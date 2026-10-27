@@ -24,14 +24,15 @@ build still works, but the intro movies are not played.
 
 ## 2. ps3recomp checkouts
 
-Three separate checkouts of the [tekulvw/ps3recomp](https://github.com/tekulvw/ps3recomp) fork are
-needed, each at a pinned revision. The lifter checkouts live under `local/` at the paths named in
+Four separate checkouts of the [tekulvw/ps3recomp](https://github.com/tekulvw/ps3recomp) fork are
+needed, each at a pinned revision. The runtime revision is the tip of the fork's
+`mag-recomp/runtime-20261024` branch. The lifter checkouts live under `local/` at the paths named in
 `profiles/retail-v1.0-spu.json`, `profiles/retail-v1.0-engine-spu.json` and
 `profiles/retail-v1.0-firmware.json`.
 
 ```sh
 git clone https://github.com/tekulvw/ps3recomp.git local/ps3recomp-runtime
-git -C local/ps3recomp-runtime checkout --detach 2a3f590d580f30393e80876139d733b53dffa537
+git -C local/ps3recomp-runtime checkout --detach c062d984d57b80f8763f8679a135192a114765ac
 
 git clone local/ps3recomp-runtime local/ps3recomp-lifter-5244db9
 git -C local/ps3recomp-lifter-5244db9 checkout --detach 5244db92669b54831c6d3ebb7a96d58c4dbfa6df
@@ -39,15 +40,19 @@ git -C local/ps3recomp-lifter-5244db9 checkout --detach 5244db92669b54831c6d3ebb
 git clone local/ps3recomp-runtime local/ps3recomp-lifter-dfa7073
 git -C local/ps3recomp-lifter-dfa7073 checkout --detach dfa7073d2e164aec6890866c4951d8dedc28619d
 
+git clone local/ps3recomp-runtime local/ps3recomp-spu-programs
+git -C local/ps3recomp-spu-programs checkout --detach 4c5c05f60a6ae428b16e5ff7075c24a5e4d282ab
+
 python3 -m venv .venv
 .venv/bin/python -m pip install -r local/ps3recomp-runtime/requirements.txt
 ```
 
 | Checkout | Revision | Role |
 | --- | --- | --- |
-| `local/ps3recomp-runtime` | `2a3f590` | Runtime SDK passed to CMake as `PS3RECOMP_DIR` |
-| `local/ps3recomp-lifter-5244db9` | `5244db9` | Inventory and SPU lifting |
+| `local/ps3recomp-runtime` | `c062d98` | Runtime SDK passed to CMake as `PS3RECOMP_DIR` |
+| `local/ps3recomp-lifter-5244db9` | `5244db9` | Inventory and launcher/engine SPU lifting |
 | `local/ps3recomp-lifter-dfa7073` | `dfa7073` | PPU and firmware lifting |
+| `local/ps3recomp-spu-programs` | `4c5c05f` | Lifting every embedded engine SPU program |
 
 Keep them clean and at these exact commits: the tools refuse other or dirty revisions, and
 `profiles/framework.json` lists the runtime revisions the build accepts. To keep a lifter elsewhere, set
@@ -97,7 +102,13 @@ Each output directory must be new; the generators reject stale output.
 .venv/bin/python tools/spu_lift.py --output generated/retail-v1.0/spu-eboot
 .venv/bin/python tools/engine_spu_lift.py --output generated/retail-v1.0/spu-engine
 .venv/bin/python tools/firmware_lift.py --output generated/retail-v1.0/libsre
+.venv/bin/python tools/spu_programs_lift.py --sdk local/ps3recomp-spu-programs \
+  --sdk-revision 4c5c05f60a6ae428b16e5ff7075c24a5e4d282ab --output local/spu-programs
 ```
+
+`spu_programs_lift.py` lifts every SPU program embedded in the engine and checks the result against
+`profiles/retail-v1.0-spu-coverage.json`; the engine build re-runs that check and refuses to configure
+without it.
 
 Optionally apply the guarded audio fix described in [docs/partial-ppu-relift.md](docs/partial-ppu-relift.md).
 See [docs/retail-spu-batch-preparation.md](docs/retail-spu-batch-preparation.md) to lift every
@@ -122,6 +133,7 @@ cmake -S . -B build-engine -G Ninja -DCMAKE_BUILD_TYPE=Release -DMAG_IMAGE=mage_
   -DPS3RECOMP_DIR="$PWD/local/ps3recomp-runtime" \
   -DRECOMP_DIR="$PWD/generated/retail-v1.0/mage_g" \
   -DSPU_DIR="$PWD/generated/retail-v1.0/spu-engine" \
+  -DMAG_SPU_PROGRAMS_DIR="$PWD/local/spu-programs" \
   -DMAG_FIRMWARE_DIR="$PWD/generated/retail-v1.0/libsre" "${FFMPEG_ARGS[@]}"
 cmake --build build --target MagRecomp -j4
 cmake --build build-engine --target MagRecomp -j4
