@@ -46,3 +46,10 @@ Contributions must never include game files, anything derived from them, or outp
 them. CI runs `tools/check_public_tree.py`, which rejects binaries, original game file types,
 generated-code signatures, embedded byte images and machine-specific paths. See [AGENTS.md](AGENTS.md)
 for the rules that apply to people and coding agents alike.
+
+## Licence
+
+This project's code is released under the [MIT License](LICENSE). The ps3recomp SDK it builds on is
+separately MIT-licensed ([LICENSE.ps3recomp](LICENSE.ps3recomp)). The licence covers only this
+repository's code and grants nothing in the game, its files or anything generated from them; see the
+[legal notice](NOTICE.md).
