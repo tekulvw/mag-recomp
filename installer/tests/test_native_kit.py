@@ -59,6 +59,24 @@ class NativeKitTests(unittest.TestCase):
                     self.assertEqual(actual,record['revision'])
             self.assertEqual((root/'sdk/.git/index').read_bytes(),original_index)
 
+    def test_git_checkout_source_refuses_untracked_files_in_allowlisted_directories(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp).resolve();source,sdks=self.fixture(root)
+            identity=['-c','user.name=Fixture','-c','user.email=fixture@example.invalid']
+            self.git('init','-q',str(source))
+            self.git('-C',str(source),'add','CMakeLists.txt','src/main.cpp')
+            self.git('-C',str(source),*identity,'commit','-qm','fixture')
+            (source/'src/scratch-capture.txt').write_text('UNTRACKED')
+            pins={r:{'commit':s['revision'],'tag':'fixture'} for r,s in sdks.items()}
+            with patch('mag_installer.native_kit.validate_source_tree',return_value=pins):
+                with self.assertRaisesRegex(InstallerError,'untracked.*src/scratch-capture.txt'):
+                    native_kit.prepare(source,sdks,root/'refused.tar.gz')
+                self.assertFalse((root/'refused.tar.gz').exists())
+                self.git('-C',str(source),'add','src/scratch-capture.txt')
+                self.git('-C',str(source),*identity,'commit','-qm','tracked')
+                native_kit.prepare(source,sdks,root/'kit.tar.gz')
+                self.assertTrue((root/'kit.tar.gz').is_file())
+
     def test_invalid_source_preflight_and_existing_output_fail_before_publish(self):
         with tempfile.TemporaryDirectory() as temp:
             root=Path(temp).resolve();source,sdks=self.fixture(root);output=root/'kit.tar.gz'

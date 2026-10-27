@@ -107,6 +107,15 @@ def prepare(source_tree, sdks, output_archive, token=None, events=None):
              'GIT_CONFIG_COUNT':'2','GIT_CONFIG_KEY_0':'core.hooksPath','GIT_CONFIG_VALUE_0':os.devnull,
              'GIT_CONFIG_KEY_1':'init.templateDir','GIT_CONFIG_VALUE_1':str(home/'empty-template')}
         (home/'empty-template').mkdir()
+        # A kit carries tracked source only: refuse untracked scratch, captures or
+        # output that happen to sit inside the allowlisted directories.
+        if (source/'.git').exists():
+            listing=_git([git,'-C',str(source),'ls-files','-z','--cached'],temp,env,token)
+            tracked={name for name in listing.split('\0') if name}
+            untracked=sorted(path.relative_to(source).as_posix() for path in files
+                             if path.relative_to(source).as_posix() not in tracked)
+            if untracked:
+                raise InstallerError('Kit source has untracked files in its allowlisted directories; remove or commit them: '+', '.join(untracked[:10]))
         inventory=[]
         events({'event':'stage-start','stage':'copy-kit-source'})
         for path in sorted(files):
