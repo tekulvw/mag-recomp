@@ -28,7 +28,7 @@ class BuildImageTests(unittest.TestCase):
         (self.root/'profiles/retail-v1.0.json').write_text(json.dumps({'images':self.images}))
         (self.root/'profiles/framework.json').write_text(json.dumps({'allowed_runtime_revisions':['reviewed']}))
         self.addCleanup(patch.stopall)
-        patch('tools.provenance.ROOT',self.root).start()
+        patch('tools.provenance.ROOT',self.root).start(); patch('tools.prepare_inputs.ROOT',self.root).start(); patch('tools.prepare_inputs.WORKSPACE',self.root).start()
         # Git only supplies the reviewed SDK revision; all image/lift/receipt IO is real.
         patch('tools.provenance.subprocess.check_output',side_effect=lambda args,**kw: 'reviewed\n' if 'rev-parse' in args else '').start()
 

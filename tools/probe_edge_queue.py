@@ -19,6 +19,9 @@ import tempfile
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+from tools.prepare_inputs import data_path
 if __package__ in (None, ''):
     sys.path.insert(0,str(ROOT))
 PASS = 'EDGE_QUEUE_PASS jobs=96 producers=2 bytes=393216 counters=0 masks=1,2 wraps=8'
@@ -68,14 +71,14 @@ def bounded_run(args, deadline, budget):
 
 
 def run(build):
-    sdk = ROOT/'local/ps3recomp-macos'
+    sdk = data_path('local/ps3recomp-macos')
     cache=(build/'CMakeCache.txt').read_text()
     fw=next(line.split('=',1)[1] for line in cache.splitlines() if line.startswith('MAG_FIRMWARE_DIR:'))
     firmware = Path(fw).resolve()
     firmware_rel=firmware.relative_to(ROOT).as_posix()
-    edge = ROOT/'generated/retail-v1.0/spu-engine-policy-audited'
+    edge = data_path('generated/retail-v1.0/spu-engine-policy-audited')
     profile = json.loads((ROOT/'profiles/retail-v1.0-spu.json').read_text())
-    elf = ROOT/profile['image']
+    elf = data_path(profile['image'])
     ninja = build/'build.ninja'
     receipt = build/'MagRecomp.receipt.json'
     required = [elf,ninja,receipt,firmware/'provenance.json',edge/'provenance.json']
@@ -130,7 +133,7 @@ def run(build):
         elf_copy=tmp/'edge.elf';elf_copy.write_bytes(elf.read_bytes())
         if digest(elf_copy)!=bindings[str(elf)]:
             raise ValueError('EDGE ELF changed while snapshotting')
-        includes=[ROOT/'generated/retail-v1.0/mage_g-initial',sdk/'include',
+        includes=[data_path('generated/retail-v1.0/mage_g-initial'),sdk/'include',
                   sdk/'runtime/ppu',sdk/'runtime/spu',sdk/'runtime/platform']
         compiled=subprocess.run(['clang++','-std=c++17','-O1','-UNDEBUG',
             *['-I'+str(x) for x in includes],str(ROOT/'tests/edge_queue_fixture.cpp'),

@@ -24,7 +24,7 @@ class LiftTests(unittest.TestCase):
                 manifests=dict(functions_sha256=sha256_file(functions),imports_sha256=sha256_file(imports)))))
             for selected in [functions,imports]:
                 original=selected.read_text(); selected.write_text('foreign image map')
-                with self.subTest(manifest=selected.name), patch('tools.lift.ROOT',root), \
+                with self.subTest(manifest=selected.name), patch('tools.lift.ROOT',root), patch('tools.prepare_inputs.ROOT',root), patch('tools.prepare_inputs.WORKSPACE',root), \
                      patch('tools.lift.check_sdk'), patch('tools.lift.run_generator',
                          side_effect=AssertionError('Generation started before inventory identity verification')) as generator:
                     with self.assertRaises(ValueError):

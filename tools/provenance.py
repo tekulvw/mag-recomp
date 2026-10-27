@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 if __package__ in (None, ''):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from tools.prepare_inputs import ROOT, sha256_file, verify_hash
+from tools.prepare_inputs import ROOT, sha256_file, verify_hash, data_path, load_framework
 
 
 def validate_lift(directory: Path, elf_hash: str) -> dict:
@@ -95,7 +95,7 @@ def validate_modules(image: dict, image_name: str, spu: Path | None,
         # A matching dispatch fingerprint is insufficient: bind every embedded
         # SPU byte to the already audited worker and the selected full ELF hash.
         profile=json.loads((ROOT/'profiles/retail-v1.0-spu.json').read_text())
-        worker=ROOT/profile['image'];verify_hash(worker,profile['image_sha256'])
+        worker=data_path(profile['image']);verify_hash(worker,profile['image_sha256'])
         embedded=review['embedded_spu']
         if (embedded['sha256'] != profile['image_sha256'] or
                 embedded['size'] != profile['image_bytes'] or
@@ -134,7 +134,7 @@ def validate_build_image(recomp: Path, image_name: str = 'EBOOT',
                          spu: Path | None = None) -> tuple[dict, dict]:
     if image_name not in ('EBOOT', 'mage_g'):
         raise ValueError('Image must be EBOOT or mage_g')
-    image=json.loads((ROOT/'profiles/retail-v1.0.json').read_text())['images'][image_name]
+    image=json.loads((data_path('profiles/retail-v1.0.json')).read_text())['images'][image_name]
     verify_hash(Path(image['elf']), image['elf_sha256'])
     lift=validate_lift(recomp, image['elf_sha256'])
     if firmware is not None or spu is not None:
@@ -147,7 +147,7 @@ def record_build(binary: Path, sdk: Path, recomp: Path, spu: Path | None = None,
     image,lift=validate_build_image(recomp,image_name)
     revision=subprocess.check_output(['git','-C',str(sdk),'rev-parse','HEAD'],text=True).strip()
     dirty=subprocess.check_output(['git','-C',str(sdk),'status','--porcelain','--untracked-files=no'],text=True)
-    allowed=json.loads((ROOT/'profiles/framework.json').read_text())['allowed_runtime_revisions']
+    allowed=load_framework()[0]['allowed_runtime_revisions']
     if revision not in allowed or dirty:
         raise ValueError('Runtime SDK must be clean and recorded in profiles/framework.json')
     record=dict(binary_sha256=sha256_file(binary), image_name=image_name, elf_sha256=image['elf_sha256'],

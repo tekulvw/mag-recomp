@@ -11,7 +11,7 @@ import sys
 from pathlib import Path
 if __package__ in (None, ''):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from tools.prepare_inputs import ROOT
+from tools.prepare_inputs import ROOT, WORKSPACE, load_framework
 
 
 def git(path, *args):
@@ -48,13 +48,17 @@ def main():
     parser.add_argument('--url', help='fork URL (default: the "fork" entry of profiles/framework.json)')
     parser.add_argument('--role', action='append', help='only this role (repeatable)')
     args = parser.parse_args()
-    framework = json.loads((args.root / 'profiles/framework.json').read_text())
+    # Run against this repository, the pins in effect (workspace overlay included) are checked out
+    # into the workspace; with an explicit --root, that repository's own pins and paths are used.
+    own = args.root.resolve() == ROOT
+    framework = load_framework()[0] if own else json.loads((args.root / 'profiles/framework.json').read_text())
+    target = WORKSPACE if own else args.root
     url = args.url or framework['fork'] + '.git'
     for role, pin in pins(framework).items():
         if args.role and role not in args.role:
             continue
-        path = fetch(args.root, url, role, pin)
-        print(f"{role}: {pin['tag']} = {pin['commit'][:12]} at {path.relative_to(args.root)}")
+        path = fetch(target, url, role, pin)
+        print(f"{role}: {pin['tag']} = {pin['commit'][:12]} at {path.relative_to(target)}")
 
 
 if __name__ == '__main__':
