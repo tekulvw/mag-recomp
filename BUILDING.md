@@ -10,12 +10,11 @@ any step that does not work as written.
 ## 1. Host dependencies
 
 Apple Silicon macOS with Metal, Xcode Command Line Tools, Python 3.11+, CMake 3.20+, Ninja, SDL2,
-pkg-config, glslang and spirv-cross. Rust (stable) builds `native/graphics`.
+pkg-config, glslang and spirv-cross.
 
 ```sh
 xcode-select --install
-brew install python cmake ninja sdl2 pkg-config glslang spirv-cross rustup
-rustup-init -y
+brew install python cmake ninja sdl2 pkg-config glslang spirv-cross
 ```
 
 Movie playback needs **FFmpeg 9** (`libavcodec` 63, `libavformat` 63, `libavutil` 61,
@@ -156,11 +155,8 @@ SDL game controllers take priority over the keyboard.
 
 ```sh
 for t in tests/test_*.py; do .venv/bin/python -m unittest "tests.$(basename "$t" .py)"; done
-PS3RECOMP_DIR="$PWD/local/ps3recomp-runtime" cargo test --workspace --all-targets
 .venv/bin/python tools/check_public_tree.py
 ```
 
-The Python tests are synthetic and need no game files. `native/graphics` compiles shared math from
-the SDK, so Cargo needs `PS3RECOMP_DIR` (or `MAG_SPU_SDK_DIR`), and its builtin-math checks expect the
-pinned runtime revision. A few tool self-tests under `tools/test_*.py` need an SDK checkout or your
-own generated output and take explicit arguments.
+The Python tests are synthetic and need no game files. A few tool self-tests under `tools/test_*.py`
+need an SDK checkout or your own generated output and take explicit arguments.

@@ -14,7 +14,7 @@ def instrument_source(source,pins=None):
   if not m:raise ValueError("Unknown graphics function shape "+name)
   body=m[0];hook="\n        MagGraphicsTraceScope mag_graphics_trace_scope(ctx,0x"+name+");"
   original=re.sub(r"\n        mag_graphics_trace_scope\.marker\(\d+,\(uint16_t\)ctx->gpr\[\d+\]\);","",body.replace(hook,"",1))
-  if hashlib.sha256(__import__('tools.native_completion_hooks',fromlist=['canonical']).canonical(original,name).encode()).hexdigest()!=digest:raise ValueError("Graphics function hash mismatch "+name)
+  if hashlib.sha256(original.encode()).hexdigest()!=digest:raise ValueError("Graphics function hash mismatch "+name)
   new=original.replace(start,start+hook,1)
   if name=='00A047D8':
    loads=list(re.finditer(r'(        ctx->gpr\[(\d+)\] = vm_read16\(ctx->gpr\[4\] \+ 0x[0-9A-F]+\);)',new))

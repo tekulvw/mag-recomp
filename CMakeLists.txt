@@ -231,19 +231,8 @@ if(MAG_FIRMWARE_DIR)
 endif()
 add_executable(${PROJECT_NAME}
     src/main.cpp
-    src/mag_render_diagnostics.cpp
-    src/mag_main_item_ablation.cpp
-    src/mag_depth_item_ablation.cpp
     src/mag_jobio_selector.cpp
-    src/mag_c630_dispatch_observation.cpp
-    src/mag_particle_cohort_ablation.cpp
-    src/mag_dynamic_light_ablation.cpp
-    src/mag_grid_level_ablation.cpp
     src/mag_timer_gcm_pump_diagnostics.cpp
-    src/mag_late_update_phase_profile.cpp
-    src/mag_occlude_input_ablation.cpp
-    src/mag_cull_input_ablation.cpp
-    src/mag_remaining_item_ablation.cpp
     src/stubs.cpp
     ${PS3RECOMP_SCAFFOLD}
     ${HLE_NID_TABLE}
@@ -252,7 +241,7 @@ add_executable(${PROJECT_NAME}
     ${MAG_FIRMWARE_SOURCES}
 )
 
-set_source_files_properties(src/mag_render_diagnostics.cpp src/mag_main_item_ablation.cpp src/mag_depth_item_ablation.cpp src/mag_remaining_item_ablation.cpp src/mag_cull_input_ablation.cpp src/mag_occlude_input_ablation.cpp src/mag_late_update_phase_profile.cpp src/mag_timer_gcm_pump_diagnostics.cpp src/mag_grid_level_ablation.cpp src/mag_jobio_selector.cpp src/mag_dynamic_light_ablation.cpp src/mag_c630_dispatch_observation.cpp src/mag_particle_cohort_ablation.cpp PROPERTIES INCLUDE_DIRECTORIES "${PS3RECOMP_DIR}")
+set_source_files_properties(src/mag_timer_gcm_pump_diagnostics.cpp src/mag_jobio_selector.cpp PROPERTIES INCLUDE_DIRECTORIES "${PS3RECOMP_DIR}")
 
 # Source-scoped includes avoid rebuilding untouched generated PPU units.
 if(MAG_IMAGE STREQUAL "mage_g")
@@ -264,8 +253,8 @@ if(MAG_IMAGE STREQUAL "mage_g")
     target_sources(${PROJECT_NAME} PRIVATE src/mag_sdk_prepare_screen.c)
     set_source_files_properties(src/mag_sdk_prepare_screen.c PROPERTIES
         INCLUDE_DIRECTORIES "${PS3RECOMP_DIR};${PS3RECOMP_DIR}/runtime")
-    target_sources(${PROJECT_NAME} PRIVATE src/mag_jobio_capture.c src/mag_graphics_trace.cpp src/mag_native_submission.cpp src/mag_native_depth_root.cpp src/mag_native_depth_executor.cpp src/mag_native_completion.cpp src/mag_native_provenance_watch.cpp src/mag_native_memory_backend.cpp src/mag_native_writer.cpp src/mag_native_input_readiness.cpp src/mag_native_main_capture.cpp src/mag_native_main_executor.cpp src/mag_native_output_arena.cpp src/mag_native_legacy_children.cpp src/mag_native_edge_executor.cpp)
-    set_source_files_properties(src/mag_jobio_capture.c src/mag_graphics_trace.cpp src/mag_native_submission.cpp src/mag_native_depth_root.cpp src/mag_native_depth_executor.cpp src/mag_native_completion.cpp src/mag_native_provenance_watch.cpp src/mag_native_memory_backend.cpp src/mag_native_writer.cpp src/mag_native_input_readiness.cpp src/mag_native_main_capture.cpp src/mag_native_main_executor.cpp src/mag_native_output_arena.cpp src/mag_native_legacy_children.cpp src/mag_native_edge_executor.cpp native/graphics/live_policy_chain.c PROPERTIES INCLUDE_DIRECTORIES "${PS3RECOMP_DIR}/runtime;${PS3RECOMP_DIR}")
+    target_sources(${PROJECT_NAME} PRIVATE src/mag_jobio_capture.c src/mag_graphics_trace.cpp)
+    set_source_files_properties(src/mag_jobio_capture.c src/mag_graphics_trace.cpp PROPERTIES INCLUDE_DIRECTORIES "${PS3RECOMP_DIR}/runtime;${PS3RECOMP_DIR}")
     foreach(_graphics_unit 000 004 005 007)
         set_property(SOURCE "${RECOMP_DIR}/ppu_recomp_${_graphics_unit}.cpp" APPEND PROPERTY INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/src")
     endforeach()
@@ -416,98 +405,13 @@ if(MAG_FIRMWARE_SOURCES)
         "${MAG_FIRMWARE_DIR}/provenance.json"
         "${CMAKE_CURRENT_SOURCE_DIR}/profiles/retail-v1.0-firmware.json")
 endif()
-option(MAG_NATIVE_GRAPHICS "Build the native Rust graphics core" OFF)
-set(MAG_NATIVE_MATERIAL_EXPECTED "" CACHE FILEPATH "Private pinned MaterialFlushMain expected-code registration")
-set(MAG_NATIVE_EDGE_EXPECTED "" CACHE FILEPATH "Private exact EdgeGeom admission registration")
-set(MAG_NATIVE_RING_EXPECTED "" CACHE FILEPATH "Private exact depthnormal ring-wait registration")
-set(MAG_NATIVE_POLICY_EXPECTED "" CACHE FILEPATH "Private exact policy worker code guard")
-set(MAG_NATIVE_SORT_EXPECTED "" CACHE FILEPATH "Private exact whole SortBucketItems registration")
-set(MAG_NATIVE_DEPTH_EXPECTED "" CACHE FILEPATH "Private exact DepthNormal builder registration")
-set(MAG_NATIVE_RECEIPT_ARGS "")
-if(MAG_NATIVE_GRAPHICS)
-    list(APPEND MAG_NATIVE_RECEIPT_ARGS --native-graphics-archive "${CMAKE_CURRENT_BINARY_DIR}/native/graphics/cargo-target/release/libmag_native_graphics.a")
-    if(MAG_NATIVE_DEPTH_EXPECTED)
-        list(APPEND MAG_NATIVE_RECEIPT_ARGS --native-depth-expected "${MAG_NATIVE_DEPTH_EXPECTED}")
-    endif()
-    if(MAG_NATIVE_POLICY_EXPECTED)
-        list(APPEND MAG_NATIVE_RECEIPT_ARGS --native-policy-expected "${MAG_NATIVE_POLICY_EXPECTED}")
-    endif()
-    if(MAG_NATIVE_SORT_EXPECTED)
-        list(APPEND MAG_NATIVE_RECEIPT_ARGS --native-sort-expected "${MAG_NATIVE_SORT_EXPECTED}")
-    endif()
-    if(MAG_NATIVE_RING_EXPECTED)
-        list(APPEND MAG_NATIVE_RECEIPT_ARGS --native-ring-expected "${MAG_NATIVE_RING_EXPECTED}")
-    endif()
-    if(MAG_NATIVE_EDGE_EXPECTED)
-        list(APPEND MAG_NATIVE_RECEIPT_ARGS --native-edge-expected "${MAG_NATIVE_EDGE_EXPECTED}")
-    endif()
-    if(MAG_NATIVE_MATERIAL_EXPECTED)
-        target_sources(${PROJECT_NAME} PRIVATE src/mag_native_main_ordered_sink.cpp src/gpu_terminal_receipt_tracker.cpp)
-        list(APPEND MAG_NATIVE_RECEIPT_ARGS --native-material-expected "${MAG_NATIVE_MATERIAL_EXPECTED}")
-    endif()
-    if(MAG_NATIVE_HEAP_EXPECTED)
-        list(APPEND MAG_NATIVE_RECEIPT_ARGS --native-graphics-expected "${MAG_NATIVE_HEAP_EXPECTED}")
-    endif()
-endif()
 add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/provenance.py"
             --binary "$<TARGET_FILE:${PROJECT_NAME}>"
             --sdk "${PS3RECOMP_DIR}" --recomp "${RECOMP_DIR}"
-            --image "${MAG_IMAGE}" ${MAG_SPU_RECEIPT_ARGS} ${MAG_NATIVE_RECEIPT_ARGS}
+            --image "${MAG_IMAGE}" ${MAG_SPU_RECEIPT_ARGS}
     VERBATIM)
 
 if(APPLE)
     target_link_libraries(MagRecomp PRIVATE "-framework CoreFoundation")
-endif()
-
-# Native graphics reconstruction. Admission into the live renderer is separate
-# from building the source-validated Rust preparation core.
-if(MAG_NATIVE_GRAPHICS)
-    add_subdirectory(native/graphics)
-    target_link_libraries(${PROJECT_NAME} PRIVATE mag_native_graphics)
-    if(MAG_NATIVE_POLICY_EXPECTED)
-        target_sources(${PROJECT_NAME} PRIVATE native/graphics/live_policy_chain.c native/graphics/live_chain.c "${MAG_NATIVE_POLICY_EXPECTED}")
-        set_property(TARGET ${PROJECT_NAME} APPEND PROPERTY LINK_DEPENDS "${MAG_NATIVE_POLICY_EXPECTED}")
-    endif()
-    if(MAG_NATIVE_DEPTH_EXPECTED)
-        target_sources(${PROJECT_NAME} PRIVATE native/graphics/live_depthnormal_builder.c "${MAG_NATIVE_DEPTH_EXPECTED}")
-        set_property(TARGET ${PROJECT_NAME} APPEND PROPERTY LINK_DEPENDS "${MAG_NATIVE_DEPTH_EXPECTED}")
-        # The resident prewalk requires the reviewed synchronous ordinary-GET
-        # engine. A different SDK leaves this candidate unregistered until its
-        # transfer/readiness contract has been reviewed explicitly.
-        execute_process(COMMAND git -C "${PS3RECOMP_DIR}" rev-parse HEAD
-            OUTPUT_VARIABLE MAG_DEPTH_SDK_REVISION OUTPUT_STRIP_TRAILING_WHITESPACE
-            RESULT_VARIABLE MAG_DEPTH_SDK_RESULT)
-        if(MAG_DEPTH_SDK_RESULT EQUAL 0 AND MAG_DEPTH_SDK_REVISION STREQUAL "29a6efdb904f413f23f2727d4de19b2d872e6214")
-            set_source_files_properties(native/graphics/live_depthnormal_builder.c PROPERTIES COMPILE_DEFINITIONS "MAG_DEPTH_SYNC_GET_SDK=1")
-        else()
-            message(STATUS "Native DepthNormal builder disabled: SDK readiness contract needs review")
-        endif()
-    endif()
-    if(MAG_NATIVE_MATERIAL_EXPECTED)
-        set_source_files_properties(src/mag_native_depth_root.cpp src/mag_native_depth_executor.cpp src/mag_native_main_capture.cpp src/mag_native_main_executor.cpp src/mag_native_completion.cpp src/mag_native_provenance_watch.cpp PROPERTIES COMPILE_DEFINITIONS "MAG_HAS_DEPTH_PPE_PREFLIGHT=1")
-        target_sources(${PROJECT_NAME} PRIVATE native/graphics/live_material.c native/graphics/live_material_batch.c native/graphics/live_workunit.c native/graphics/shader_math.c native/graphics/main_group15_math.c "${MAG_NATIVE_MATERIAL_EXPECTED}")
-        set_source_files_properties(native/graphics/live_material.c PROPERTIES COMPILE_DEFINITIONS "MAG_HAS_NATIVE_WORKUNIT=1;MAG_HAS_NATIVE_MATERIAL_BATCH=1")
-        set_property(TARGET ${PROJECT_NAME} APPEND PROPERTY LINK_DEPENDS "${MAG_NATIVE_MATERIAL_EXPECTED}")
-    endif()
-    if(MAG_NATIVE_RING_EXPECTED)
-        target_sources(${PROJECT_NAME} PRIVATE native/graphics/live_ring_driver.c native/graphics/live_ring_wait.c "${MAG_NATIVE_RING_EXPECTED}")
-        set_property(TARGET ${PROJECT_NAME} APPEND PROPERTY LINK_DEPENDS "${MAG_NATIVE_RING_EXPECTED}")
-    endif()
-    if(MAG_NATIVE_SORT_EXPECTED)
-        target_sources(${PROJECT_NAME} PRIVATE native/graphics/live_sort_bucket.c "${MAG_NATIVE_SORT_EXPECTED}")
-        set_property(TARGET ${PROJECT_NAME} APPEND PROPERTY LINK_DEPENDS "${MAG_NATIVE_SORT_EXPECTED}")
-    endif()
-    if(MAG_NATIVE_MATERIAL_EXPECTED OR MAG_NATIVE_EDGE_EXPECTED OR MAG_NATIVE_RING_EXPECTED OR MAG_NATIVE_SORT_EXPECTED OR MAG_NATIVE_POLICY_EXPECTED OR MAG_NATIVE_DEPTH_EXPECTED)
-        target_sources(${PROJECT_NAME} PRIVATE native/graphics/live_transport.c)
-    endif()
-    if(MAG_NATIVE_EDGE_EXPECTED)
-        target_sources(${PROJECT_NAME} PRIVATE native/graphics/live_edgegeom_probe.c native/graphics/live_edgegeom.c native/graphics/live_edgegeom_diagnostics.c native/graphics/live_spu_attribution.c native/graphics/live_spu_instruction_attribution.c native/graphics/edgegeom_math.c native/graphics/edgegeom_scene.c native/graphics/edgegeom_cull_math.c native/graphics/edgegeom_deformation.c native/graphics/edgegeom_skinning.c native/graphics/edgegeom_owned_math.c "${MAG_NATIVE_EDGE_EXPECTED}")
-        set_property(TARGET ${PROJECT_NAME} APPEND PROPERTY LINK_DEPENDS "${MAG_NATIVE_EDGE_EXPECTED}")
-    endif()
-    set(MAG_NATIVE_HEAP_EXPECTED "" CACHE FILEPATH "Private pinned SortBucketItems expected-code registration")
-    if(MAG_NATIVE_HEAP_EXPECTED)
-        target_sources(${PROJECT_NAME} PRIVATE native/graphics/live_heap.c "${MAG_NATIVE_HEAP_EXPECTED}")
-        set_property(TARGET ${PROJECT_NAME} APPEND PROPERTY LINK_DEPENDS "${MAG_NATIVE_HEAP_EXPECTED}")
-    endif()
 endif()

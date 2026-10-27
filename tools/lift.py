@@ -12,7 +12,6 @@ from tools.prepare_inputs import ROOT, sha256_file, verify_hash
 from tools.inventory import check_sdk, SDK_REVISION
 from tools.movie_picture_hooks import instrument_source, RETAIL_ELF
 from tools.graphics_trace_hooks import instrument_source as instrument_graphics
-from tools.native_submission_hooks import instrument_source as instrument_native_submission
 
 
 def guard_generated_source(source: str) -> str:
@@ -86,7 +85,7 @@ def generate_lift(elf_path: Path, functions_path: Path, imports_path: Path, sdk_
         result['nonlocal_profile_sha256']=sha256_file(nonlocal_profile)
     for path in output_dir.glob('ppu_recomp_*.cpp'):
         source=guard_generated_source(path.read_text())
-        path.write_text(instrument_native_submission(instrument_graphics(instrument_source(source))) if image['elf_sha256']==RETAIL_ELF else source)
+        path.write_text(instrument_graphics(instrument_source(source)) if image['elf_sha256']==RETAIL_ELF else source)
     result['postprocessing'] = 'Fail at executed TODO/unresolved code; log verified retail entry function; tools/lift.py'
     if image['elf_sha256']==RETAIL_ELF:
         result['movie_picture_hooks']=dict(tool_sha256=sha256_file(ROOT/'tools/movie_picture_hooks.py'),elf_sha256=RETAIL_ELF)

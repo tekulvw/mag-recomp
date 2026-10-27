@@ -16,10 +16,11 @@ are allowed. Run `python3 tools/check_public_tree.py` before committing; CI runs
 
 ## Clean-room native code
 
-Native replacements under `native/` follow
+The game's SPU jobs run as recompiled original programs. Any native replacement must follow
 [docs/native-graphics-reimplementation-method.md](docs/native-graphics-reimplementation-method.md):
 specify behaviour in your own words first, then implement from that specification. Never port,
-transliterate or paste original code structure.
+transliterate or paste original code structure, and never re-use the original program's internal
+memory layout, register use or call order.
 
 ## Portability
 

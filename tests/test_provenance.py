@@ -43,26 +43,6 @@ class BuildImageTests(unittest.TestCase):
         validate_receipt(self.binary,self.images['mage_g']['elf_sha256'])
         with self.assertRaises(ValueError): validate_receipt(self.binary,self.images['EBOOT']['elf_sha256'])
 
-    def test_native_graphics_pins_rust_archive_all_c_adapters_and_private_guards(self):
-        paths=['Cargo.toml','Cargo.lock','native/graphics/Cargo.toml',
-               'native/graphics/CMakeLists.txt','native/graphics/src/lib.rs',
-               'native/graphics/include/native.h','native/graphics/live_heap.c',
-               'native/graphics/live_material.c']
-        for name in paths:
-            source=self.root/name;source.parent.mkdir(parents=True,exist_ok=True)
-            source.write_text('synthetic '+name)
-        archive=self.root/'native.a';archive.write_bytes(b'synthetic archive')
-        heap=self.root/'heap.expected';heap.write_bytes(b'synthetic heap guard')
-        material=self.root/'material.expected';material.write_bytes(b'synthetic material guard')
-        result=record_build(self.binary,self.root,self.lifts['EBOOT'],
-            native_graphics_archive=archive,native_graphics_expected=heap,
-            native_material_expected=material)['native_graphics']
-        self.assertEqual(result['archive_sha256'],sha256_file(archive))
-        self.assertEqual(result['private_expected_registration_sha256'],sha256_file(heap))
-        self.assertEqual(result['private_material_registration_sha256'],sha256_file(material))
-        for name in paths:
-            self.assertEqual(result['sources'][name],sha256_file(self.root/name))
-
     def test_engine_rejects_launcher_lift(self):
         with self.assertRaisesRegex(ValueError,'selected ELF'):
             record_build(self.binary,self.root,self.lifts['EBOOT'],image_name='mage_g')

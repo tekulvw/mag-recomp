@@ -1,4 +1,4 @@
-"""Bind the native runner to its generated image and reviewed framework revision."""
+"""Bind the built runner to its generated image and reviewed framework revision."""
 import argparse
 import hashlib
 import json
@@ -143,13 +143,7 @@ def validate_build_image(recomp: Path, image_name: str = 'EBOOT',
 
 
 def record_build(binary: Path, sdk: Path, recomp: Path, spu: Path | None = None,
-                 firmware: Path | None = None, image_name: str = 'EBOOT',
-                 native_graphics_archive: Path | None = None,
-                 native_graphics_expected: Path | None = None,
-                 native_material_expected: Path | None = None,
-                 native_edge_expected: Path | None = None,
-                 native_ring_expected: Path | None = None,
-                 native_sort_expected: Path | None = None, native_policy_expected: Path | None = None, native_depth_expected: Path | None = None) -> dict:
+                 firmware: Path | None = None, image_name: str = 'EBOOT') -> dict:
     image,lift=validate_build_image(recomp,image_name)
     revision=subprocess.check_output(['git','-C',str(sdk),'rev-parse','HEAD'],text=True).strip()
     dirty=subprocess.check_output(['git','-C',str(sdk),'status','--porcelain','--untracked-files=no'],text=True)
@@ -160,28 +154,6 @@ def record_build(binary: Path, sdk: Path, recomp: Path, spu: Path | None = None,
                 sdk_revision=revision, sdk_path=str(sdk), lift_provenance=lift,
                 runner_sources={str(p.relative_to(ROOT)):sha256_file(p) for p in
                                 [ROOT/'CMakeLists.txt', *sorted((ROOT/'src').glob('*'))] if p.is_file()})
-    if native_graphics_archive is not None:
-        paths = [ROOT/'Cargo.toml', ROOT/'Cargo.lock',
-                 *sorted((ROOT/'native/graphics').rglob('*.rs')),
-                 *sorted((ROOT/'native/graphics').rglob('*.h')),
-                 ROOT/'native/graphics/Cargo.toml', ROOT/'native/graphics/CMakeLists.txt',
-                 *sorted((ROOT/'native/graphics').glob('*.c'))]
-        record['native_graphics'] = dict(sources={str(p.relative_to(ROOT)):sha256_file(p) for p in paths},
-            archive_sha256=sha256_file(native_graphics_archive))
-        if native_graphics_expected is not None:
-            record['native_graphics']['private_expected_registration_sha256'] = sha256_file(native_graphics_expected)
-        if native_depth_expected is not None:
-            record['native_graphics']['private_depth_registration_sha256'] = sha256_file(native_depth_expected)
-        if native_policy_expected is not None:
-            record['native_graphics']['private_policy_registration_sha256'] = sha256_file(native_policy_expected)
-        if native_sort_expected is not None:
-            record['native_graphics']['private_sort_registration_sha256'] = sha256_file(native_sort_expected)
-        if native_ring_expected is not None:
-            record['native_graphics']['private_ring_registration_sha256'] = sha256_file(native_ring_expected)
-        if native_edge_expected is not None:
-            record['native_graphics']['private_edge_registration_sha256'] = sha256_file(native_edge_expected)
-        if native_material_expected is not None:
-            record['native_graphics']['private_material_registration_sha256'] = sha256_file(native_material_expected)
     record.update(validate_modules(image,image_name,spu,firmware))
     binary.with_suffix('.receipt.json').write_text(json.dumps(record,indent=2)+'\n')
     return record
@@ -196,18 +168,10 @@ if __name__=='__main__':
     parser.add_argument('--validate-image',action='store_true',help='Validate the selected ELF and lift without creating a receipt')
     parser.add_argument('--spu',type=Path)
     parser.add_argument('--firmware',type=Path)
-    parser.add_argument('--native-graphics-archive',type=Path)
-    parser.add_argument('--native-graphics-expected',type=Path)
-    parser.add_argument('--native-material-expected',type=Path)
-    parser.add_argument('--native-edge-expected',type=Path)
-    parser.add_argument('--native-ring-expected',type=Path)
-    parser.add_argument('--native-sort-expected',type=Path)
-    parser.add_argument('--native-policy-expected',type=Path)
-    parser.add_argument('--native-depth-expected',type=Path)
     args=parser.parse_args()
     if args.validate_image:
         validate_build_image(args.recomp,args.image,args.firmware,args.spu)
     else:
         if args.binary is None or args.sdk is None:
             parser.error('--binary and --sdk are required when recording a build')
-        record_build(args.binary,args.sdk,args.recomp,args.spu,args.firmware,args.image,args.native_graphics_archive,args.native_graphics_expected,args.native_material_expected,args.native_edge_expected,args.native_ring_expected,args.native_sort_expected,args.native_policy_expected,args.native_depth_expected)
+        record_build(args.binary,args.sdk,args.recomp,args.spu,args.firmware,args.image)

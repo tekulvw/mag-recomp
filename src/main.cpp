@@ -1,15 +1,3 @@
-#include "mag_particle_cohort_ablation.h"
-#include "mag_c630_dispatch_observation.h"
-#include "mag_dynamic_light_ablation.h"
-#include "mag_grid_level_ablation.h"
-#include "mag_occlude_input_ablation.h"
-#include "mag_cull_input_ablation.h"
-#include "mag_remaining_item_ablation.h"
-#include "mag_depth_item_ablation.h"
-#include "mag_main_item_ablation.h"
-#include "mag_render_diagnostics.h"
-#include "mag_native_provenance_watch.h"
-#include "mag_native_completion.h"
 /*
  * ps3recomp game project -- entry point template.
  *
@@ -236,7 +224,6 @@ static DWORD WINAPI frame_clock(LPVOID)
     for (;;) {
         if (g_native_consumer) cellGcm_fifo_kick_wait(4);
         else Sleep(4);
-        mag_native_provenance_poll();
         ULONGLONG now = GetTickCount64();
         if (now >= next_snapshot) { mag_queue_snapshot(); mag_job_marker_snapshot(); next_snapshot = now + 1000; }
 
@@ -413,20 +400,6 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    mag_particle_cohort_ablation_vm_begin();
-    mag_native_depth_vm_begin(argv[1]);
-    (void)mag_c630_dispatch_observation_init();
-    (void)mag_particle_cohort_ablation_init();
-    (void)mag_dynamic_light_ablation_init();
-    (void)mag_grid_descendant_ablation_init();
-    (void)mag_level_descendant_ablation_init();
-    (void)mag_occlude_input_ablation_init();
-    (void)mag_cull_input_ablation_init();
-    (void)mag_shadow_item_ablation_init();
-    (void)mag_other_item_ablation_init();
-    (void)mag_depth_item_ablation_init();
-    (void)mag_main_item_ablation_init();
-    mag_render_diagnostics_start();
     derive_vfs_root(argv[1]);
     printf("[boot] VFS root: %s\n", ppu_vfs_root);
     /* Our runner always uses a private disc-layout overlay. */
@@ -480,9 +453,6 @@ int main(int argc, char** argv)
     } else
 #endif
         rc = ppu_run(entry, STACK_TOP);
-    mag_render_diagnostics_stop();
-    mag_particle_cohort_ablation_vm_end();
-    mag_native_depth_vm_shutdown();
     printf("\n[boot] ppu_run returned %d (entry function unwound)\n", rc);
 
     /* A title that called sys_process_exit never reaches this line: that path

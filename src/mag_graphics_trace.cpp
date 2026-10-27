@@ -1,8 +1,4 @@
-#include "mag_c630_dispatch_observation.h"
-#include "mag_dynamic_light_ablation.h"
 #include "mag_jobio_selector.h"
-#include "mag_grid_level_ablation.h"
-#include "mag_occlude_input_ablation.h"
 #include "mag_graphics_trace.h"
 #include "diagnostics/critical_trace.h"
 #include "diagnostics/critical_write_trace.h"
@@ -14,18 +10,15 @@ static std::atomic<uint64_t> sequence{0};
 static thread_local uint64_t current_span;
 struct PredState {uint64_t capture,ctx,object,array,target,result,markers0,markers1;};
 static thread_local PredState last[2];
-MagGraphicsTraceScope::MagGraphicsTraceScope(ppu_context *c,uint32_t f):submission(c,f),ctx(c),function(f),start(0),token(0),capture(0),parent(0),predicate(f==0xA047D8||f==0xA05438),exceptions(0),marker_mask(0),wait_identity_valid(false){
- if(f==0xDFBCAC){for(int i=0;i<3;i++)args[i]=c->gpr[3+i];exceptions=std::uncaught_exceptions();mag_c630_dispatch_submit_begin(c,c->thread_id,(uint32_t)c->lr,(uint32_t)args[0],(uint32_t)args[1],(uint32_t)c->gpr[30],(uint32_t)c->gpr[31]);}
+MagGraphicsTraceScope::MagGraphicsTraceScope(ppu_context *c,uint32_t f):ctx(c),function(f),start(0),token(0),capture(0),parent(0),predicate(f==0xA047D8||f==0xA05438),exceptions(0),marker_mask(0),wait_identity_valid(false){
  if(!ps3_critical_enabled())return;
  int saved=errno;capture=ps3_critical_capture_id();for(int i=0;i<3;i++)args[i]=c->gpr[3+i];
  if(!predicate){start=ps3_critical_now_ns();token=++sequence;parent=current_span;current_span=token;exceptions=std::uncaught_exceptions();}
- if(f==0x23D7D0){const uint32_t job=(uint32_t)args[0],module=vm_read32(job+0x288);if(module==0x1f6b860){const uint32_t container=vm_read32(job+0x2a4),ticket=vm_read16(job+0x2a0);uint32_t output=0;const uint64_t header=vm_read64(job+0x280),source=mag_occlude_input_ablation_wait_begin(job,container,ticket,header,&output);if(source){uint64_t identity[8]={module,job,header,container,0,ticket,source,output};for(unsigned i=0;i<8;i++)wait_identity[i]=identity[i];wait_identity_valid=true;}}else if(module==0x1f6b930||module==0x1f6ba00||module==0x1f6c3c0||module==0x1f6c490){const uint32_t container=vm_read32(job+0x2a4),ticket=vm_read16(job+0x2a0);uint64_t identity[8]={module,job,vm_read64(job+0x280),container,vm_read32(container),ticket,vm_read32(container+0x2c),ticket?vm_read32(container+0x20)+8ull*(ticket-1):0};for(unsigned i=0;i<8;i++)wait_identity[i]=identity[i];wait_identity_valid=true;if(module==0x1f6c3c0||module==0x1f6c490)ps3_critical_emit_capture(capture,105,(uint64_t)ctx,token,identity,8);}}
+ if(f==0x23D7D0){const uint32_t job=(uint32_t)args[0],module=vm_read32(job+0x288);if(module==0x1f6b930||module==0x1f6ba00||module==0x1f6c3c0||module==0x1f6c490){const uint32_t container=vm_read32(job+0x2a4),ticket=vm_read16(job+0x2a0);uint64_t identity[8]={module,job,vm_read64(job+0x280),container,vm_read32(container),ticket,vm_read32(container+0x2c),ticket?vm_read32(container+0x20)+8ull*(ticket-1):0};for(unsigned i=0;i<8;i++)wait_identity[i]=identity[i];wait_identity_valid=true;if(module==0x1f6c3c0||module==0x1f6c490)ps3_critical_emit_capture(capture,105,(uint64_t)ctx,token,identity,8);}}
  errno=saved;
 }
 MagGraphicsTraceScope::~MagGraphicsTraceScope(){
  const int caller_errno=errno;
- if(function==0xDFBCAC&&std::uncaught_exceptions()==exceptions){const uint32_t module=(uint32_t)args[0],job=(uint32_t)args[1];if(module==0x1f6c3c0||module==0x1f6c490)mag_grid_level_ablation_observe_submit(ctx,ctx->thread_id,module,job,vm_read32(job+0x2a4),vm_read16(job+0x2a0));if(module==0x1f6c630){mag_dynamic_light_ablation_observe_submit(ctx,ctx->thread_id,module,job,vm_read32(job+0x2a4),vm_read16(job+0x2a0));mag_c630_dispatch_observe_submit(ctx,ctx->thread_id,module,job,vm_read32(job+0x2a4),vm_read16(job+0x2a0));}}
- if(function==0xDFBCAC&&std::uncaught_exceptions()!=exceptions)mag_c630_dispatch_submit_cancel(ctx,(uint32_t)args[1]);
  errno=caller_errno;
  if(!capture)return;int saved=errno;
  if(!predicate)current_span=parent;
@@ -37,10 +30,9 @@ MagGraphicsTraceScope::~MagGraphicsTraceScope(){
    if(function==0xA047D8){uint64_t markers[8]={args[0],args[1],args[2],result,m0,m1,marker_mask,current_span};ps3_critical_emit_capture(capture,39,(uint64_t)ctx,0,markers,8);}uint64_t w[8]={function,args[0],args[1],args[2],result,ctx->gpr[0],current_span,ctx->gpr[4]};ps3_critical_emit_capture(capture,PS3_CRITICAL_PREDICATE,(uint64_t)ctx,0,w,8);
   }
  }else{
-  if(wait_identity_valid){const uint32_t job=(uint32_t)wait_identity[1];if(vm_read32(job+0x288)!=wait_identity[0]||vm_read32(job+0x2a4)!=wait_identity[3]||vm_read16(job+0x2a0)!=wait_identity[5]||vm_read64(job+0x280)!=wait_identity[2])wait_identity[6]|=1ull<<63;if(wait_identity[0]==0x1f6b860){if(std::uncaught_exceptions()==exceptions)mag_occlude_input_ablation_wait_end(wait_identity[6]&~(1ull<<63),job,(uint32_t)wait_identity[3],wait_identity[5],wait_identity[2],(uint32_t)wait_identity[7],!(wait_identity[6]>>63));}else if(wait_identity[0]==0x1f6c3c0||wait_identity[0]==0x1f6c490){if(std::uncaught_exceptions()==exceptions)ps3_critical_emit_capture(capture,106,(uint64_t)ctx,token,wait_identity,8);}else ps3_critical_emit_capture(capture,38,(uint64_t)ctx,token,wait_identity,8);}
+  if(wait_identity_valid){const uint32_t job=(uint32_t)wait_identity[1];if(vm_read32(job+0x288)!=wait_identity[0]||vm_read32(job+0x2a4)!=wait_identity[3]||vm_read16(job+0x2a0)!=wait_identity[5]||vm_read64(job+0x280)!=wait_identity[2])wait_identity[6]|=1ull<<63;if(wait_identity[0]==0x1f6c3c0||wait_identity[0]==0x1f6c490){if(std::uncaught_exceptions()==exceptions)ps3_critical_emit_capture(capture,106,(uint64_t)ctx,token,wait_identity,8);}else ps3_critical_emit_capture(capture,38,(uint64_t)ctx,token,wait_identity,8);}
   if(function==0xDFBCAC){
    const uint32_t job=(uint32_t)args[function==0xDFBCAC?1:0],module=function==0xDFBCAC?(uint32_t)args[0]:vm_read32(job+0x288);
-   if(module==0x1f6b860&&std::uncaught_exceptions()==exceptions)mag_occlude_input_ablation_observe_submit(ctx,ctx->thread_id,module,job,vm_read32(job+0x2a4),vm_read16(job+0x2a0));
    if((module==0x1f6c3c0||module==0x1f6c490)&&std::uncaught_exceptions()==exceptions){const uint32_t container=vm_read32(job+0x2a4),ticket=vm_read16(job+0x2a0);uint64_t identity[8]={module,job,vm_read64(job+0x280),container,vm_read32(container),ticket,vm_read32(job+0x28c),ctx->thread_id};ps3_critical_emit_capture(capture,104,(uint64_t)ctx,token,identity,8);}
    if(module==0x1f6b930||module==0x1f6ba00){const uint32_t container=vm_read32(job+0x2a4),ticket=vm_read16(job+0x2a0);uint64_t identity[8]={module,job,vm_read64(job+0x280),container,vm_read32(container),ticket,vm_read32(container+0x2c),ticket?vm_read32(container+0x20)+8ull*(ticket-1):0};ps3_critical_emit_capture(capture,function==0xDFBCAC?37:38,(uint64_t)ctx,token,identity,8);}
   }
@@ -68,7 +60,6 @@ static std::mutex payload_lock;
 struct PendingPayload {MagGraphicsPayloadTrace token;uint64_t continuation_hash,capture_seen;uint32_t queue;MagPayloadClockObservation clock{};bool selected{};};
 static PendingPayload payload_pending[64];
 /* A cached opt-in observation selector; no guest input, scheduling or completion changes. */
-static const bool payload_all_c630_queue=[](){const char*e=std::getenv("MAG_GRAPHICS_PAYLOAD_ALL_C630_QUEUE");return e&&!std::strcmp(e,"1");}();
 static const bool payload_clock_selected=[](){const char*e=std::getenv("MAG_GRAPHICS_PAYLOAD_CLOCK");return e&&!std::strcmp(e,"1");}();
 static const uint32_t payload_clock_entry=mag_payload_clock_entry(std::getenv("MAG_GRAPHICS_PAYLOAD_CLOCK_ENTRY"));
 static MagPayloadClockObservation payload_clock(){
@@ -145,8 +136,7 @@ extern "C" void mag_graphics_payload_begin(MagGraphicsPayloadTrace *t,void *opaq
  uint64_t range=__atomic_load_n(&ps3_critical_watch_range,__ATOMIC_ACQUIRE);
  uint32_t queue=payload_ls_word(c,0x13F0);
  const bool selected=payload_clock_selected&&payload_clock_entry&&((c->pc&SPU_LS_MASK)==payload_clock_entry);
- const bool held_queue=payload_all_c630_queue&&mag_c630_dispatch_queue_active(queue,ps3_critical_capture_id());
- if(!selected&&!held_queue&&(!range || queue!=((uint32_t)range&~127u))){errno=saved;return;}
+ if(!selected&&(!range || queue!=((uint32_t)range&~127u))){errno=saved;return;}
  t->capture=ps3_critical_capture_id();t->start=ps3_critical_now_ns();t->span=++sequence;t->owner=(uint64_t)c;t->target=c->pc&SPU_LS_MASK;t->continuation=c->gpr[0]._u32[0];t->generation=ps3_critical_context_generation(c);t->control_12e0=payload_ls_word(c,0x12E0);
  {std::lock_guard<std::mutex> guard(payload_lock);PendingPayload *slot=nullptr;
   for(auto &p:payload_pending)if(p.token.owner==t->owner){slot=&p;break;}
@@ -155,7 +145,6 @@ extern "C" void mag_graphics_payload_begin(MagGraphicsPayloadTrace *t,void *opaq
    if(selected){slot->clock=payload_clock();const auto &clock=slot->clock;uint64_t clock_begin[8]={clock.wall,clock.cpu,clock.host,t->target,t->generation,queue,0,uint64_t(clock.cpu_valid)|(uint64_t(clock.host_valid)<<1)};ps3_critical_emit_capture(t->capture,117,t->owner,t->span,clock_begin,8);}}
   else{uint64_t missing[1]={1};ps3_critical_emit_capture(t->capture,17,t->owner,t->span,missing,1);}
  }
- if(t->target==0x7848){MagC630DispatchBinding binding{};(void)mag_c630_dispatch_payload_bind(c,t->span,t->target,&binding);}
  uint64_t fingerprint=payload_hash(c,t->target);
  uint64_t begin[8]={t->start,t->target,t->continuation,queue,t->generation,t->control_12e0,payload_ls_word(c,0x1320),fingerprint};ps3_critical_emit_capture(t->capture,13,t->owner,t->span,begin,8);
  uint64_t descriptor[8];for(unsigned i=0;i<4;i++){descriptor[i]=payload_ls_word(c,0x1320+i*4);descriptor[4+i]=payload_ls_word(c,0x13A0+i*4);}ps3_critical_emit_capture(t->capture,15,t->owner,t->span,descriptor,8);
