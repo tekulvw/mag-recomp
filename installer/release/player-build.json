@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "host": null,
+  "distribution": "source",
+  "kit": null,
+  "reason": "This source checkout carries no maintained MAG build kit. Installer builds embed one with scripts/prepare_player_kit.py.",
+  "native_build_verified": false
+}

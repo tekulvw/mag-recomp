@@ -1,0 +1,24 @@
+MAG installer (mag-recomp)
+
+This archive contains the mag-recomp installer: its own source and profiles, a frozen
+Python launcher, and a source kit with mag-recomp's tooling, sources and profiles plus the
+pinned ps3recomp checkouts (MIT, see LICENSE.ps3recomp in the kit). It contains no MAG
+assets, firmware, decrypted game images, generated or lifted code, built launcher or engine,
+player accounts or build caches. The installer builds MAG on your computer from your own
+game files; nothing it builds may be redistributed.
+
+The frozen launcher embeds CPython. Its version and source inventory are recorded in
+PROVENANCE.json; the interpreter's license is copied to licenses/. PyInstaller 6.22.3
+supplies the bootloader under GPL-2.0 with its distribution exception, with selected files
+under Apache-2.0. Its license notices and those of the pinned packager dependencies
+accompany this archive.
+
+Official references:
+https://docs.python.org/3/license.html
+https://pyinstaller.org/en/v6.22.3/license.html
+https://github.com/pyinstaller/pyinstaller/blob/v6.22.3/COPYING.txt
+
+Build MAG downloads further tools (Python, CMake, Ninja, MinGit, Python wheels and, on
+macOS, SDL2, glslang, SPIRV-Cross and FFmpeg sources) from their official origins at
+pinned versions, under their own licenses. On Windows, Microsoft's Visual Studio Build
+Tools are installed through Microsoft's own installer and license.

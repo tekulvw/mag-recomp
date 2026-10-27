@@ -109,6 +109,10 @@ message(STATUS "Retail image:   ${MAG_IMAGE}")
 # different reason. add_subdirectory hands all of that over with the target.
 add_subdirectory("${PS3RECOMP_DIR}" "${CMAKE_BINARY_DIR}/ps3recomp_sdk"
                  EXCLUDE_FROM_ALL)
+if(WIN32)
+    include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/MagWin32Posix.cmake")
+    mag_win32_posix_runtime("${PS3RECOMP_DIR}")
+endif()
 
 # ---------------------------------------------------------------------------
 # The HLE NID table
@@ -225,9 +229,15 @@ if(MAG_FIRMWARE_DIR)
         list(APPEND MAG_STUB_DEFINITIONS MAG_LAUNCHER_HOOKS)
     endif()
     set_source_files_properties(src/stubs.cpp PROPERTIES COMPILE_DEFINITIONS "${MAG_STUB_DEFINITIONS}")
+    # clang-cl ignores -O0 (and would keep the Release /O2); MSVC spells it /Od.
+    if(MSVC)
+        set(MAG_FIRMWARE_OPTIONS "/Od;/w")
+    else()
+        set(MAG_FIRMWARE_OPTIONS "-O0;-w")
+    endif()
     set_source_files_properties(${MAG_FIRMWARE_SOURCES} PROPERTIES
         INCLUDE_DIRECTORIES "${MAG_FIRMWARE_DIR};${PS3RECOMP_DIR}/runtime/prx"
-        COMPILE_OPTIONS "-O0;-w")
+        COMPILE_OPTIONS "${MAG_FIRMWARE_OPTIONS}")
 endif()
 add_executable(${PROJECT_NAME}
     src/main.cpp
@@ -326,7 +336,9 @@ if(WIN32)
         user32
         gdi32
         winmm
+        bcrypt      # SHA-256 of the prepared engine files (src/retail_handoff.cpp)
     )
+    mag_win32_posix_target(${PROJECT_NAME})
 endif()
 
 # ---------------------------------------------------------------------------
@@ -362,15 +374,23 @@ endif()
 #     default; a PPC fmadd is spelt as one where the lifter means one.
 #   - /bigobj on MSVC. A single lifted file routinely passes the 65,536-section
 #     limit of the default object format.
+#   - the same MAG_GENERATED_PPU_OPT level everywhere. MSVC-style drivers spell
+#     it /Od, /O1, /O2 (clang-cl ignores -O0 and would keep the Release /O2).
+#     x86-64 without FMA flags never contracts, so no contraction switch there.
+set(MAG_GENERATED_PPU_OPT "0" CACHE STRING "Generated title PPU optimization level (diagnostic default0)")
+set_property(CACHE MAG_GENERATED_PPU_OPT PROPERTY STRINGS 0 1 2)
+if(NOT MAG_GENERATED_PPU_OPT MATCHES "^[012]$")
+    message(FATAL_ERROR "MAG_GENERATED_PPU_OPT must be0,1,or2")
+endif()
 if(MSVC)
-    set_source_files_properties(${RECOMP_SOURCES} PROPERTIES
-        COMPILE_OPTIONS "/w;/bigobj")
-else()
-    set(MAG_GENERATED_PPU_OPT "0" CACHE STRING "Generated title PPU optimization level (diagnostic default0)")
-    set_property(CACHE MAG_GENERATED_PPU_OPT PROPERTY STRINGS 0 1 2)
-    if(NOT MAG_GENERATED_PPU_OPT MATCHES "^[012]$")
-        message(FATAL_ERROR "MAG_GENERATED_PPU_OPT must be0,1,or2")
+    if(MAG_GENERATED_PPU_OPT STREQUAL "0")
+        set(MAG_GENERATED_PPU_MSVC_OPT "/Od")
+    else()
+        set(MAG_GENERATED_PPU_MSVC_OPT "/O${MAG_GENERATED_PPU_OPT}")
     endif()
+    set_source_files_properties(${RECOMP_SOURCES} PROPERTIES
+        COMPILE_OPTIONS "/w;/bigobj;${MAG_GENERATED_PPU_MSVC_OPT}")
+else()
     set_source_files_properties(${RECOMP_SOURCES} PROPERTIES
         COMPILE_OPTIONS "-w;-ffp-contract=off;-O${MAG_GENERATED_PPU_OPT}")
 endif()
