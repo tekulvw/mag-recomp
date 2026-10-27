@@ -56,16 +56,21 @@ Keep them clean and at these exact commits: the tools refuse other or dirty revi
 
 ## 3. Your inputs
 
-Follow [docs/retail-inputs.md](docs/retail-inputs.md): copy your disc's `PS3_GAME` tree to
-`local/retail-v1.0/PS3_GAME`, decrypt `EBOOT.BIN` and `bin/mage_g.self` to ELFs beside them, then:
+1. Copy the **complete** `PS3_GAME` tree from your own disc copy to `local/retail-v1.0/PS3_GAME`
+   (Git-ignored). Archives, fonts, textures and movies are loaded at run time, not just the
+   executables.
+2. Decrypt the copies of `USRDIR/EBOOT.BIN` and `USRDIR/bin/mage_g.self` with RPCS3's standalone
+   `--decrypt`, writing `EBOOT.elf` and `bin/mage_g.elf` next to them. No game needs to be booted.
+3. Validate them:
 
 ```sh
 .venv/bin/python tools/prepare_inputs.py --source-root /path/to/your/PS3_GAME/USRDIR
 ```
 
-This verifies every file against the expected v1.0 identities and writes `profiles/retail-v1.0.json`
-(Git-ignored). The complete `PS3_GAME` tree is needed at run time for archives, fonts, textures and
-movies, not just the executables.
+`prepare_inputs.py` checks the originals, your copies and the decrypted ELFs against the expected
+v1.0 SHA-256 identities, validates the ELF64/PowerPC64 headers, segments and entry descriptors, and
+writes `profiles/retail-v1.0.json` (Git-ignored) with the local paths the later steps read. Any other
+release or a modified file is refused.
 
 The engine also needs the console's decrypted SPURS queue firmware module at
 `local/firmware/libsre.prx`; its expected SHA-256 is recorded in `profiles/retail-v1.0-firmware.json`.

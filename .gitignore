@@ -5,8 +5,9 @@ analysis/
 generated/
 build/
 runs/
-# Written by tools/prepare_inputs.py with paths to your own decrypted inputs.
+# Written per machine by tools/prepare_inputs.py and tools/inventory.py from your own inputs.
 profiles/retail-v1.0.json
+profiles/retail-v1.0-inventory.json
 *.BIN
 *.self
 *.sprx

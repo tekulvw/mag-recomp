@@ -18,7 +18,7 @@ PlayStation 3, built on the [ps3recomp](https://github.com/sp00nznet/ps3recomp) 
 | `native/graphics/` | Clean-room native reimplementations of SPU render jobs (Rust and C), with synthetic tests |
 | `profiles/` | Pinned identities of the expected inputs, lifter configurations and allowed SDK revisions |
 | `tests/` | Synthetic tests and fixtures; none contain game data |
-| `docs/` | Input preparation, SPU batch preparation, partial relift and the reimplementation method |
+| `docs/` | SPU batch preparation, the guarded partial relift and the clean-room reimplementation method |
 
 Only the v1.0 retail release is supported; any other release or modified file is refused.
 
