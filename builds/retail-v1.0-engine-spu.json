@@ -1,0 +1,51 @@
+{
+  "image_name": "mage_g",
+  "elf_sha256": "0089f0d6d17e48533ce7ff8d943dddd03487b925e7b04a1a055bfb907568694c",
+  "worker_profile_sha256": "d8eb476b41e65315b43f0a2f508a3af654d26e62f6038a556a667ca6213218fb",
+  "embedded_worker": {
+    "offset": 26973440,
+    "size": 38544,
+    "sha256": "4f12813b7e3d47392f0ea2014c139b20cf9935ac7ca7562cdbf2fbd19ad450f4"
+  },
+  "policy": {
+    "offset": 27085952,
+    "guest_ea": 27151488,
+    "size": 12032,
+    "sha256": "6a3af90518af72ed790b36b2081ab2040237d378bf3644d4461356b44bcfc58a",
+    "runtime_fingerprint": "0xAD16923605435AD0",
+    "image_id": 101,
+    "base": 2560,
+    "entry": 2560,
+    "code_end": 14472,
+    "extra_functions": [
+      2604
+    ],
+    "expected_unsupported_count": 4
+  },
+  "executed_todo_policy": "halt",
+  "expected_unsupported_count": 4,
+  "lifter_repository": "local/ps3recomp-lifter-5244db9",
+  "lifter_revision": "5244db92669b54831c6d3ebb7a96d58c4dbfa6df",
+  "training_task": {
+    "offset": 25795456,
+    "guest_ea": 25860992,
+    "size": 106992,
+    "sha256": "fd2d833f2f502552ced0291e904861e06475ddc236e9a91e35075f1ad615b7ed",
+    "runtime_fingerprint": "0x0A3EA634A9E4C10D",
+    "image_id": 102,
+    "entry": 12400,
+    "code_end": 108448,
+    "expected_unsupported_count": 0
+  },
+  "queued_training_task": {
+    "offset": 25590912,
+    "guest_ea": 25656448,
+    "size": 51808,
+    "sha256": "19e5c5ecba6acbef83db89512bcc058fb206727ee3a48de4175163cadbe50fd1",
+    "runtime_fingerprint": "0xE27EF56335F5E95B",
+    "image_id": 103,
+    "entry": 12400,
+    "code_end": 56424,
+    "expected_unsupported_count": 0
+  }
+}

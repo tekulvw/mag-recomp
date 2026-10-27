@@ -1,0 +1,12 @@
+{
+  "image": "analysis/retail-v1.0/EBOOT/spu/spu_0002_at_00351B80.elf",
+  "image_sha256": "4f12813b7e3d47392f0ea2014c139b20cf9935ac7ca7562cdbf2fbd19ad450f4",
+  "eboot_offset": 3480448,
+  "image_bytes": 38544,
+  "runtime_fingerprint": "0x024D759466FC0751",
+  "image_id": 100,
+  "entry": 12368,
+  "code_end": 43696,
+  "lifter_repository": "local/ps3recomp-lifter-5244db9",
+  "lifter_revision": "5244db92669b54831c6d3ebb7a96d58c4dbfa6df"
+}

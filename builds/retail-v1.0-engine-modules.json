@@ -1,0 +1,24 @@
+{
+  "image_name": "mage_g",
+  "elf_sha256": "0089f0d6d17e48533ce7ff8d943dddd03487b925e7b04a1a055bfb907568694c",
+  "embedded_spu": {
+    "offset": 26973440,
+    "size": 38544,
+    "sha256": "4f12813b7e3d47392f0ea2014c139b20cf9935ac7ca7562cdbf2fbd19ad450f4"
+  },
+  "shared_profiles": {
+    "firmware": "ee3331bce2d556f4506276a0f8fd9e229d3220c61a83a4b814c15ae3a188975e"
+  },
+  "image_profiles": {
+    "spu": {
+      "path": "builds/retail-v1.0-engine-spu.json",
+      "sha256": "0e5684d053e33818be15d5dfb4651f52c1385bd91386a3e4e4d4e699e121fc8c"
+    }
+  },
+  "evidence": {
+    "method": "Full 38,544-byte equality with the audited launcher worker; exactly one occurrence in the pinned engine ELF.",
+    "runtime_fingerprint": "0x024D759466FC0751",
+    "launcher_network_hooks": false,
+    "scope": "Retain the byte-identical audited EDGE worker and shared firmware exports/bridges; use the separate exact-hash-pinned engine WWS policy profile. No EBOOT network or launcher addresses apply to mage_g. Executed unsupported firmware and policy sites remain halts. Policy census is not proof of runtime correctness."
+  }
+}

@@ -1,0 +1,4 @@
+[audio-chronology-summary] reason=shutdown count=0 dropped=0 limit=32768 start_us=1250001 duration_us=10000000 queue_min=4294967295 queue_zero=0 max_submit_interval_us=0 inflight_at_flush=0 coverage=SPU-DMA-only overlap_is_ambiguous=1
+[ppu-call-span-summary] run_id=1250001 target=00012000 start_us=1250001 duration_us=10000000 count=2 dropped=0 limit=32768 pending_recorded_brackets=0 completion=PPU-fn-and-trampoline-only
+[ppu-call-span] seq=1 run_id=1250001 token=1 phase=0 us=1250001 ctx=16DB663E0 thread=4294967303 target=00012000 depth=0 flags=0 r3=5 r4=0 r5=256 r6=0 r7=0 r8=0 r9=0 r10=0 r31=144470
+[ppu-call-span] seq=2 run_id=1250001 token=1 phase=1 us=1250601 ctx=16DB663E0 thread=4294967303 target=00012000 depth=0 flags=0 r3=5 r4=0 r5=256 r6=0 r7=0 r8=0 r9=0 r10=0 r31=144470

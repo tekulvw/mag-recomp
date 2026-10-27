@@ -1,0 +1,7 @@
+{
+  "image_name": "EBOOT",
+  "elf_sha256": "eb916f92e7c32a9401739d79835630273e1f41a92e6a5d17753d9374062da7d9",
+  "sdk_revision": "dfa7073d2e164aec6890866c4951d8dedc28619d",
+  "configuration": "retail-v1.0-EBOOT-reservations-config.json",
+  "configuration_sha256": "281cb7b4f2185c6b65549c18687f9f4ecdcdcf673715c858cd3155aacfc0ba22"
+}

@@ -1,0 +1,40 @@
+{
+  "format": 1,
+  "change": "mtctr-full-width",
+  "elf_sha256": "0089f0d6d17e48533ce7ff8d943dddd03487b925e7b04a1a055bfb907568694c",
+  "input_sha256": "66e55197bd95891db98344b6bfdf625c11c05bed9c672ab788967b9de188398c",
+  "output_sha256": "8e7142430b5f14ff1a7c1c638f7f58f332c34a77e191f36f90fe10873a898cc8",
+  "tools": {
+    "decoder_sha256": "1fd70ab34d22b2c55d49a779c9f9fb4a625ef4469c89314fc2e8bae00253d35e",
+    "before": {
+      "revision": "a2c20108af45174dbb7d3e2f87f6acaaef09c6b4",
+      "lifter_sha256": "b6ce511eb795835143a8147e2179f3b070a4b38b4c114bc9e4e8aba5da2fc811"
+    },
+    "after": {
+      "revision": "423ba50ad535da65ff67328c2df589708cbd8764",
+      "lifter_sha256": "9a9ae0680459ab9f5df1baa1867a168718879d5eee5b5ec42ec750b9458b8b67"
+    }
+  },
+  "function": {
+    "name": "func_01112114",
+    "start": "0x1112114",
+    "end": "0x1112580",
+    "instruction_count": 283,
+    "bytes_sha256": "5da30051b0388760470f7d0821ab929dee3ec1b5bdb8974ed9f744c75cf3a062",
+    "before_body_sha256": "a47ae05d0eb056ac7e0f1800393ff97ea2355d589fd02ab9f95a68e93d19dc90",
+    "after_body_sha256": "5f82906859736de3199a33f9aba02947a15dcff04504a7780039dc95e49c2b03",
+    "mtctr_register": 10,
+    "mtctr": [
+      [
+        "0x1112258",
+        "r10"
+      ]
+    ],
+    "mfctr": [
+      [
+        "0x111241c",
+        "r9"
+      ]
+    ]
+  }
+}

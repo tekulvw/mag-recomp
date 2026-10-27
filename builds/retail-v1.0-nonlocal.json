@@ -1,0 +1,7 @@
+{
+  "image_name": "mage_g",
+  "elf_sha256": "0089f0d6d17e48533ce7ff8d943dddd03487b925e7b04a1a055bfb907568694c",
+  "sdk_revision": "dfa7073d2e164aec6890866c4951d8dedc28619d",
+  "configuration": "retail-v1.0-nonlocal-config.json",
+  "configuration_sha256": "23f5916478f768a325e8ded11b5650a92fbd586ccbb68e2deac49775ade1e0f1"
+}

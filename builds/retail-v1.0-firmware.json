@@ -1,0 +1,37 @@
+{
+  "image": "local/firmware/libsre.prx",
+  "image_sha256": "115f9df9596dd0b358e5a8c4eaaf77ee44c1f3ec16f9056b3abc517b739140c9",
+  "base": 553648128,
+  "toc": 553884336,
+  "code_end": 553769752,
+  "exports": [
+    "0x011EE38B",
+    "0x8A85674D",
+    "0x1656D49F",
+    "0x73E06F91"
+  ],
+  "lifter_repository": "local/ps3recomp-lifter-dfa7073",
+  "lifter_revision": "dfa7073d2e164aec6890866c4951d8dedc28619d",
+  "hle_bridges": [
+    {
+      "library": "cellSpurs",
+      "name": "cellSpursAttachLv2EventQueue",
+      "nid": "0xB9BC6207",
+      "stub": "0x2100B0D0",
+      "reason": "Use the host SPURS scheduler event-port registry; no LV2 SPU thread group exists for HLE tasks."
+    },
+    {
+      "library": "cellSpurs",
+      "name": "cellSpursDetachLv2EventQueue",
+      "nid": "0x4E66D483",
+      "stub": "0x2100B234",
+      "reason": "Use the host SPURS scheduler event-port registry; no LV2 SPU thread group exists for HLE tasks."
+    }
+  ],
+  "placement": {
+    "reserved_bytes": 1048576,
+    "scope": "MAG retail v1.0 native host reservation, not a general PS3 PRX placement policy.",
+    "evidence": "The original 0x30000000 placement overlaps the observed retail GCM IO buffer [0x30000000,0x32300000). A hardware write watch caught the LFQueuePush OPD at 0x3003184C overwritten by guest function 0xE24384 with 0xDC663E5E. Reserve [0x21000000,0x21100000) outside the title image/main/RSX range below 0x20000000, GCM injected structures [0x20000000,0x20008000), raw-SPU/GCM IO [0x30000000,0x40000000), sys_memory [0x40000000,0x50000000), sys_vm [0x60000000,0x70000000), and thread stacks [0xD0000000,0xE0000000).",
+    "runtime_evidence": "runs/retail-visible-firmware-overlap-20261011/native/firmware-watch/writes.jsonl"
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "nonlocal_return_functions": ["0x00CE0BAC"],
+  "continuations": [
+    {"function": "0x009BDBB0", "address": "0x009BDBEC"}
+  ]
+}

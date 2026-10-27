@@ -1,0 +1,1121 @@
+{
+  "schema_version": 1,
+  "scope": "Every embedded SPU ELF in both hash-pinned BCUS98110 v1.0 decrypted retail executables, with selected/auxiliary firmware reported separately. Raw SPU policies/job blobs are outside ELF magic inventory.",
+  "lifter_revision": "5244db92669b54831c6d3ebb7a96d58c4dbfa6df",
+  "sources": [
+    {
+      "name": "EBOOT",
+      "scope": "retail",
+      "bytes": 4700112,
+      "sha256": "eb916f92e7c32a9401739d79835630273e1f41a92e6a5d17753d9374062da7d9",
+      "hash_pinned": true,
+      "embedded_spu_count": 3,
+      "independent_magic_scan_agrees": true
+    },
+    {
+      "name": "mage_g",
+      "scope": "retail",
+      "bytes": 30251576,
+      "sha256": "0089f0d6d17e48533ce7ff8d943dddd03487b925e7b04a1a055bfb907568694c",
+      "hash_pinned": true,
+      "embedded_spu_count": 11,
+      "independent_magic_scan_agrees": true
+    },
+    {
+      "name": "libsre",
+      "scope": "selected_firmware",
+      "bytes": 239344,
+      "sha256": "115f9df9596dd0b358e5a8c4eaaf77ee44c1f3ec16f9056b3abc517b739140c9",
+      "hash_pinned": true,
+      "embedded_spu_count": 2,
+      "independent_magic_scan_agrees": true
+    },
+    {
+      "name": "libsail",
+      "scope": "auxiliary_firmware",
+      "bytes": 203400,
+      "sha256": "ac33b80980d45113d887c868ff02619dc145e8a80bc102749a31fbd750431bbb",
+      "hash_pinned": false,
+      "embedded_spu_count": 0,
+      "independent_magic_scan_agrees": true
+    }
+  ],
+  "registrations": [
+    {
+      "fingerprint": "0xAD16923605435AD0",
+      "symbol": "mag_wws_policy_spu_func_00000A00",
+      "image_id": 101,
+      "label": "MAG retail WWS policy",
+      "source": "engine_policy_workload.c",
+      "source_sha256": "8c5a1e7a14192ceed3463e09178728e93e692332ff1aa26aa3696ea26526a480"
+    },
+    {
+      "fingerprint": "0x0A3EA634A9E4C10D",
+      "symbol": "mag_training_spu_func_00003070",
+      "image_id": 102,
+      "label": "MAG retail training task",
+      "source": "engine_policy_workload.c",
+      "source_sha256": "8c5a1e7a14192ceed3463e09178728e93e692332ff1aa26aa3696ea26526a480"
+    },
+    {
+      "fingerprint": "0xE27EF56335F5E95B",
+      "symbol": "mag_training_queued_spu_func_00003070",
+      "image_id": 103,
+      "label": "MAG retail queued training task",
+      "source": "engine_policy_workload.c",
+      "source_sha256": "8c5a1e7a14192ceed3463e09178728e93e692332ff1aa26aa3696ea26526a480"
+    },
+    {
+      "fingerprint": "0x024D759466FC0751",
+      "symbol": "mag_edgezlib_spu_func_00003050",
+      "image_id": 100,
+      "label": "MAG retail EDGE zlib",
+      "source": "spu_workloads.c",
+      "source_sha256": "859dfcc259fe7b72dc6c25928eca3339267e2c74e7265f9262fe46ca78ddfe0a"
+    }
+  ],
+  "summary": {
+    "retail_occurrences": 14,
+    "retail_unique_ELFs": 12,
+    "retail_registered_occurrences": 4,
+    "retail_registered_unique_ELFs": 3,
+    "retail_unregistered_occurrences": 10,
+    "retail_unregistered_unique_ELFs": 9,
+    "selected_firmware_occurrences": 2,
+    "auxiliary_firmware_occurrences": 0,
+    "total_generated_registry_entries": 4
+  },
+  "images": [
+    {
+      "carrier": "EBOOT",
+      "scope": "retail",
+      "index": 0,
+      "file_offset": "0x0034B900",
+      "guest_eas": [
+        "0x0035B900"
+      ],
+      "size": 10768,
+      "sha256": "125f76b2cc7f4b0a11bd846a9e11c0881772e7156807dbbb2e7eb05af30c844e",
+      "runtime_fingerprint": "0xAD2FC6BA2B77DA39",
+      "entry": "0x3050",
+      "note_spu_name": [
+        "sha256.elf"
+      ],
+      "executable_sections": [
+        {
+          "ls_start": "0x3000",
+          "file_offset": "0x100",
+          "size": 16,
+          "ls_end": "0x3010"
+        },
+        {
+          "ls_start": "0x3010",
+          "file_offset": "0x110",
+          "size": 48,
+          "ls_end": "0x3040"
+        },
+        {
+          "ls_start": "0x3040",
+          "file_offset": "0x140",
+          "size": 8560,
+          "ls_end": "0x51B0"
+        },
+        {
+          "ls_start": "0x51B0",
+          "file_offset": "0x22B0",
+          "size": 48,
+          "ls_end": "0x51E0"
+        }
+      ],
+      "executable_end": "0x51E0",
+      "load_segments": [
+        {
+          "ls_start": "0x3000",
+          "file_offset": "0x100",
+          "file_bytes": 8736,
+          "memory_bytes": 8736,
+          "flags": 5
+        },
+        {
+          "ls_start": "0x5280",
+          "file_offset": "0x2380",
+          "file_bytes": 272,
+          "memory_bytes": 4752,
+          "flags": 6
+        }
+      ],
+      "registration": null,
+      "classification": "unregistered_embedded_ELF",
+      "duplicate_occurrences": [],
+      "actual_SDK_C_extent_and_fingerprint_verified": true,
+      "actual_generated_constructor_registry_id": 0,
+      "role_label": "SHA-256 worker",
+      "role_evidence_basis": "recorded ELF note"
+    },
+    {
+      "carrier": "EBOOT",
+      "scope": "retail",
+      "index": 1,
+      "file_offset": "0x0034E380",
+      "guest_eas": [
+        "0x0035E380"
+      ],
+      "size": 14256,
+      "sha256": "0dd0cbdcad3807f4882717ff8254b215a422736f33caf9705208d538655ed819",
+      "runtime_fingerprint": "0x0DF28B81C072B973",
+      "entry": "0x3050",
+      "note_spu_name": [
+        "HashTask.elf"
+      ],
+      "executable_sections": [
+        {
+          "ls_start": "0x3000",
+          "file_offset": "0x100",
+          "size": 16,
+          "ls_end": "0x3010"
+        },
+        {
+          "ls_start": "0x3010",
+          "file_offset": "0x110",
+          "size": 48,
+          "ls_end": "0x3040"
+        },
+        {
+          "ls_start": "0x3040",
+          "file_offset": "0x140",
+          "size": 12720,
+          "ls_end": "0x61F0"
+        },
+        {
+          "ls_start": "0x61F0",
+          "file_offset": "0x32F0",
+          "size": 48,
+          "ls_end": "0x6220"
+        }
+      ],
+      "executable_end": "0x6220",
+      "load_segments": [
+        {
+          "ls_start": "0x3000",
+          "file_offset": "0x100",
+          "file_bytes": 12848,
+          "memory_bytes": 12848,
+          "flags": 5
+        },
+        {
+          "ls_start": "0x6280",
+          "file_offset": "0x3380",
+          "file_bytes": 16,
+          "memory_bytes": 368,
+          "flags": 6
+        }
+      ],
+      "registration": null,
+      "classification": "unregistered_embedded_ELF",
+      "duplicate_occurrences": [
+        {
+          "carrier": "EBOOT",
+          "file_offset": "0x0034E380"
+        },
+        {
+          "carrier": "mage_g",
+          "file_offset": "0x019B5D00"
+        }
+      ],
+      "actual_SDK_C_extent_and_fingerprint_verified": true,
+      "actual_generated_constructor_registry_id": 0,
+      "role_label": "HashTask worker",
+      "role_evidence_basis": "recorded ELF note"
+    },
+    {
+      "carrier": "EBOOT",
+      "scope": "retail",
+      "index": 2,
+      "file_offset": "0x00351B80",
+      "guest_eas": [
+        "0x00361B80"
+      ],
+      "size": 38544,
+      "sha256": "4f12813b7e3d47392f0ea2014c139b20cf9935ac7ca7562cdbf2fbd19ad450f4",
+      "runtime_fingerprint": "0x024D759466FC0751",
+      "entry": "0x3050",
+      "note_spu_name": [
+        "objs/release/edgezlib_inflate_ta"
+      ],
+      "executable_sections": [
+        {
+          "ls_start": "0x3000",
+          "file_offset": "0x100",
+          "size": 16,
+          "ls_end": "0x3010"
+        },
+        {
+          "ls_start": "0x3010",
+          "file_offset": "0x110",
+          "size": 48,
+          "ls_end": "0x3040"
+        },
+        {
+          "ls_start": "0x3040",
+          "file_offset": "0x140",
+          "size": 31296,
+          "ls_end": "0xAA80"
+        },
+        {
+          "ls_start": "0xAA80",
+          "file_offset": "0x7B80",
+          "size": 48,
+          "ls_end": "0xAAB0"
+        }
+      ],
+      "executable_end": "0xAAB0",
+      "load_segments": [
+        {
+          "ls_start": "0x3000",
+          "file_offset": "0x100",
+          "file_bytes": 35696,
+          "memory_bytes": 35696,
+          "flags": 5
+        },
+        {
+          "ls_start": "0xBB80",
+          "file_offset": "0x8C80",
+          "file_bytes": 32,
+          "memory_bytes": 174336,
+          "flags": 6
+        }
+      ],
+      "registration": {
+        "fingerprint": "0x024D759466FC0751",
+        "symbol": "mag_edgezlib_spu_func_00003050",
+        "image_id": 100,
+        "label": "MAG retail EDGE zlib",
+        "source": "spu_workloads.c",
+        "source_sha256": "859dfcc259fe7b72dc6c25928eca3339267e2c74e7265f9262fe46ca78ddfe0a"
+      },
+      "classification": "registered_exact_ELF",
+      "duplicate_occurrences": [
+        {
+          "carrier": "EBOOT",
+          "file_offset": "0x00351B80"
+        },
+        {
+          "carrier": "mage_g",
+          "file_offset": "0x019B9500"
+        }
+      ],
+      "actual_SDK_C_extent_and_fingerprint_verified": true,
+      "actual_generated_constructor_registry_id": 100,
+      "role_label": "EDGE zlib decompression worker",
+      "role_evidence_basis": "recorded ELF note and pinned existing profile"
+    },
+    {
+      "carrier": "mage_g",
+      "scope": "retail",
+      "index": 0,
+      "file_offset": "0x01867C80",
+      "guest_eas": [
+        "0x01877C80"
+      ],
+      "size": 51808,
+      "sha256": "19e5c5ecba6acbef83db89512bcc058fb206727ee3a48de4175163cadbe50fd1",
+      "runtime_fingerprint": "0xE27EF56335F5E95B",
+      "entry": "0x3070",
+      "note_spu_name": [
+        "hkaSpursSpu_spu_gcc_4-1-1_releas"
+      ],
+      "executable_sections": [
+        {
+          "ls_start": "0x3000",
+          "file_offset": "0x100",
+          "size": 16,
+          "ls_end": "0x3010"
+        },
+        {
+          "ls_start": "0x3010",
+          "file_offset": "0x110",
+          "size": 80,
+          "ls_end": "0x3060"
+        },
+        {
+          "ls_start": "0x3060",
+          "file_offset": "0x160",
+          "size": 43992,
+          "ls_end": "0xDC38"
+        },
+        {
+          "ls_start": "0xDC38",
+          "file_offset": "0xAD38",
+          "size": 48,
+          "ls_end": "0xDC68"
+        }
+      ],
+      "executable_end": "0xDC68",
+      "load_segments": [
+        {
+          "ls_start": "0x3000",
+          "file_offset": "0x100",
+          "file_bytes": 45936,
+          "memory_bytes": 45936,
+          "flags": 5
+        },
+        {
+          "ls_start": "0xE380",
+          "file_offset": "0xB480",
+          "file_bytes": 400,
+          "memory_bytes": 185088,
+          "flags": 6
+        }
+      ],
+      "registration": {
+        "fingerprint": "0xE27EF56335F5E95B",
+        "symbol": "mag_training_queued_spu_func_00003070",
+        "image_id": 103,
+        "label": "MAG retail queued training task",
+        "source": "engine_policy_workload.c",
+        "source_sha256": "8c5a1e7a14192ceed3463e09178728e93e692332ff1aa26aa3696ea26526a480"
+      },
+      "classification": "registered_exact_ELF",
+      "duplicate_occurrences": [],
+      "actual_SDK_C_extent_and_fingerprint_verified": true,
+      "actual_generated_constructor_registry_id": 103,
+      "role_label": "Havok animation worker",
+      "role_evidence_basis": "recorded hkaSpurs note; animation role inferred from hka naming"
+    },
+    {
+      "carrier": "mage_g",
+      "scope": "retail",
+      "index": 1,
+      "file_offset": "0x01874700",
+      "guest_eas": [
+        "0x01884700"
+      ],
+      "size": 152608,
+      "sha256": "a83dd7a802f9dc16071871df90d762f235f272e3d1025f203d656dd54cc74241",
+      "runtime_fingerprint": "0xA1115C92B0FF49BE",
+      "entry": "0x3070",
+      "note_spu_name": [
+        "hkpSpursCollide_spu_gcc_4-1-1_re"
+      ],
+      "executable_sections": [
+        {
+          "ls_start": "0x3000",
+          "file_offset": "0x100",
+          "size": 16,
+          "ls_end": "0x3010"
+        },
+        {
+          "ls_start": "0x3010",
+          "file_offset": "0x110",
+          "size": 80,
+          "ls_end": "0x3060"
+        },
+        {
+          "ls_start": "0x3060",
+          "file_offset": "0x160",
+          "size": 141224,
+          "ls_end": "0x25808"
+        },
+        {
+          "ls_start": "0x25808",
+          "file_offset": "0x22908",
+          "size": 48,
+          "ls_end": "0x25838"
+        }
+      ],
+      "executable_end": "0x25838",
+      "load_segments": [
+        {
+          "ls_start": "0x3000",
+          "file_offset": "0x100",
+          "file_bytes": 143904,
+          "memory_bytes": 143904,
+          "flags": 5
+        },
+        {
+          "ls_start": "0x26280",
+          "file_offset": "0x23380",
+          "file_bytes": 432,
+          "memory_bytes": 87296,
+          "flags": 6
+        }
+      ],
+      "registration": null,
+      "classification": "unregistered_embedded_ELF",
+      "duplicate_occurrences": [],
+      "actual_SDK_C_extent_and_fingerprint_verified": true,
+      "actual_generated_constructor_registry_id": 0,
+      "role_label": "Havok collision worker",
+      "role_evidence_basis": "recorded hkpSpursCollide note"
+    },
+    {
+      "carrier": "mage_g",
+      "scope": "retail",
+      "index": 2,
+      "file_offset": "0x01899B80",
+      "guest_eas": [
+        "0x018A9B80"
+      ],
+      "size": 106992,
+      "sha256": "fd2d833f2f502552ced0291e904861e06475ddc236e9a91e35075f1ad615b7ed",
+      "runtime_fingerprint": "0x0A3EA634A9E4C10D",
+      "entry": "0x3070",
+      "note_spu_name": [
+        "hkpSpursIntegrate_spu_gcc_4-1-1_"
+      ],
+      "executable_sections": [
+        {
+          "ls_start": "0x3000",
+          "file_offset": "0x100",
+          "size": 16,
+          "ls_end": "0x3010"
+        },
+        {
+          "ls_start": "0x3010",
+          "file_offset": "0x110",
+          "size": 80,
+          "ls_end": "0x3060"
+        },
+        {
+          "ls_start": "0x3060",
+          "file_offset": "0x160",
+          "size": 96016,
+          "ls_end": "0x1A770"
+        },
+        {
+          "ls_start": "0x1A770",
+          "file_offset": "0x17870",
+          "size": 48,
+          "ls_end": "0x1A7A0"
+        }
+      ],
+      "executable_end": "0x1A7A0",
+      "load_segments": [
+        {
+          "ls_start": "0x3000",
+          "file_offset": "0x100",
+          "file_bytes": 98512,
+          "memory_bytes": 98512,
+          "flags": 5
+        },
+        {
+          "ls_start": "0x1B100",
+          "file_offset": "0x18200",
+          "file_bytes": 480,
+          "memory_bytes": 84096,
+          "flags": 6
+        }
+      ],
+      "registration": {
+        "fingerprint": "0x0A3EA634A9E4C10D",
+        "symbol": "mag_training_spu_func_00003070",
+        "image_id": 102,
+        "label": "MAG retail training task",
+        "source": "engine_policy_workload.c",
+        "source_sha256": "8c5a1e7a14192ceed3463e09178728e93e692332ff1aa26aa3696ea26526a480"
+      },
+      "classification": "registered_exact_ELF",
+      "duplicate_occurrences": [],
+      "actual_SDK_C_extent_and_fingerprint_verified": true,
+      "actual_generated_constructor_registry_id": 102,
+      "role_label": "Havok integration worker",
+      "role_evidence_basis": "recorded hkpSpursIntegrate note"
+    },
+    {
+      "carrier": "mage_g",
+      "scope": "retail",
+      "index": 3,
+      "file_offset": "0x018B3D80",
+      "guest_eas": [
+        "0x018C3D80"
+      ],
+      "size": 133000,
+      "sha256": "de7b71e289f898154b9a110b007472050a572913f6f94909d8913d599acfec7c",
+      "runtime_fingerprint": "0x35A3DF4CA5C1E655",
+      "entry": "0x3070",
+      "note_spu_name": [
+        "hkpSpursCollisionQuery_spu_gcc_4"
+      ],
+      "executable_sections": [
+        {
+          "ls_start": "0x3000",
+          "file_offset": "0x100",
+          "size": 16,
+          "ls_end": "0x3010"
+        },
+        {
+          "ls_start": "0x3010",
+          "file_offset": "0x110",
+          "size": 80,
+          "ls_end": "0x3060"
+        },
+        {
+          "ls_start": "0x3060",
+          "file_offset": "0x160",
+          "size": 122240,
+          "ls_end": "0x20DE0"
+        },
+        {
+          "ls_start": "0x20DE0",
+          "file_offset": "0x1DEE0",
+          "size": 48,
+          "ls_end": "0x20E10"
+        }
+      ],
+      "executable_end": "0x20E10",
+      "load_segments": [
+        {
+          "ls_start": "0x3000",
+          "file_offset": "0x100",
+          "file_bytes": 124352,
+          "memory_bytes": 124352,
+          "flags": 5
+        },
+        {
+          "ls_start": "0x21600",
+          "file_offset": "0x1E700",
+          "file_bytes": 464,
+          "memory_bytes": 72960,
+          "flags": 6
+        }
+      ],
+      "registration": null,
+      "classification": "unregistered_embedded_ELF",
+      "duplicate_occurrences": [],
+      "actual_SDK_C_extent_and_fingerprint_verified": true,
+      "actual_generated_constructor_registry_id": 0,
+      "role_label": "Havok collision-query worker",
+      "role_evidence_basis": "recorded hkpSpursCollisionQuery note"
+    },
+    {
+      "carrier": "mage_g",
+      "scope": "retail",
+      "index": 4,
+      "file_offset": "0x018D4580",
+      "guest_eas": [
+        "0x018E4580"
+      ],
+      "size": 131628,
+      "sha256": "f69fe625dd3989085baf161506fdb761a3cc427e0a03aa79aaa4c368fe7e3976",
+      "runtime_fingerprint": "0xCDACBAC6CBDB52DC",
+      "entry": "0x3070",
+      "note_spu_name": [
+        "hkpSpursRayCastQuery_spu_gcc_4-1"
+      ],
+      "executable_sections": [
+        {
+          "ls_start": "0x3000",
+          "file_offset": "0x100",
+          "size": 16,
+          "ls_end": "0x3010"
+        },
+        {
+          "ls_start": "0x3010",
+          "file_offset": "0x110",
+          "size": 80,
+          "ls_end": "0x3060"
+        },
+        {
+          "ls_start": "0x3060",
+          "file_offset": "0x160",
+          "size": 122080,
+          "ls_end": "0x20D40"
+        },
+        {
+          "ls_start": "0x20D40",
+          "file_offset": "0x1DE40",
+          "size": 48,
+          "ls_end": "0x20D70"
+        }
+      ],
+      "executable_end": "0x20D70",
+      "load_segments": [
+        {
+          "ls_start": "0x3000",
+          "file_offset": "0x100",
+          "file_bytes": 124176,
+          "memory_bytes": 124176,
+          "flags": 5
+        },
+        {
+          "ls_start": "0x21580",
+          "file_offset": "0x1E680",
+          "file_bytes": 448,
+          "memory_bytes": 114560,
+          "flags": 6
+        }
+      ],
+      "registration": null,
+      "classification": "unregistered_embedded_ELF",
+      "duplicate_occurrences": [],
+      "actual_SDK_C_extent_and_fingerprint_verified": true,
+      "actual_generated_constructor_registry_id": 0,
+      "role_label": "Havok raycast-query worker",
+      "role_evidence_basis": "recorded hkpSpursRayCastQuery note"
+    },
+    {
+      "carrier": "mage_g",
+      "scope": "retail",
+      "index": 5,
+      "file_offset": "0x019B5D00",
+      "guest_eas": [
+        "0x019C5D00"
+      ],
+      "size": 14256,
+      "sha256": "0dd0cbdcad3807f4882717ff8254b215a422736f33caf9705208d538655ed819",
+      "runtime_fingerprint": "0x0DF28B81C072B973",
+      "entry": "0x3050",
+      "note_spu_name": [
+        "HashTask.elf"
+      ],
+      "executable_sections": [
+        {
+          "ls_start": "0x3000",
+          "file_offset": "0x100",
+          "size": 16,
+          "ls_end": "0x3010"
+        },
+        {
+          "ls_start": "0x3010",
+          "file_offset": "0x110",
+          "size": 48,
+          "ls_end": "0x3040"
+        },
+        {
+          "ls_start": "0x3040",
+          "file_offset": "0x140",
+          "size": 12720,
+          "ls_end": "0x61F0"
+        },
+        {
+          "ls_start": "0x61F0",
+          "file_offset": "0x32F0",
+          "size": 48,
+          "ls_end": "0x6220"
+        }
+      ],
+      "executable_end": "0x6220",
+      "load_segments": [
+        {
+          "ls_start": "0x3000",
+          "file_offset": "0x100",
+          "file_bytes": 12848,
+          "memory_bytes": 12848,
+          "flags": 5
+        },
+        {
+          "ls_start": "0x6280",
+          "file_offset": "0x3380",
+          "file_bytes": 16,
+          "memory_bytes": 368,
+          "flags": 6
+        }
+      ],
+      "registration": null,
+      "classification": "unregistered_embedded_ELF",
+      "duplicate_occurrences": [
+        {
+          "carrier": "EBOOT",
+          "file_offset": "0x0034E380"
+        },
+        {
+          "carrier": "mage_g",
+          "file_offset": "0x019B5D00"
+        }
+      ],
+      "actual_SDK_C_extent_and_fingerprint_verified": true,
+      "actual_generated_constructor_registry_id": 0,
+      "role_label": "HashTask worker",
+      "role_evidence_basis": "recorded ELF note"
+    },
+    {
+      "carrier": "mage_g",
+      "scope": "retail",
+      "index": 6,
+      "file_offset": "0x019B9500",
+      "guest_eas": [
+        "0x019C9500"
+      ],
+      "size": 38544,
+      "sha256": "4f12813b7e3d47392f0ea2014c139b20cf9935ac7ca7562cdbf2fbd19ad450f4",
+      "runtime_fingerprint": "0x024D759466FC0751",
+      "entry": "0x3050",
+      "note_spu_name": [
+        "objs/release/edgezlib_inflate_ta"
+      ],
+      "executable_sections": [
+        {
+          "ls_start": "0x3000",
+          "file_offset": "0x100",
+          "size": 16,
+          "ls_end": "0x3010"
+        },
+        {
+          "ls_start": "0x3010",
+          "file_offset": "0x110",
+          "size": 48,
+          "ls_end": "0x3040"
+        },
+        {
+          "ls_start": "0x3040",
+          "file_offset": "0x140",
+          "size": 31296,
+          "ls_end": "0xAA80"
+        },
+        {
+          "ls_start": "0xAA80",
+          "file_offset": "0x7B80",
+          "size": 48,
+          "ls_end": "0xAAB0"
+        }
+      ],
+      "executable_end": "0xAAB0",
+      "load_segments": [
+        {
+          "ls_start": "0x3000",
+          "file_offset": "0x100",
+          "file_bytes": 35696,
+          "memory_bytes": 35696,
+          "flags": 5
+        },
+        {
+          "ls_start": "0xBB80",
+          "file_offset": "0x8C80",
+          "file_bytes": 32,
+          "memory_bytes": 174336,
+          "flags": 6
+        }
+      ],
+      "registration": {
+        "fingerprint": "0x024D759466FC0751",
+        "symbol": "mag_edgezlib_spu_func_00003050",
+        "image_id": 100,
+        "label": "MAG retail EDGE zlib",
+        "source": "spu_workloads.c",
+        "source_sha256": "859dfcc259fe7b72dc6c25928eca3339267e2c74e7265f9262fe46ca78ddfe0a"
+      },
+      "classification": "registered_exact_ELF",
+      "duplicate_occurrences": [
+        {
+          "carrier": "EBOOT",
+          "file_offset": "0x00351B80"
+        },
+        {
+          "carrier": "mage_g",
+          "file_offset": "0x019B9500"
+        }
+      ],
+      "actual_SDK_C_extent_and_fingerprint_verified": true,
+      "actual_generated_constructor_registry_id": 100,
+      "role_label": "EDGE zlib decompression worker",
+      "role_evidence_basis": "recorded ELF note and pinned existing profile"
+    },
+    {
+      "carrier": "mage_g",
+      "scope": "retail",
+      "index": 7,
+      "file_offset": "0x019D7E80",
+      "guest_eas": [
+        "0x019E7E80"
+      ],
+      "size": 78504,
+      "sha256": "700ddaad7cb110cfe4e1bea75861e6a78aabe4a1d153e67b79345d84f828eb61",
+      "runtime_fingerprint": "0x48EA1D0EF8B19C04",
+      "entry": "0x4080",
+      "note_spu_name": [
+        "../../bin/ps3spu/gnu/release/scr"
+      ],
+      "executable_sections": [
+        {
+          "ls_start": "0x4000",
+          "file_offset": "0x80",
+          "size": 16,
+          "ls_end": "0x4010"
+        },
+        {
+          "ls_start": "0x4080",
+          "file_offset": "0x100",
+          "size": 64056,
+          "ls_end": "0x13AB8"
+        }
+      ],
+      "executable_end": "0x13AB8",
+      "load_segments": [
+        {
+          "ls_start": "0x4000",
+          "file_offset": "0x80",
+          "file_bytes": 75392,
+          "memory_bytes": 77856,
+          "flags": 7
+        }
+      ],
+      "registration": null,
+      "classification": "unregistered_embedded_ELF",
+      "duplicate_occurrences": [],
+      "actual_SDK_C_extent_and_fingerprint_verified": true,
+      "actual_generated_constructor_registry_id": 0,
+      "role_label": "Boomerang audio DSP/sampler image A",
+      "role_evidence_basis": "truncated scr note plus DSP, distortion, envelope and sampler source assertions; exact file basename unavailable"
+    },
+    {
+      "carrier": "mage_g",
+      "scope": "retail",
+      "index": 8,
+      "file_offset": "0x019EB180",
+      "guest_eas": [
+        "0x019FB180"
+      ],
+      "size": 146464,
+      "sha256": "663ef8107a217936cf3074b4f8efa8c208ac7a8c7c7767ed5ba88f0028ccad5a",
+      "runtime_fingerprint": "0x60D5238F7C52C274",
+      "entry": "0x4080",
+      "note_spu_name": [
+        "../../bin/ps3spu/gnu/release/scr"
+      ],
+      "executable_sections": [
+        {
+          "ls_start": "0x4000",
+          "file_offset": "0x80",
+          "size": 16,
+          "ls_end": "0x4010"
+        },
+        {
+          "ls_start": "0x4080",
+          "file_offset": "0x100",
+          "size": 124200,
+          "ls_end": "0x225A8"
+        }
+      ],
+      "executable_end": "0x225A8",
+      "load_segments": [
+        {
+          "ls_start": "0x4000",
+          "file_offset": "0x80",
+          "file_bytes": 141824,
+          "memory_bytes": 144480,
+          "flags": 7
+        }
+      ],
+      "registration": null,
+      "classification": "unregistered_embedded_ELF",
+      "duplicate_occurrences": [],
+      "actual_SDK_C_extent_and_fingerprint_verified": true,
+      "actual_generated_constructor_registry_id": 0,
+      "role_label": "Boomerang audio DSP/effects image B",
+      "role_evidence_basis": "truncated scr note plus FFT, analysis and delay source assertions; exact file basename unavailable"
+    },
+    {
+      "carrier": "mage_g",
+      "scope": "retail",
+      "index": 9,
+      "file_offset": "0x01A0EE00",
+      "guest_eas": [
+        "0x01A1EE00"
+      ],
+      "size": 97016,
+      "sha256": "a3afdaf808317c789dbae248f210f6610c6ac0a7443f6e6d9adb57486d56b2bc",
+      "runtime_fingerprint": "0xF16094DFECD3F597",
+      "entry": "0x4080",
+      "note_spu_name": [
+        "../../bin/ps3spu/gnu/release/mp3"
+      ],
+      "executable_sections": [
+        {
+          "ls_start": "0x4000",
+          "file_offset": "0x80",
+          "size": 16,
+          "ls_end": "0x4010"
+        },
+        {
+          "ls_start": "0x4080",
+          "file_offset": "0x100",
+          "size": 65712,
+          "ls_end": "0x14130"
+        }
+      ],
+      "executable_end": "0x14130",
+      "load_segments": [
+        {
+          "ls_start": "0x4000",
+          "file_offset": "0x80",
+          "file_bytes": 95184,
+          "memory_bytes": 97680,
+          "flags": 7
+        }
+      ],
+      "registration": null,
+      "classification": "unregistered_embedded_ELF",
+      "duplicate_occurrences": [],
+      "actual_SDK_C_extent_and_fingerprint_verified": true,
+      "actual_generated_constructor_registry_id": 0,
+      "role_label": "Boomerang MP3 sampler image",
+      "role_evidence_basis": "truncated mp3 note plus MP3 sampler assertion labels"
+    },
+    {
+      "carrier": "mage_g",
+      "scope": "retail",
+      "index": 10,
+      "file_offset": "0x01A26900",
+      "guest_eas": [
+        "0x01A36900"
+      ],
+      "size": 33996,
+      "sha256": "5e4149a877bd898f4c5b79b42fea92538f147e2404b12bb7c2fac08d021223a1",
+      "runtime_fingerprint": "0xED9B1D6C365AEECD",
+      "entry": "0x4080",
+      "note_spu_name": [
+        "../../bin/ps3spu/gnu/release/cor"
+      ],
+      "executable_sections": [
+        {
+          "ls_start": "0x4000",
+          "file_offset": "0x80",
+          "size": 16,
+          "ls_end": "0x4010"
+        },
+        {
+          "ls_start": "0x4080",
+          "file_offset": "0x100",
+          "size": 27824,
+          "ls_end": "0xAD30"
+        }
+      ],
+      "executable_end": "0xAD30",
+      "load_segments": [
+        {
+          "ls_start": "0x4000",
+          "file_offset": "0x80",
+          "file_bytes": 32288,
+          "memory_bytes": 34464,
+          "flags": 7
+        }
+      ],
+      "registration": null,
+      "classification": "unregistered_embedded_ELF",
+      "duplicate_occurrences": [],
+      "actual_SDK_C_extent_and_fingerprint_verified": true,
+      "actual_generated_constructor_registry_id": 0,
+      "role_label": "Boomerang audio core/output image",
+      "role_evidence_basis": "truncated cor note plus primary/secondary output and capture assertion labels"
+    },
+    {
+      "carrier": "libsre",
+      "scope": "selected_firmware",
+      "index": 0,
+      "file_offset": "0x00020480",
+      "guest_eas": [
+        "0x00020380"
+      ],
+      "size": 2100,
+      "sha256": "5b62b86c8979609c33633d53cb0074d1b31a519d5222dec892f5a19da00dfb38",
+      "runtime_fingerprint": "0x52C547B9A76CF26C",
+      "entry": "0x818",
+      "note_spu_name": [],
+      "executable_sections": [],
+      "executable_end": "0x0",
+      "load_segments": [
+        {
+          "ls_start": "0x100",
+          "file_offset": "0x80",
+          "file_bytes": 1920,
+          "memory_bytes": 1920,
+          "flags": 7
+        }
+      ],
+      "registration": null,
+      "classification": "firmware_ELF_not_in_title_workload_registry; runtime_role_not_established",
+      "duplicate_occurrences": [],
+      "actual_SDK_C_extent_and_fingerprint_verified": true,
+      "actual_generated_constructor_registry_id": 0,
+      "role_label": "Firmware internal ELF; role unresolved",
+      "role_evidence_basis": "no recorded SPUNAME note; not a title workload registry coverage claim"
+    },
+    {
+      "carrier": "libsre",
+      "scope": "selected_firmware",
+      "index": 1,
+      "file_offset": "0x00020D00",
+      "guest_eas": [
+        "0x00020C00"
+      ],
+      "size": 2116,
+      "sha256": "055d662ecafc95ebdcf34c886d98878fd2ab32d7e12447c590596f14423d6985",
+      "runtime_fingerprint": "0x7093093F295BB518",
+      "entry": "0x848",
+      "note_spu_name": [],
+      "executable_sections": [],
+      "executable_end": "0x0",
+      "load_segments": [
+        {
+          "ls_start": "0x100",
+          "file_offset": "0x80",
+          "file_bytes": 1936,
+          "memory_bytes": 1936,
+          "flags": 7
+        }
+      ],
+      "registration": null,
+      "classification": "firmware_ELF_not_in_title_workload_registry; runtime_role_not_established",
+      "duplicate_occurrences": [],
+      "actual_SDK_C_extent_and_fingerprint_verified": true,
+      "actual_generated_constructor_registry_id": 0,
+      "role_label": "Firmware internal ELF; role unresolved",
+      "role_evidence_basis": "no recorded SPUNAME note; not a title workload registry coverage claim"
+    }
+  ],
+  "metadata_only": true,
+  "runtime_sdk_revision": "c0f3c9e570e082f4102aba421460f56e44fe0742",
+  "runtime_sizing_source_sha256": "2b4ba16b8e1202d078b924c131353c3fc08865f6d7290d5d9248b0e7f20c3f41",
+  "verification": {
+    "actual_SDK_C_extent_and_fingerprint_occurrences": 16,
+    "actual_generated_constructor_registry_entries": 4,
+    "actual_generated_constructor_coverage_checked_occurrences": 16,
+    "fixture_limit": "Registration uses actual generated constructor TUs and actual SDK registry; lifted entry functions and table registration functions are inert stubs. This checks registry coverage, not program execution."
+  },
+  "existing_MAG_inventory": {
+    "path": "builds/retail-v1.0-inventory.json",
+    "retail_occurrences": {
+      "EBOOT": 3,
+      "mage_g": 11
+    },
+    "discovery_already_present": true
+  },
+  "source_metadata": {
+    "generic_extract": {
+      "path": "tools/extract_spu_images.py",
+      "sha256": "2e1caca3b86bc17acb3298466940d74af53c9cb0f89712c7c429c165f123d7ac"
+    },
+    "generic_build": {
+      "path": "tools/build_spu_workloads.py",
+      "sha256": "7899c02d17b29bc81d41c819a395af55c2894fc6dea4d8fa4695848641889925"
+    },
+    "generic_lifter": {
+      "path": "tools/spu_lifter.py",
+      "sha256": "9f765f36fa0876dee0f83126ec4cbf020d8153761ab903b26a21e345b02b5769"
+    },
+    "MAG_inventory": {
+      "path": "tools/inventory.py",
+      "sha256": "dd315a56b1edab3de7d72a9162231e02adcd3420e146bfb6c7587c857c0b527f"
+    },
+    "MAG_EDGE_generator": {
+      "path": "tools/spu_lift.py",
+      "sha256": "49eda11a2416c5f1f9885b9a30a610a59aa799dd7e33f394f32209a2aebca493"
+    },
+    "MAG_engine_generator": {
+      "path": "tools/engine_spu_lift.py",
+      "sha256": "d2ff632cb71d9033184e7a160d8177934adb0bafff36c65d08f4ce22dc52048b"
+    },
+    "MAG_build": {
+      "path": "CMakeLists.txt",
+      "sha256": "dce4c90d49c5a4bff9ffda96cdc020820de5a4f85475a2e3d848c900915d9635"
+    },
+    "MAG_profile": {
+      "path": "builds/retail-v1.0-engine-spu.json",
+      "sha256": "0e5684d053e33818be15d5dfb4651f52c1385bd91386a3e4e4d4e699e121fc8c"
+    },
+    "MAG_existing_inventory": {
+      "path": "builds/retail-v1.0-inventory.json",
+      "sha256": "cb7da5c81e2064f22986e393c8aba86279154da00e4a74347ea9f2a331907de9"
+    }
+  }
+}

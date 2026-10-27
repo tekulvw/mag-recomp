@@ -1,0 +1,29 @@
+# Original game files, anything extracted or recompiled from them, and runtime output
+# never belong in this repository.
+local/
+analysis/
+generated/
+build/
+runs/
+# Written by tools/prepare_inputs.py with paths to your own decrypted inputs.
+builds/retail-v1.0.json
+*.BIN
+*.self
+*.sprx
+*.elf
+*.pkg
+*.psarc
+*.sdat
+*.edat
+*.rap
+*.iso
+.superpowers/
+__pycache__/
+*.pyc
+.DS_Store
+build-engine/
+
+# Rust build output and rustfmt backups (Cargo.lock is tracked).
+/target/
+**/target/
+**/*.rs.bk

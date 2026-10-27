@@ -1,0 +1,77 @@
+{
+  "schema_version": 1,
+  "description": "Every embedded SPU ELF in the engine carrier is either registered by the automatic SDK lift (build_spu_workloads --input) under its pinned image id, or listed as handled by another path. The build fails if a discovered program is in neither list.",
+  "carrier": "mage_g",
+  "elf_sha256": "0089f0d6d17e48533ce7ff8d943dddd03487b925e7b04a1a055bfb907568694c",
+  "coverage_inventory": "builds/retail-v1.0-spu-coverage.json",
+  "reserved_image_ids": {
+    "100": "EDGE zlib",
+    "101": "WWS policy",
+    "102": "Havok integration",
+    "103": "Havok animation",
+    "104": "audio span perf tool",
+    "105": "geometry perf tool",
+    "107": "renderer perf tool",
+    "108-113": "perf tools",
+    "200-229": "WWS job modules"
+  },
+  "image_ids": {
+    "0dd0cbdcad3807f4882717ff8254b215a422736f33caf9705208d538655ed819": {
+      "image_id": 120,
+      "role": "HashTask worker",
+      "fingerprint": "0x0DF28B81C072B973"
+    },
+    "a83dd7a802f9dc16071871df90d762f235f272e3d1025f203d656dd54cc74241": {
+      "image_id": 121,
+      "role": "Havok collision worker",
+      "fingerprint": "0xA1115C92B0FF49BE"
+    },
+    "de7b71e289f898154b9a110b007472050a572913f6f94909d8913d599acfec7c": {
+      "image_id": 122,
+      "role": "Havok collision-query worker",
+      "fingerprint": "0x35A3DF4CA5C1E655"
+    },
+    "f69fe625dd3989085baf161506fdb761a3cc427e0a03aa79aaa4c368fe7e3976": {
+      "image_id": 123,
+      "role": "Havok raycast-query worker",
+      "fingerprint": "0xCDACBAC6CBDB52DC"
+    },
+    "700ddaad7cb110cfe4e1bea75861e6a78aabe4a1d153e67b79345d84f828eb61": {
+      "image_id": 124,
+      "role": "Boomerang audio DSP/sampler image A",
+      "fingerprint": "0x48EA1D0EF8B19C04"
+    },
+    "663ef8107a217936cf3074b4f8efa8c208ac7a8c7c7767ed5ba88f0028ccad5a": {
+      "image_id": 125,
+      "role": "Boomerang audio DSP/effects image B",
+      "fingerprint": "0x60D5238F7C52C274"
+    },
+    "a3afdaf808317c789dbae248f210f6610c6ac0a7443f6e6d9adb57486d56b2bc": {
+      "image_id": 126,
+      "role": "Boomerang MP3 sampler image",
+      "fingerprint": "0xF16094DFECD3F597"
+    },
+    "5e4149a877bd898f4c5b79b42fea92538f147e2404b12bb7c2fac08d021223a1": {
+      "image_id": 127,
+      "role": "Boomerang audio core/output image",
+      "fingerprint": "0xED9B1D6C365AEECD"
+    }
+  },
+  "handled": {
+    "4f12813b7e3d47392f0ea2014c139b20cf9935ac7ca7562cdbf2fbd19ad450f4": {
+      "reason": "registered as image 100 by tools/spu_lift.py (spu_workloads.c)",
+      "role": "EDGE zlib decompression worker",
+      "fingerprint": "0x024D759466FC0751"
+    },
+    "fd2d833f2f502552ced0291e904861e06475ddc236e9a91e35075f1ad615b7ed": {
+      "reason": "registered as image 102 by tools/engine_spu_lift.py (engine_policy_workload.c)",
+      "role": "Havok integration worker",
+      "fingerprint": "0x0A3EA634A9E4C10D"
+    },
+    "19e5c5ecba6acbef83db89512bcc058fb206727ee3a48de4175163cadbe50fd1": {
+      "reason": "registered as image 103 by tools/engine_spu_lift.py (engine_policy_workload.c)",
+      "role": "Havok animation worker",
+      "fingerprint": "0xE27EF56335F5E95B"
+    }
+  }
+}
