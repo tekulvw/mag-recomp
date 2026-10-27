@@ -88,12 +88,19 @@ def prepare_inputs(source_root: Path, output_root: Path) -> dict:
     return dict(title_id='BCUS98110', app_version='01.00', images=images)
 
 
+def write_image_profile(result: dict) -> Path:
+    """Write this machine's image profile into the workspace, creating its profiles/ directory."""
+    path = data_path('profiles/retail-v1.0.json')
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(result, indent=2)+'\n')
+    return path
+
+
 if __name__ == '__main__':
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--source-root', type=Path, required=True, help='PS3_GAME/USRDIR of your own BCUS98110 v1.0 disc copy')
     p.add_argument('--local-root', type=Path, default=data_path('local/retail-v1.0/PS3_GAME/USRDIR'))
     a = p.parse_args()
     result = prepare_inputs(a.source_root, a.local_root)
-    (ROOT/'profiles').mkdir(exist_ok=True)
-    (data_path('profiles/retail-v1.0.json')).write_text(json.dumps(result, indent=2)+'\n')
+    write_image_profile(result)
     print('Validated original, copied SELF and decrypted ELF hashes for both v1.0 executables.')

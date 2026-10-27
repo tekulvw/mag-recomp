@@ -114,7 +114,8 @@ def generate_lift(elf_path: Path, functions_path: Path, imports_path: Path, sdk_
     result['postprocessing'] = 'Fail at executed TODO/unresolved code; log verified retail entry function; tools/lift.py'
     if image['elf_sha256']==RETAIL_ELF:
         result['movie_picture_hooks']=dict(tool_sha256=sha256_file(ROOT/'tools/movie_picture_hooks.py'),elf_sha256=RETAIL_ELF)
-    if extension_hooks:
+    if extension_hooks and image['elf_sha256']==RETAIL_ELF:
+        # Hooks run only on the retail image, so they are recorded only there.
         result['extension_hooks'] = hook_records(extension_hooks)
     result['generator_sha256'] = sha256_file(Path(__file__))
     result['outputs'] = {p.name:sha256_file(p) for pattern in ('*.c','*.cpp','*.h')

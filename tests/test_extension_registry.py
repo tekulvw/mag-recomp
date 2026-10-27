@@ -21,5 +21,17 @@ class ExtensionRegistryTests(unittest.TestCase):
             self.assertIn('PASS extension registry', run.stdout)
 
 
+class TraceCallSiteTests(unittest.TestCase):
+    """The trace scope only compiles inside an engine build, so check the call sites' placement in source."""
+    def test_extension_call_sites_preserve_errno(self):
+        source = (ROOT / 'src/mag_graphics_trace.cpp').read_text()
+        ctor = source[source.index('MagGraphicsTraceScope::MagGraphicsTraceScope('):source.index('MagGraphicsTraceScope::~MagGraphicsTraceScope(')]
+        dtor = source[source.index('MagGraphicsTraceScope::~MagGraphicsTraceScope('):]
+        save, call, restore = ctor.index('const int ext_errno=errno;'), ctor.index('enter(c,f,'), ctor.index('errno=ext_errno;')
+        self.assertLess(save, call); self.assertLess(call, restore)
+        save, call, restore = dtor.index('const int caller_errno=errno;'), dtor.index('leave(ctx,'), dtor.index('errno=caller_errno;')
+        self.assertLess(save, call); self.assertLess(call, restore)
+
+
 if __name__ == '__main__':
     unittest.main()

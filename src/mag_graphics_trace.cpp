@@ -11,7 +11,7 @@ static thread_local uint64_t current_span;
 struct PredState {uint64_t capture,ctx,object,array,target,result,markers0,markers1;};
 static thread_local PredState last[2];
 MagGraphicsTraceScope::MagGraphicsTraceScope(ppu_context *c,uint32_t f):ctx(c),function(f),start(0),token(0),capture(0),parent(0),predicate(f==0xA047D8||f==0xA05438),exceptions(0),marker_mask(0),wait_identity_valid(false){
- if(auto enter=mag_extension()->trace_enter){for(int i=0;i<3;i++)ext_args[i]=c->gpr[3+i];ext_exceptions=std::uncaught_exceptions();enter(c,f,ext_args,ext_scratch);}
+ if(auto enter=mag_extension()->trace_enter){const int ext_errno=errno;for(int i=0;i<3;i++)ext_args[i]=c->gpr[3+i];ext_exceptions=std::uncaught_exceptions();enter(c,f,ext_args,ext_scratch);errno=ext_errno;}
  if(!ps3_critical_enabled())return;
  int saved=errno;capture=ps3_critical_capture_id();for(int i=0;i<3;i++)args[i]=c->gpr[3+i];
  if(!predicate){start=ps3_critical_now_ns();token=++sequence;parent=current_span;current_span=token;exceptions=std::uncaught_exceptions();}
@@ -19,8 +19,8 @@ MagGraphicsTraceScope::MagGraphicsTraceScope(ppu_context *c,uint32_t f):ctx(c),f
  errno=saved;
 }
 MagGraphicsTraceScope::~MagGraphicsTraceScope(){
- if(auto leave=mag_extension()->trace_exit)leave(ctx,function,ext_args,std::uncaught_exceptions()==ext_exceptions,ext_scratch);
  const int caller_errno=errno;
+ if(auto leave=mag_extension()->trace_exit)leave(ctx,function,ext_args,std::uncaught_exceptions()==ext_exceptions,ext_scratch);
  errno=caller_errno;
  if(!capture)return;int saved=errno;
  if(!predicate)current_span=parent;
