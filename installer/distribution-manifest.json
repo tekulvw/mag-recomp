@@ -37,7 +37,6 @@
     "mag_installer/native_package.py",
     "mag_installer/native_kit.py",
     "scripts/prepare_native_kit.py",
-    "release/player-build.json",
     "mag_installer/native_package_windows.py",
     "scripts/prepare_player_kit.py"
   ],

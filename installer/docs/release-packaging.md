@@ -45,7 +45,18 @@ its own for pull requests and pushes to `main`:
    downloads, managed CMake/Ninja building the runtime library, the `MAG.exe` supervisor); then
    the frozen build, smoke checks and a readiness check of the extracted executable.
 3. **macos**: unit tests, frozen build, smoke checks and readiness check.
-4. **publish** (releases only): `verify-set` and `publish_release.py`.
+4. **verify** (pull requests and `main`): the same `verify-set` check a release runs, on the preview set.
+5. **publish** (releases only): `verify-set` and `publish_release.py`.
+
+The kit and its per-host `release/player-build.json` are not part of the fixed source registry:
+each installer's kit manifest must name that installer's own target and match its kit's size and
+SHA-256, and a release installer must carry one. The registry digest is therefore the same for
+every host and matches the release checkout.
+
+To rebuild and attach installers for an existing release (for example after an attach failure),
+run the **Installers** workflow by hand from `main` with that release's tag. The kit is built from
+the tag's source; the installer tooling and CI scripts come from the commit that runs the workflow,
+and each archive records both in `PROVENANCE.json` (`source_revision`, `tooling_revision`).
 
 Smoke checks run the frozen executable with an empty program `PATH`: `--help`, `status`, and the
 synthetic installation. A checksum inventory is integrity metadata, not a signature: installers

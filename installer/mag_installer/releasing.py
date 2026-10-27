@@ -113,29 +113,46 @@ def _source_digest(root):
     return hashlib.sha256(_json(records)).hexdigest()
 
 
-def _extra_resources(root):
-    """The pinned source kit (this repository plus the pinned runtime SDK).
+KIT = 'release/native-kit.tar.gz'
+KIT_MANIFEST = 'release/player-build.json'
 
-    Source bundles remain text-only. Frozen installers carry this separate kit;
-    it contains code, never the player's inputs or anything generated from them.
+
+def _kit_record(manifest, kit, target=None):
+    """Check a kit manifest and its kit bytes against each other; return the manifest."""
+    try: record = json.loads(manifest)
+    except (ValueError, UnicodeError) as exc: raise InstallerError('Invalid source kit manifest') from exc
+    entry = record.get('kit') if isinstance(record, dict) else None
+    if (not isinstance(entry, dict) or record.get('schema_version') != 1 or entry.get('embedded') != KIT
+            or record.get('distribution') != 'source-kit'):
+        raise InstallerError('Unrecognized embedded native source kit')
+    if target is not None and record.get('host') != target:
+        raise InstallerError('Embedded source kit is for another host')
+    if len(kit) != entry.get('size') or len(kit) > 64 * 1024 * 1024:
+        raise InstallerError('Native source kit size differs from its pinned identity')
+    if hashlib.sha256(kit).hexdigest() != entry.get('sha256'):
+        raise InstallerError('Native source kit hash differs from its pinned identity')
+    return record
+
+
+def _extra_resources(root, target=None):
+    """The per-build source kit and its host manifest, when this stage has one.
+
+    They are not part of the fixed source registry: CI prepares one kit per host
+    from the release's source, so each installer verifies its own kit instead.
+    The kit contains code, never the player's inputs or anything generated from them.
     """
-    manifest = Path(root) / 'release/player-build.json'
+    manifest = Path(root) / KIT_MANIFEST
     if not manifest.exists():
         return {}
+    _ordinary(manifest)
     record = _load(manifest)
-    kit = record.get('kit') or {}
-    if not kit.get('embedded'):
-        return {}
-    if kit['embedded'] != 'release/native-kit.tar.gz' or record.get('distribution') != 'source-kit':
-        raise InstallerError('Unrecognized embedded native source kit')
-    path = contained(root, kit['embedded'])
+    if not (record.get('kit') or {}).get('embedded'):
+        return {}  # the source checkout's placeholder: no kit
+    path = contained(root, KIT)
     _ordinary(path)
-    if path.stat().st_size != kit.get('size') or path.stat().st_size > 64 * 1024 * 1024:
-        raise InstallerError('Native source kit size differs from its pinned identity')
     data = path.read_bytes()
-    if hashlib.sha256(data).hexdigest() != kit.get('sha256'):
-        raise InstallerError('Native source kit hash differs from its pinned identity')
-    return {kit['embedded']: data}
+    _kit_record(manifest.read_bytes(), data, target)
+    return {KIT_MANIFEST: manifest.read_bytes(), KIT: data}
 
 
 def check(version, kind, repository):
@@ -267,11 +284,14 @@ def package_payload(payload, output, version, target, kind, source_revision, roo
         if required not in files or not files[required]: raise InstallerError('Required Python/PyInstaller redistribution notice is absent')
     registry = _registry(root)
     files.update({'resources/' + key: data for key, data in registry.items()})
-    files.update({'resources/' + key: data for key, data in _extra_resources(root).items()})
+    files.update({'resources/' + key: data for key, data in _extra_resources(root, target).items()})
     files['NOTICE.txt'] = registry['release/notices/NOTICE.txt']
     lock = _load(root / 'release/packager-lock.json')
-    provenance = {'schema_version': 1, 'version': version, 'target': target, 'kind': kind,
-                  'source_revision': source_revision,
+    # The tooling revision differs from the source revision only when installers
+    # are rebuilt for an existing release with later tooling.
+    tooling_revision = _revision(os.environ.get('INSTALLER_TOOLING_REVISION', source_revision), preview)
+    provenance = {'schema_version': 2, 'version': version, 'target': target, 'kind': kind,
+                  'source_revision': source_revision, 'tooling_revision': tooling_revision,
                   'source_repository': os.environ.get('GITHUB_REPOSITORY', 'unknown'),
                   'source_registry_sha256': _source_digest(root), 'source_encoding': 'UTF-8-LF',
                   'pyinstaller_version': lock['pyinstaller_version'],
@@ -402,9 +422,9 @@ def verify_artifact(artifact, root):
         provenance = json.loads(data[prefix + '/PROVENANCE.json'])
         inventory = json.loads(data[prefix + '/INVENTORY.json'])
     except (KeyError, ValueError, UnicodeError) as exc: raise InstallerError('Invalid release provenance/inventory') from exc
-    fields = {'schema_version', 'version', 'target', 'kind', 'source_revision', 'source_repository',
+    fields = {'schema_version', 'version', 'target', 'kind', 'source_revision', 'tooling_revision', 'source_repository',
               'source_registry_sha256', 'source_encoding', 'pyinstaller_version', 'python_version', 'smoke_verified', 'release_ready'}
-    if not isinstance(provenance, dict) or set(provenance) != fields or provenance['schema_version'] != 1:
+    if not isinstance(provenance, dict) or set(provenance) != fields or provenance['schema_version'] != 2:
         raise InstallerError('Unsupported release provenance')
     preview = provenance['kind'] == 'preview'
     if provenance['kind'] not in KINDS: raise InstallerError('Unknown release kind')
@@ -412,6 +432,7 @@ def verify_artifact(artifact, root):
     if artifact.name != expected_name or prefix != expected_name.removesuffix('.tar.gz').removesuffix('.zip'):
         raise InstallerError('Release filename/root differs from provenance')
     _revision(provenance['source_revision'], preview)
+    _revision(provenance['tooling_revision'], preview)
     lock = _load(root / 'release/packager-lock.json')
     if (provenance['source_registry_sha256'] != _source_digest(root)
             or provenance['source_encoding'] != 'UTF-8-LF'
@@ -434,7 +455,13 @@ def verify_artifact(artifact, root):
     if any(not name.startswith(prefix + '/') for name in entries) or actual != inventory['files']:
         raise InstallerError('Release members, hashes or modes differ from inventory')
     allowed = {binary, 'NOTICE.txt', 'PROVENANCE.json'} | {'resources/' + name for name in SHIPPABLE_FILES}
-    allowed |= {'resources/' + name for name in _extra_resources(root)}
+    kit_names = {'resources/' + KIT, 'resources/' + KIT_MANIFEST}
+    if kit_names & set(actual):
+        if not kit_names <= set(actual): raise InstallerError('Source kit and its manifest must travel together')
+        _kit_record(data[prefix + '/resources/' + KIT_MANIFEST], data[prefix + '/resources/' + KIT], provenance['target'])
+        allowed |= kit_names
+    elif not preview:
+        raise InstallerError('A release installer must carry its source kit')
     if provenance['target'].startswith('macos-'):
         allowed.add(MAC_PLIST)
         if data.get(prefix + '/' + MAC_PLIST) != _app_plist(provenance['version']):
@@ -451,8 +478,6 @@ def verify_artifact(artifact, root):
         if name not in actual or not actual[name]['size']: raise InstallerError('Required license notice is missing')
     for name, expected in _registry(root).items():
         if data.get(prefix + '/resources/' + name) != expected: raise InstallerError('Bundled source resource differs from the fixed registry')
-    for name, expected in _extra_resources(root).items():
-        if data.get(prefix + '/resources/' + name) != expected: raise InstallerError('Bundled source kit differs from its pinned identity')
     if data[prefix + '/NOTICE.txt'] != _registry(root)['release/notices/NOTICE.txt']:
         raise InstallerError('Release notice differs from source')
     return provenance
