@@ -34,6 +34,13 @@ See [BUILDING.md](BUILDING.md). In outline: install the host dependencies, check
 ps3recomp revisions, supply and validate your own inputs, generate the recompiled sources locally,
 then build the launcher and engine with CMake.
 
+## Releases
+
+Versions follow [Semantic Versioning](https://semver.org/) and are managed by
+[release-please](https://github.com/googleapis/release-please) from Conventional Commit messages; see
+[CHANGELOG.md](CHANGELOG.md) once the first release is cut. Releases are **source-only**: there are no
+prebuilt binaries, because any build contains code generated from the game.
+
 ## Contributing
 
 Contributions must never include game files, anything derived from them, or output of tools run on

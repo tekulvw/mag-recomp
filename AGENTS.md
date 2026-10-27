@@ -32,3 +32,14 @@ transliterate or paste original code structure.
 
 Tests must be synthetic: generate their inputs and never require game files. Tests that compare
 against the original program belong outside this repository.
+
+## Commits and releases
+
+Use [Conventional Commits](https://www.conventionalcommits.org/): `feat:`, `fix:`, `perf:`,
+`refactor:`, `docs:`, `test:`, `build:`, `ci:` or `chore:`, with `!` (or a `BREAKING CHANGE:` footer)
+for incompatible changes. [release-please](https://github.com/googleapis/release-please) reads them on
+`main` to keep a release pull request with the next version and `CHANGELOG.md`; merging it tags the
+release. Squash-merged pull requests need a conventional title.
+
+Releases are source-only. Never attach builds, generated sources or anything made from game files
+to a release.
