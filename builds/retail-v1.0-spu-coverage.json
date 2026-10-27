@@ -1111,7 +1111,7 @@
     },
     "MAG_profile": {
       "path": "builds/retail-v1.0-engine-spu.json",
-      "sha256": "0e5684d053e33818be15d5dfb4651f52c1385bd91386a3e4e4d4e699e121fc8c"
+      "sha256": "bd143deaf5024e4079ebcebd2d39e5f55306133511f0ca02a0f7e598b193ad59"
     },
     "MAG_existing_inventory": {
       "path": "builds/retail-v1.0-inventory.json",

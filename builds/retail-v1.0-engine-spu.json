@@ -1,7 +1,7 @@
 {
   "image_name": "mage_g",
   "elf_sha256": "0089f0d6d17e48533ce7ff8d943dddd03487b925e7b04a1a055bfb907568694c",
-  "worker_profile_sha256": "d8eb476b41e65315b43f0a2f508a3af654d26e62f6038a556a667ca6213218fb",
+  "worker_profile_sha256": "a42952d431fef0d09f240bc9dade77aa10d7ee837a216deee0fe1a05eb0aca59",
   "embedded_worker": {
     "offset": 26973440,
     "size": 38544,

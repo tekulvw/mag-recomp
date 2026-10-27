@@ -7,12 +7,12 @@
     "sha256": "4f12813b7e3d47392f0ea2014c139b20cf9935ac7ca7562cdbf2fbd19ad450f4"
   },
   "shared_profiles": {
-    "firmware": "ee3331bce2d556f4506276a0f8fd9e229d3220c61a83a4b814c15ae3a188975e"
+    "firmware": "c60168282fd18b6f79f9c7dee5bf56057a82a62ef5b467c88d712fb113db7a9f"
   },
   "image_profiles": {
     "spu": {
       "path": "builds/retail-v1.0-engine-spu.json",
-      "sha256": "0e5684d053e33818be15d5dfb4651f52c1385bd91386a3e4e4d4e699e121fc8c"
+      "sha256": "bd143deaf5024e4079ebcebd2d39e5f55306133511f0ca02a0f7e598b193ad59"
     }
   },
   "evidence": {
