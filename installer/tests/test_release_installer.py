@@ -16,24 +16,73 @@ REVISION = 'a' * 40
 
 
 class ReleaseTests(unittest.TestCase):
+    def kit_root(self, root, host, kit_bytes=b'synthetic kit'):
+        """A copy of the installer source with a per-host kit, as CI's kit job writes it."""
+        stage = root / ('source-' + host)
+        shutil.copytree(ROOT, stage, ignore=shutil.ignore_patterns('__pycache__', 'artifacts'))
+        (stage / 'release/native-kit.tar.gz').write_bytes(kit_bytes)
+        manifest = {'schema_version': 1, 'host': host, 'distribution': 'source-kit',
+                    'kit': {'embedded': 'release/native-kit.tar.gz', 'size': len(kit_bytes),
+                            'sha256': hashlib.sha256(kit_bytes).hexdigest()}}
+        (stage / 'release/player-build.json').write_text(json.dumps(manifest))
+        return stage
+
     def test_source_kit_resource_is_exactly_pinned_and_rejects_other_paths(self):
         from mag_installer.releasing import _extra_resources
         with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
-            (root / 'release').mkdir()
-            kit = root / 'release/native-kit.tar.gz'
-            kit.write_bytes(b'synthetic kit')
-            manifest = {'distribution': 'source-kit', 'kit': {'embedded': 'release/native-kit.tar.gz',
-                        'size': kit.stat().st_size, 'sha256': hashlib.sha256(kit.read_bytes()).hexdigest()}}
-            (root / 'release/player-build.json').write_text(json.dumps(manifest))
-            self.assertEqual(_extra_resources(root), {'release/native-kit.tar.gz': b'synthetic kit'})
-            kit.write_bytes(b'tampered! kit')
+            root = self.kit_root(Path(temp), 'macos-arm64')
+            manifest_bytes = (root / 'release/player-build.json').read_bytes()
+            self.assertEqual(_extra_resources(root, 'macos-arm64'),
+                             {'release/player-build.json': manifest_bytes, 'release/native-kit.tar.gz': b'synthetic kit'})
+            with self.assertRaisesRegex(InstallerError, 'another host'):
+                _extra_resources(root, 'windows-x86_64')
+            (root / 'release/native-kit.tar.gz').write_bytes(b'tampered! kit')
             with self.assertRaises(InstallerError):
                 _extra_resources(root)
-            manifest['kit']['embedded'] = 'game/EBOOT.BIN'
+            manifest = json.loads(manifest_bytes); manifest['kit']['embedded'] = 'game/EBOOT.BIN'
             (root / 'release/player-build.json').write_text(json.dumps(manifest))
             with self.assertRaisesRegex(InstallerError, 'Unrecognized'):
                 _extra_resources(root)
+        self.assertEqual(_extra_resources(ROOT), {})  # the checkout's placeholder carries no kit
+
+    def test_set_with_per_host_kits_verifies_against_the_plain_checkout(self):
+        # Regression: each host embeds its own kit manifest, and the publishing
+        # checkout has only the placeholder; the set must still verify.
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp); out = root / 'assets'; out.mkdir()
+            for host, kit in (('windows-x86_64', b'windows kit'), ('macos-arm64', b'macos kit')):
+                package_payload(self.payload(root, host), out, 'preview-test', host, 'preview', REVISION,
+                                self.kit_root(root, host, kit))
+            manifest = verify_set(out, ROOT, 'preview-test', REVISION, preview=True)
+            self.assertEqual(manifest['kind'], 'preview')
+
+    def test_kit_for_another_host_or_tampered_kit_is_refused_in_an_archive(self):
+        for case in ('host', 'tampered'):
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp); out = root / 'assets'; out.mkdir()
+                stage = self.kit_root(root, 'windows-x86_64')
+                artifact = package_payload(self.payload(root, 'windows-x86_64'), out, 'preview-test', 'windows-x86_64',
+                                           'preview', REVISION, stage)
+                verify_artifact(artifact, ROOT)
+                changed = root / 'changed'; changed.mkdir(); target = changed / artifact.name
+                with zipfile.ZipFile(artifact) as source, zipfile.ZipFile(target, 'w') as destination:
+                    for info in source.infolist():
+                        data = source.read(info)
+                        if case == 'host' and info.filename.endswith('/resources/release/player-build.json'):
+                            data = data.replace(b'windows-x86_64', b'macos-arm64')
+                        if case == 'tampered' and info.filename.endswith('/resources/release/native-kit.tar.gz'):
+                            data = b'tampered! kit'
+                        destination.writestr(info, data)
+                with self.assertRaises(InstallerError): verify_artifact(target, ROOT)
+
+    def test_release_installer_without_its_kit_is_refused(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp); out = root / 'assets'; out.mkdir()
+            with patch.dict(os.environ, {'GITHUB_REPOSITORY': 'tekulvw/mag-recomp'}):
+                artifact = package_payload(self.payload(root, 'windows-x86_64'), out, 'v0.1.0', 'windows-x86_64',
+                                           'release', REVISION, ROOT, smoke_verified=True)
+                with self.assertRaisesRegex(InstallerError, 'must carry its source kit'):
+                    verify_artifact(artifact, ROOT)
 
     def test_native_build_requires_tk_runtime_without_creating_display(self):
         from mag_installer.releasing import _check_tk_runtime
