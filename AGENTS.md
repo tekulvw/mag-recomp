@@ -42,5 +42,8 @@ for incompatible changes. [release-please](https://github.com/googleapis/release
 `main` to keep a release pull request with the next version and `CHANGELOG.md`; merging it tags the
 release. Squash-merged pull requests need a conventional title.
 
-Releases are source-only. Never attach builds, generated sources or anything made from game files
-to a release.
+Release assets are only the installers CI builds from the release's own source
+(`.github/workflows/installers.yml`). An installer may contain this repository's tooling and source
+and the pinned ps3recomp source; never a built launcher or engine (`MagRecomp`), generated or lifted
+sources, firmware, or anything else derived from game files. Never attach anything else to a release,
+and never commit installer builds.

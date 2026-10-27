@@ -18,8 +18,15 @@ for this project. It does **not** contain, and must never be used to distribute:
 The build consumes files that **you** supply from a legitimately owned BCUS98110 v1.0 copy of the game
 and the console firmware component it needs. Everything the tools extract, decrypt or generate from
 those files is written to Git-ignored directories (`local/`, `analysis/`, `generated/`, `build/`,
-`runs/`) and stays on your machine. Do not commit, upload, share or redistribute it, or any binary
-built from it. Requests for game files, keys or prebuilt binaries will be closed.
+`runs/`), or inside the installation folder you choose for the installer, and stays on your machine.
+Do not commit, upload, share or redistribute it, or any binary built from it. Requests for game
+files, keys or prebuilt binaries will be closed.
+
+The installers attached to releases contain only this project's tooling and source and the pinned
+ps3recomp SDK source. They contain no game content and no binary built from it: they run the build on
+your computer. The build tools they download (Python, CMake, Ninja, MinGit, SDL2, glslang,
+SPIRV-Cross, FFmpeg sources and, on Windows, Microsoft's Visual Studio Build Tools through
+Microsoft's own installer) come from their official origins under their own licences.
 
 Some tools record identities of the original files (SHA-256 hashes, sizes, offsets, addresses and
 hashes of generated functions). These are used only to verify that you supplied the exact expected
