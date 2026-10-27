@@ -5,6 +5,18 @@ project(MagRecomp
     DESCRIPTION "Recompiled PS3 game project (ps3recomp)"
 )
 
+# Working data (inputs, generated sources, per-machine profiles) and an optional SDK pin overlay
+# live in the workspace, which defaults to this source tree. Build extensions are listed in
+# MAG_EXTENSIONS (cmake/MagExtensions.cmake).
+set(MAG_WORKSPACE "${CMAKE_CURRENT_SOURCE_DIR}" CACHE PATH "Directory holding working data and per-machine profiles")
+get_filename_component(MAG_WORKSPACE "${MAG_WORKSPACE}" ABSOLUTE)
+set(MAG_TOOL_ENV "${CMAKE_COMMAND}" -E env "MAG_WORKSPACE=${MAG_WORKSPACE}")
+set(MAG_FRAMEWORK_FILE "${CMAKE_CURRENT_SOURCE_DIR}/profiles/framework.json")
+if(NOT MAG_WORKSPACE STREQUAL CMAKE_CURRENT_SOURCE_DIR AND EXISTS "${MAG_WORKSPACE}/profiles/framework.json")
+    set(MAG_FRAMEWORK_FILE "${MAG_WORKSPACE}/profiles/framework.json")
+endif()
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/MagExtensions.cmake")
+
 # ---------------------------------------------------------------------------
 # Standards
 # ---------------------------------------------------------------------------
@@ -90,7 +102,7 @@ if(PORT_ENABLE_SPU)
     endif()
 endif()
 execute_process(
-    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/provenance.py"
+    COMMAND ${MAG_TOOL_ENV} "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/provenance.py"
             --validate-image --image "${MAG_IMAGE}" --recomp "${RECOMP_DIR}" ${MAG_MODULE_VALIDATION_ARGS}
     RESULT_VARIABLE MAG_IMAGE_VALIDATION_RESULT
     ERROR_VARIABLE MAG_IMAGE_VALIDATION_ERROR)
@@ -201,7 +213,7 @@ if(PORT_ENABLE_SPU)
             message(FATAL_ERROR "MAG_SPU_PROGRAMS_DIR is required for mage_g: run tools/spu_programs_lift.py")
         endif()
         execute_process(
-            COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/spu_programs_lift.py"
+            COMMAND ${MAG_TOOL_ENV} "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/spu_programs_lift.py"
                     --check "${MAG_SPU_PROGRAMS_DIR}"
             RESULT_VARIABLE MAG_SPU_PROGRAMS_RESULT
             OUTPUT_VARIABLE MAG_SPU_PROGRAMS_OUTPUT
@@ -241,6 +253,7 @@ if(MAG_FIRMWARE_DIR)
 endif()
 add_executable(${PROJECT_NAME}
     src/main.cpp
+    src/mag_extension.cpp
     src/mag_jobio_selector.cpp
     src/mag_timer_gcm_pump_diagnostics.cpp
     src/stubs.cpp
@@ -404,8 +417,8 @@ install(TARGETS ${PROJECT_NAME} RUNTIME DESTINATION bin)
 find_package(Python3 3.11 COMPONENTS Interpreter REQUIRED)
 set_property(TARGET ${PROJECT_NAME} APPEND PROPERTY LINK_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/tools/provenance.py"
-    "${CMAKE_CURRENT_SOURCE_DIR}/profiles/retail-v1.0.json"
-    "${CMAKE_CURRENT_SOURCE_DIR}/profiles/framework.json"
+    "${MAG_WORKSPACE}/profiles/retail-v1.0.json"
+    "${MAG_FRAMEWORK_FILE}"
     "${CMAKE_CURRENT_SOURCE_DIR}/profiles/retail-v1.0-engine-modules.json"
     "${RECOMP_DIR}/provenance.json")
 set(MAG_SPU_RECEIPT_ARGS "")
@@ -425,11 +438,16 @@ if(MAG_FIRMWARE_SOURCES)
         "${MAG_FIRMWARE_DIR}/provenance.json"
         "${CMAKE_CURRENT_SOURCE_DIR}/profiles/retail-v1.0-firmware.json")
 endif()
+mag_apply_extensions(${PROJECT_NAME})
+set(MAG_EXTENSION_RECEIPT_ARGS "")
+foreach(extra IN LISTS MAG_RECEIPT_EXTRA)
+    list(APPEND MAG_EXTENSION_RECEIPT_ARGS --receipt-extra "${extra}")
+endforeach()
 add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/provenance.py"
+    COMMAND ${MAG_TOOL_ENV} "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/provenance.py"
             --binary "$<TARGET_FILE:${PROJECT_NAME}>"
             --sdk "${PS3RECOMP_DIR}" --recomp "${RECOMP_DIR}"
-            --image "${MAG_IMAGE}" ${MAG_SPU_RECEIPT_ARGS}
+            --image "${MAG_IMAGE}" ${MAG_SPU_RECEIPT_ARGS} ${MAG_EXTENSION_RECEIPT_ARGS}
     VERBATIM)
 
 if(APPLE)
