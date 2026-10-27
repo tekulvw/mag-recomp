@@ -1,5 +1,6 @@
 """Generate one image into a fresh directory and retain the audit evidence."""
 import argparse
+import importlib
 import json
 import os
 import re
@@ -55,7 +56,31 @@ def validate_nonlocal_profile(profile_path: Path, sdk_root: Path, elf_path: Path
     return config,profile
 
 
-def generate_lift(elf_path: Path, functions_path: Path, imports_path: Path, sdk_root: Path, output_dir: Path, nonlocal_profile: Path | None = None) -> dict:
+def load_hooks(names) -> list:
+    """Import extension hook modules; each must expose instrument_source(source) -> source."""
+    hooks = []
+    for name in names:
+        module = importlib.import_module(name)
+        if not callable(getattr(module, 'instrument_source', None)):
+            raise ValueError(f'Lift hook {name} has no instrument_source(source)')
+        hooks.append((name, module))
+    return hooks
+
+
+def apply_hooks(source: str, hooks) -> str:
+    for name, module in hooks:
+        source = module.instrument_source(source)
+        if not isinstance(source, str):
+            raise ValueError(f'Lift hook {name} returned {type(source).__name__}, not source text')
+    return source
+
+
+def hook_records(hooks) -> list:
+    return [{'module': name, 'path': module.__file__, 'sha256': sha256_file(Path(module.__file__))} for name, module in hooks]
+
+
+def generate_lift(elf_path: Path, functions_path: Path, imports_path: Path, sdk_root: Path, output_dir: Path, nonlocal_profile: Path | None = None, hooks=()) -> dict:
+    extension_hooks = load_hooks(hooks)
     config=None; control_profile=None; generator_revision=SDK_REVISION
     if nonlocal_profile is None:
         check_sdk(sdk_root)
@@ -85,10 +110,12 @@ def generate_lift(elf_path: Path, functions_path: Path, imports_path: Path, sdk_
         result['nonlocal_profile_sha256']=sha256_file(nonlocal_profile)
     for path in output_dir.glob('ppu_recomp_*.cpp'):
         source=guard_generated_source(path.read_text())
-        path.write_text(instrument_graphics(instrument_source(source)) if image['elf_sha256']==RETAIL_ELF else source)
+        path.write_text(apply_hooks(instrument_graphics(instrument_source(source)), extension_hooks) if image['elf_sha256']==RETAIL_ELF else source)
     result['postprocessing'] = 'Fail at executed TODO/unresolved code; log verified retail entry function; tools/lift.py'
     if image['elf_sha256']==RETAIL_ELF:
         result['movie_picture_hooks']=dict(tool_sha256=sha256_file(ROOT/'tools/movie_picture_hooks.py'),elf_sha256=RETAIL_ELF)
+    if extension_hooks:
+        result['extension_hooks'] = hook_records(extension_hooks)
     result['generator_sha256'] = sha256_file(Path(__file__))
     result['outputs'] = {p.name:sha256_file(p) for pattern in ('*.c','*.cpp','*.h')
                          for p in sorted(output_dir.glob(pattern))}
@@ -113,9 +140,11 @@ if __name__ == '__main__':
                         help='ps3recomp checkout (default: $PS3RECOMP_DIR)')
     parser.add_argument('--output', type=Path)
     parser.add_argument('--nonlocal-profile', type=Path, help='Exact-image configuration for reviewed nonlocal control flow')
+    parser.add_argument('--hook', action='append', default=[], help='Extension hook module applied after the built-in hooks (repeatable)')
     a=parser.parse_args()
     image=json.loads((data_path('profiles/retail-v1.0.json')).read_text())['images'][a.image]
     analysis=data_path('analysis/retail-v1.0')/a.image
     out=a.output or data_path('generated/retail-v1.0')/a.image
-    generate_lift(Path(image['elf']), analysis/'reviewed-functions.json', analysis/f'{a.image}.imports.json', a.sdk, out, a.nonlocal_profile)
+    hooks = a.hook + [h for h in os.environ.get('MAG_LIFT_HOOKS', '').split(os.pathsep) if h]
+    generate_lift(Path(image['elf']), analysis/'reviewed-functions.json', analysis/f'{a.image}.imports.json', a.sdk, out, a.nonlocal_profile, hooks)
     print('Generated and audited', out)

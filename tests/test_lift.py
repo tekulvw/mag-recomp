@@ -5,7 +5,7 @@ import unittest
 import json
 from unittest.mock import patch
 from pathlib import Path
-from tools.lift import run_generator, guard_generated_source, generate_lift
+from tools.lift import run_generator, guard_generated_source, generate_lift, load_hooks, apply_hooks, hook_records
 from tools.prepare_inputs import sha256_file
 from tools.inventory import SDK_REVISION
 
@@ -52,6 +52,50 @@ class LiftTests(unittest.TestCase):
     def test_zero_exit_without_generated_files_is_not_success(self):
         with self.assertRaises(RuntimeError):
             run_generator([sys.executable, '-c', 'pass'], self.out)
+
+    def hook_modules(self, **bodies):
+        """Write synthetic hook modules on sys.path; return their names."""
+        directory=Path(self.tmp.name)/'hooks';directory.mkdir(exist_ok=True)
+        sys.path.insert(0,str(directory));self.addCleanup(sys.path.remove,str(directory))
+        for name,body in bodies.items():
+            (directory/f'{name}.py').write_text(f'def instrument_source(source):\n    {body}\n')
+            sys.modules.pop(name,None)
+        return list(bodies)
+
+    def test_hooks_run_after_builtins_in_order(self):
+        names=self.hook_modules(mag_hook_a="return source+'|A'",mag_hook_b="return source+'|B'")
+        self.assertEqual(apply_hooks('builtin',load_hooks(names)),'builtin|A|B')
+
+    def test_hooks_recorded_in_receipt(self):
+        names=self.hook_modules(mag_hook_c="return source")
+        [(name,module)]=load_hooks(names)
+        self.assertEqual(hook_records([(name,module)]),
+                         [{'module':'mag_hook_c','path':module.__file__,'sha256':sha256_file(Path(module.__file__))}])
+
+    def test_hook_must_return_text(self):
+        names=self.hook_modules(mag_hook_d="return None")
+        with self.assertRaisesRegex(ValueError,'mag_hook_d'):
+            apply_hooks('x',load_hooks(names))
+
+    def test_failing_hook_aborts_lift(self):
+        names=self.hook_modules(mag_hook_e="raise RuntimeError('boom')")
+        root=Path(self.tmp.name)/'repo';(root/'profiles').mkdir(parents=True)
+        elf=root/'EBOOT.elf';elf.write_bytes(b'test image');digest=sha256_file(elf)
+        (root/'profiles/retail-v1.0.json').write_text(json.dumps(dict(images=dict(EBOOT=dict(elf_sha256=digest)))))
+        functions=root/'reviewed-functions.json';imports=root/'EBOOT.imports.json'
+        functions.write_text('functions');imports.write_text('imports')
+        (root/'summary.json').write_text(json.dumps(dict(elf_sha256=digest,sdk_revision=SDK_REVISION,code_end='0x100',
+            manifests=dict(functions_sha256=sha256_file(functions),imports_sha256=sha256_file(imports)))))
+        out=root/'out'
+        def generate(command,output_dir):
+            output_dir.mkdir();(output_dir/'ppu_recomp_000.cpp').write_text('void f() {}\n');return dict(command=command,exit_code=0)
+        with patch('tools.lift.ROOT',root),patch('tools.prepare_inputs.ROOT',root),patch('tools.prepare_inputs.WORKSPACE',root), \
+             patch('tools.lift.check_sdk'),patch('tools.lift.run_generator',side_effect=generate), \
+             patch('tools.lift.RETAIL_ELF',digest),patch('tools.lift.instrument_source',side_effect=lambda s:s), \
+             patch('tools.lift.instrument_graphics',side_effect=lambda s:s):
+            with self.assertRaisesRegex(RuntimeError,'boom'):
+                generate_lift(elf,functions,imports,root/'sdk',out,hooks=names)
+        self.assertFalse((out/'provenance.json').exists())
 
     def test_existing_output_cannot_be_reused_for_changed_inputs(self):
         self.out.mkdir(); (self.out/'old.cpp').write_text('old input')
