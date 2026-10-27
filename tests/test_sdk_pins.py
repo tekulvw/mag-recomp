@@ -55,7 +55,7 @@ class FetchTests(unittest.TestCase):
             (self.origin / 'f').write_text(n)
             git('add', 'f')
             git('-c', 'user.name=t', '-c', 'user.email=t@example.invalid', 'commit', '-q', '-m', n)
-            git('tag', '-a', f'mag-recomp/x-{n}', '-m', n)
+            git('-c', 'user.name=t', '-c', 'user.email=t@example.invalid', 'tag', '-a', f'mag-recomp/x-{n}', '-m', n)
         self.first = git('rev-parse', 'mag-recomp/x-one^{commit}')
         self.second = git('rev-parse', 'HEAD')
 

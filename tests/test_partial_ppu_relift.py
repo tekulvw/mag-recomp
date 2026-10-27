@@ -12,14 +12,20 @@ import unittest
 ROOT=Path(__file__).resolve().parents[1]
 spec=importlib.util.spec_from_file_location('partial_relift', ROOT/'tools/partial_ppu_relift.py')
 u=importlib.util.module_from_spec(spec);spec.loader.exec_module(u)
+import os
 SDK=Path(sys.argv.pop(sys.argv.index('--sdk')+1)) if '--sdk' in sys.argv else None
 if '--sdk' in sys.argv:sys.argv.remove('--sdk')
+if SDK is None and (os.environ.get('MAG_TEST_SDK') or os.environ.get('PS3RECOMP_DIR')):
+ SDK=Path(os.environ.get('MAG_TEST_SDK') or os.environ['PS3RECOMP_DIR'])
 
 class PartialRelift(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        if SDK is None:raise RuntimeError('--sdk with pinned Git objects required')
+        if SDK is None:raise unittest.SkipTest('ps3recomp checkout required (--sdk, MAG_TEST_SDK or PS3RECOMP_DIR)')
         cls.real=json.loads((ROOT/'profiles/retail-v1.0-ppu-ctr64-partial-relift.json').read_text())
+        for pin in (cls.real['tools']['before'],cls.real['tools']['after']):
+            if subprocess.run(['git','-C',str(SDK),'cat-file','-e',pin['revision']+'^{commit}'],capture_output=True).returncode:
+                raise unittest.SkipTest('ps3recomp checkout lacks pinned lifter '+pin['revision'][:12])
         cls.old,cls.new,decode=u.load_tools(SDK,cls.real)
         cls.decode=staticmethod(decode)
 
