@@ -97,6 +97,34 @@ class LiftTests(unittest.TestCase):
                 generate_lift(elf,functions,imports,root/'sdk',out,hooks=names)
         self.assertFalse((out/'provenance.json').exists())
 
+    def fake_lift(self, names, retail):
+        """Run generate_lift end to end with the generator, built-in hooks and audit faked; return the receipt."""
+        root=Path(self.tmp.name)/('retail' if retail else 'other');(root/'profiles').mkdir(parents=True)
+        (root/'tools').mkdir();(root/'tools/movie_picture_hooks.py').write_text('# receipt fixture\n')
+        elf=root/'EBOOT.elf';elf.write_bytes(b'test image '+root.name.encode());digest=sha256_file(elf)
+        (root/'profiles/retail-v1.0.json').write_text(json.dumps(dict(images=dict(EBOOT=dict(elf_sha256=digest)))))
+        functions=root/'reviewed-functions.json';imports=root/'EBOOT.imports.json'
+        functions.write_text('functions');imports.write_text('imports')
+        (root/'summary.json').write_text(json.dumps(dict(elf_sha256=digest,sdk_revision=SDK_REVISION,code_end='0x100',
+            manifests=dict(functions_sha256=sha256_file(functions),imports_sha256=sha256_file(imports)))))
+        out=root/'out'
+        def generate(command,output_dir):
+            output_dir.mkdir();(output_dir/'ppu_recomp_000.cpp').write_text('void f() {}\n');return dict(command=command,exit_code=0)
+        with patch('tools.lift.ROOT',root),patch('tools.prepare_inputs.ROOT',root),patch('tools.prepare_inputs.WORKSPACE',root), \
+             patch('tools.lift.check_sdk'),patch('tools.lift.run_generator',side_effect=generate), \
+             patch('tools.lift.RETAIL_ELF',digest if retail else '0'*64),patch('tools.lift.instrument_source',side_effect=lambda s:s), \
+             patch('tools.lift.instrument_graphics',side_effect=lambda s:s), \
+             patch('tools.lift.subprocess.run',return_value=subprocess.CompletedProcess([],0)):
+            generate_lift(elf,functions,imports,root/'sdk',out,hooks=names)
+        return json.loads((out/'provenance.json').read_text()), (out/'ppu_recomp_000.cpp').read_text()
+
+    def test_hooks_recorded_only_when_applied(self):
+        names=self.hook_modules(mag_hook_f="return source+'// hooked\\n'")
+        receipt,source=self.fake_lift(names,retail=True)
+        self.assertEqual(([h['module'] for h in receipt['extension_hooks']],source.endswith('// hooked\n')),(['mag_hook_f'],True))
+        receipt,source=self.fake_lift(names,retail=False)
+        self.assertEqual(('extension_hooks' in receipt,source.endswith('// hooked\n')),(False,False))
+
     def test_existing_output_cannot_be_reused_for_changed_inputs(self):
         self.out.mkdir(); (self.out/'old.cpp').write_text('old input')
         with self.assertRaises(FileExistsError):

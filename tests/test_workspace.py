@@ -58,6 +58,14 @@ class WorkspaceTests(unittest.TestCase):
         r = probe(ROOT)
         self.assertEqual(r['framework'], str(ROOT / 'profiles/framework.json'))
 
+    def test_image_profile_written_into_a_fresh_workspace(self):
+        from unittest.mock import patch
+        from tools import prepare_inputs
+        with patch('tools.prepare_inputs.WORKSPACE', self.workspace):
+            path = prepare_inputs.write_image_profile({'title_id': 'BCUS98110'})
+        self.assertEqual(path, self.workspace / 'profiles/retail-v1.0.json')
+        self.assertEqual(json.loads(path.read_text()), {'title_id': 'BCUS98110'})
+
     def test_fetch_uses_overlay_table(self):
         self.write_overlay(['f' * 40])
         self.assertEqual(probe(self.workspace)['table'], ['runtime'])
