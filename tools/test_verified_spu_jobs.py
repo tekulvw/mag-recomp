@@ -1,5 +1,5 @@
 import unittest,sys,struct,tempfile,pathlib,subprocess
-from verified_spu_jobs import executable_sections,emit_registry,sdk_identity,fresh_output,copy_baseline
+from tools.verified_spu_jobs import executable_sections,emit_registry,sdk_identity,fresh_output,copy_baseline
 def synthetic_elf():
  b=bytearray(208);b[:7]=b'\x7fELF\x01\x02\x01'
  struct.pack_into('>H',b,18,23);struct.pack_into('>I',b,32,128)

@@ -148,7 +148,7 @@ int main(void) {
             import sys
             dead=['-Wl,-dead_strip'] if sys.platform=='darwin' else ['-Wl,--gc-sections']
             command=['cc','-std=gnu11','-ffunction-sections','-fdata-sections',
-                     '-I'+str(sdk/'runtime/spu'),'-I'+str(sdk/'runtime'),str(reg),str(test),
+                     '-I'+str(sdk/'runtime/spu'),'-I'+str(sdk/'runtime'),'-I'+str(sdk/'include'),str(reg),str(test),
                      str(sdk/'runtime/spu/spu_workload.c'),*dead,'-pthread','-lm','-o',str(binary)]
             subprocess.run(command,check=True,capture_output=True,text=True)
             run=subprocess.run([str(binary)],capture_output=True,text=True)
