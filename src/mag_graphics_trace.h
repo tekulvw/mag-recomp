@@ -1,7 +1,9 @@
 #pragma once
 #include "ppu_recomp.h"
 #include <stdint.h>
+#include "mag_extension.h"
 class MagGraphicsTraceScope {
+ uint64_t ext_args[3]{},ext_scratch[8]{}; int ext_exceptions=0;
  ppu_context *ctx; uint32_t function; uint64_t start,token,capture,args[3],parent; bool predicate; int exceptions; uint16_t marker_values[7]; uint8_t marker_mask; uint64_t wait_identity[8]; bool wait_identity_valid;
 public:
  MagGraphicsTraceScope(ppu_context*,uint32_t);

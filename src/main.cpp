@@ -38,6 +38,7 @@
  * names over pthreads and mmap, so the call sites below are written once. */
 #include "win32_compat.h"
 #include "macos_runloop.h"
+#include "mag_extension.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -224,6 +225,7 @@ static DWORD WINAPI frame_clock(LPVOID)
     for (;;) {
         if (g_native_consumer) cellGcm_fifo_kick_wait(4);
         else Sleep(4);
+        if (auto poll = mag_extension()->frame_poll) poll();
         ULONGLONG now = GetTickCount64();
         if (now >= next_snapshot) { mag_queue_snapshot(); mag_job_marker_snapshot(); next_snapshot = now + 1000; }
 
@@ -400,6 +402,7 @@ int main(int argc, char** argv)
         return 1;
     }
 
+    if (auto start = mag_extension()->start) start(argv[1]);
     derive_vfs_root(argv[1]);
     printf("[boot] VFS root: %s\n", ppu_vfs_root);
     /* Our runner always uses a private disc-layout overlay. */
@@ -453,6 +456,7 @@ int main(int argc, char** argv)
     } else
 #endif
         rc = ppu_run(entry, STACK_TOP);
+    if (auto stop = mag_extension()->stop) stop();
     printf("\n[boot] ppu_run returned %d (entry function unwound)\n", rc);
 
     /* A title that called sys_process_exit never reaches this line: that path
