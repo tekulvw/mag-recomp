@@ -9,6 +9,24 @@ from mag_installer.model import InstallerError
 from mag_installer.safety import Cancellation
 
 class NativeBuildTests(unittest.TestCase):
+    def test_windows_build_environment_drops_inherited_overrides(self):
+        inherited = {'Path': 'C:/Windows/System32', 'INCLUDE': 'C:/VS/include', 'LIB': 'C:/VS/lib',
+                     'WindowsSdkDir': 'C:/SDK', 'SystemRoot': 'C:/Windows',
+                     'MAG_WORKSPACE': 'C:/elsewhere', 'MAG_LIFT_HOOKS': 'evil', 'mag_spu_lifter_repository': 'C:/other',
+                     'PS3RECOMP_DIR': 'C:/sdk', 'RSX_ENGINE_PHASES': '1', 'CMAKE_TOOLCHAIN_FILE': 'C:/t.cmake',
+                     'CFLAGS': '-O3', 'CL': '/O2', 'PYTHONPATH': 'C:/py'}
+        config = {k: f'C:/tools/{k}/{k}.exe' for k in ('python', 'cmake', 'ninja', 'git')}
+        config['msvc'] = {'vcvars': 'C:/VS/vcvars64.bat', 'clang_cl': 'C:/VS/Llvm/bin/clang-cl.exe'}
+        with patch('mag_installer.managed_tools.msvc_environment', return_value=dict(inherited)):
+            env = native._windows_environment(config, Path('home'))
+        for name in ('MAG_WORKSPACE', 'MAG_LIFT_HOOKS', 'mag_spu_lifter_repository', 'PS3RECOMP_DIR',
+                     'RSX_ENGINE_PHASES', 'CMAKE_TOOLCHAIN_FILE', 'CFLAGS', 'CL', 'PYTHONPATH', 'Path'):
+            self.assertNotIn(name, env)
+        for name in ('INCLUDE', 'LIB', 'WindowsSdkDir', 'SystemRoot'):
+            self.assertEqual(env[name], inherited[name])
+        self.assertTrue(env['PATH'].endswith('C:/Windows/System32'))
+        self.assertEqual(env['CMAKE_BUILD_PARALLEL_LEVEL'], '2')
+
     def test_failed_stage_retains_incomplete_journal_and_logs(self):
         with tempfile.TemporaryDirectory() as temp:
             root=Path(temp).resolve(); source=root/'source'; disc=root/'disc'

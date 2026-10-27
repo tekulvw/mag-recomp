@@ -79,9 +79,19 @@ def check_windows_location(output):
         raise InstallerError(f'Choose a shorter installation location (at most {WINDOWS_MAX_OUTPUT_PATH} characters, for example C:\\MAG): Windows build paths would exceed their length limit.')
 
 
+# Inherited variables that would redirect or reconfigure a player build: the
+# repository's own overrides (workspace, lift hooks, lifter paths), runtime
+# diagnostics, and CMake/compiler defaults. macOS builds start from an empty
+# environment; Windows needs the system's, so these are removed from it.
+INHERITED_PREFIXES = ('MAG_', 'PS3_', 'PS3RECOMP_', 'RSX_', 'SPU_', 'CMAKE_')
+INHERITED_NAMES = {'CC', 'CXX', 'CFLAGS', 'CXXFLAGS', 'CPPFLAGS', 'LDFLAGS', 'CL', '_CL_', 'LINK', '_LINK_'}
+
+
 def _windows_environment(config, home):
     from .managed_tools import msvc_environment
     environment = msvc_environment(config['msvc']['vcvars'])
+    for key in [k for k in environment if k.upper().startswith(INHERITED_PREFIXES) or k.upper() in INHERITED_NAMES]:
+        environment.pop(key)
     # Windows variable names are case-insensitive; `set` prints Path.
     system_path = ''
     for key in [k for k in environment if k.upper() in ('PATH', 'PYTHONPATH', 'PYTHONHOME')]:

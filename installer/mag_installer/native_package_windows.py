@@ -111,6 +111,30 @@ static void key_hash(const wchar_t *path, char *out) {
 }
 
 static void set_env(const wchar_t *name, const wchar_t *value) { if (!SetEnvironmentVariableW(name, value)) fail(L"Cannot set environment", name); }
+
+/* The macOS launcher starts the game from an empty environment. Windows needs the
+ * system's, so drop inherited runtime overrides and diagnostics instead: only the
+ * variables set below reach the launcher and engine. */
+static void clear_inherited(void) {
+    static const wchar_t *prefixes[] = {L"MAG_", L"PS3_", L"PS3RECOMP_", L"RSX_", L"SPU_"};
+    static wchar_t names[1024][256];
+    int count = 0;
+    LPWCH block = GetEnvironmentStringsW();
+    if (!block) fail(L"Cannot read the environment", NULL);
+    for (LPWCH entry = block; *entry; entry += wcslen(entry) + 1) {
+        const wchar_t *equals = wcschr(entry + 1, L'=');
+        if (*entry == L'=' || !equals || equals - entry >= 256) continue;
+        for (size_t i = 0; i < sizeof prefixes / sizeof prefixes[0]; i++) {
+            if (!_wcsnicmp(entry, prefixes[i], wcslen(prefixes[i]))) {
+                if (count == 1024) { FreeEnvironmentStringsW(block); fail(L"Too many inherited MAG variables", NULL); }
+                wmemcpy(names[count], entry, (size_t)(equals - entry)); names[count][equals - entry] = 0; count++;
+                break;
+            }
+        }
+    }
+    FreeEnvironmentStringsW(block);
+    for (int i = 0; i < count; i++) SetEnvironmentVariableW(names[i], NULL);
+}
 static void set_env_utf8(const wchar_t *name, const char *value) {
     wchar_t wide[256]; MultiByteToWideChar(CP_UTF8, 0, value, -1, wide, 256); set_env(name, wide);
 }
@@ -170,6 +194,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR arguments, int
     join(home, g_root, L"home");
     CreateDirectoryW(home, NULL);
 
+    clear_inherited();
     set_env(L"HOME", home);
     set_env(L"PS3_VFS_ROOT", vfs);
     set_env(L"PS3_BOOT_PATH", L"/dev_bdvd/PS3_GAME/USRDIR/EBOOT.BIN");
