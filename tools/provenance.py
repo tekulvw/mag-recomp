@@ -2,6 +2,7 @@
 import argparse
 import hashlib
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -142,18 +143,39 @@ def validate_build_image(recomp: Path, image_name: str = 'EBOOT',
     return image,lift
 
 
+def extension_record(extras: dict | None) -> dict:
+    """Hash each extension input: a file's SHA-256, or every file of a directory."""
+    record = {}
+    for name, path in (extras or {}).items():
+        if not re.fullmatch('[a-z0-9_-]+', name):
+            raise ValueError(f'Receipt extra name must be lowercase [a-z0-9_-]: {name!r}')
+        path = Path(path)
+        if path.is_file():
+            record[name] = {'sha256': sha256_file(path)}
+        elif path.is_dir():
+            record[name] = {'files': {p.relative_to(path).as_posix(): sha256_file(p) for p in sorted(path.rglob('*')) if p.is_file()}}
+        else:
+            raise ValueError(f'Receipt extra {name} is missing: {path}')
+    return record
+
+
 def record_build(binary: Path, sdk: Path, recomp: Path, spu: Path | None = None,
-                 firmware: Path | None = None, image_name: str = 'EBOOT') -> dict:
+                 firmware: Path | None = None, image_name: str = 'EBOOT', extras: dict | None = None) -> dict:
     image,lift=validate_build_image(recomp,image_name)
     revision=subprocess.check_output(['git','-C',str(sdk),'rev-parse','HEAD'],text=True).strip()
     dirty=subprocess.check_output(['git','-C',str(sdk),'status','--porcelain','--untracked-files=no'],text=True)
-    allowed=load_framework()[0]['allowed_runtime_revisions']
+    framework,framework_path=load_framework()
+    allowed=framework['allowed_runtime_revisions']
+    extensions=extension_record(extras)
     if revision not in allowed or dirty:
         raise ValueError('Runtime SDK must be clean and recorded in profiles/framework.json')
     record=dict(binary_sha256=sha256_file(binary), image_name=image_name, elf_sha256=image['elf_sha256'],
                 sdk_revision=revision, sdk_path=str(sdk), lift_provenance=lift,
                 runner_sources={str(p.relative_to(ROOT)):sha256_file(p) for p in
-                                [ROOT/'CMakeLists.txt', *sorted((ROOT/'src').glob('*'))] if p.is_file()})
+                                [ROOT/'CMakeLists.txt', *sorted((ROOT/'src').glob('*'))] if p.is_file()},
+                framework=dict(path=str(framework_path), sha256=sha256_file(framework_path)))
+    if extensions:
+        record['extensions']=extensions
     record.update(validate_modules(image,image_name,spu,firmware))
     binary.with_suffix('.receipt.json').write_text(json.dumps(record,indent=2)+'\n')
     return record
@@ -168,10 +190,16 @@ if __name__=='__main__':
     parser.add_argument('--validate-image',action='store_true',help='Validate the selected ELF and lift without creating a receipt')
     parser.add_argument('--spu',type=Path)
     parser.add_argument('--firmware',type=Path)
+    parser.add_argument('--receipt-extra',action='append',default=[],metavar='NAME=PATH',help='Record an extension input in the receipt')
     args=parser.parse_args()
     if args.validate_image:
         validate_build_image(args.recomp,args.image,args.firmware,args.spu)
     else:
         if args.binary is None or args.sdk is None:
             parser.error('--binary and --sdk are required when recording a build')
-        record_build(args.binary,args.sdk,args.recomp,args.spu,args.firmware,args.image)
+        extras={}
+        for item in args.receipt_extra:
+            name,sep,value=item.partition('=')
+            if not sep: parser.error('--receipt-extra needs NAME=PATH')
+            extras[name]=Path(value)
+        record_build(args.binary,args.sdk,args.recomp,args.spu,args.firmware,args.image,extras)
