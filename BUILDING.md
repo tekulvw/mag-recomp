@@ -151,6 +151,20 @@ diagnostic variables and caps a run at 120 seconds.
 
 SDL game controllers take priority over the keyboard.
 
+## Extending a build
+
+Six extension points let a separate project build on this repository without patching it. All are
+off by default.
+
+| Point | How to use it |
+| --- | --- |
+| Workspace | `MAG_WORKSPACE=<dir>` (environment) and `-DMAG_WORKSPACE=<dir>` (CMake): `local/`, `analysis/`, `generated/`, `runs/` and `profiles/retail-v1.0*.json` live there instead of in this checkout |
+| Pin overlay | `<workspace>/profiles/framework.json` replaces this repository's SDK pins for that workspace; every receipt records which framework file it used |
+| CMake extensions | `-DMAG_EXTENSIONS=a.cmake;b.cmake`: each file is included after the `MagRecomp` target exists, with `MAG_TARGET` set, and may append `name=path` to `MAG_RECEIPT_EXTRA` |
+| Receipt extras | `tools/provenance.py --receipt-extra NAME=PATH` (fed from `MAG_RECEIPT_EXTRA`) records a file's or directory's hashes under `extensions` |
+| Lift hooks | `tools/lift.py --hook MODULE` or `MAG_LIFT_HOOKS`: each module's `instrument_source(source)` runs after the built-in hooks |
+| Runtime callbacks | `src/mag_extension.h`: register a `MagExtensionCallbacks` from a static constructor to receive start, frame, trace and payload callbacks |
+
 ## Tests
 
 ```sh
