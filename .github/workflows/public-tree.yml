@@ -11,4 +11,4 @@ jobs:
       - name: No game content, derived output or machine-specific paths
         run: python tools/check_public_tree.py
       - name: Synthetic Python tests
-        run: python -m unittest tests.test_check_public_tree tests.test_profile_pins tests.test_sdk_pins
+        run: python -m unittest tests.test_check_public_tree

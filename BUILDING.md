@@ -154,9 +154,12 @@ SDL game controllers take priority over the keyboard.
 ## Tests
 
 ```sh
-for t in tests/test_*.py; do .venv/bin/python -m unittest "tests.$(basename "$t" .py)"; done
+export MAG_TEST_SDK="$PWD/local/ps3recomp-runtime" SPU_BATCH_TEST_SDK="$PWD/local/ps3recomp-lifter-5244db9"
+.venv/bin/python -m unittest discover -s tests -t .
+.venv/bin/python -m unittest discover -s tools -p 'test_*.py' -t .
 .venv/bin/python tools/check_public_tree.py
 ```
 
-The Python tests are synthetic and need no game files. A few tool self-tests under `tools/test_*.py`
-need an SDK checkout or your own generated output and take explicit arguments.
+The tests are synthetic and need no game files; CI runs the same commands on every push and pull
+request. Tests that compile against the SDK use the checkouts named by the two variables and skip
+without them.

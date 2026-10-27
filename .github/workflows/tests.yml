@@ -1,0 +1,27 @@
+name: Tests
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  python:
+    # Apple Silicon is the supported target; several tests build macOS fixtures with clang.
+    runs-on: macos-latest
+    env:
+      MAG_TEST_SDK: ${{ github.workspace }}/local/ps3recomp-runtime
+      SPU_BATCH_TEST_SDK: ${{ github.workspace }}/local/ps3recomp-lifter-5244db9
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Pinned ps3recomp checkouts
+        run: python tools/fetch_ps3recomp.py --role runtime --role lifter-spu
+      - name: SDK tool dependencies
+        run: python -m pip install -r local/ps3recomp-runtime/requirements.txt
+      - name: Project tests
+        run: python -m unittest discover -s tests -t . -v
+      - name: Tool self-tests
+        run: python -m unittest discover -s tools -p 'test_*.py' -t . -v
