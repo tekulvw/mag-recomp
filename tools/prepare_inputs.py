@@ -2,10 +2,27 @@
 import argparse
 import hashlib
 import json
+import os
 import struct
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+# Working data (inputs, SDK checkouts, analysis, generated sources, runs and per-machine profiles)
+# lives in the workspace; code and pinned profiles always come from ROOT.
+WORKSPACE = Path(os.environ['MAG_WORKSPACE']).resolve() if os.environ.get('MAG_WORKSPACE') else ROOT
+FRAMEWORK_OVERLAY = 'profiles/framework.json'
+
+
+def data_path(relative) -> Path:
+    return WORKSPACE / relative
+
+
+def load_framework():
+    """The SDK pins in effect: a workspace's own framework file replaces the public one."""
+    path = ROOT / FRAMEWORK_OVERLAY
+    if WORKSPACE != ROOT and (WORKSPACE / FRAMEWORK_OVERLAY).is_file():
+        path = WORKSPACE / FRAMEWORK_OVERLAY
+    return json.loads(path.read_text()), path
 RETAIL = {
     'EBOOT.BIN': ('ebe4a52656cc38483d24656029a55ddef6fd53adc7f23b4c52c42f272ac8d1f9',
                   'eb916f92e7c32a9401739d79835630273e1f41a92e6a5d17753d9374062da7d9'),
@@ -74,9 +91,9 @@ def prepare_inputs(source_root: Path, output_root: Path) -> dict:
 if __name__ == '__main__':
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--source-root', type=Path, required=True, help='PS3_GAME/USRDIR of your own BCUS98110 v1.0 disc copy')
-    p.add_argument('--local-root', type=Path, default=ROOT/'local/retail-v1.0/PS3_GAME/USRDIR')
+    p.add_argument('--local-root', type=Path, default=data_path('local/retail-v1.0/PS3_GAME/USRDIR'))
     a = p.parse_args()
     result = prepare_inputs(a.source_root, a.local_root)
     (ROOT/'profiles').mkdir(exist_ok=True)
-    (ROOT/'profiles/retail-v1.0.json').write_text(json.dumps(result, indent=2)+'\n')
+    (data_path('profiles/retail-v1.0.json')).write_text(json.dumps(result, indent=2)+'\n')
     print('Validated original, copied SELF and decrypted ELF hashes for both v1.0 executables.')

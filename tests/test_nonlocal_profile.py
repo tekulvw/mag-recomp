@@ -18,7 +18,7 @@ class NonlocalProfileTests(unittest.TestCase):
         self.profile.write_text(json.dumps(self.record))
         (self.root/'profiles/framework.json').write_text(json.dumps({'allowed_lifter_revisions':['reviewed']}))
     def check(self, revision='reviewed', dirty=''):
-        with patch('tools.lift.ROOT',self.root),patch('tools.lift.subprocess.check_output',side_effect=[revision,dirty]):
+        with patch('tools.lift.ROOT',self.root), patch('tools.prepare_inputs.ROOT',self.root), patch('tools.prepare_inputs.WORKSPACE',self.root),patch('tools.lift.subprocess.check_output',side_effect=[revision,dirty]):
             return lift.validate_nonlocal_profile(self.profile,self.root/'sdk',self.elf,'mage_g')
     def test_accepts_exact_reviewed_profile(self):
         config,record=self.check();self.assertEqual(config,self.config);self.assertEqual(record,self.record)

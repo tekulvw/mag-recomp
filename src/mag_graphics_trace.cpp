@@ -11,6 +11,7 @@ static thread_local uint64_t current_span;
 struct PredState {uint64_t capture,ctx,object,array,target,result,markers0,markers1;};
 static thread_local PredState last[2];
 MagGraphicsTraceScope::MagGraphicsTraceScope(ppu_context *c,uint32_t f):ctx(c),function(f),start(0),token(0),capture(0),parent(0),predicate(f==0xA047D8||f==0xA05438),exceptions(0),marker_mask(0),wait_identity_valid(false){
+ if(auto enter=mag_extension()->trace_enter){for(int i=0;i<3;i++)ext_args[i]=c->gpr[3+i];ext_exceptions=std::uncaught_exceptions();enter(c,f,ext_args,ext_scratch);}
  if(!ps3_critical_enabled())return;
  int saved=errno;capture=ps3_critical_capture_id();for(int i=0;i<3;i++)args[i]=c->gpr[3+i];
  if(!predicate){start=ps3_critical_now_ns();token=++sequence;parent=current_span;current_span=token;exceptions=std::uncaught_exceptions();}
@@ -18,6 +19,7 @@ MagGraphicsTraceScope::MagGraphicsTraceScope(ppu_context *c,uint32_t f):ctx(c),f
  errno=saved;
 }
 MagGraphicsTraceScope::~MagGraphicsTraceScope(){
+ if(auto leave=mag_extension()->trace_exit)leave(ctx,function,ext_args,std::uncaught_exceptions()==ext_exceptions,ext_scratch);
  const int caller_errno=errno;
  errno=caller_errno;
  if(!capture)return;int saved=errno;
@@ -136,7 +138,8 @@ extern "C" void mag_graphics_payload_begin(MagGraphicsPayloadTrace *t,void *opaq
  uint64_t range=__atomic_load_n(&ps3_critical_watch_range,__ATOMIC_ACQUIRE);
  uint32_t queue=payload_ls_word(c,0x13F0);
  const bool selected=payload_clock_selected&&payload_clock_entry&&((c->pc&SPU_LS_MASK)==payload_clock_entry);
- if(!selected&&(!range || queue!=((uint32_t)range&~127u))){errno=saved;return;}
+ const auto *ext=mag_extension();const bool extension_selected=ext->payload_select&&ext->payload_select(queue,ps3_critical_capture_id());
+ if(!selected&&!extension_selected&&(!range || queue!=((uint32_t)range&~127u))){errno=saved;return;}
  t->capture=ps3_critical_capture_id();t->start=ps3_critical_now_ns();t->span=++sequence;t->owner=(uint64_t)c;t->target=c->pc&SPU_LS_MASK;t->continuation=c->gpr[0]._u32[0];t->generation=ps3_critical_context_generation(c);t->control_12e0=payload_ls_word(c,0x12E0);
  {std::lock_guard<std::mutex> guard(payload_lock);PendingPayload *slot=nullptr;
   for(auto &p:payload_pending)if(p.token.owner==t->owner){slot=&p;break;}
@@ -145,6 +148,7 @@ extern "C" void mag_graphics_payload_begin(MagGraphicsPayloadTrace *t,void *opaq
    if(selected){slot->clock=payload_clock();const auto &clock=slot->clock;uint64_t clock_begin[8]={clock.wall,clock.cpu,clock.host,t->target,t->generation,queue,0,uint64_t(clock.cpu_valid)|(uint64_t(clock.host_valid)<<1)};ps3_critical_emit_capture(t->capture,117,t->owner,t->span,clock_begin,8);}}
   else{uint64_t missing[1]={1};ps3_critical_emit_capture(t->capture,17,t->owner,t->span,missing,1);}
  }
+ if(ext->payload_begin)ext->payload_begin(c,t->span,t->target);
  uint64_t fingerprint=payload_hash(c,t->target);
  uint64_t begin[8]={t->start,t->target,t->continuation,queue,t->generation,t->control_12e0,payload_ls_word(c,0x1320),fingerprint};ps3_critical_emit_capture(t->capture,13,t->owner,t->span,begin,8);
  uint64_t descriptor[8];for(unsigned i=0;i<4;i++){descriptor[i]=payload_ls_word(c,0x1320+i*4);descriptor[4+i]=payload_ls_word(c,0x13A0+i*4);}ps3_critical_emit_capture(t->capture,15,t->owner,t->span,descriptor,8);

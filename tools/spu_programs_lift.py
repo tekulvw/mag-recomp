@@ -18,6 +18,9 @@ Generated code and original bytes stay in the (ignored) output directory.
 import argparse, hashlib, json, pathlib, subprocess, sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+from tools.prepare_inputs import data_path
 MANIFEST = ROOT / 'profiles/retail-v1.0-spu-programs.json'
 COVERAGE = ROOT / 'profiles/retail-v1.0-spu-coverage.json'
 RECEIPT = 'mag-spu-programs.json'
@@ -81,7 +84,7 @@ def check(output):
 
 def generate(sdk, revision, output):
     manifest = json.loads(MANIFEST.read_text())
-    image = json.loads((ROOT / 'profiles/retail-v1.0.json').read_text())['images'][manifest['carrier']]
+    image = json.loads((data_path('profiles/retail-v1.0.json')).read_text())['images'][manifest['carrier']]
     elf = pathlib.Path(image['elf'])
     if digest(elf) != manifest['elf_sha256'] or image['elf_sha256'] != manifest['elf_sha256']:
         raise ValueError('engine ELF identity differs from the SPU program manifest')

@@ -8,7 +8,7 @@ import subprocess
 import sys
 if __package__ in (None,''):
     sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
-from tools.prepare_inputs import ROOT, verify_hash, sha256_file
+from tools.prepare_inputs import ROOT, verify_hash, sha256_file, data_path
 from tools.lift import guard_generated_source
 from tools.inventory import check_sdk
 
@@ -52,12 +52,12 @@ def bridge_function(source: str, address: str, nid: str) -> str:
 
 def generate(output: Path) -> dict:
     profile=json.loads((ROOT/'profiles/retail-v1.0-firmware.json').read_text())
-    sdk=ROOT/os.environ.get('MAG_FIRMWARE_LIFTER_REPOSITORY', profile['lifter_repository']);check_sdk(sdk,expected_revision=profile['lifter_revision'])
+    sdk=data_path(os.environ.get('MAG_FIRMWARE_LIFTER_REPOSITORY', profile['lifter_repository']));check_sdk(sdk,expected_revision=profile['lifter_revision'])
     revision=subprocess.check_output(['git','-C',str(sdk),'rev-parse','HEAD'],text=True).strip()
     if revision != profile['lifter_revision']:
         raise ValueError('Unexpected firmware lifter revision')
     validate_placement(profile)
-    source=ROOT/profile['image'];verify_hash(source,profile['image_sha256'])
+    source=data_path(profile['image']);verify_hash(source,profile['image_sha256'])
     output.mkdir(parents=True,exist_ok=False)
     inputs=output/'inputs';inputs.mkdir()
     base=profile['base'];toc=profile['toc']

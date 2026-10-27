@@ -28,7 +28,7 @@ class BuildImageTests(unittest.TestCase):
         (self.root/'profiles/retail-v1.0.json').write_text(json.dumps({'images':self.images}))
         (self.root/'profiles/framework.json').write_text(json.dumps({'allowed_runtime_revisions':['reviewed']}))
         self.addCleanup(patch.stopall)
-        patch('tools.provenance.ROOT',self.root).start()
+        patch('tools.provenance.ROOT',self.root).start(); patch('tools.prepare_inputs.ROOT',self.root).start(); patch('tools.prepare_inputs.WORKSPACE',self.root).start()
         # Git only supplies the reviewed SDK revision; all image/lift/receipt IO is real.
         patch('tools.provenance.subprocess.check_output',side_effect=lambda args,**kw: 'reviewed\n' if 'rev-parse' in args else '').start()
 
@@ -36,6 +36,28 @@ class BuildImageTests(unittest.TestCase):
         result=record_build(self.binary,self.root,self.lifts['EBOOT'])
         self.assertEqual(result['elf_sha256'],self.images['EBOOT']['elf_sha256'])
         validate_receipt(self.binary,self.images['EBOOT']['elf_sha256'])
+
+    def test_receipt_extra_file(self):
+        extra=self.root/'native.a';extra.write_bytes(b'synthetic archive')
+        result=record_build(self.binary,self.root,self.lifts['EBOOT'],extras={'native-core':extra})
+        self.assertEqual(result['extensions'],{'native-core':{'sha256':sha256_file(extra)}})
+
+    def test_receipt_extra_directory_hashes_every_file(self):
+        tree=self.root/'ext';(tree/'sub').mkdir(parents=True)
+        (tree/'a.c').write_text('a');(tree/'sub/b.c').write_text('b')
+        result=record_build(self.binary,self.root,self.lifts['EBOOT'],extras={'sources':tree})
+        self.assertEqual(result['extensions']['sources'],{'files':{'a.c':sha256_file(tree/'a.c'),'sub/b.c':sha256_file(tree/'sub/b.c')}})
+
+    def test_receipt_extra_rejects_missing_path_and_bad_name(self):
+        with self.assertRaisesRegex(ValueError,'missing'):
+            record_build(self.binary,self.root,self.lifts['EBOOT'],extras={'gone':self.root/'absent'})
+        with self.assertRaisesRegex(ValueError,'name'):
+            record_build(self.binary,self.root,self.lifts['EBOOT'],extras={'Bad Name':self.binary})
+
+    def test_receipt_records_framework_file(self):
+        result=record_build(self.binary,self.root,self.lifts['EBOOT'])
+        framework=self.root/'profiles/framework.json'
+        self.assertEqual(result['framework'],{'path':str(framework),'sha256':sha256_file(framework)})
 
     def test_engine_receipt_identifies_selected_image(self):
         result=record_build(self.binary,self.root,self.lifts['mage_g'],image_name='mage_g')

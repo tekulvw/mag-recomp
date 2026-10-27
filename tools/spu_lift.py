@@ -8,19 +8,19 @@ import subprocess
 import sys
 if __package__ in (None, ''):
     sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
-from tools.prepare_inputs import ROOT, sha256_file, verify_hash
+from tools.prepare_inputs import ROOT, sha256_file, verify_hash, data_path
 
 
 def generate(output: Path) -> dict:
     profile=json.loads((ROOT/'profiles/retail-v1.0-spu.json').read_text())
-    sdk=ROOT/os.environ.get('MAG_SPU_LIFTER_REPOSITORY', profile['lifter_repository'])
+    sdk=data_path(os.environ.get('MAG_SPU_LIFTER_REPOSITORY', profile['lifter_repository']))
     revision=subprocess.check_output(['git','-C',str(sdk),'rev-parse','HEAD'],text=True).strip()
     if revision != profile['lifter_revision']:
         raise ValueError('Unexpected SPU lifter revision')
     if subprocess.check_output(['git','-C',str(sdk),'status','--porcelain','--untracked-files=no'],text=True):
         raise ValueError('SPU lifter repository must be clean')
-    image=ROOT/profile['image']; verify_hash(image,profile['image_sha256'])
-    retail=json.loads((ROOT/'profiles/retail-v1.0.json').read_text())['images']['EBOOT']
+    image=data_path(profile['image']); verify_hash(image,profile['image_sha256'])
+    retail=json.loads((data_path('profiles/retail-v1.0.json')).read_text())['images']['EBOOT']
     eboot=Path(retail['elf']);verify_hash(eboot,retail['elf_sha256'])
     data=image.read_bytes()
     with eboot.open('rb') as f:

@@ -1,0 +1,6 @@
+cmake_minimum_required(VERSION 3.20)
+project(mag_extension_fixture C)
+include("${MAG_REPO}/cmake/MagExtensions.cmake")
+add_executable(fixture main.c)
+mag_apply_extensions(fixture)
+file(WRITE "${CMAKE_BINARY_DIR}/receipt-extra.txt" "${MAG_RECEIPT_EXTRA}")

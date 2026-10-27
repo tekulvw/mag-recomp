@@ -29,6 +29,13 @@ memory layout, register use or call order.
 - Retail v1.0 is the only supported build. Do not apply addresses from other builds without evidence.
 - Keep unsupported runtime behaviour visible instead of silently skipping it.
 
+## Extension points
+
+The workspace, pin overlay, `MAG_EXTENSIONS`, `--receipt-extra`, lift hook modules and runtime
+callbacks (BUILDING.md, "Extending a build") must stay inert by default: with none of them set, the
+build, its outputs and its receipts are unchanged. Keep them generic. They name no particular
+extension, and code that uses them lives outside this repository.
+
 ## Testing
 
 Tests must be synthetic: generate their inputs and never require game files. Tests that compare

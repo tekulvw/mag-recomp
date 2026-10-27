@@ -11,7 +11,7 @@ class FirmwareLiftTests(unittest.TestCase):
             root=Path(tmp);(root/'profiles').mkdir()
             (root/'profiles/retail-v1.0-firmware.json').write_text(json.dumps(dict(
                 lifter_repository='/unused/sdk',lifter_revision='expected',image='input',image_sha256='hash')))
-            with patch.object(firmware_lift,'ROOT',root), patch.object(firmware_lift,'check_sdk'), \
+            with patch.object(firmware_lift,'ROOT',root), patch('tools.prepare_inputs.ROOT',root), patch('tools.prepare_inputs.WORKSPACE',root), patch.object(firmware_lift,'check_sdk'), \
                  patch.object(firmware_lift.subprocess,'check_output',return_value='different\n'), \
                  patch.object(firmware_lift,'verify_hash',side_effect=AssertionError('input processing reached')):
                 with self.assertRaisesRegex(ValueError,'revision'):
@@ -24,7 +24,7 @@ class FirmwareGeneratorPinTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);(root/'profiles').mkdir()
             (root/'profiles/framework.json').write_text(json.dumps({'allowed_lifter_revisions':['reviewed']}))
-            with patch.object(inventory,'ROOT',root):
+            with patch.object(inventory,'ROOT',root), patch('tools.prepare_inputs.ROOT',root), patch('tools.prepare_inputs.WORKSPACE',root):
                 for head,dirty,expected,accepted in [('reviewed','','reviewed',True),
                     ('foreign','','foreign',False),('reviewed','modified','reviewed',False),
                     ('wrong','','reviewed',False)]:

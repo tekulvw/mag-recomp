@@ -10,7 +10,7 @@ import subprocess
 import sys
 if __package__ in (None, ''):
     sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
-from tools.prepare_inputs import ROOT, sha256_file, verify_hash
+from tools.prepare_inputs import ROOT, sha256_file, verify_hash, data_path
 from tools.spu_lift import generate as generate_edge
 
 
@@ -98,7 +98,7 @@ def guard_policy_source(source: str, label: str = 'policy') -> tuple[str,int]:
 
 def generate(output: Path) -> dict:
     profile=json.loads((ROOT/'profiles/retail-v1.0-engine-spu.json').read_text())
-    sdk=ROOT/os.environ.get('MAG_SPU_LIFTER_REPOSITORY', profile['lifter_repository'])
+    sdk=data_path(os.environ.get('MAG_SPU_LIFTER_REPOSITORY', profile['lifter_repository']))
     revision=subprocess.check_output(['git','-C',str(sdk),'rev-parse','HEAD'],text=True).strip()
     if revision != profile['lifter_revision']:
         raise ValueError('Unexpected engine SPU lifter revision')
@@ -106,7 +106,7 @@ def generate(output: Path) -> dict:
         raise ValueError('Engine SPU lifter repository must be clean')
     worker_profile=ROOT/'profiles/retail-v1.0-spu.json'
     verify_hash(worker_profile,profile['worker_profile_sha256'])
-    image=json.loads((ROOT/'profiles/retail-v1.0.json').read_text())['images']['mage_g']
+    image=json.loads((data_path('profiles/retail-v1.0.json')).read_text())['images']['mage_g']
     if image['elf_sha256'] != profile['elf_sha256']:
         raise ValueError('Selected engine image does not match SPU profile')
     data=Path(image['elf']).read_bytes();raw=extract_policy(data,profile)

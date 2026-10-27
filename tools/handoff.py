@@ -6,7 +6,7 @@ import stat
 from pathlib import Path
 import time
 import uuid
-from tools.prepare_inputs import ROOT, verify_hash, validate_ppu_elf
+from tools.prepare_inputs import ROOT, verify_hash, validate_ppu_elf, data_path, load_framework
 
 GUEST_ENGINE='/dev_bdvd/PS3_GAME/USRDIR/bin/mage_g.self'
 
@@ -61,8 +61,8 @@ def validate_mapping(mapping: dict) -> dict:
 
 
 def provision_handoff(vfs: Path, output: Path, engine_binary: Path) -> tuple[dict,dict]:
-    images=json.loads((ROOT/'profiles/retail-v1.0.json').read_text())['images']
-    framework=json.loads((ROOT/'profiles/framework.json').read_text())
+    images=json.loads((data_path('profiles/retail-v1.0.json')).read_text())['images']
+    framework=load_framework()[0]
     engine=images['mage_g'];launcher=images['EBOOT']
     verify_hash(Path(launcher['elf']),launcher['elf_sha256'])
     # Read the retail launcher's key identity without storing or logging its bytes.
