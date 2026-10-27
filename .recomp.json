@@ -4,13 +4,15 @@
   "system": "PlayStation 3",
   "type": "recomp",
   "status": "in-progress",
-  "targets": ["macOS"],
-  "toolchain": ["ps3recomp"],
+  "targets": ["macOS", "Windows", "Linux"],
+  "toolchain": ["Ps3recomp"],
   "project": "mag-recomp",
-  "approach": "Static recompilation of the PS3 PPU/SPU code to native Apple Silicon, with a Metal renderer.",
+  "approach": "Static recompilation of the PS3 PPU/SPU code to native code. macOS (Apple Silicon, Metal) works today; Windows and Linux are planned.",
   "notes": "Boots to the menus and reaches interactive training. Rendering has known gaps, audio stutters, and performance work is ongoing. Online play needs separate replacement services. Only retail v1.0 (BCUS98110) is supported. Bring your own copy; the repository contains no game data.",
   "help": ["Rendering fixes", "Performance profiling", "Audio"],
   "tags": ["ps3", "metal", "apple-silicon"],
-  "maintainers": [{"name": "Will Tekulve", "link": "https://github.com/tekulvw"}],
-  "links": [{"label": "Source", "url": "https://github.com/tekulvw/mag-recomp"}]
+  "maintainers": [{ "name": "tekulvw", "link": "https://github.com/tekulvw" }],
+  "links": [
+    { "label": "Source", "url": "https://github.com/tekulvw/mag-recomp" }
+  ]
 }
