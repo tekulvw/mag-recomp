@@ -24,39 +24,27 @@ build still works, but the intro movies are not played.
 
 ## 2. ps3recomp checkouts
 
-Four separate checkouts of the [tekulvw/ps3recomp](https://github.com/tekulvw/ps3recomp) fork are
-needed, each at a pinned revision. The runtime revision is the tip of the fork's
-`mag-recomp/runtime-20261024` branch. The lifter checkouts live under `local/` at the paths named in
-`profiles/retail-v1.0-spu.json`, `profiles/retail-v1.0-engine-spu.json` and
-`profiles/retail-v1.0-firmware.json`.
+Four checkouts of the [tekulvw/ps3recomp](https://github.com/tekulvw/ps3recomp) fork are needed,
+each at a pinned commit with an immutable `mag-recomp/*` tag. The `ps3recomp` table in
+`profiles/framework.json` is the single source of these pins; the helper clones the fork into each
+path, checks out the pinned commit and refuses if the tag does not resolve to exactly that commit:
 
 ```sh
-git clone https://github.com/tekulvw/ps3recomp.git local/ps3recomp-runtime
-git -C local/ps3recomp-runtime checkout --detach c062d984d57b80f8763f8679a135192a114765ac
-
-git clone local/ps3recomp-runtime local/ps3recomp-lifter-5244db9
-git -C local/ps3recomp-lifter-5244db9 checkout --detach 5244db92669b54831c6d3ebb7a96d58c4dbfa6df
-
-git clone local/ps3recomp-runtime local/ps3recomp-lifter-dfa7073
-git -C local/ps3recomp-lifter-dfa7073 checkout --detach dfa7073d2e164aec6890866c4951d8dedc28619d
-
-git clone local/ps3recomp-runtime local/ps3recomp-spu-programs
-git -C local/ps3recomp-spu-programs checkout --detach 4c5c05f60a6ae428b16e5ff7075c24a5e4d282ab
-
+python3 tools/fetch_ps3recomp.py
 python3 -m venv .venv
 .venv/bin/python -m pip install -r local/ps3recomp-runtime/requirements.txt
 ```
 
-| Checkout | Revision | Role |
-| --- | --- | --- |
-| `local/ps3recomp-runtime` | `c062d98` | Runtime SDK passed to CMake as `PS3RECOMP_DIR` |
-| `local/ps3recomp-lifter-5244db9` | `5244db9` | Inventory and launcher/engine SPU lifting |
-| `local/ps3recomp-lifter-dfa7073` | `dfa7073` | PPU and firmware lifting |
-| `local/ps3recomp-spu-programs` | `4c5c05f` | Lifting every embedded engine SPU program |
+| Checkout | Tag | Commit | Role |
+| --- | --- | --- | --- |
+| `local/ps3recomp-runtime` | `mag-recomp/runtime-2026.10.24` | `c062d98` | Runtime SDK passed to CMake as `PS3RECOMP_DIR` |
+| `local/ps3recomp-lifter-5244db9` | `mag-recomp/lifter-spu-2026.10.07` | `5244db9` | Inventory and launcher/engine SPU lifting |
+| `local/ps3recomp-lifter-dfa7073` | `mag-recomp/lifter-ppu-2026.10.12` | `dfa7073` | PPU and firmware lifting |
+| `local/ps3recomp-spu-programs` | `mag-recomp/spu-programs-2026.10.21` | `4c5c05f` | Lifting every embedded engine SPU program |
 
-Keep them clean and at these exact commits: the tools refuse other or dirty revisions, and
-`profiles/framework.json` lists the runtime revisions the build accepts. To keep a lifter elsewhere, set
-`MAG_SPU_LIFTER_REPOSITORY` or `MAG_FIRMWARE_LIFTER_REPOSITORY`.
+Keep them clean and at these exact commits: the tools refuse other or dirty revisions, and the build
+accepts only the pinned runtime. To keep a lifter elsewhere, set `MAG_SPU_LIFTER_REPOSITORY` or
+`MAG_FIRMWARE_LIFTER_REPOSITORY`.
 
 ## 3. Your inputs
 
