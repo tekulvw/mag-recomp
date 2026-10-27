@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "id": "mag-unconfigured",
+  "revision": 1,
+  "kind": "production",
+  "approval": "unconfigured",
+  "identity": {
+    "label": "MAG BCUS98110 retail v1.0 / APP_VER01.00 (built by Build MAG, not by this profile)",
+    "provenance": "The generic profile pipeline carries no MAG recipe. MAG is built by the player route (Build MAG) from the embedded source kit, which verifies the input identities pinned in the kit.",
+    "inputs": []
+  },
+  "platforms": {
+    "windows-x86_64": {
+      "status": "blocked",
+      "reason": "Use Build MAG: this profile has no recipe; the player route builds MAG on this host.",
+      "tools": [],
+      "stages": [],
+      "package": []
+    },
+    "windows-arm64": {
+      "status": "blocked",
+      "reason": "No MAG player route exists for this host.",
+      "tools": [],
+      "stages": [],
+      "package": []
+    },
+    "linux-x86_64": {
+      "status": "blocked",
+      "reason": "No MAG player route exists for this host.",
+      "tools": [],
+      "stages": [],
+      "package": []
+    },
+    "linux-arm64": {
+      "status": "blocked",
+      "reason": "No MAG player route exists for this host.",
+      "tools": [],
+      "stages": [],
+      "package": []
+    },
+    "macos-x86_64": {
+      "status": "blocked",
+      "reason": "No MAG player route exists for this host.",
+      "tools": [],
+      "stages": [],
+      "package": []
+    },
+    "macos-arm64": {
+      "status": "blocked",
+      "reason": "Use Build MAG: this profile has no recipe; the player route builds MAG on this host.",
+      "tools": [],
+      "stages": [],
+      "package": []
+    }
+  }
+}

@@ -28,3 +28,6 @@ build-engine/
 /target/
 **/target/
 **/*.rs.bk
+
+# Installer source kit, generated per build by installer/scripts/prepare_player_kit.py.
+installer/release/native-kit.tar.gz

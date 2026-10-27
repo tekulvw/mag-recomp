@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "id": "synthetic-demonstration",
+  "revision": 1,
+  "kind": "synthetic",
+  "approval": "reviewed",
+  "identity": {
+    "label": "Synthetic installer demonstration; no game data",
+    "provenance": "Public literal text in README; this profile is never a game version profile.",
+    "inputs": [
+      {
+        "path": "SYNTHETIC-INPUT.txt",
+        "size": 35,
+        "sha256": "2a710fb67a1611c847a39e77c98152342f0c0d3daeeae97361b3da4037467ab6"
+      }
+    ]
+  },
+  "platforms": {
+    "windows-x86_64": {
+      "status": "ready",
+      "reason": "Generic adapter only; synthetic demonstration requires host testing and does not establish MAG or release readiness.",
+      "tools": [],
+      "stages": [],
+      "package": []
+    },
+    "windows-arm64": {
+      "status": "ready",
+      "reason": "Generic adapter only; synthetic demonstration requires host testing and does not establish MAG or release readiness.",
+      "tools": [],
+      "stages": [],
+      "package": []
+    },
+    "linux-x86_64": {
+      "status": "ready",
+      "reason": "Generic adapter only; synthetic demonstration requires host testing and does not establish MAG or release readiness.",
+      "tools": [],
+      "stages": [],
+      "package": []
+    },
+    "linux-arm64": {
+      "status": "ready",
+      "reason": "Generic adapter only; synthetic demonstration requires host testing and does not establish MAG or release readiness.",
+      "tools": [],
+      "stages": [],
+      "package": []
+    },
+    "macos-x86_64": {
+      "status": "ready",
+      "reason": "Generic adapter only; synthetic demonstration requires host testing and does not establish MAG or release readiness.",
+      "tools": [],
+      "stages": [],
+      "package": []
+    },
+    "macos-arm64": {
+      "status": "ready",
+      "reason": "Generic adapter only; synthetic demonstration requires host testing and does not establish MAG or release readiness.",
+      "tools": [],
+      "stages": [],
+      "package": []
+    }
+  }
+}
