@@ -17,7 +17,7 @@ From the MAG repository, verify an existing original or corrected file:
 ```sh
 python3 tools/partial_ppu_relift.py \
   --sdk /path/to/ps3recomp \
-  --profile builds/retail-v1.0-ppu-ctr64-partial-relift.json \
+  --profile profiles/retail-v1.0-ppu-ctr64-partial-relift.json \
   --elf /path/to/retail/mage_g.elf \
   --source /path/to/generated/ppu_recomp_007.cpp \
   --verify-only

@@ -19,7 +19,7 @@ class PartialRelift(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         if SDK is None:raise RuntimeError('--sdk with pinned Git objects required')
-        cls.real=json.loads((ROOT/'builds/retail-v1.0-ppu-ctr64-partial-relift.json').read_text())
+        cls.real=json.loads((ROOT/'profiles/retail-v1.0-ppu-ctr64-partial-relift.json').read_text())
         cls.old,cls.new,decode=u.load_tools(SDK,cls.real)
         cls.decode=staticmethod(decode)
 

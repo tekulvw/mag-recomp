@@ -3,10 +3,10 @@
 
 Runs the SDK's generic discovery pipeline (build_spu_workloads --input) over the
 pinned engine ELF with this title's reviewed decisions from
-builds/retail-v1.0-spu-programs.json: a pinned image id for every program the
+profiles/retail-v1.0-spu-programs.json: a pinned image id for every program the
 pipeline registers, and a reason for every program another path already
 provides. The discovered set must equal the audited coverage inventory
-(builds/retail-v1.0-spu-coverage.json) byte for byte, and the pipeline must
+(profiles/retail-v1.0-spu-coverage.json) byte for byte, and the pipeline must
 report complete coverage, so a new or changed SPU program cannot go
 unregistered silently.
 
@@ -18,8 +18,8 @@ Generated code and original bytes stay in the (ignored) output directory.
 import argparse, hashlib, json, pathlib, subprocess, sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-MANIFEST = ROOT / 'builds/retail-v1.0-spu-programs.json'
-COVERAGE = ROOT / 'builds/retail-v1.0-spu-coverage.json'
+MANIFEST = ROOT / 'profiles/retail-v1.0-spu-programs.json'
+COVERAGE = ROOT / 'profiles/retail-v1.0-spu-coverage.json'
 RECEIPT = 'mag-spu-programs.json'
 REGISTRY = 'spu_programs.c'
 REGISTER_FN = 'mag_spu_programs_register'
@@ -81,7 +81,7 @@ def check(output):
 
 def generate(sdk, revision, output):
     manifest = json.loads(MANIFEST.read_text())
-    image = json.loads((ROOT / 'builds/retail-v1.0.json').read_text())['images'][manifest['carrier']]
+    image = json.loads((ROOT / 'profiles/retail-v1.0.json').read_text())['images'][manifest['carrier']]
     elf = pathlib.Path(image['elf'])
     if digest(elf) != manifest['elf_sha256'] or image['elf_sha256'] != manifest['elf_sha256']:
         raise ValueError('engine ELF identity differs from the SPU program manifest')

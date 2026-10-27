@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-PROFILES = ROOT / 'builds'
+PROFILES = ROOT / 'profiles'
 
 
 def sha256(path):

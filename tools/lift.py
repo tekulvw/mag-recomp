@@ -48,7 +48,7 @@ def validate_nonlocal_profile(profile_path: Path, sdk_root: Path, elf_path: Path
     if config.is_symlink() or not config.is_file():
         raise ValueError('Nonlocal configuration must be a regular local file')
     verify_hash(config,profile['configuration_sha256'])
-    framework=json.loads((ROOT/'builds/framework.json').read_text())
+    framework=json.loads((ROOT/'profiles/framework.json').read_text())
     revision=subprocess.check_output(['git','-C',str(sdk_root),'rev-parse','HEAD'],text=True).strip()
     dirty=subprocess.check_output(['git','-C',str(sdk_root),'status','--porcelain','--untracked-files=no'],text=True)
     if revision != profile['sdk_revision'] or revision not in framework.get('allowed_lifter_revisions',[]) or dirty:
@@ -63,7 +63,7 @@ def generate_lift(elf_path: Path, functions_path: Path, imports_path: Path, sdk_
     else:
         config,control_profile=validate_nonlocal_profile(nonlocal_profile,sdk_root,elf_path,elf_path.stem)
         generator_revision=control_profile['sdk_revision']
-    manifest = json.loads((ROOT/'builds/retail-v1.0.json').read_text())
+    manifest = json.loads((ROOT/'profiles/retail-v1.0.json').read_text())
     image = manifest['images'][elf_path.stem]
     verify_hash(elf_path, image['elf_sha256'])
     summary = json.loads((functions_path.parent/'summary.json').read_text())
@@ -115,7 +115,7 @@ if __name__ == '__main__':
     parser.add_argument('--output', type=Path)
     parser.add_argument('--nonlocal-profile', type=Path, help='Exact-image configuration for reviewed nonlocal control flow')
     a=parser.parse_args()
-    image=json.loads((ROOT/'builds/retail-v1.0.json').read_text())['images'][a.image]
+    image=json.loads((ROOT/'profiles/retail-v1.0.json').read_text())['images'][a.image]
     analysis=ROOT/'analysis/retail-v1.0'/a.image
     out=a.output or ROOT/'generated/retail-v1.0'/a.image
     generate_lift(Path(image['elf']), analysis/'reviewed-functions.json', analysis/f'{a.image}.imports.json', a.sdk, out, a.nonlocal_profile)

@@ -17,7 +17,7 @@ def check_sdk(sdk_root: Path, expected_revision: str = SDK_REVISION):
     revision = subprocess.check_output(['git', '-C', str(sdk_root), 'rev-parse', 'HEAD'], text=True).strip()
     dirty = subprocess.check_output(['git', '-C', str(sdk_root), 'status', '--porcelain', '--untracked-files=no'], text=True)
     if expected_revision != SDK_REVISION:
-        framework=json.loads((ROOT/'builds/framework.json').read_text())
+        framework=json.loads((ROOT/'profiles/framework.json').read_text())
         if expected_revision not in framework.get('allowed_lifter_revisions',[]):
             raise ValueError('Generator revision is not reviewed')
     if revision != expected_revision or dirty:
@@ -86,10 +86,10 @@ if __name__ == '__main__':
     parser.add_argument('--sdk', type=Path, default=os.environ.get('PS3RECOMP_DIR'), required='PS3RECOMP_DIR' not in os.environ,
                         help='ps3recomp checkout (default: $PS3RECOMP_DIR)')
     args = parser.parse_args()
-    config = json.loads((ROOT/'builds/retail-v1.0.json').read_text())
+    config = json.loads((ROOT/'profiles/retail-v1.0.json').read_text())
     summaries = {}
     for name, record in config['images'].items():
         path = Path(record['elf']); verify_hash(path, record['elf_sha256'])
         summaries[name] = inventory_image(path, args.sdk, ROOT/'analysis/retail-v1.0'/name)
         print(name, summaries[name]['discovered_function_count'], 'functions,', len(summaries[name]['tocs']), 'TOCs,', len(summaries[name]['spu_elfs']), 'SPU ELFs', flush=True)
-    (ROOT/'builds/retail-v1.0-inventory.json').write_text(json.dumps(summaries, indent=2)+'\n')
+    (ROOT/'profiles/retail-v1.0-inventory.json').write_text(json.dumps(summaries, indent=2)+'\n')

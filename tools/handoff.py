@@ -61,8 +61,8 @@ def validate_mapping(mapping: dict) -> dict:
 
 
 def provision_handoff(vfs: Path, output: Path, engine_binary: Path) -> tuple[dict,dict]:
-    images=json.loads((ROOT/'builds/retail-v1.0.json').read_text())['images']
-    framework=json.loads((ROOT/'builds/framework.json').read_text())
+    images=json.loads((ROOT/'profiles/retail-v1.0.json').read_text())['images']
+    framework=json.loads((ROOT/'profiles/framework.json').read_text())
     engine=images['mage_g'];launcher=images['EBOOT']
     verify_hash(Path(launcher['elf']),launcher['elf_sha256'])
     # Read the retail launcher's key identity without storing or logging its bytes.

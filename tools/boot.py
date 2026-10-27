@@ -119,14 +119,14 @@ def run_boot(binary: Path, seconds: float, output_dir: Path, syscall_trace: str 
     if syscall_trace not in ('1', 'fail'):
         raise ValueError('Syscall trace must be 1 or fail')
     binary=binary.resolve(); output_dir=output_dir.resolve()
-    image,source,guest_path=select_boot_image(json.loads((ROOT/'builds/retail-v1.0.json').read_text()),image_name)
+    image,source,guest_path=select_boot_image(json.loads((ROOT/'profiles/retail-v1.0.json').read_text()),image_name)
     if engine_handoff and image_name!='EBOOT':
         raise ValueError('Only the launcher can request an engine handoff')
     if image_name != 'EBOOT' and (network_profile is not None or trace_network):
         raise ValueError('Launcher network hooks are verified only for EBOOT')
     elf=Path(image['elf']);verify_hash(elf, image['elf_sha256'])
     receipt=validate_receipt(binary,image['elf_sha256'])
-    framework=json.loads((ROOT/'builds/framework.json').read_text())
+    framework=json.loads((ROOT/'profiles/framework.json').read_text())
     if receipt['sdk_revision'] not in framework['strict_runtime_revisions']:
         raise ValueError('This diagnostic run requires a recorded runtime with strict syscall support')
     if receipt['sdk_revision'] not in framework.get('strict_hle_runtime_revisions', []):

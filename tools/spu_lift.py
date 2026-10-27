@@ -12,7 +12,7 @@ from tools.prepare_inputs import ROOT, sha256_file, verify_hash
 
 
 def generate(output: Path) -> dict:
-    profile=json.loads((ROOT/'builds/retail-v1.0-spu.json').read_text())
+    profile=json.loads((ROOT/'profiles/retail-v1.0-spu.json').read_text())
     sdk=ROOT/os.environ.get('MAG_SPU_LIFTER_REPOSITORY', profile['lifter_repository'])
     revision=subprocess.check_output(['git','-C',str(sdk),'rev-parse','HEAD'],text=True).strip()
     if revision != profile['lifter_revision']:
@@ -20,7 +20,7 @@ def generate(output: Path) -> dict:
     if subprocess.check_output(['git','-C',str(sdk),'status','--porcelain','--untracked-files=no'],text=True):
         raise ValueError('SPU lifter repository must be clean')
     image=ROOT/profile['image']; verify_hash(image,profile['image_sha256'])
-    retail=json.loads((ROOT/'builds/retail-v1.0.json').read_text())['images']['EBOOT']
+    retail=json.loads((ROOT/'profiles/retail-v1.0.json').read_text())['images']['EBOOT']
     eboot=Path(retail['elf']);verify_hash(eboot,retail['elf_sha256'])
     data=image.read_bytes()
     with eboot.open('rb') as f:
@@ -44,7 +44,7 @@ def generate(output: Path) -> dict:
     if unsupported:
         raise ValueError(f'SPU lift has {unsupported} unsupported/unresolved markers')
     image_id=profile['image_id'];entry=profile['entry'];fingerprint=profile['runtime_fingerprint']
-    (output/'spu_workloads.c').write_text(f'''/* Generated from builds/retail-v1.0-spu.json. */
+    (output/'spu_workloads.c').write_text(f'''/* Generated from profiles/retail-v1.0-spu.json. */
 #include "spu_workload.h"
 extern void spu_begin_image(int);
 extern void mag_edgezlib_spu_recomp_register(void);

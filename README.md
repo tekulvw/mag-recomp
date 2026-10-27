@@ -16,7 +16,7 @@ PlayStation 3, built on the [ps3recomp](https://github.com/sp00nznet/ps3recomp) 
 | `tools/` | Input validation, PPU/SPU/firmware lifting drivers, launcher/engine handoff, opt-in diagnostic hooks, benchmarks |
 | `src/` | Runtime glue for the recompiled launcher and engine, native job executors and default-off diagnostics |
 | `native/graphics/` | Clean-room native reimplementations of SPU render jobs (Rust and C), with synthetic tests |
-| `builds/` | Pinned identities of the expected inputs, lifter configurations and allowed SDK revisions |
+| `profiles/` | Pinned identities of the expected inputs, lifter configurations and allowed SDK revisions |
 | `tests/` | Synthetic tests and fixtures; none contain game data |
 | `docs/` | Input preparation, SPU batch preparation, partial relift and the reimplementation method |
 

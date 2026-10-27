@@ -8,8 +8,8 @@ from tools import firmware_lift
 class FirmwareLiftTests(unittest.TestCase):
     def test_profile_revision_mismatch_stops_before_processing_input(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root=Path(tmp);(root/'builds').mkdir()
-            (root/'builds/retail-v1.0-firmware.json').write_text(json.dumps(dict(
+            root=Path(tmp);(root/'profiles').mkdir()
+            (root/'profiles/retail-v1.0-firmware.json').write_text(json.dumps(dict(
                 lifter_repository='/unused/sdk',lifter_revision='expected',image='input',image_sha256='hash')))
             with patch.object(firmware_lift,'ROOT',root), patch.object(firmware_lift,'check_sdk'), \
                  patch.object(firmware_lift.subprocess,'check_output',return_value='different\n'), \
@@ -22,8 +22,8 @@ class FirmwareGeneratorPinTests(unittest.TestCase):
     def test_clean_reviewed_revision_is_allowed_but_foreign_or_dirty_is_not(self):
         from tools import inventory
         with tempfile.TemporaryDirectory() as tmp:
-            root=Path(tmp);(root/'builds').mkdir()
-            (root/'builds/framework.json').write_text(json.dumps({'allowed_lifter_revisions':['reviewed']}))
+            root=Path(tmp);(root/'profiles').mkdir()
+            (root/'profiles/framework.json').write_text(json.dumps({'allowed_lifter_revisions':['reviewed']}))
             with patch.object(inventory,'ROOT',root):
                 for head,dirty,expected,accepted in [('reviewed','','reviewed',True),
                     ('foreign','','foreign',False),('reviewed','modified','reviewed',False),
@@ -54,7 +54,7 @@ class FirmwareBridgeTests(unittest.TestCase):
 
 class FirmwarePlacementTests(unittest.TestCase):
     def setUp(self):
-        self.profile=json.loads((firmware_lift.ROOT/'builds/retail-v1.0-firmware.json').read_text())
+        self.profile=json.loads((firmware_lift.ROOT/'profiles/retail-v1.0-firmware.json').read_text())
 
     def test_reviewed_profile_avoids_guest_gcm_and_runtime_injection_windows(self):
         base=self.profile['base']

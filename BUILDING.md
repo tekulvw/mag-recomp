@@ -27,8 +27,8 @@ build still works, but the intro movies are not played.
 
 Three separate checkouts of the [tekulvw/ps3recomp](https://github.com/tekulvw/ps3recomp) fork are
 needed, each at a pinned revision. The lifter checkouts live under `local/` at the paths named in
-`builds/retail-v1.0-spu.json`, `builds/retail-v1.0-engine-spu.json` and
-`builds/retail-v1.0-firmware.json`.
+`profiles/retail-v1.0-spu.json`, `profiles/retail-v1.0-engine-spu.json` and
+`profiles/retail-v1.0-firmware.json`.
 
 ```sh
 git clone https://github.com/tekulvw/ps3recomp.git local/ps3recomp-runtime
@@ -51,7 +51,7 @@ python3 -m venv .venv
 | `local/ps3recomp-lifter-dfa7073` | `dfa7073` | PPU and firmware lifting |
 
 Keep them clean and at these exact commits: the tools refuse other or dirty revisions, and
-`builds/framework.json` lists the runtime revisions the build accepts. To keep a lifter elsewhere, set
+`profiles/framework.json` lists the runtime revisions the build accepts. To keep a lifter elsewhere, set
 `MAG_SPU_LIFTER_REPOSITORY` or `MAG_FIRMWARE_LIFTER_REPOSITORY`.
 
 ## 3. Your inputs
@@ -63,12 +63,12 @@ Follow [docs/retail-inputs.md](docs/retail-inputs.md): copy your disc's `PS3_GAM
 .venv/bin/python tools/prepare_inputs.py --source-root /path/to/your/PS3_GAME/USRDIR
 ```
 
-This verifies every file against the expected v1.0 identities and writes `builds/retail-v1.0.json`
+This verifies every file against the expected v1.0 identities and writes `profiles/retail-v1.0.json`
 (Git-ignored). The complete `PS3_GAME` tree is needed at run time for archives, fonts, textures and
 movies, not just the executables.
 
 The engine also needs the console's decrypted SPURS queue firmware module at
-`local/firmware/libsre.prx`; its expected SHA-256 is recorded in `builds/retail-v1.0-firmware.json`.
+`local/firmware/libsre.prx`; its expected SHA-256 is recorded in `profiles/retail-v1.0-firmware.json`.
 
 ## 4. Inventory
 
@@ -85,10 +85,10 @@ Each output directory must be new; the generators reject stale output.
 
 ```sh
 .venv/bin/python tools/lift.py --image EBOOT --sdk local/ps3recomp-lifter-dfa7073 \
-  --nonlocal-profile builds/retail-v1.0-EBOOT-reservations.json \
+  --nonlocal-profile profiles/retail-v1.0-EBOOT-reservations.json \
   --output generated/retail-v1.0/EBOOT
 .venv/bin/python tools/lift.py --image mage_g --sdk local/ps3recomp-lifter-dfa7073 \
-  --nonlocal-profile builds/retail-v1.0-nonlocal.json \
+  --nonlocal-profile profiles/retail-v1.0-nonlocal.json \
   --output generated/retail-v1.0/mage_g
 .venv/bin/python tools/spu_lift.py --output generated/retail-v1.0/spu-eboot
 .venv/bin/python tools/engine_spu_lift.py --output generated/retail-v1.0/spu-engine

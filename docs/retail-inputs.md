@@ -10,7 +10,7 @@ The build needs both v1.0 executables from your own BCUS98110 disc copy, `EBOOT.
 
 `prepare_inputs.py` verifies the originals, the local copies and the decrypted images against the
 SHA-256 identities in the tool, validates the ELF64/PowerPC64 headers, segments and entry
-descriptors, and writes `builds/retail-v1.0.json` (ignored by Git) with the paths and identities the
+descriptors, and writes `profiles/retail-v1.0.json` (ignored by Git) with the paths and identities the
 later lift and build steps read. Any other release or a modified file is refused.
 
 For reference, the v1.0 EBOOT entry descriptor `0x376f38` resolves to code `0x10230`, TOC

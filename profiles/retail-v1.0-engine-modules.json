@@ -11,7 +11,7 @@
   },
   "image_profiles": {
     "spu": {
-      "path": "builds/retail-v1.0-engine-spu.json",
+      "path": "profiles/retail-v1.0-engine-spu.json",
       "sha256": "bd143deaf5024e4079ebcebd2d39e5f55306133511f0ca02a0f7e598b193ad59"
     }
   },

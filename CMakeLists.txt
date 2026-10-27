@@ -187,7 +187,7 @@ if(PORT_ENABLE_SPU)
     endif()
     # Every embedded SPU program of the engine ELF: registered by the
     # automatic discovery lift (tools/spu_programs_lift.py) or listed in
-    # builds/retail-v1.0-spu-programs.json as handled by another path. A
+    # profiles/retail-v1.0-spu-programs.json as handled by another path. A
     # program in neither fails here, before compiling, instead of being
     # dropped at dispatch with nothing waiting on it ever completing.
     if(MAG_IMAGE STREQUAL "mage_g")
@@ -211,8 +211,8 @@ if(PORT_ENABLE_SPU)
         list(APPEND SPU_SOURCES ${SPU_GENERATED_SOURCES})
         set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
             "${MAG_SPU_PROGRAMS_DIR}/inventory.json"
-            "${CMAKE_CURRENT_SOURCE_DIR}/builds/retail-v1.0-spu-programs.json"
-            "${CMAKE_CURRENT_SOURCE_DIR}/builds/retail-v1.0-spu-coverage.json")
+            "${CMAKE_CURRENT_SOURCE_DIR}/profiles/retail-v1.0-spu-programs.json"
+            "${CMAKE_CURRENT_SOURCE_DIR}/profiles/retail-v1.0-spu-coverage.json")
     endif()
 endif()
 
@@ -395,26 +395,26 @@ install(TARGETS ${PROJECT_NAME} RUNTIME DESTINATION bin)
 find_package(Python3 3.11 COMPONENTS Interpreter REQUIRED)
 set_property(TARGET ${PROJECT_NAME} APPEND PROPERTY LINK_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/tools/provenance.py"
-    "${CMAKE_CURRENT_SOURCE_DIR}/builds/retail-v1.0.json"
-    "${CMAKE_CURRENT_SOURCE_DIR}/builds/framework.json"
-    "${CMAKE_CURRENT_SOURCE_DIR}/builds/retail-v1.0-engine-modules.json"
+    "${CMAKE_CURRENT_SOURCE_DIR}/profiles/retail-v1.0.json"
+    "${CMAKE_CURRENT_SOURCE_DIR}/profiles/framework.json"
+    "${CMAKE_CURRENT_SOURCE_DIR}/profiles/retail-v1.0-engine-modules.json"
     "${RECOMP_DIR}/provenance.json")
 set(MAG_SPU_RECEIPT_ARGS "")
 if(SPU_SOURCES)
     set(MAG_SPU_RECEIPT_ARGS --spu "${SPU_DIR}")
     set_property(TARGET ${PROJECT_NAME} APPEND PROPERTY LINK_DEPENDS
         "${SPU_DIR}/provenance.json"
-        "${CMAKE_CURRENT_SOURCE_DIR}/builds/retail-v1.0-spu.json")
+        "${CMAKE_CURRENT_SOURCE_DIR}/profiles/retail-v1.0-spu.json")
     if(MAG_IMAGE STREQUAL "mage_g")
         set_property(TARGET ${PROJECT_NAME} APPEND PROPERTY LINK_DEPENDS
-            "${CMAKE_CURRENT_SOURCE_DIR}/builds/retail-v1.0-engine-spu.json")
+            "${CMAKE_CURRENT_SOURCE_DIR}/profiles/retail-v1.0-engine-spu.json")
     endif()
 endif()
 if(MAG_FIRMWARE_SOURCES)
     list(APPEND MAG_SPU_RECEIPT_ARGS --firmware "${MAG_FIRMWARE_DIR}")
     set_property(TARGET ${PROJECT_NAME} APPEND PROPERTY LINK_DEPENDS
         "${MAG_FIRMWARE_DIR}/provenance.json"
-        "${CMAKE_CURRENT_SOURCE_DIR}/builds/retail-v1.0-firmware.json")
+        "${CMAKE_CURRENT_SOURCE_DIR}/profiles/retail-v1.0-firmware.json")
 endif()
 option(MAG_NATIVE_GRAPHICS "Build the native Rust graphics core" OFF)
 set(MAG_NATIVE_MATERIAL_EXPECTED "" CACHE FILEPATH "Private pinned MaterialFlushMain expected-code registration")

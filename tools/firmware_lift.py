@@ -51,7 +51,7 @@ def bridge_function(source: str, address: str, nid: str) -> str:
 
 
 def generate(output: Path) -> dict:
-    profile=json.loads((ROOT/'builds/retail-v1.0-firmware.json').read_text())
+    profile=json.loads((ROOT/'profiles/retail-v1.0-firmware.json').read_text())
     sdk=ROOT/os.environ.get('MAG_FIRMWARE_LIFTER_REPOSITORY', profile['lifter_repository']);check_sdk(sdk,expected_revision=profile['lifter_revision'])
     revision=subprocess.check_output(['git','-C',str(sdk),'rev-parse','HEAD'],text=True).strip()
     if revision != profile['lifter_revision']:

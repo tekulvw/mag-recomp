@@ -6,7 +6,7 @@ generated/
 build/
 runs/
 # Written by tools/prepare_inputs.py with paths to your own decrypted inputs.
-builds/retail-v1.0.json
+profiles/retail-v1.0.json
 *.BIN
 *.self
 *.sprx

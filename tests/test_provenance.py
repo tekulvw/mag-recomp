@@ -12,7 +12,7 @@ class BuildImageTests(unittest.TestCase):
         self.tmp=tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.root=Path(self.tmp.name)
-        (self.root/'builds').mkdir()
+        (self.root/'profiles').mkdir()
         (self.root/'src').mkdir()
         (self.root/'CMakeLists.txt').write_text('project(fixture)')
         self.binary=self.root/'runner'; self.binary.write_text('native fixture')
@@ -25,8 +25,8 @@ class BuildImageTests(unittest.TestCase):
             (lift/'provenance.json').write_text(json.dumps(dict(status='complete',exit_code=0,audit_exit=0,
                 elf_sha256=sha256_file(elf),outputs={src.name:sha256_file(src)})))
             self.lifts[name]=lift
-        (self.root/'builds/retail-v1.0.json').write_text(json.dumps({'images':self.images}))
-        (self.root/'builds/framework.json').write_text(json.dumps({'allowed_runtime_revisions':['reviewed']}))
+        (self.root/'profiles/retail-v1.0.json').write_text(json.dumps({'images':self.images}))
+        (self.root/'profiles/framework.json').write_text(json.dumps({'allowed_runtime_revisions':['reviewed']}))
         self.addCleanup(patch.stopall)
         patch('tools.provenance.ROOT',self.root).start()
         # Git only supplies the reviewed SDK revision; all image/lift/receipt IO is real.
@@ -73,22 +73,22 @@ class BuildImageTests(unittest.TestCase):
         elf=Path(self.images['mage_g']['elf']); offset=elf.stat().st_size
         elf.write_bytes(elf.read_bytes()+worker.read_bytes())
         self.images['mage_g']['elf_sha256']=sha256_file(elf)
-        (self.root/'builds/retail-v1.0.json').write_text(json.dumps({'images':self.images}))
+        (self.root/'profiles/retail-v1.0.json').write_text(json.dumps({'images':self.images}))
         lift_path=self.lifts['mage_g']/'provenance.json'
         lift=json.loads(lift_path.read_text()); lift['elf_sha256']=sha256_file(elf)
         lift_path.write_text(json.dumps(lift))
         dirs={}
         for kind in ('spu','firmware'):
             profile={'image':worker.name,'image_sha256':sha256_file(worker),'image_bytes':worker.stat().st_size}
-            (self.root/f'builds/retail-v1.0-{kind}.json').write_text(json.dumps(profile))
+            (self.root/f'profiles/retail-v1.0-{kind}.json').write_text(json.dumps(profile))
             directory=self.root/('generated-'+kind); directory.mkdir(); src=directory/'module.cpp';src.write_text(kind+' source')
             (directory/'provenance.json').write_text(json.dumps(dict(status='complete',profile=profile,
                 unsupported_count=0,executed_todo_policy='halt',outputs={src.name:sha256_file(src)})))
             dirs[kind]=directory
         review=dict(image_name='mage_g',elf_sha256=sha256_file(elf),
             embedded_spu=dict(offset=offset,size=worker.stat().st_size,sha256=sha256_file(worker)),
-            shared_profiles={kind:sha256_file(self.root/f'builds/retail-v1.0-{kind}.json') for kind in dirs})
-        review_path=self.root/'builds/retail-v1.0-engine-modules.json'
+            shared_profiles={kind:sha256_file(self.root/f'profiles/retail-v1.0-{kind}.json') for kind in dirs})
+        review_path=self.root/'profiles/retail-v1.0-engine-modules.json'
         review_path.write_text(json.dumps(review))
         return dirs,review,review_path
 
@@ -110,8 +110,8 @@ class BuildImageTests(unittest.TestCase):
         dirs,review,path=self.module_fixture()
         profile={'image_name':'mage_g','elf_sha256':self.images['mage_g']['elf_sha256'],
                  'executed_todo_policy':'halt','expected_unsupported_count':2,'policy':{'image_id':101}}
-        specific=self.root/'builds/retail-v1.0-engine-spu.json';specific.write_text(json.dumps(profile))
-        review['image_profiles']={'spu':{'path':'builds/retail-v1.0-engine-spu.json','sha256':sha256_file(specific)}}
+        specific=self.root/'profiles/retail-v1.0-engine-spu.json';specific.write_text(json.dumps(profile))
+        review['image_profiles']={'spu':{'path':'profiles/retail-v1.0-engine-spu.json','sha256':sha256_file(specific)}}
         path.write_text(json.dumps(review))
         record_path=dirs['spu']/'provenance.json';record=json.loads(record_path.read_text())
         record.update(profile=profile,unsupported_count=2,guarded_todo_count=2,executed_todo_policy='halt')

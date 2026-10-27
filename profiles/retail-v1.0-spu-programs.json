@@ -3,7 +3,7 @@
   "description": "Every embedded SPU ELF in the engine carrier is either registered by the automatic SDK lift (build_spu_workloads --input) under its pinned image id, or listed as handled by another path. The build fails if a discovered program is in neither list.",
   "carrier": "mage_g",
   "elf_sha256": "0089f0d6d17e48533ce7ff8d943dddd03487b925e7b04a1a055bfb907568694c",
-  "coverage_inventory": "builds/retail-v1.0-spu-coverage.json",
+  "coverage_inventory": "profiles/retail-v1.0-spu-coverage.json",
   "reserved_image_ids": {
     "100": "EDGE zlib",
     "101": "WWS policy",

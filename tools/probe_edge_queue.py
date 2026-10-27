@@ -74,7 +74,7 @@ def run(build):
     firmware = Path(fw).resolve()
     firmware_rel=firmware.relative_to(ROOT).as_posix()
     edge = ROOT/'generated/retail-v1.0/spu-engine-policy-audited'
-    profile = json.loads((ROOT/'builds/retail-v1.0-spu.json').read_text())
+    profile = json.loads((ROOT/'profiles/retail-v1.0-spu.json').read_text())
     elf = ROOT/profile['image']
     ninja = build/'build.ninja'
     receipt = build/'MagRecomp.receipt.json'
@@ -89,7 +89,7 @@ def run(build):
     for kind,directory,profile_name in [('firmware',firmware,'retail-v1.0-firmware.json'),
                                        ('spu',edge,'retail-v1.0-engine-spu.json')]:
         modules[kind] = validate_generated(directory,
-            json.loads((ROOT/'builds'/profile_name).read_text()),kind)
+            json.loads((ROOT/'profiles'/profile_name).read_text()),kind)
     build_record=json.loads(receipt.read_text())
     if (build_record.get('firmware_provenance') != modules['firmware'] or
             build_record.get('spu_provenance') != modules['spu']):

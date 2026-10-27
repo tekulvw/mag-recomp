@@ -42,7 +42,7 @@ Example (paths and revisions must come from the selected reviewed build):
 
 ```sh
 python3 tools/retail_spu_batch.py \
-  --inventory builds/retail-v1.0-spu-coverage.json \
+  --inventory profiles/retail-v1.0-spu-coverage.json \
   --inventory-sha256 REVIEWED_COVERAGE_SHA256 \
   --carrier EBOOT=/absolute/private/EBOOT.elf \
   --carrier mage_g=/absolute/private/bin/mage_g.elf \

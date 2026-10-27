@@ -86,7 +86,7 @@ def validate_modules(image: dict, image_name: str, spu: Path | None,
     if spu is None and firmware is None:
         return result
     if image_name == 'mage_g':
-        review_path=ROOT/'builds/retail-v1.0-engine-modules.json'
+        review_path=ROOT/'profiles/retail-v1.0-engine-modules.json'
         if not review_path.is_file():
             raise ValueError('Engine module review is required')
         review=json.loads(review_path.read_text())
@@ -94,7 +94,7 @@ def validate_modules(image: dict, image_name: str, spu: Path | None,
             raise ValueError('Engine module review does not match selected image')
         # A matching dispatch fingerprint is insufficient: bind every embedded
         # SPU byte to the already audited worker and the selected full ELF hash.
-        profile=json.loads((ROOT/'builds/retail-v1.0-spu.json').read_text())
+        profile=json.loads((ROOT/'profiles/retail-v1.0-spu.json').read_text())
         worker=ROOT/profile['image'];verify_hash(worker,profile['image_sha256'])
         embedded=review['embedded_spu']
         if (embedded['sha256'] != profile['image_sha256'] or
@@ -109,11 +109,11 @@ def validate_modules(image: dict, image_name: str, spu: Path | None,
     for kind,directory in [('spu',spu),('firmware',firmware)]:
         if directory is None:
             continue
-        profile_path=ROOT/f'builds/retail-v1.0-{kind}.json'
+        profile_path=ROOT/f'profiles/retail-v1.0-{kind}.json'
         if image_name == 'mage_g':
             specific=review.get('image_profiles',{}).get(kind)
             if specific:
-                expected=f'builds/retail-v1.0-engine-{kind}.json'
+                expected=f'profiles/retail-v1.0-engine-{kind}.json'
                 if specific.get('path') != expected:
                     raise ValueError('Engine module profile path is not the reviewed image profile')
                 profile_path=ROOT/expected
@@ -134,7 +134,7 @@ def validate_build_image(recomp: Path, image_name: str = 'EBOOT',
                          spu: Path | None = None) -> tuple[dict, dict]:
     if image_name not in ('EBOOT', 'mage_g'):
         raise ValueError('Image must be EBOOT or mage_g')
-    image=json.loads((ROOT/'builds/retail-v1.0.json').read_text())['images'][image_name]
+    image=json.loads((ROOT/'profiles/retail-v1.0.json').read_text())['images'][image_name]
     verify_hash(Path(image['elf']), image['elf_sha256'])
     lift=validate_lift(recomp, image['elf_sha256'])
     if firmware is not None or spu is not None:
@@ -153,9 +153,9 @@ def record_build(binary: Path, sdk: Path, recomp: Path, spu: Path | None = None,
     image,lift=validate_build_image(recomp,image_name)
     revision=subprocess.check_output(['git','-C',str(sdk),'rev-parse','HEAD'],text=True).strip()
     dirty=subprocess.check_output(['git','-C',str(sdk),'status','--porcelain','--untracked-files=no'],text=True)
-    allowed=json.loads((ROOT/'builds/framework.json').read_text())['allowed_runtime_revisions']
+    allowed=json.loads((ROOT/'profiles/framework.json').read_text())['allowed_runtime_revisions']
     if revision not in allowed or dirty:
-        raise ValueError('Runtime SDK must be clean and recorded in builds/framework.json')
+        raise ValueError('Runtime SDK must be clean and recorded in profiles/framework.json')
     record=dict(binary_sha256=sha256_file(binary), image_name=image_name, elf_sha256=image['elf_sha256'],
                 sdk_revision=revision, sdk_path=str(sdk), lift_provenance=lift,
                 runner_sources={str(p.relative_to(ROOT)):sha256_file(p) for p in

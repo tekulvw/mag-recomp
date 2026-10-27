@@ -9,14 +9,14 @@ from tools.prepare_inputs import sha256_file
 class NonlocalProfileTests(unittest.TestCase):
     def setUp(self):
         self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup)
-        self.root=Path(self.tmp.name);(self.root/'builds').mkdir()
+        self.root=Path(self.tmp.name);(self.root/'profiles').mkdir()
         self.elf=self.root/'mage_g.elf';self.elf.write_bytes(b'verified-image')
         self.config=self.root/'config.json';self.config.write_text('{}')
         self.profile=self.root/'profile.json'
         self.record={'image_name':'mage_g','elf_sha256':sha256_file(self.elf),'sdk_revision':'reviewed',
                      'configuration':'config.json','configuration_sha256':sha256_file(self.config)}
         self.profile.write_text(json.dumps(self.record))
-        (self.root/'builds/framework.json').write_text(json.dumps({'allowed_lifter_revisions':['reviewed']}))
+        (self.root/'profiles/framework.json').write_text(json.dumps({'allowed_lifter_revisions':['reviewed']}))
     def check(self, revision='reviewed', dirty=''):
         with patch('tools.lift.ROOT',self.root),patch('tools.lift.subprocess.check_output',side_effect=[revision,dirty]):
             return lift.validate_nonlocal_profile(self.profile,self.root/'sdk',self.elf,'mage_g')

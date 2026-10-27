@@ -1073,7 +1073,7 @@
     "fixture_limit": "Registration uses actual generated constructor TUs and actual SDK registry; lifted entry functions and table registration functions are inert stubs. This checks registry coverage, not program execution."
   },
   "existing_MAG_inventory": {
-    "path": "builds/retail-v1.0-inventory.json",
+    "path": "profiles/retail-v1.0-inventory.json",
     "retail_occurrences": {
       "EBOOT": 3,
       "mage_g": 11
@@ -1110,11 +1110,11 @@
       "sha256": "dce4c90d49c5a4bff9ffda96cdc020820de5a4f85475a2e3d848c900915d9635"
     },
     "MAG_profile": {
-      "path": "builds/retail-v1.0-engine-spu.json",
+      "path": "profiles/retail-v1.0-engine-spu.json",
       "sha256": "bd143deaf5024e4079ebcebd2d39e5f55306133511f0ca02a0f7e598b193ad59"
     },
     "MAG_existing_inventory": {
-      "path": "builds/retail-v1.0-inventory.json",
+      "path": "profiles/retail-v1.0-inventory.json",
       "sha256": "cb7da5c81e2064f22986e393c8aba86279154da00e4a74347ea9f2a331907de9"
     }
   }

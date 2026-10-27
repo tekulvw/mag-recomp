@@ -13,10 +13,10 @@ from tools.inventory import SDK_REVISION
 class LiftTests(unittest.TestCase):
     def test_substituted_inventory_map_stops_before_generation(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root=Path(tmp); (root/'builds').mkdir()
+            root=Path(tmp); (root/'profiles').mkdir()
             elf=root/'EBOOT.elf'; elf.write_bytes(b'test image')
             expected=sha256_file(elf)
-            (root/'builds/retail-v1.0.json').write_text(json.dumps(dict(images=dict(EBOOT=dict(elf_sha256=expected)))))
+            (root/'profiles/retail-v1.0.json').write_text(json.dumps(dict(images=dict(EBOOT=dict(elf_sha256=expected)))))
             functions=root/'reviewed-functions.json'; imports=root/'EBOOT.imports.json'
             functions.write_text('functions'); imports.write_text('imports')
             (root/'summary.json').write_text(json.dumps(dict(elf_sha256=expected,

@@ -77,6 +77,6 @@ if __name__ == '__main__':
     p.add_argument('--local-root', type=Path, default=ROOT/'local/retail-v1.0/PS3_GAME/USRDIR')
     a = p.parse_args()
     result = prepare_inputs(a.source_root, a.local_root)
-    (ROOT/'builds').mkdir(exist_ok=True)
-    (ROOT/'builds/retail-v1.0.json').write_text(json.dumps(result, indent=2)+'\n')
+    (ROOT/'profiles').mkdir(exist_ok=True)
+    (ROOT/'profiles/retail-v1.0.json').write_text(json.dumps(result, indent=2)+'\n')
     print('Validated original, copied SELF and decrypted ELF hashes for both v1.0 executables.')
