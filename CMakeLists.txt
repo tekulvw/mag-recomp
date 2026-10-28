@@ -124,6 +124,9 @@ add_subdirectory("${PS3RECOMP_DIR}" "${CMAKE_BINARY_DIR}/ps3recomp_sdk"
 if(WIN32)
     include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/MagWin32Posix.cmake")
     mag_win32_posix_runtime("${PS3RECOMP_DIR}")
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/MagLinuxCompat.cmake")
+    mag_linux_compat_runtime("${PS3RECOMP_DIR}")
 endif()
 
 # ---------------------------------------------------------------------------

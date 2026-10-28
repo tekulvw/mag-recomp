@@ -55,10 +55,16 @@ def main():
          'import Crypto,capstone,construct,tabulate,tqdm; print("managed Python modules verified")'])
     step('system compiler', [toolchain['cxx'], '--version'])
     step('Git', [managed['git'], '--version'])
+    wrapper = work / 'runtime-project'; wrapper.mkdir(exist_ok=True)
+    (wrapper / 'CMakeLists.txt').write_text(
+        'cmake_minimum_required(VERSION 3.20)\nproject(linux_runtime_check C CXX)\n'
+        f'add_subdirectory("{sdk.as_posix()}" sdk EXCLUDE_FROM_ALL)\n'
+        f'include("{(ROOT / "cmake/MagLinuxCompat.cmake").as_posix()}")\n'
+        f'mag_linux_compat_runtime("{sdk.as_posix()}")\n')
     build = work / 'runtime-build'
     prefix = Path(managed['prefix'])
     step('configure pinned runtime with real Linux Vulkan and FFmpeg', [
-        managed['cmake'], '-S', sdk, '-B', build, '-G', 'Ninja',
+        managed['cmake'], '-S', wrapper, '-B', build, '-G', 'Ninja',
         '-DCMAKE_BUILD_TYPE=Release', '-DCMAKE_EXPORT_COMPILE_COMMANDS=ON',
         '-DCMAKE_C_COMPILER=' + toolchain['cc'], '-DCMAKE_CXX_COMPILER=' + toolchain['cxx'],
         '-DCMAKE_MAKE_PROGRAM=' + managed['ninja'], '-DPython3_EXECUTABLE=' + managed['python'],

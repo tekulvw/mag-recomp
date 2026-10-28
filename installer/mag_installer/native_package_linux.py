@@ -120,10 +120,13 @@ def _copy_dependencies(binaries, destination, token, dynamic_libraries=()):
         if 'not found' in output:
             raise InstallerError('Missing Linux desktop/runtime dependencies:\n' + output[-3000:])
         for line in output.splitlines():
-            match = re.match(r'\s*(\S+) => (/\S+) \(', line)
+            match = re.match(r'\s*(\S+) => (.+?) \(', line)
             if not match or system.match(match[1]):
                 continue
-            name, source = match.groups(); source = Path(source).resolve()
+            name, source = match.groups()
+            if not Path(source).is_absolute():
+                raise InstallerError('Linux dependency did not resolve to an absolute path: ' + source)
+            source = Path(source).resolve()
             if name in copied and copied[name] != source:
                 raise InstallerError('Linux runtime library basename collision: ' + name)
             copied[name] = source

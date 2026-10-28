@@ -139,6 +139,8 @@ REQUIRED_SOURCE_FILES = (
     'tools/spu_lift.py', 'tools/engine_spu_lift.py', 'tools/firmware_lift.py',
     'tools/spu_programs_lift.py', 'tools/provenance.py',
     'tools/movie_picture_hooks.py', 'tools/graphics_trace_hooks.py',
+    'tools/installer_ppu_splice.py', 'tools/partial_ppu_relift.py', 'tools/ppu_function_splice.py',
+    'profiles/retail-v1.0-ppu-jumptable-splice.json',
     'profiles/framework.json', 'profiles/retail-v1.0-spu.json',
     'profiles/retail-v1.0-engine-spu.json', 'profiles/retail-v1.0-firmware.json',
     'profiles/retail-v1.0-engine-modules.json', 'profiles/retail-v1.0-spu-programs.json',
@@ -192,6 +194,15 @@ def build_plan(config, workspace):
                                   ('engine', 'mage_g', 'retail-v1.0-nonlocal.json')]:
         script('lift-' + name, 'lift.py', '--image', image, '--sdk', sdk['lifter-ppu'],
                '--nonlocal-profile', workspace / 'profiles' / profile, '--output', paths[name])
+    engine_base = paths['engine']
+    paths['engine'] = generated / 'mage_g-dispatcher'
+    script('splice-engine-dispatcher', 'installer_ppu_splice.py',
+           '--base', engine_base, '--output', paths['engine'],
+           '--work', workspace.parent / 'logs/dispatcher-splice',
+           '--elf', disc / 'bin/mage_g.elf', '--inventory', workspace / 'analysis/retail-v1.0/mage_g',
+           '--nonlocal-profile', workspace / 'profiles/retail-v1.0-nonlocal.json',
+           '--before-sdk', sdk['lifter-ppu'], '--after-sdk', sdk['runtime'],
+           '--profile', workspace / 'profiles/retail-v1.0-ppu-jumptable-splice.json')
     script('worker-spu', 'spu_lift.py', '--output', paths['worker-spu'])
     script('engine-spu', 'engine_spu_lift.py', '--output', paths['engine-spu'])
     script('firmware', 'firmware_lift.py', '--output', paths['firmware'])

@@ -32,8 +32,14 @@ def main():
     header_dir.mkdir(exist_ok=True)
     run([sys.executable, args.ppu_sdk.resolve() / 'tools/make_smoke_elf.py', '--header', header_dir / 'ppu_recomp.h'], check=True)
 
+    wrapper = work / 'runtime-project'; wrapper.mkdir(exist_ok=True)
+    (wrapper / 'CMakeLists.txt').write_text(
+        'cmake_minimum_required(VERSION 3.20)\nproject(linux_runtime_check C CXX)\n'
+        f'add_subdirectory("{sdk.as_posix()}" sdk EXCLUDE_FROM_ALL)\n'
+        f'include("{(ROOT / "cmake/MagLinuxCompat.cmake").as_posix()}")\n'
+        f'mag_linux_compat_runtime("{sdk.as_posix()}")\n')
     build = work / 'runtime'
-    run(['cmake', '-S', sdk, '-B', build, '-G', 'Ninja', '-DCMAKE_BUILD_TYPE=Release',
+    run(['cmake', '-S', wrapper, '-B', build, '-G', 'Ninja', '-DCMAKE_BUILD_TYPE=Release',
          '-DCMAKE_C_COMPILER=clang', '-DCMAKE_CXX_COMPILER=clang++',
          '-DPS3RECOMP_RSX_VULKAN=ON', '-DPS3RECOMP_FFMPEG_RUNTIME=ON'], check=True)
     runtime = run(['cmake', '--build', build, '--target', 'ps3recomp_runtime', '--parallel', '2'])
@@ -56,7 +62,7 @@ def main():
     for image, source, includes, defines in jobs:
         out = work / 'obj' / image / (source.stem + '.obj')
         out.parent.mkdir(parents=True, exist_ok=True)
-        language = ['-std=c17'] if source.suffix == '.c' else ['-std=c++20']
+        language = ['-std=gnu17'] if source.suffix == '.c' else ['-std=gnu++20']
         result = run(['clang' if source.suffix == '.c' else 'clang++', *flags, *language, *defines, *(f'-I{p}' for p in includes),
                       '-o', out, source], capture_output=True, text=True)
         if result.returncode:

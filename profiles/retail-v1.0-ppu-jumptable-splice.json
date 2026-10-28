@@ -1,0 +1,18 @@
+{
+  "format": 1,
+  "purpose": "Regenerate and splice one spilled jump-table dispatcher from verified local game inputs",
+  "elf_sha256": "0089f0d6d17e48533ce7ff8d943dddd03487b925e7b04a1a055bfb907568694c",
+  "function": "func_0149F9D8",
+  "body_sha256": "3369d17a3f79f1f4f76f3ce9bc8f43fa8d3ca2c4f6df8a74ddbc56eae7ab1fc8",
+  "decoder_sha256": "1fd70ab34d22b2c55d49a779c9f9fb4a625ef4469c89314fc2e8bae00253d35e",
+  "before": {
+    "revision": "dfa7073d2e164aec6890866c4951d8dedc28619d",
+    "lifter_sha256": "b603e97109e1ceb42e19dacf5ca29c239e3b93d98ca085a9a4d544f6c392b8e3"
+  },
+  "after": {
+    "revision": "c062d984d57b80f8763f8679a135192a114765ac",
+    "lifter_sha256": "4a3f1c53f2a6c94f4538cd5b4d7f7c6c0a4176ba1447adde550ecee9379977c8"
+  },
+  "reason": "Recover the stack-spilled jump-table base and retain the dispatcher case blocks as internal labels",
+  "scope": "Only the named complete function is replaced; other generated functions and runtime pins remain unchanged"
+}
