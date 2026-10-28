@@ -1,5 +1,39 @@
 # Changelog
 
+## [0.2.0](https://github.com/tekulvw/mag-recomp/compare/v0.1.0...v0.2.0) (2026-10-28)
+
+
+### Features
+
+* add build extension points (workspace, pin overlay, CMake, receipts, lift hooks, runtime callbacks) ([c105a40](https://github.com/tekulvw/mag-recomp/commit/c105a40a09509575549ec982de131f4c6a33231c))
+* **build:** include MAG_EXTENSIONS and resolve per-machine profiles against MAG_WORKSPACE ([4a4fd38](https://github.com/tekulvw/mag-recomp/commit/4a4fd381497a8e06201c707ce289b62499a40bd1))
+* **installer:** validate early, recover failed builds and support Linux ([f988851](https://github.com/tekulvw/mag-recomp/commit/f9888516b23540217d49bda09bab92a73dcf92f4))
+* **installer:** validate early, recover failed builds and support Linux ([47e7b24](https://github.com/tekulvw/mag-recomp/commit/47e7b2413f3345f8ebea109839673100d2d309fb))
+* **lift:** apply extension hook modules after the built-in hooks ([628a144](https://github.com/tekulvw/mag-recomp/commit/628a144732516e8fab391bc6bcce6a4091791154))
+* **provenance:** record extension inputs and the framework file in build receipts ([336b498](https://github.com/tekulvw/mag-recomp/commit/336b49821e8638dd05550148969096c35c6df708))
+* **runtime:** add an extension callback registry for start, frame, trace and payload hooks ([876f2aa](https://github.com/tekulvw/mag-recomp/commit/876f2aa42931abcf1c71e140b3d34ae2f1506db4))
+* **tools:** resolve working data against MAG_WORKSPACE and allow a workspace pin overlay ([7a6395a](https://github.com/tekulvw/mag-recomp/commit/7a6395afbe785f01cc9f22f296a74a4fcda56b19))
+
+
+### Bug Fixes
+
+* extension point follow-ups from review ([8a4b7b6](https://github.com/tekulvw/mag-recomp/commit/8a4b7b61f973c4fdaeaf45d1cc08ab45a9a52d1c))
+* **installer:** compile Linux runtime and restore dispatcher build fix ([e9bdf51](https://github.com/tekulvw/mag-recomp/commit/e9bdf519833631011d5b3bcb43f84bade9df6ad1))
+* **installer:** keep inherited overrides out of Windows builds and launches ([8ad13dc](https://github.com/tekulvw/mag-recomp/commit/8ad13dc0a6f742b8d0683682847be556537bea06))
+* **installer:** keep inherited overrides out of Windows builds and launches ([06aae4d](https://github.com/tekulvw/mag-recomp/commit/06aae4dff800b221eca0dbd46df9bd17e6a690bf))
+* **installer:** preserve case-distinct Linux tool archive files ([2550ed6](https://github.com/tekulvw/mag-recomp/commit/2550ed6857d993ece4887200a6e34daff375befd))
+* **installer:** verify each installer's own kit so releases can be attached ([fd70290](https://github.com/tekulvw/mag-recomp/commit/fd702905dee31b28b9e753e6eb4b5120aab6570a))
+* **installer:** verify each installer's own kit so releases can be attached ([03f2d8d](https://github.com/tekulvw/mag-recomp/commit/03f2d8da5a549fe3f0fb60613427355433eafbb8))
+* keep extension callbacks inside errno protection and record only applied hooks ([1a45ac5](https://github.com/tekulvw/mag-recomp/commit/1a45ac5f5f27309e3e19f4da6dcb8fc41ddf9141))
+
+
+### Documentation
+
+* add recomp.fyi manifest ([030c198](https://github.com/tekulvw/mag-recomp/commit/030c1985350bddac8c241e72cd4952d19c0efe67))
+* add recomp.fyi manifest ([cc6d223](https://github.com/tekulvw/mag-recomp/commit/cc6d223c9f687509a2c21c465648b7570cb13613))
+* describe the six build extension points ([c8a3d3e](https://github.com/tekulvw/mag-recomp/commit/c8a3d3ee7eee831e5417e99947ac95f20cb593a0))
+* list Windows and Linux as recomp.fyi targets ([115278f](https://github.com/tekulvw/mag-recomp/commit/115278fec2a2a68fd4b8631cad79e6ddfad3e512))
+
 ## 0.1.0 (2026-10-27)
 
 
