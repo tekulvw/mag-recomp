@@ -261,7 +261,12 @@ def extract_managed(archive, destination, spec, token=None):
             raw = raw.rstrip('/')
             if raw in ('', '.'): continue
             if raw.startswith('./'): raw = raw[2:]
-            name = _name(raw); key = unicodedata.normalize('NFC', name).casefold()
+            name = _name(raw)
+            # Linux archives (notably Python's terminfo database) contain real
+            # case-distinct entries. Keep normalized/exact duplicate rejection,
+            # and retain case folding on Windows and default macOS volumes.
+            key = unicodedata.normalize('NFC', name)
+            if host_key() != 'linux-x86_64': key = key.casefold()
             if key in folded: raise InstallerError('Duplicate/colliding managed archive members')
             folded.add(key)
             mode = (entry.external_attr >> 16) if is_zip else entry.mode
