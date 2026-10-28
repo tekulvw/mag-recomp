@@ -1,6 +1,6 @@
 name: Installers
 
-# Builds the macOS (Apple Silicon) and Windows (x86_64) installers from this
+# Builds macOS (Apple Silicon), Windows and Linux (x86_64) installers from this
 # repository's source. They contain tooling and source only, never anything
 # built from game files. Pull requests and main produce workflow artifacts;
 # release-please.yml calls this workflow with the new tag to attach them to
@@ -58,7 +58,7 @@ jobs:
         run: python tools/fetch_ps3recomp.py
       - name: Prepare one kit per installer host
         run: |
-          for host in windows-x86_64 macos-arm64; do
+          for host in windows-x86_64 macos-arm64 linux-x86_64; do
             cp -R installer "$RUNNER_TEMP/installer-$host"
             rm "$RUNNER_TEMP/installer-$host/release/player-build.json"
             python "$RUNNER_TEMP/installer-$host/scripts/prepare_player_kit.py" \
@@ -76,6 +76,12 @@ jobs:
         with:
           name: kit-macos-arm64
           path: kit-macos-arm64/*
+          if-no-files-found: error
+          retention-days: 3
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: kit-linux-x86_64
+          path: kit-linux-x86_64/*
           if-no-files-found: error
           retention-days: 3
 
@@ -208,10 +214,75 @@ jobs:
           retention-days: 30
           compression-level: 0
 
+  linux:
+    name: Linux installer
+    needs: kit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ inputs.tag || github.sha }}
+          persist-credentials: false
+      - name: Use this run's installer tooling over the release source
+        shell: bash
+        run: |
+          if [ "$TOOLING_REF" != "$(git rev-parse HEAD)" ]; then
+            git fetch --quiet --depth=1 origin "$TOOLING_REF"
+            git checkout FETCH_HEAD -- installer .github/scripts
+            echo "Installer tooling from $TOOLING_REF over source $(git rev-parse HEAD)"
+          fi
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Linux build and GUI dependencies
+        run: sudo apt-get update && sudo apt-get install -y clang lld build-essential git pkg-config python3-tk libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxfixes-dev libxss-dev libwayland-dev libxkbcommon-dev libasound2-dev libpulse-dev libudev-dev libgl1-mesa-dev libvulkan-dev libssl-dev zlib1g-dev libvulkan1 mesa-vulkan-drivers libsdl2-dev glslang-dev glslang-tools spirv-tools libspirv-cross-c-shared-dev libavcodec-dev libavformat-dev libavutil-dev libswscale-dev xvfb
+      - name: Unit tests
+        working-directory: installer
+        run: python -m unittest discover -s tests
+      - name: Pinned runtime and PPU lifter
+        run: python tools/fetch_ps3recomp.py --role runtime --role lifter-ppu
+      - name: Managed Linux downloads, dependency builds and Vulkan runtime (no game data)
+        run: python .github/scripts/linux_toolchain_smoke.py --runtime-sdk local/ps3recomp-runtime --work "$RUNNER_TEMP/linux-managed"
+      - name: Compile Linux runtime, MAG sources and supervisor (synthetic inputs)
+        run: python .github/scripts/linux_native_check.py --runtime-sdk local/ps3recomp-runtime --ppu-sdk local/ps3recomp-lifter-dfa7073 --work "$RUNNER_TEMP/linux-native"
+      - name: Replace the source placeholder with the generated kit manifest
+        run: rm installer/release/player-build.json
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: kit-linux-x86_64
+          path: installer/release
+      - name: Install the hash-locked packager
+        run: |
+          python -m pip install --disable-pip-version-check --require-hashes --only-binary=:all: -r installer/requirements-release.txt
+      - name: Build and smoke-test the frozen installer
+        env:
+          EXPECTED_TARGET: linux-x86_64
+        run: |
+          export INSTALLER_SOURCE_REVISION="$(git rev-parse HEAD)" INSTALLER_TOOLING_REVISION="$TOOLING_REF"
+          if [ -n "$RELEASE_TAG" ]; then
+            python installer/scripts/release_installer.py build --output "$GITHUB_WORKSPACE/installer-out" --version "$RELEASE_TAG"
+          else
+            python installer/scripts/release_installer.py build --output "$GITHUB_WORKSPACE/installer-out" --version "preview-$GITHUB_RUN_NUMBER" --preview
+          fi
+      - name: The frozen installer finds its kit and reports Build MAG ready
+        run: |
+          mkdir "$RUNNER_TEMP/unpacked" && cd "$RUNNER_TEMP/unpacked"
+          tar -xzf "$GITHUB_WORKSPACE"/installer-out/*.tar.gz
+          ./*/mag-installer status > status.json
+          python -c "import json,sys; s=json.load(open('status.json')); print(json.dumps(s['player_build'])); sys.exit(0 if s['player_build'].get('ready') else 1)"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: mag-installer-linux-x86_64
+          path: installer-out/*
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
   verify:
     name: Verify the installer set
     if: inputs.tag == ''
-    needs: [windows, macos]
+    needs: [windows, macos, linux]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -234,7 +305,7 @@ jobs:
   publish:
     name: Attach installers to the release
     if: inputs.tag != ''
-    needs: [windows, macos]
+    needs: [windows, macos, linux]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:

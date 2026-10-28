@@ -70,12 +70,39 @@ class ManagedToolTests(unittest.TestCase):
             self.assertEqual((dest/'Framework/library').read_text(),'actual')
 
     def test_escape_cycle_symlink_ancestor_and_collision_are_refused(self):
-        cases=[[('../escape','file','bad')],[('a','link','../escape')],[('a','link','b'),('b','link','a')],[('a','link','b'),('a/child','file','bad'),('b','file','safe')],[('A','file','1'),('a','file','2')]]
+        cases=[[('../escape','file','bad')],[('a','link','../escape')],[('a','link','b'),('b','link','a')],[('a','link','b'),('a/child','file','bad'),('b','file','safe')],[('a','file','1'),('a','file','2')]]
         for members in cases:
             with self.subTest(members=members),tempfile.TemporaryDirectory() as temp:
                 root=Path(temp);archive=self.archive(root,members)
                 with self.assertRaises(InstallerError):self.extract(archive,root/'out')
                 self.assertFalse((root/'escape').exists())
+    def test_case_collisions_remain_refused_on_windows_and_macos(self):
+        for host in ('windows-x86_64', 'macos-arm64'):
+            with self.subTest(host=host), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp); archive = self.archive(root, [('A', 'file', 'one'), ('a', 'file', 'two')])
+                with patch('mag_installer.managed_tools.host_key', return_value=host):
+                    with self.assertRaisesRegex(InstallerError, 'colliding'):
+                        self.extract(archive, root / 'out')
+
+    @unittest.skipUnless(__import__('sys').platform.startswith('linux'), 'Requires a Linux case-sensitive filesystem')
+    def test_linux_terminfo_case_distinct_entries_survive(self):
+        # Real pinned Python archive contains both terminfo/2/2621A and 2621a.
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            archive = self.archive(root, [('python/share/terminfo/2/2621A', 'file', 'upper'),
+                                          ('python/share/terminfo/2/2621a', 'file', 'lower')])
+            dest = self.extract(archive, root / 'out')
+            self.assertEqual((dest / 'python/share/terminfo/2/2621A').read_text(), 'upper')
+            self.assertEqual((dest / 'python/share/terminfo/2/2621a').read_text(), 'lower')
+
+    def test_linux_rejects_normalized_duplicate_archive_names(self):
+        for names in (('same', 'same'), ('caf\u00e9', 'cafe\u0301')):
+            with self.subTest(names=names), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp); archive = self.archive(root, [(name, 'file', 'value') for name in names])
+                with patch('mag_installer.managed_tools.host_key', return_value='linux-x86_64'):
+                    with self.assertRaisesRegex(InstallerError, 'colliding'):
+                        self.extract(archive, root / 'out')
+
     def test_archive_limits(self):
         with tempfile.TemporaryDirectory() as temp:
             root=Path(temp);archive=self.archive(root,[('file','file','too big')])

@@ -1,4 +1,4 @@
-"""Pinned private build tools and dependency source builds; no system installation."""
+"""Pinned private tools and source builds, with OS-authorized compiler setup."""
 import hashlib
 import json
 import os
@@ -183,7 +183,51 @@ WINDOWS_LOCK = {'python': {'id': 'python-windows',
                     'max_entries': 10000,
                     'version': '0.4.6'}}
 
-LOCKS = {'macos-arm64': LOCK, 'windows-x86_64': WINDOWS_LOCK}
+# Linux x86_64 pins verified against official GitHub release assets and PyPI JSON.
+LINUX_LOCK = {'python': {'id': 'python-linux',
+            'url': 'https://github.com/astral-sh/python-build-standalone/releases/download/20261021/cpython-3.12.15%2B20261021-x86_64-unknown-linux-gnu-install_only.tar.gz',
+            'size': 67908973,
+            'sha256': '5ff9f0602ce964a529ed1e8555d3abab6341926d724402ba9a15e9e877191124',
+            'archive': 'tar.gz',
+            'max_expanded_bytes': 1073741824,
+            'max_entries': 50000,
+            'executable': 'python/bin/python3.12'},
+ 'cmake': {'id': 'cmake-linux',
+           'url': 'https://github.com/Kitware/CMake/releases/download/v4.4.4/cmake-4.4.4-linux-x86_64.tar.gz',
+           'size': 64865570,
+           'sha256': 'e5bb807f7728cb60cd8b27ebc97a2edb469b68655f21e844a600c3575b76f5bb',
+           'archive': 'tar.gz',
+           'max_expanded_bytes': 1073741824,
+           'max_entries': 50000,
+           'executable': 'cmake-4.4.4-linux-x86_64/bin/cmake'},
+ 'ninja': {'id': 'ninja-linux',
+           'url': 'https://github.com/ninja-build/ninja/releases/download/v1.13.2/ninja-linux.zip',
+           'size': 134040,
+           'sha256': '5749cbc4e668273514150a80e387a957f933c6ed3f5f11e03fb30955e2bbead6',
+           'archive': 'zip',
+           'max_expanded_bytes': 1073741824,
+           'max_entries': 50000,
+           'executable': 'ninja'},
+ 'wheel-pycryptodome': {'id': 'wheel-pycryptodome-linux',
+                        'url': 'https://files.pythonhosted.org/packages/18/88/33df6b1176b63aed427745696d88ed38f7877104cf0f6004ee9ad600f897/pycryptodome-4.2.0-cp39-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl',
+                        'size': 2976488,
+                        'sha256': '76777686de3a354c41710727988c2284448d5db9bd82e5ddb9a9b6710d17d9df',
+                        'archive': 'zip',
+                        'max_expanded_bytes': 1073741824,
+                        'max_entries': 50000,
+                        'version': '4.2.0'},
+ 'wheel-capstone': {'id': 'wheel-capstone-linux',
+                    'url': 'https://files.pythonhosted.org/packages/d1/39/17747862222bb062e86b501f1f148d5ff589b77908b080d30f7f085cbfb7/capstone-5.0.9-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl',
+                    'size': 1485316,
+                    'sha256': '273fd8d747d2e35c88f91450be51a603ecfaafb00d96d9f315dcb8689c86193e',
+                    'archive': 'zip',
+                    'max_expanded_bytes': 1073741824,
+                    'max_entries': 50000,
+                    'version': '5.0.9'}}
+for _key in ('wheel-construct', 'wheel-tabulate', 'wheel-tqdm', 'source-sdl2', 'source-glslang', 'source-spirv-cross', 'source-ffmpeg'):
+    LINUX_LOCK[_key] = LOCK[_key]
+
+LOCKS = {'macos-arm64': LOCK, 'windows-x86_64': WINDOWS_LOCK, 'linux-x86_64': LINUX_LOCK}
 SUPPORTED_HOSTS = tuple(LOCKS)
 
 
@@ -217,7 +261,12 @@ def extract_managed(archive, destination, spec, token=None):
             raw = raw.rstrip('/')
             if raw in ('', '.'): continue
             if raw.startswith('./'): raw = raw[2:]
-            name = _name(raw); key = unicodedata.normalize('NFC', name).casefold()
+            name = _name(raw)
+            # Linux archives (notably Python's terminfo database) contain real
+            # case-distinct entries. Keep normalized/exact duplicate rejection,
+            # and retain case folding on Windows and default macOS volumes.
+            key = unicodedata.normalize('NFC', name)
+            if host_key() != 'linux-x86_64': key = key.casefold()
             if key in folded: raise InstallerError('Duplicate/colliding managed archive members')
             folded.add(key)
             mode = (entry.external_attr >> 16) if is_zip else entry.mode
@@ -340,13 +389,13 @@ def dependency_plan(paths, prefix):
     for key,options in (
         ('sdl2',['-DSDL_SHARED=ON','-DSDL_STATIC=OFF','-DSDL_TEST=OFF','-DSDL_TESTS=OFF']),
         ('spirv-cross',['-DSPIRV_CROSS_CLI=OFF','-DSPIRV_CROSS_ENABLE_TESTS=OFF','-DSPIRV_CROSS_SHARED=OFF','-DSPIRV_CROSS_STATIC=ON']),
-        ('glslang',['-DENABLE_OPT=OFF','-DENABLE_GLSLANG_BINARIES=OFF','-DBUILD_TESTING=OFF','-DENABLE_CTEST=OFF'])):
+        ('glslang',['-DENABLE_OPT=OFF','-DENABLE_GLSLANG_BINARIES=OFF','-DGLSLANG_TESTS=OFF','-DGLSLANG_ENABLE_INSTALL=ON','-DBUILD_TESTING=OFF','-DENABLE_CTEST=OFF'])):
         source=Path(paths['source-'+key]); build=prefix.parent/('build-'+key)
-        stages.extend([{'id':'configure-'+key,'cwd':source,'argv':[cmake,'-S',str(source),'-B',str(build),'-G','Ninja','-DCMAKE_MAKE_PROGRAM='+ninja,'-DCMAKE_POLICY_VERSION_MINIMUM=3.5','-DCMAKE_BUILD_TYPE=Release','-DCMAKE_INSTALL_PREFIX='+str(prefix),'-DCMAKE_POSITION_INDEPENDENT_CODE=ON',*options]},
+        stages.extend([{'id':'configure-'+key,'cwd':source,'argv':[cmake,'-S',str(source),'-B',str(build),'-G','Ninja','-DCMAKE_MAKE_PROGRAM='+ninja,'-DCMAKE_POLICY_VERSION_MINIMUM=3.5','-DCMAKE_BUILD_TYPE=Release','-DCMAKE_INSTALL_PREFIX='+str(prefix),'-DCMAKE_INSTALL_LIBDIR=lib','-DCMAKE_POSITION_INDEPENDENT_CODE=ON',*options]},
                        {'id':'build-'+key,'cwd':source,'argv':[cmake,'--build',str(build),'--parallel','2']},
                        {'id':'install-'+key,'cwd':source,'argv':[cmake,'--install',str(build)]}])
     ffmpeg=Path(paths['source-ffmpeg']); build=prefix.parent/'build-ffmpeg'
-    stages.extend([{'id':'configure-ffmpeg','cwd':build,'argv':[str(ffmpeg/'configure'),'--prefix='+str(prefix),'--disable-programs','--disable-doc','--disable-debug','--disable-static','--enable-shared','--disable-autodetect','--disable-avdevice','--disable-avfilter','--disable-network','--enable-zlib']},
+    stages.extend([{'id':'configure-ffmpeg','cwd':build,'argv':[str(ffmpeg/'configure'),'--prefix='+str(prefix),'--disable-programs','--disable-doc','--disable-debug','--disable-static','--enable-shared','--disable-autodetect','--disable-avdevice','--disable-avfilter','--disable-network','--enable-zlib',*(['--disable-x86asm'] if paths.get('host')=='linux-x86_64' else [])]},
                    {'id':'build-ffmpeg','cwd':build,'argv':['/usr/bin/make','-j2']},
                    {'id':'install-ffmpeg','cwd':build,'argv':['/usr/bin/make','install']}])
     return stages
@@ -418,6 +467,8 @@ def readiness(root):
     host=host_key()
     if host=='windows-x86_64':
         return _windows_readiness()
+    if host=='linux-x86_64':
+        return _linux_readiness()
     if host!='macos-arm64':
         return {'ready':False,'reason':'Managed player builds support Apple Silicon Macs and 64-bit Windows PCs.'}
     expected={'python','cmake','ninja','source-sdl2','source-spirv-cross','source-glslang','source-ffmpeg',
@@ -449,11 +500,12 @@ def _install_wheels(python_root, wheel_roots, token, site_packages='python/lib/p
     _write_json(python_root/'MANAGED-INVENTORY.json',_inventory(python_root,token))
 
 
-def _dependency_paths(prefix):
-    return [prefix/'include/SDL2/SDL.h',prefix/'lib/cmake/SDL2/SDL2Config.cmake',
+def _dependency_paths(prefix, linux=False):
+    paths = [prefix/'include/SDL2/SDL.h',prefix/'lib/cmake/SDL2/SDL2Config.cmake',
             prefix/'lib/cmake/glslang/glslang-config.cmake',prefix/'lib/libspirv-cross-c.a',
             prefix/'include/libavcodec/avcodec.h',prefix/'lib/libavcodec.63.dylib',
             prefix/'lib/libavformat.63.dylib',prefix/'lib/libavutil.61.dylib',prefix/'lib/libswscale.10.dylib']
+    return [Path(str(p).replace('.63.dylib', '.so.63').replace('.61.dylib', '.so.61').replace('.10.dylib', '.so.10')) for p in paths] if linux else paths
 
 
 def bootstrap(root, cache=None, token=None, events=None, build_dependencies=True):
@@ -464,6 +516,8 @@ def bootstrap(root, cache=None, token=None, events=None, build_dependencies=True
     """
     if host_key()=='windows-x86_64':
         return _bootstrap_windows(root, cache, token, events)
+    if host_key()=='linux-x86_64':
+        return _bootstrap_linux(root, cache, token, events, build_dependencies)
     if host_key()!='macos-arm64': raise InstallerError('Managed native tools support Apple Silicon Macs and 64-bit Windows PCs')
     if not Path('/usr/bin/xcrun').is_file(): raise InstallerError('Apple Command Line Tools are required. Install them using the standard macOS developer-tools dialog, then retry Build MAG.')
     token=token or Cancellation(); events=events or (lambda event:None)
@@ -746,3 +800,126 @@ def _bootstrap_windows(root, cache, token, events):
     run_command([str(paths['git']), '--version'], root, logs / 'git.log', token, env, events, 'git')
     paths.update(dependencies_ready=True, cmake_args=[], python_site=[str(p) for p in sites], logs=str(logs))
     return {k: str(v) if isinstance(v, Path) else v for k, v in paths.items()}
+
+
+# Ubuntu owns compiler, C library and desktop headers. All downloaded tools and
+# dependency builds remain private. No sudo shell or password collection.
+LINUX_PACKAGES = ('clang', 'build-essential', 'git', 'pkg-config', 'libssl-dev',
+                  'zlib1g-dev', 'libx11-dev', 'libxext-dev', 'libxrandr-dev',
+                  'libxcursor-dev', 'libxi-dev', 'libxfixes-dev', 'libxss-dev',
+                  'libxkbcommon-dev', 'libwayland-dev', 'libgl1-mesa-dev',
+                  'libasound2-dev', 'libpulse-dev', 'libudev-dev', 'libvulkan-dev',
+                  'libvulkan1', 'mesa-vulkan-drivers')
+
+
+def linux_platform_probe():
+    """Read only; distribution support is deliberately explicit."""
+    import platform
+    try:
+        release = {}
+        for line in Path('/etc/os-release').read_text().splitlines():
+            key, separator, value = line.partition('=')
+            if separator: release[key] = value.strip('"\'')
+        version = tuple(int(n) for n in release.get('VERSION_ID', '').split('.'))
+    except (OSError, ValueError):
+        return False, 'Cannot identify Linux distribution from /etc/os-release'
+    if platform.machine().lower() not in ('x86_64', 'amd64') or release.get('ID') != 'ubuntu' or version < (24, 4):
+        return False, 'Linux Build MAG supports Ubuntu 24.04 or later on x86_64 with a graphical desktop'
+    return True, ''
+
+
+def linux_toolchain_probe():
+    supported, detail = linux_platform_probe()
+    if not supported: return None, detail
+    try:
+        result = subprocess.run(['/usr/bin/dpkg-query', '-W', '-f=${Package} ${Status}\n', *LINUX_PACKAGES],
+                                stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=30)
+        installed = {line.split(' ', 1)[0] for line in result.stdout.splitlines() if line.endswith(' install ok installed')}
+    except (OSError, subprocess.SubprocessError):
+        installed = set()
+    missing = sorted(set(LINUX_PACKAGES) - installed)
+    paths = {'cc': '/usr/bin/clang', 'cxx': '/usr/bin/clang++', 'git': '/usr/bin/git'}
+    if missing or any(not Path(p).is_file() for p in paths.values()):
+        return None, 'Required Ubuntu development packages: ' + ', '.join(missing or LINUX_PACKAGES)
+    return {**paths, 'packages': list(LINUX_PACKAGES)}, ''
+
+
+def _linux_readiness():
+    supported, detail = linux_platform_probe()
+    if not supported: return {'ready': False, 'reason': detail}
+    toolchain, detail = linux_toolchain_probe()
+    return {'ready': True, 'requires_build_tools': not bool(toolchain),
+            'reason': 'Pinned Linux tools are available. ' + (detail + '. Build MAG will request system authorization to install these packages.' if not toolchain else 'Ubuntu development packages are installed.')}
+
+
+def ensure_linux_build_tools(cache=None, token=None, events=None):
+    """Build action: apt through the desktop PolicyKit authorization dialog."""
+    token = token or Cancellation(); events = events or (lambda event: None)
+    token.check()
+    supported, detail = linux_platform_probe()
+    if not supported: raise InstallerError(detail)
+    toolchain, detail = linux_toolchain_probe()
+    if toolchain: return toolchain
+    if not Path('/usr/bin/pkexec').is_file():
+        raise InstallerError(detail + '. Install them using Ubuntu Software or apt, then retry Build MAG (PolicyKit is unavailable).')
+    events({'event': 'stage-start', 'stage': 'build-tools', 'message':
+            'Ubuntu development packages are required. Approve the system authorization dialog. Packages: ' + ', '.join(LINUX_PACKAGES)})
+    cache = Path(cache) if cache else Path(tempfile.gettempdir()) / 'mag-installer'
+    cache.mkdir(parents=True, exist_ok=True)
+    env = {key: value for key, value in os.environ.items() if key in ('DISPLAY', 'WAYLAND_DISPLAY', 'XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS', 'LANG')}
+    env['PATH'] = '/usr/bin:/bin:/usr/sbin:/sbin'
+    # Exact fixed argv; no shell, repository changes, or package names from input.
+    run_command(['/usr/bin/pkexec', '/usr/bin/apt-get', 'install', '--yes', '--no-install-recommends', *LINUX_PACKAGES],
+                cache, cache / 'ubuntu-build-tools.log', token, env, events, 'build-tools')
+    toolchain, detail = linux_toolchain_probe()
+    if not toolchain: raise InstallerError('Ubuntu development tools remain incomplete: ' + detail)
+    return toolchain
+
+
+def _bootstrap_linux(root, cache, token, events, build_dependencies):
+    token = token or Cancellation(); events = events or (lambda event: None)
+    root = Path(root).absolute()
+    if root.is_symlink(): raise InstallerError('Managed root must not be a symlink')
+    root.mkdir(parents=True, exist_ok=True)
+    cache = Path(cache) if cache else root / 'cache'
+    toolchain, detail = linux_toolchain_probe()
+    if not toolchain: raise InstallerError(detail + '. Retry Build MAG to install Ubuntu development tools.')
+    home = root / 'home'; home.mkdir(exist_ok=True)
+    logs = root / 'logs'; logs.mkdir(exist_ok=True)
+    paths = {'git': toolchain['git'], 'host': 'linux-x86_64'}; sites = []; python_root = None
+    for key, spec in LINUX_LOCK.items():
+        if key.startswith('source-') and not build_dependencies: continue
+        location = materialize(spec, root / 'artifacts', cache, token, events)
+        if key in ('python', 'cmake', 'ninja'):
+            paths[key] = location / spec['executable']
+            if key == 'python': python_root = location
+        elif key.startswith('wheel-'): sites.append(location)
+        elif key.startswith('source-'): paths[key] = location / spec['root']
+    _install_wheels(python_root, sites, token)
+    env = _env(paths['python'], paths['cmake'], paths['ninja'], home, sites)
+    env.update(CC=toolchain['cc'], CXX=toolchain['cxx'])
+    run_command([str(paths['python']), '-c', 'import Crypto,capstone,construct,tabulate,tqdm'], root,
+                logs / 'python-modules.log', token, env, events, 'python-modules')
+    prefix = root / 'prefix'
+    if build_dependencies:
+        marker = prefix / 'MANAGED-DEPENDENCIES.json'
+        identity = {key: spec['sha256'] for key, spec in LINUX_LOCK.items()}
+        if marker.exists():
+            inventory = prefix / 'MANAGED-INVENTORY.json'
+            if json.loads(marker.read_text()) != identity or not inventory.is_file() or json.loads(inventory.read_text()) != _inventory(prefix, token):
+                raise InstallerError('Managed Linux dependency identity changed; use fresh managed storage')
+        else:
+            for stage in dependency_plan(paths, prefix):
+                Path(stage['cwd']).mkdir(parents=True, exist_ok=True)
+                events({'event': 'stage-start', 'stage': stage['id']})
+                run_command(stage['argv'], stage['cwd'], logs / (stage['id'] + '.log'), token, env, events, stage['id'])
+            missing = [str(p) for p in _dependency_paths(prefix, linux=True) if not p.exists()]
+            if missing: raise InstallerError('Managed Linux dependencies did not produce: ' + ', '.join(missing))
+            _write_json(marker, identity)
+            _write_json(prefix / 'MANAGED-INVENTORY.json', _inventory(prefix, token))
+    paths.update(dependencies_ready=build_dependencies, cmake_args=['-DCMAKE_PREFIX_PATH=' + str(prefix)],
+                 python_site=[str(p) for p in sites], prefix=str(prefix), managed_prefix=str(prefix), logs=str(logs),
+                 linux_toolchain={key: toolchain[key] for key in ('cc', 'cxx')},
+                 ffmpeg={'include': str(prefix / 'include'), **{name: str(prefix / 'lib' / ('lib' + name + '.so.' + version))
+                         for name, version in (('avcodec', '63'), ('avformat', '63'), ('avutil', '61'), ('swscale', '10'))}})
+    return {key: str(value) if isinstance(value, Path) else value for key, value in paths.items()}

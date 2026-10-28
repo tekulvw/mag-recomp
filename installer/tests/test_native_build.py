@@ -9,6 +9,16 @@ from mag_installer.model import InstallerError
 from mag_installer.safety import Cancellation
 
 class NativeBuildTests(unittest.TestCase):
+    def test_retry_reuses_kernel_lease_only_when_requested(self):
+        for retry in (False, True):
+            with self.subTest(retry=retry), tempfile.TemporaryDirectory() as temp:
+                output = Path(temp) / 'output'
+                with patch.object(native, 'preflight', return_value={'config': {}}), patch.object(native, '_exclusive_lock', side_effect=InstallerError('lease check')) as lease:
+                    with self.assertRaisesRegex(InstallerError, 'lease check'):
+                        native.install('fixture', output, retry_lock=retry)
+                self.assertEqual(lease.call_args.args[:2], (output.with_name('.output.native-lock'), retry))
+                self.assertFalse(output.exists())
+
     def test_windows_build_environment_drops_inherited_overrides(self):
         inherited = {'Path': 'C:/Windows/System32', 'INCLUDE': 'C:/VS/include', 'LIB': 'C:/VS/lib',
                      'WindowsSdkDir': 'C:/SDK', 'SystemRoot': 'C:/Windows',

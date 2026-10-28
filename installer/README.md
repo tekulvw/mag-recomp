@@ -3,7 +3,7 @@
 A one-button wizard that builds mag-recomp on the player's own computer from the player's own
 BCUS98110 v1.0 copy: **choose your game folder and an installation folder → Build MAG**. It runs the
 same steps as [BUILDING.md](../BUILDING.md) (prepare inputs, inventory, lift, compile) and packages the
-result as `MAG.app` on macOS or `MAG\MAG.exe` on Windows.
+result as `MAG.app` on macOS, `MAG\MAG.exe` on Windows, or `MAG/MAG` on Linux.
 
 The installer contains tooling only: this directory, a source kit with this repository's tools,
 sources and profiles, and the four ps3recomp checkouts pinned in `profiles/framework.json` (MIT).
@@ -14,6 +14,7 @@ installation folder, and must not be shared.
 | Host | Status |
 | --- | --- |
 | macOS, Apple Silicon | Build MAG verified end to end from a clean checkout; packages `MAG.app` |
+| Ubuntu 24.04 or later, x86_64 | Linux installer and synthetic native checks; real-game build and play verification pending |
 | Windows 10/11, x86_64 | Toolchain, compilation of MAG's sources and the frozen installer verified in CI; a full build with real game files is not yet verified |
 
 Release builds are attached to each GitHub release by CI. Builds of pull requests and of `main` are
@@ -42,8 +43,17 @@ vendor owns the compiler:
   installation path that is ASCII and at most 100 characters, such as `C:\MAG`. The executables use
   the static C runtime. Movie playback is not yet built on Windows.
 
-Progress, cancellation, *Open output* and *Open logs* are in the wizard. Failed work is kept for
-diagnosis and never overwritten; use a new installation folder for another attempt. See
+- **Linux** targets Ubuntu 24.04 or later on x86_64 with a graphical desktop and Vulkan driver.
+  Build MAG requests Ubuntu authorization for required compiler and desktop development packages
+  if missing, then downloads the pinned tools and builds dependencies privately. No system Python
+  installation is required to use the bundled wizard. Other distributions and ARM Linux are not
+  supported by this installer yet.
+
+Progress, cancellation, *Open output* and *Open logs* are in the wizard. On failure, use **Retry build**
+to keep the same installation folder. The installer checks your inputs again, reuses verified
+downloads and completed tool dependencies, and rebuilds unfinished work. Earlier logs remain under
+`logs/attempts/`. Changed inputs, a different installer kit, and unknown output folders are preserved
+and require a new destination. From the command line, use `build --retry` with the same paths. See
 [docs/testing.md](docs/testing.md) for what to report.
 
 ## Developing

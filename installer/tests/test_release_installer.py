@@ -50,7 +50,7 @@ class ReleaseTests(unittest.TestCase):
         # checkout has only the placeholder; the set must still verify.
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp); out = root / 'assets'; out.mkdir()
-            for host, kit in (('windows-x86_64', b'windows kit'), ('macos-arm64', b'macos kit')):
+            for host, kit in (('windows-x86_64', b'windows kit'), ('macos-arm64', b'macos kit'), ('linux-x86_64', b'linux kit')):
                 package_payload(self.payload(root, host), out, 'preview-test', host, 'preview', REVISION,
                                 self.kit_root(root, host, kit))
             manifest = verify_set(out, ROOT, 'preview-test', REVISION, preview=True)
@@ -152,7 +152,7 @@ class ReleaseTests(unittest.TestCase):
         return package_payload(self.payload(root, target), out, version, target, 'preview', revision, ROOT)
 
     def test_release_policy_needs_a_release_please_tag_from_this_repository(self):
-        self.assertEqual(check('v0.2.0', 'release', 'tekulvw/mag-recomp')['targets'], ['windows-x86_64', 'macos-arm64'])
+        self.assertEqual(check('v0.2.0', 'release', 'tekulvw/mag-recomp')['targets'], ['windows-x86_64', 'macos-arm64', 'linux-x86_64'])
         self.assertEqual(check('preview-7', 'preview', 'anyone/fork')['kind'], 'preview')
         for version, repository in [('preview-7', 'tekulvw/mag-recomp'), ('v1', 'tekulvw/mag-recomp'),
                                     ('v0.2.0', 'someone/fork'), ('v0.2.0', 'unknown')]:
@@ -217,12 +217,12 @@ class ReleaseTests(unittest.TestCase):
     def test_exact_preview_set_metadata_and_release_refusal(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
-            for target in ('windows-x86_64', 'macos-arm64'): self.artifact(root, target)
+            for target in ('windows-x86_64', 'macos-arm64', 'linux-x86_64'): self.artifact(root, target)
             directory = root / 'assets'
             with self.assertRaises(InstallerError): verify_set(directory, ROOT, 'preview-test', REVISION)
             manifest = verify_set(directory, ROOT, 'preview-test', REVISION, preview=True)
             self.assertEqual(manifest['kind'], 'preview')
-            self.assertEqual(len(manifest['files']), 5)
+            self.assertEqual(len(manifest['files']), 7)
             self.assertTrue((directory / 'SHA256SUMS.txt').is_file())
             self.assertEqual(verify_set(directory, ROOT, 'preview-test', REVISION, preview=True), manifest)
             (directory / 'unexpected.log').write_text('unexpected')
@@ -231,7 +231,7 @@ class ReleaseTests(unittest.TestCase):
     def test_set_refuses_missing_target_wrong_tag_revision_and_altered_metadata(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
-            for target in ('windows-x86_64', 'macos-arm64'): self.artifact(root, target)
+            for target in ('windows-x86_64', 'macos-arm64', 'linux-x86_64'): self.artifact(root, target)
             directory = root / 'assets'
             for version, revision in [('wrong-tag', REVISION), ('preview-test', 'b' * 40)]:
                 with self.subTest(version=version, revision=revision), self.assertRaises(InstallerError):
@@ -243,7 +243,7 @@ class ReleaseTests(unittest.TestCase):
     def test_unsafe_version_and_foreign_target_names_are_refused(self):
         for version in ('../escape', '/absolute', 'x\\y', '.', 'x:y'):
             with self.subTest(version=version), self.assertRaises(InstallerError): artifact_name(version, 'windows-x86_64', True)
-        for target in ('windows-arm64', 'linux-x86_64'):
+        for target in ('windows-arm64', 'linux-arm64'):
             with self.subTest(target=target), self.assertRaises(InstallerError): artifact_name('v1', target, True)
 
     def test_build_refuses_foreign_or_blocked_public_target_without_starting_tools(self):

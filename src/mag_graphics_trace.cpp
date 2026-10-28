@@ -6,6 +6,9 @@
 #include <exception>
 #include <errno.h>
 #include <unistd.h>
+#ifdef __linux__
+#include <sys/syscall.h>
+#endif
 static std::atomic<uint64_t> sequence{0};
 static thread_local uint64_t current_span;
 struct PredState {uint64_t capture,ctx,object,array,target,result,markers0,markers1;};
@@ -68,7 +71,12 @@ static MagPayloadClockObservation payload_clock(){
  MagPayloadClockObservation out{};out.wall=ps3_critical_now_ns();struct timespec value{};
  out.cpu_valid=clock_gettime(CLOCK_THREAD_CPUTIME_ID,&value)==0;
  if(out.cpu_valid)out.cpu=uint64_t(value.tv_sec)*1000000000ull+uint64_t(value.tv_nsec);
- out.host_valid=pthread_threadid_np(nullptr,&out.host)==0;return out;
+ #ifdef __linux__
+ const long tid=syscall(SYS_gettid);out.host_valid=tid>0;if(out.host_valid)out.host=uint64_t(tid);
+ #else
+ out.host_valid=pthread_threadid_np(nullptr,&out.host)==0;
+ #endif
+ return out;
 }
 static const char *snapshot_prefix=std::getenv("MAG_GRAPHICS_PAYLOAD_SNAPSHOT");
 static std::atomic<bool> snapshot_claimed{false};

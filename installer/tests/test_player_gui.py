@@ -21,3 +21,26 @@ class PlayerControllerTests(unittest.TestCase):
         c=PlayerBuildController(Path('/kit'),readiness=lambda root:{'ready':False,'reason':'Maintained MAG build kit is missing.'})
         self.assertIn('build kit',c.blocked)
         with self.assertRaises(InstallerError):c.start(Path('/disc'),Path('/new'),Path('/cache'))
+
+    def test_failed_build_can_be_retried_using_same_destination(self):
+        import json
+        calls = []
+        def build(root, source, output, cache, **kwargs):
+            calls.append(kwargs.get('retry', False))
+            if len(calls) == 1:
+                output.mkdir()
+                (output / 'build.json').write_text(json.dumps({'schema_version': 2, 'state': 'building'}))
+                raise InstallerError('synthetic failure')
+            return output
+        c = PlayerBuildController(Path('/kit'), readiness=lambda root: {'ready': True}, installer=build)
+        with tempfile.TemporaryDirectory() as temp:
+            parent = Path(temp)
+            c.start(parent / 'disc', parent, parent / 'cache')
+            c.worker.join(2); c.poll()
+            reopened = PlayerBuildController(Path('/kit'), readiness=lambda root: {'ready': True}, installer=build)
+            self.assertTrue(reopened.has_journal(parent))
+            self.assertTrue(c.has_journal(parent))
+            c.start(parent / 'disc', parent, parent / 'cache', retry=True)
+            c.worker.join(2); c.poll()
+            self.assertEqual(c.state, 'complete')
+            self.assertEqual(calls, [False, True])

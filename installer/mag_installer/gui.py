@@ -169,13 +169,24 @@ class PlayerBuildController(WizardController):
         if self.blocked:
             self.state = 'blocked'
 
-    def start(self, source, parent, cache):
+    def has_journal(self, parent):
+        output = ux.destination(parent)
+        try:
+            journal = output / 'build.json'
+            if output.is_symlink() or journal.is_symlink():
+                return False
+            data = json.loads(journal.read_text(encoding='utf-8'))
+            return isinstance(data, dict) and data.get('schema_version') == 2 and data.get('state') in ('incomplete', 'building')
+        except (OSError, ValueError):
+            return False
+
+    def start(self, source, parent, cache, retry=False):
         if self.blocked:
             raise InstallerError(self.blocked)
         if self.busy:
             raise InstallerError('A build is already running')
         output = ux.destination(parent).absolute()
-        if output.exists() or output.is_symlink():
+        if (output.exists() or output.is_symlink()) and not retry:
             raise InstallerError('Output already exists; choose another installation parent. Existing files are preserved.')
         self.output, self.logs = output, output/'logs'
         self.token = Cancellation()
@@ -188,7 +199,7 @@ class PlayerBuildController(WizardController):
                     from . import player_build
                     build = player_build.install
                 self.token.check()
-                result = build(self.root, Path(source).expanduser(), output, Path(cache).expanduser(), token=self.token, events=self.events.put)
+                result = build(self.root, Path(source).expanduser(), output, Path(cache).expanduser(), token=self.token, events=self.events.put, **({'retry': True} if retry else {}))
                 self.events.put({'event':'_complete','output':str(result or output)})
             except Cancelled as exc:
                 self.events.put({'event':'_cancelled','message':str(exc)})
@@ -249,7 +260,7 @@ def launch(root: Path, synthetic: bool = False) -> int:
                 if resume and not messagebox.askyesno('Retry demonstration?', 'Interrupted demonstration work exists. Reverify input and replay its stages?',parent=window):return
                 controller.start(Path(source.get()).expanduser(),Path(parent.get()).expanduser(),ux.default_cache(),install=True,resume=resume)
             else:
-                controller.start(Path(source.get()).expanduser(),Path(parent.get()).expanduser(),ux.default_cache())
+                controller.start(Path(source.get()).expanduser(),Path(parent.get()).expanduser(),ux.default_cache(),retry=controller.has_journal(Path(parent.get()).expanduser()))
             progress.start(12);refresh()
         except (InstallerError,OSError) as exc:status.set(str(exc))
     def folder(path):
@@ -262,6 +273,8 @@ def launch(root: Path, synthetic: bool = False) -> int:
     def refresh():
         for widget in controls:widget.configure(state='disabled' if controller.busy else 'normal')
         build.configure(state='disabled' if controller.busy or controller.blocked else 'normal')
+        if not synthetic:
+            build.configure(text='Retry build' if controller.has_journal(Path(parent.get()).expanduser()) else 'Build MAG')
         cancel.configure(state='normal' if controller.busy else 'disabled')
         output=controller.display_output(Path(parent.get()).expanduser())
         destination_label.configure(text=f'New output folder: {output}')

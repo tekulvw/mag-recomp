@@ -64,7 +64,7 @@ def _probe(argv, env):
         raise InstallerError(f'Prerequisite command failed: {argv[0]} {argv[1:]}; {str(getattr(exc, "stderr", ""))[-1500:]}') from exc
 
 
-SUPPORTED_HOSTS = ('macos-arm64', 'windows-x86_64')
+SUPPORTED_HOSTS = ('macos-arm64', 'windows-x86_64', 'linux-x86_64')
 # Build trees nest the output path twice in some object paths; keep Windows
 # paths well inside MAX_PATH instead of failing deep inside a compile.
 WINDOWS_MAX_OUTPUT_PATH = 100
@@ -159,9 +159,13 @@ def preflight(config_path, output, token=None):
     config = load_config(config_path)
     host = host_key()
     if host not in SUPPORTED_HOSTS:
-        raise InstallerError('Native MAG builds support Apple Silicon Macs and 64-bit Windows PCs')
+        raise InstallerError('Native MAG builds support Apple Silicon Macs, 64-bit Windows PCs and Ubuntu 24.04+ x86_64')
     if (host == 'windows-x86_64') != ('msvc' in config):
         raise InstallerError('Native build configuration does not match this host toolchain')
+    if host == 'linux-x86_64' and config.get('host') != host:
+        raise InstallerError('Linux native configuration must explicitly set host=linux-x86_64')
+    if config.get('host') and config['host'] != host:
+        raise InstallerError('Native configuration host does not match this computer')
     output = Path(output).absolute()
     if host == 'windows-x86_64':
         check_windows_location(output)
@@ -191,6 +195,13 @@ def preflight(config_path, output, token=None):
     if 'msvc' in config:
         env = _environment(config, Path(tempfile.gettempdir()))
         _probe([config['msvc']['clang_cl'], '--version'], env)
+    elif host == 'linux-x86_64':
+        from .managed_tools import linux_toolchain_probe
+        toolchain, detail = linux_toolchain_probe()
+        if not toolchain: raise InstallerError(detail)
+        env = _environment(config, Path(tempfile.gettempdir()))
+        for compiler in ('cc', 'cxx'):
+            _probe([config['linux_toolchain'][compiler], '--version'], env)
     else:
         env = _environment(config, Path(tempfile.gettempdir()))
         _probe(['/usr/bin/xcrun', '--find', 'clang'], env)
@@ -253,7 +264,7 @@ def _validate_receipts(workspace, runtime_revision, token=None):
     return results
 
 
-def install(config_path, output, resume=False, token=None, events=None):
+def install(config_path, output, resume=False, token=None, events=None, retry_lock=False):
     from .native_recipe import build_plan, framework_pins
     if resume:
         raise InstallerError('Experimental native build resume is unsupported; retained logs explain the failure. Choose a new destination.')
@@ -262,7 +273,7 @@ def install(config_path, output, resume=False, token=None, events=None):
     report = preflight(config_path, output, token=token)
     config = report['config']; output = Path(output).absolute()
     lock = output.with_name('.' + output.name + '.native-lock')
-    with _exclusive_lock(lock, False, events):
+    with _exclusive_lock(lock, retry_lock, events):
         output.mkdir(mode=0o700)
         journal = output / 'native-build.json'
         state = {'schema_version': 1, 'kind': 'experimental-private-native-build', 'status': 'incomplete', 'output': str(output)}

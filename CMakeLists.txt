@@ -124,6 +124,9 @@ add_subdirectory("${PS3RECOMP_DIR}" "${CMAKE_BINARY_DIR}/ps3recomp_sdk"
 if(WIN32)
     include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/MagWin32Posix.cmake")
     mag_win32_posix_runtime("${PS3RECOMP_DIR}")
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/MagLinuxCompat.cmake")
+    mag_linux_compat_runtime("${PS3RECOMP_DIR}")
 endif()
 
 # ---------------------------------------------------------------------------
@@ -286,6 +289,10 @@ endif()
 # The prepared-image handoff belongs only to the retail launcher.
 if(MAG_IMAGE STREQUAL "EBOOT")
     target_sources(${PROJECT_NAME} PRIVATE src/retail_handoff.cpp)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        find_package(OpenSSL REQUIRED COMPONENTS Crypto)
+        target_link_libraries(${PROJECT_NAME} PRIVATE OpenSSL::Crypto)
+    endif()
 endif()
 
 # Cached getenv for every statically linked caller (src/mag_env_cache.cpp).

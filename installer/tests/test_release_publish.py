@@ -22,7 +22,7 @@ class ReleasePublicationTests(unittest.TestCase):
         self.calls = []
         self.remote = {'tag_name': self.tag, 'draft': False, 'immutable': False, 'assets': []}
         self.files = []
-        for target, suffix in [('windows-x86_64', '.zip'), ('macos-arm64', '.zip')]:
+        for target, suffix in [('windows-x86_64', '.zip'), ('macos-arm64', '.zip'), ('linux-x86_64', '.tar.gz')]:
             archive = f'mag-installer-{self.tag}-{target}{suffix}'
             self.files.extend([archive, archive + '.sha256'])
         self.files.append('SHA256SUMS.txt')

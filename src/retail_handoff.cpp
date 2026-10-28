@@ -4,11 +4,15 @@
 #include <cstdlib>
 #include <cstring>
 
-#if defined(__APPLE__) || defined(_WIN32)
+#if defined(__APPLE__) || defined(_WIN32) || defined(__linux__)
 #include <cerrno>
 #include <string>
+#if defined(__APPLE__) || defined(__linux__)
 #ifdef __APPLE__
 #include <CommonCrypto/CommonDigest.h>
+#else
+#include <openssl/evp.h>
+#endif
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -69,6 +73,17 @@ struct Sha256 {
     void final(unsigned char* digest) { CC_SHA256_Final(digest,&state); }
 };
 
+#elif defined(__linux__)
+constexpr size_t digest_length=32;
+struct Sha256 {
+    EVP_MD_CTX* state=EVP_MD_CTX_new();
+    Sha256() { if (!state || EVP_DigestInit_ex(state,EVP_sha256(),nullptr)!=1) reject("SHA256 unavailable"); }
+    ~Sha256() { EVP_MD_CTX_free(state); }
+    void update(const void* data,size_t length) { if(EVP_DigestUpdate(state,data,length)!=1) reject("SHA256 update failed"); }
+    void final(unsigned char* digest) { unsigned n=0;if(EVP_DigestFinal_ex(state,digest,&n)!=1 || n!=32) reject("SHA256 finish failed"); }
+};
+#endif
+#if defined(__APPLE__) || defined(__linux__)
 bool absolute_path(const char* path) { return path && path[0]=='/'; }
 #else
 constexpr size_t digest_length=32;
@@ -122,7 +137,7 @@ void check_digest(const unsigned char* digest, const char* expected) {
     if (std::strcmp(actual,expected)) reject("prepared input identity mismatch");
 }
 
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(__linux__)
 void check_file(const char* key, const char* expected) {
     const char* path=std::getenv(key);
     if (!absolute_path(path) || !lower_hex(expected,64))
@@ -227,7 +242,7 @@ std::string request_body() {
     std::_Exit(90);
 }
 
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(__linux__)
 [[noreturn]] void publish_request() {
     const char* destination=std::getenv("MAG_HANDOFF_REQUEST");
     std::string temp=std::string(destination)+".tmp."+std::to_string(getpid());
@@ -284,7 +299,7 @@ void spawn(ppu_context* ctx) {
 #endif
 
 extern "C" void mag_register_handoff(void) {
-#if defined(__APPLE__) || defined(_WIN32)
+#if defined(__APPLE__) || defined(_WIN32) || defined(__linux__)
     for (const char* key:required_env) {
         const char* value=std::getenv(key);
         if (!value || !*value) return;

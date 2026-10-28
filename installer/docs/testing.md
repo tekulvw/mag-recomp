@@ -9,6 +9,10 @@ Releases carry `mag-installer-vX.Y.Z-<target>.zip`. Builds of pull requests and 
 gh run download <run-id> -R tekulvw/mag-recomp -n mag-installer-windows-x86_64
 ```
 
+Linux uses `mag-installer-vX.Y.Z-linux-x86_64.tar.gz`. Extract it with `tar -xzf`, then run
+`./mag-installer` from the extracted folder. Ubuntu 24.04+ x86_64 with a graphical desktop is
+required; **Build MAG** opens system authorization if development packages are missing.
+
 Verify the archive against its `.sha256` file and extract it. The executables are unsigned: on
 Windows, SmartScreen may say "Windows protected your PC" (More info → Run anyway); on macOS, open
 `MAG Installer.app` with Control-click → Open the first time.
@@ -21,9 +25,14 @@ folder and a new installation folder, and click **Build MAG**. Expect a long bui
 lifted sources are large and two compile jobs run by default. Roughly 40 GB of free space is
 needed, plus several GB for Visual Studio Build Tools on Windows if they are not installed yet.
 
-The result is `<installation>/MAG.app` on macOS or `<installation>\MAG\MAG.exe` on Windows. Start
+The result is `<installation>/MAG.app` on macOS or `<installation>\MAG\MAG.exe` on Windows. On Linux the result is `<installation>/MAG/MAG`. Start
 it from there. Launch logs are written under `<installation>/logs/launch-*/`, and a startup failure
 also to `<installation>/launch-error.log`.
+
+If a build fails or is cancelled, select **Retry build** with the same game and installation
+folders. Inputs are reverified before tools are installed or downloaded. Completed managed
+dependencies and verified cached downloads are reused; older logs are retained in `logs/attempts/`.
+A different kit or changed game input requires a new destination.
 
 ## What to report
 
