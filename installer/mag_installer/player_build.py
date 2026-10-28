@@ -6,14 +6,16 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 from pathlib import Path
+from contextlib import nullcontext
 
 from .model import InstallerError, host_key
 from .pipeline import _exclusive_lock, _write_json, _separate
 from .safety import Cancellation, contained, file_digest
 
 
-PLAYER_HOSTS = {'macos-arm64': 'Apple Silicon Macs', 'windows-x86_64': '64-bit Windows PCs'}
+PLAYER_HOSTS = {'macos-arm64': 'Apple Silicon Macs', 'windows-x86_64': '64-bit Windows PCs', 'linux-x86_64': '64-bit Linux PCs'}
 
 
 def _manifest(root):
@@ -98,48 +100,192 @@ def _load_kit(root, record, destination, cache, token, events):
         raise InstallerError('The maintained native source kit metadata is incomplete.') from exc
 
 
-def install(root, source, output, cache, token=None, events=None):
+def _binding(inputs, record, token):
+    identities = {}
+    disc = Path(inputs['disc_root'])
+    files = {**{key: Path(inputs[key]) for key in ('eboot_elf', 'engine_elf', 'firmware')},
+             **{name: disc / name for name in ('PARAM.SFO', 'USRDIR/EBOOT.BIN', 'USRDIR/bin/mage_g.self')}}
+    for key, path in files.items():
+        size, digest = file_digest(path, token)
+        identities[key] = {'path': str(path.resolve()), 'size': size, 'sha256': digest}
+    return {'host': record['host'], 'kit': record['kit'], 'input_identities': record.get('input_identities'), 'inputs': identities}
+
+
+def _retry_status(output, binding):
+    if output.is_symlink() or not output.is_dir() or (output / 'build.json').is_symlink():
+        raise InstallerError('Retry requires an owned incomplete MAG build folder, without symlinks.')
+    try:
+        status = json.loads((output / 'build.json').read_text(encoding='utf-8'))
+    except (OSError, ValueError) as exc:
+        raise InstallerError('Unknown output folder; no matching MAG retry journal. Existing files are preserved.') from exc
+    if not isinstance(status, dict) or status.get('schema_version') != 2 or status.get('state') not in ('incomplete', 'building') or status.get('output') != str(output):
+        raise InstallerError('Retry requires a matching incomplete build with the same input identities, source kit and host. Existing files are preserved.')
+    if status.get('binding') != binding:
+        previous = status.get('binding', {})
+        # A rejected preflight has never entered tool setup or a build. Permit
+        # correction of those same selected files, while retaining the failed
+        # attempt evidence. Host/source-kit changes still require a fresh folder.
+        compatible = isinstance(previous, dict) and all(previous.get(key) == binding.get(key)
+                     for key in ('host', 'kit', 'input_identities'))
+        old_inputs = previous.get('inputs', {}) if isinstance(previous, dict) else {}
+        same_paths = isinstance(old_inputs, dict) and set(old_inputs) == set(binding['inputs']) and all(
+            isinstance(old_inputs[key], dict) and old_inputs[key].get('path') == value['path']
+            for key, value in binding['inputs'].items())
+        if not (status.get('state') == 'incomplete' and status.get('preflight_rejected') is True and status.get('tools_started') is False and compatible and same_paths):
+            raise InstallerError('Retry requires a matching incomplete build with the same input identities, source kit and host. Existing files are preserved.')
+    if type(status.get('attempt')) is not int or status['attempt'] < 1 or type(status.get('managed_complete')) is not bool:
+        raise InstallerError('Unknown retry journal; existing files are preserved.')
+    allowed = {'logs', 'build.json', 'build-kit', 'managed-tools', 'build-settings.json', 'build-work', 'MAG', 'MAG.app', '.build-work.native-lock', 'build.pending', 'build-settings.pending'}
+    if any(p.name not in allowed or p.is_symlink() for p in output.iterdir()):
+        raise InstallerError('Unknown files or symlinks in retry output; existing files are preserved.')
+    # Stage directories are renamed intact, so their legitimate SDK/tool symlinks
+    # are never followed. Log destinations, which we write into, must be ordinary.
+    if any(p.is_symlink() for p in (output / 'logs').rglob('*')):
+        raise InstallerError('Retry logs contain symlinks; existing files are preserved.')
+    return status
+
+
+def _prepare_retry(output, status, token):
+    """Retain small diagnostics, then discard only journal-owned scratch roots.
+
+    This is replayable after a power failure: the attempt number changes only
+    after all cleanup succeeds, and the original attempt journal is never replaced.
+    """
+    native_lock = output / '.build-work.native-lock'
+    with (_exclusive_lock(native_lock, True) if native_lock.exists() else nullcontext()):
+        _clean_retry_scratch(output, status, token)
+
+
+def _clean_retry_scratch(output, status, token):
+    attempt = output / 'logs' / 'attempts' / str(status['attempt'])
+    attempt.mkdir(parents=True, exist_ok=True)
+    prior = attempt / 'build.json'
+    if not prior.exists():
+        _write_json(prior, status)
+    diagnostics = [('build-settings.json', 'build-settings.json'),
+                   ('build-work/native-build.json', 'native-build.json')]
+    for stage in ('build', 'build-engine'):
+        parent = output / 'build-work/workspace' / stage
+        if parent.is_symlink() or not parent.resolve().is_relative_to(output.resolve()):
+            continue
+        for path in parent.glob('*.receipt.json'):
+            diagnostics.append((str(path.relative_to(output)), stage + '-' + path.name))
+    for source, target in diagnostics:
+        path = output / source
+        if path.is_file() and not path.is_symlink():
+            shutil.copy2(path, attempt / target)
+    stages = ['build-kit', 'build-work', 'MAG', 'MAG.app']
+    if not status['managed_complete']:
+        stages.append('managed-tools')
+    for name in stages:
+        token.check()
+        stage = output / name
+        if not stage.exists():
+            continue
+        logs = stage / 'logs'
+        if logs.is_dir() and not logs.is_symlink():
+            if any(path.is_symlink() for path in logs.rglob('*')):
+                raise InstallerError('Stage logs contain symlinks; retry cleanup was stopped.')
+            shutil.copytree(logs, attempt / name / 'logs', dirs_exist_ok=True)
+        # These exact roots are owned scratch recorded by the matching journal;
+        # rmtree unlinks SDK symlinks rather than following their targets.
+        if stage.is_symlink() or not stage.is_dir():
+            raise InstallerError('Retry scratch must be an ordinary owned directory.')
+        shutil.rmtree(stage)
+    for name in ('build-settings.json', 'build.pending', 'build-settings.pending'):
+        path = output / name
+        if path.exists():
+            path.unlink()
+
+
+def install(root, source, output, cache, token=None, events=None, retry=False):
     token = token or Cancellation()
     events = events or (lambda event: None)
     root, source, output, cache = (Path(p).expanduser().absolute() for p in (root, source, output, cache))
     state = readiness(root)
     if not state['ready']:
         raise InstallerError(state['reason'])
-    _separate(source, output, cache)
+    if retry and (output.exists() or output.is_symlink()):
+        if output.is_symlink() or not output.parent.is_dir() or output.parent.is_symlink():
+            raise InstallerError('Retry requires an ordinary output folder and parent, without symlinks.')
+        source_real, output_real, cache_real = source.resolve(), output.resolve(), cache.resolve()
+        for writable in (output_real, cache_real):
+            if writable.is_relative_to(source_real) or source_real.is_relative_to(writable):
+                raise InstallerError('Output and cache must be separate from the owned input tree')
+        if cache_real.is_relative_to(output_real) or output_real.is_relative_to(cache_real):
+            raise InstallerError('Output and cache must be separate directories')
+    else:
+        _separate(source, output, cache)
     token.check()
     events({'event': 'stage-start', 'stage': 'validate', 'message': 'Checking your game files'})
     inputs = locate_inputs(source)
     record = _manifest(root)
-    windows = record.get('host', host_key()) == 'windows-x86_64'
+    host = record.get('host', host_key())
+    windows = host == 'windows-x86_64'
+    linux = host == 'linux-x86_64'
+    binding = _binding(inputs, record, token)
     # The OS vendor owns the compiler/SDK installation; settle it before downloads.
     from .managed_tools import bootstrap, ensure_apple_sdk, ensure_windows_build_tools
     from .native_build import install as build_native, _verify_identities, check_windows_location
     from .native_package import package
     if windows:
         check_windows_location(output)
-        toolchain = ensure_windows_build_tools(cache=cache, token=token, events=events)
-    else:
-        ensure_apple_sdk(token=token, events=events)
-    with _exclusive_lock(output.with_name('.' + output.name + '.player-lock'), False, events):
-        output.mkdir(mode=0o700)
-        logs = output / 'logs'; logs.mkdir()
+    with _exclusive_lock(output.with_name('.' + output.name + '.player-lock'), retry, events):
+        if output.exists() or output.is_symlink():
+            if not retry:
+                raise InstallerError('Output already exists. Use Retry build or build --retry for a matching failed build.')
+            status = _retry_status(output, binding)
+            recovering = True
+        else:
+            recovering = False
+            output.mkdir(mode=0o700)
+            status = {'schema_version': 2, 'state': 'building', 'output': str(output),
+                      'binding': binding, 'attempt': 1, 'managed_complete': False, 'tools_started': False}
+        logs = output / 'logs'; logs.mkdir(exist_ok=True)
         journal = output / 'build.json'
-        status = {'schema_version': 1, 'state': 'building', 'output': str(output)}
-        _write_json(journal, status)
+        retry_prepared = False
+        checking_inputs = False
         try:
+            if recovering:
+                _prepare_retry(output, status, token)
+                status.update(state='building', attempt=status['attempt'] + 1, binding=binding)
+                retry_prepared = True
+            _write_json(journal, status)
+            checking_inputs = True
             events({'event': 'stage-start', 'stage': 'prepare-source', 'logs': str(logs)})
             kit_root = output / 'build-kit'
+            if 'embedded' not in record['kit'] and record['kit']:
+                from .native_build import _verify_hash
+                identities = record.get('input_identities')
+                if not isinstance(identities, dict) or set(identities) != set(binding['inputs']):
+                    raise InstallerError('Remote source kits require bound input_identities in the maintained installer manifest before downloading. Obtain a complete embedded installer.')
+                for key, identity in binding['inputs'].items():
+                    _verify_hash(identity['path'], identities[key], token)
             kit = _load_kit(root, record['kit'], kit_root, cache, token, events)
             source_tree = contained(kit_root, kit['source_tree'])
             # Hash-check prepared inputs before fetching or compiling tools.
             _verify_identities(source_tree, Path(inputs['disc_root']), inputs, token)
+            checking_inputs = False
+            status['preflight_rejected'] = False
+            status['tools_started'] = True
+            _write_json(journal, status)
+            if windows:
+                toolchain = ensure_windows_build_tools(cache=cache, token=token, events=events)
+            elif linux:
+                from .managed_tools import ensure_linux_build_tools
+                toolchain = ensure_linux_build_tools(cache=cache, token=token, events=events)
+            else:
+                ensure_apple_sdk(token=token, events=events)
             events({'event': 'stage-start', 'stage': 'acquire', 'logs': str(output / 'managed-tools/logs')})
             managed = bootstrap(output / 'managed-tools', cache=cache, token=token, events=events)
+            status['managed_complete'] = True
+            _write_json(journal, status)
             toolchain_fields = ({'msvc': {key: toolchain[key] for key in ('vcvars', 'clang_cl', 'installation', 'version', 'product')}}
                                 if windows else {'ffmpeg': managed['ffmpeg']})
             config = {'schema_version': 1, 'source_tree': str(source_tree), **inputs,
                       **{key: managed[key] for key in ('python', 'cmake', 'ninja', 'git')}, **toolchain_fields,
                       'jobs': 2, 'native_graphics': False,
+                      **({'host': host, 'linux_toolchain': {key: toolchain[key] for key in ('cc', 'cxx')}} if linux else {}),
                       'sdks': {role: {'path': str(contained(kit_root, item['path'])), 'revision': item['revision']}
                                for role, item in kit['sdks'].items()}}
             if managed.get('prefix'):
@@ -152,18 +298,29 @@ def install(root, source, output, cache, token=None, events=None):
                     return
                 events(event)
             events({'event': 'stage-start', 'stage': 'build', 'logs': str(native_output / 'logs')})
-            build_native(config_path, native_output, token=token, events=progress)
+            build_native(config_path, native_output, token=token, events=progress, **({'retry_lock': True} if recovering else {}))
             events({'event': 'stage-start', 'stage': 'package', 'logs': str(native_output / 'logs')})
-            app = package(config, native_output / 'workspace', output / ('MAG' if windows else 'MAG.app'), token=token, events=progress)
+            app = package(config, native_output / 'workspace', output / ('MAG' if windows or linux else 'MAG.app'), token=token, events=progress)
             token.check()
             status.update(state='complete', app=str(app), logs=str(native_output / 'logs'))
             _write_json(journal, status)
             done = ('MAG was built. Open the installation folder and start MAG\\MAG.exe.' if windows
-                    else 'MAG.app was built. Open the installation folder to use it.')
+                    else ('MAG was built. Open the installation folder and start MAG/MAG.' if linux
+                          else 'MAG.app was built. Open the installation folder to use it.'))
             events({'event': 'player-build-complete', 'output': str(output), 'app': str(app),
                     'logs': str(native_output / 'logs'), 'message': done})
             return output
         except BaseException as exc:
-            status.update(state='incomplete', error=str(exc))
-            _write_json(journal, status)
+            status['state'] = 'incomplete'
+            if checking_inputs:
+                status['preflight_rejected'] = True
+            if recovering and not retry_prepared:
+                status.setdefault('error', str(exc))
+                status['retry_error'] = str(exc)
+            else:
+                status['error'] = str(exc)
+            try:
+                _write_json(journal, status)
+            except OSError:
+                pass  # Preserve the original build/cancellation error.
             raise

@@ -12,7 +12,7 @@ ROOT=Path(__file__).resolve().parents[1]
 GUEST_PATH='/dev_bdvd/PS3_GAME/USRDIR/bin/mage_g.self'
 
 
-@unittest.skipUnless(sys.platform=='darwin','MAG adapter uses macOS CommonCrypto')
+@unittest.skipUnless(sys.platform in ('darwin','linux'),'native POSIX handoff test')
 class RetailHandoffTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -85,7 +85,7 @@ int main(int argc,char** argv) {
 ''')
         cls.binary=root/'adapter-test'
         subprocess.run(['c++','-std=c++17','-UNDEBUG','-I'+str(root),'-I'+str(ROOT/'src'),
-            str(root/'main.cpp'),str(ROOT/'src/retail_handoff.cpp'),'-o',str(cls.binary)],check=True,timeout=30)
+            str(root/'main.cpp'),str(ROOT/'src/retail_handoff.cpp'),'-o',str(cls.binary)]+(['-lcrypto'] if sys.platform=='linux' else []),check=True,timeout=30)
 
     def setUp(self):
         self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup)

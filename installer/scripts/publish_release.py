@@ -55,6 +55,7 @@ def publish(directory, tag, repository, source_revision, run=subprocess.run):
     archives = {
         f'mag-installer-{tag}-windows-x86_64.zip',
         f'mag-installer-{tag}-macos-arm64.zip',
+        f'mag-installer-{tag}-linux-x86_64.tar.gz',
     }
     expected = archives | {name + '.sha256' for name in archives} | {'SHA256SUMS.txt'}
     records = manifest.get('files')

@@ -286,6 +286,10 @@ endif()
 # The prepared-image handoff belongs only to the retail launcher.
 if(MAG_IMAGE STREQUAL "EBOOT")
     target_sources(${PROJECT_NAME} PRIVATE src/retail_handoff.cpp)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        find_package(OpenSSL REQUIRED COMPONENTS Crypto)
+        target_link_libraries(${PROJECT_NAME} PRIVATE OpenSSL::Crypto)
+    endif()
 endif()
 
 # Cached getenv for every statically linked caller (src/mag_env_cache.cpp).

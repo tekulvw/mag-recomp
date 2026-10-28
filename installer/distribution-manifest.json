@@ -38,7 +38,8 @@
     "mag_installer/native_kit.py",
     "scripts/prepare_native_kit.py",
     "mag_installer/native_package_windows.py",
-    "scripts/prepare_player_kit.py"
+    "scripts/prepare_player_kit.py",
+    "mag_installer/native_package_linux.py"
   ],
   "excludes": [
     "original game and firmware files",

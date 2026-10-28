@@ -20,8 +20,8 @@ from .safety import contained
 ROLES = ('runtime', 'lifter-spu', 'lifter-ppu', 'spu-programs')
 _REQUIRED = {'schema_version', 'source_tree', 'disc_root', 'eboot_elf', 'engine_elf',
              'firmware', 'python', 'cmake', 'ninja', 'git', 'sdks'}
-# ffmpeg: required on macOS (SAIL media). msvc: the Windows toolchain record.
-_OPTIONAL = {'jobs', 'cmake_args', 'native_graphics', 'managed_prefix', 'ffmpeg', 'msvc'}
+# ffmpeg: required on macOS/Linux. msvc/linux_toolchain: host compiler records.
+_OPTIONAL = {'jobs', 'cmake_args', 'native_graphics', 'managed_prefix', 'ffmpeg', 'msvc', 'host', 'linux_toolchain'}
 
 
 def is_windows(config):
@@ -60,6 +60,15 @@ def load_config(path):
     if type(raw['schema_version']) is not int or raw['schema_version'] != 1:
         raise InstallerError('Native build configuration schema_version must be 1')
     result = dict(raw)
+    if raw.get('host') not in (None, 'macos-arm64', 'windows-x86_64', 'linux-x86_64'):
+        raise InstallerError('Unsupported native configuration host')
+    if raw.get('host') == 'linux-x86_64':
+        if 'msvc' in raw or 'linux_toolchain' not in raw:
+            raise InstallerError('Linux configuration requires linux_toolchain')
+        _object(raw['linux_toolchain'], {'cc', 'cxx'}, set(), 'linux_toolchain')
+        result['linux_toolchain'] = {key: _path(raw['linux_toolchain'][key], path.parent, 'linux_toolchain.' + key, executable=True) for key in ('cc', 'cxx')}
+    elif 'linux_toolchain' in raw:
+        raise InstallerError('linux_toolchain requires host=linux-x86_64')
     for key in ('source_tree', 'disc_root'):
         result[key] = _path(raw[key], path.parent, key, directory=True)
     for key in ('eboot_elf', 'engine_elf', 'firmware'):
@@ -85,7 +94,7 @@ def load_config(path):
                           'clang_cl': _path(raw['msvc']['clang_cl'], path.parent, 'msvc.clang_cl', executable=True)}
     else:
         if 'ffmpeg' not in raw:
-            raise InstallerError('Native build configuration requires ffmpeg on macOS')
+            raise InstallerError('Native build configuration requires ffmpeg on macOS and Linux')
         fields = {'include', 'avcodec', 'avformat', 'avutil', 'swscale'}
         _object(raw['ffmpeg'], fields, set(), 'ffmpeg')
         result['ffmpeg'] = {key: _path(raw['ffmpeg'][key], path.parent, f'ffmpeg.{key}', directory=key == 'include', dependency=True) for key in fields}
@@ -203,6 +212,10 @@ def build_plan(config, workspace):
                   '-DPS3RECOMP_SAIL_FFMPEG=ON', '-DPS3RECOMP_FFMPEG_INCLUDE_DIR=' + ffmpeg['include']]
         for name in ('avcodec', 'avformat', 'avutil', 'swscale'):
             common.append('-DPS3RECOMP_FFMPEG_' + name.upper() + '_LIBRARY=' + ffmpeg[name])
+    if config.get('host') == 'linux-x86_64':
+        common += ['-DPS3RECOMP_RSX_VULKAN=ON', '-DPS3RECOMP_FFMPEG_RUNTIME=ON',
+                   '-DCMAKE_C_COMPILER=' + config['linux_toolchain']['cc'],
+                   '-DCMAKE_CXX_COMPILER=' + config['linux_toolchain']['cxx']]
     common += ['-DPS3RECOMP_DIR=' + cmake_path(sdk['runtime']), '-DPython3_EXECUTABLE=' + cmake_path(python),
                '-DCMAKE_MAKE_PROGRAM=' + cmake_path(config['ninja']), '-DMAG_FIRMWARE_DIR=' + cmake_path(paths['firmware'])]
     common += config.get('cmake_args', [])

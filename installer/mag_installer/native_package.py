@@ -151,6 +151,9 @@ def package(config, workspace, destination, token=None, events=None):
     The app + descendant workspace form the local install. No cache/source-toolchain
     paths enter the launcher. Existing destinations are never overwritten.
     """
+    if config.get('host') == 'linux-x86_64':
+        from .native_package_linux import package as package_linux
+        return package_linux(config, workspace, destination, token=token, events=events)
     if 'msvc' in config:
         from .native_package_windows import package as package_windows
         return package_windows(config, workspace, destination, token=token, events=events)

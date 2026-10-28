@@ -31,7 +31,7 @@ from .model import InstallerError, Profile, host_key, relative_path
 from .platforms import publish_directory
 from .safety import contained
 
-TARGETS = ('windows-x86_64', 'macos-arm64')
+TARGETS = ('windows-x86_64', 'macos-arm64', 'linux-x86_64')
 REPOSITORY = 'tekulvw/mag-recomp'
 KINDS = ('preview', 'release')
 MAX_ARCHIVE = 256 * 1024 * 1024

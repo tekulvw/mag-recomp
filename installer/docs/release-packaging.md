@@ -1,8 +1,7 @@
 # Installer packaging and releases
 
 CI builds one frozen installer per supported host, natively on that host: Windows x86_64 on
-Windows and macOS arm64 on macOS. There is no Linux installer because there is no Linux player
-route. Each installer is a PyInstaller one-file executable that embeds CPython, Tcl/Tk, this
+Windows, macOS arm64 on macOS, and Linux x86_64 on Ubuntu 24.04. Each installer is a PyInstaller one-file executable that embeds CPython, Tcl/Tk, this
 directory's fixed source registry and the source kit; players need no Python.
 
 ## What an installer contains
@@ -28,6 +27,8 @@ machine.
   (`vX.Y.Z`), the repository must be `tekulvw/mag-recomp`, and the frozen launcher must have
   passed its smoke checks. Archive `mag-installer-vX.Y.Z-<target>.zip`.
 
+Linux archives use `.tar.gz` instead of `.zip` to preserve executable permissions.
+
 Each archive has an exact `.sha256` companion. `verify-set` checks the complete per-target set,
 writes `SHA256SUMS.txt` and `RELEASE-ASSETS.json`, and `scripts/publish_release.py` re-verifies
 the set and attaches it to the existing release without replacing or deleting any asset.
@@ -45,8 +46,10 @@ its own for pull requests and pushes to `main`:
    downloads, managed CMake/Ninja building the runtime library, the `MAG.exe` supervisor); then
    the frozen build, smoke checks and a readiness check of the extracted executable.
 3. **macos**: unit tests, frozen build, smoke checks and readiness check.
-4. **verify** (pull requests and `main`): the same `verify-set` check a release runs, on the preview set.
-5. **publish** (releases only): `verify-set` and `publish_release.py`.
+4. **linux**: unit tests, pinned runtime and MAG source compilation with synthetic headers, native
+   supervisor relocation/handoff tests, frozen build, smoke checks and readiness check.
+5. **verify** (pull requests and `main`): the same `verify-set` check a release runs, on the preview set.
+6. **publish** (releases only): `verify-set` and `publish_release.py`.
 
 The kit and its per-host `release/player-build.json` are not part of the fixed source registry:
 each installer's kit manifest must name that installer's own target and match its kit's size and
