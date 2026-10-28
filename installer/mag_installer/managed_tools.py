@@ -389,7 +389,7 @@ def dependency_plan(paths, prefix):
     for key,options in (
         ('sdl2',['-DSDL_SHARED=ON','-DSDL_STATIC=OFF','-DSDL_TEST=OFF','-DSDL_TESTS=OFF']),
         ('spirv-cross',['-DSPIRV_CROSS_CLI=OFF','-DSPIRV_CROSS_ENABLE_TESTS=OFF','-DSPIRV_CROSS_SHARED=OFF','-DSPIRV_CROSS_STATIC=ON']),
-        ('glslang',['-DENABLE_OPT=OFF','-DENABLE_GLSLANG_BINARIES=OFF','-DBUILD_TESTING=OFF','-DENABLE_CTEST=OFF'])):
+        ('glslang',['-DENABLE_OPT=OFF','-DENABLE_GLSLANG_BINARIES=OFF','-DGLSLANG_TESTS=OFF','-DGLSLANG_ENABLE_INSTALL=ON','-DBUILD_TESTING=OFF','-DENABLE_CTEST=OFF'])):
         source=Path(paths['source-'+key]); build=prefix.parent/('build-'+key)
         stages.extend([{'id':'configure-'+key,'cwd':source,'argv':[cmake,'-S',str(source),'-B',str(build),'-G','Ninja','-DCMAKE_MAKE_PROGRAM='+ninja,'-DCMAKE_POLICY_VERSION_MINIMUM=3.5','-DCMAKE_BUILD_TYPE=Release','-DCMAKE_INSTALL_PREFIX='+str(prefix),'-DCMAKE_INSTALL_LIBDIR=lib','-DCMAKE_POSITION_INDEPENDENT_CODE=ON',*options]},
                        {'id':'build-'+key,'cwd':source,'argv':[cmake,'--build',str(build),'--parallel','2']},
