@@ -23,10 +23,24 @@ int main(int argc,char**argv){@autoreleasepool{
     assert([controller.settings[@"server_address"] isEqual:@"community.example.net"]);
     server.stringValue=@"discard.example.net";[controller cancel:nil];
     assert([server.stringValue isEqual:@"community.example.net"]);
+    NSPopUpButton *rendering=(NSPopUpButton *)find(content,@"render_scale");
+    assert(rendering && rendering.indexOfSelectedItem==0);
+    [rendering selectItemAtIndex:2];[controller cancel:nil];
+    assert(rendering.indexOfSelectedItem==0 && [controller.settings[@"render_scale"] intValue]==100);
+    [rendering selectItemAtIndex:1];[controller apply:nil];
+    assert(find(content,@"display_confirmation").hidden);
+    assert([controller.settings[@"render_scale"] intValue]==150);
     NSPopUpButton *mode=(NSPopUpButton *)find(content,@"display_mode");
     [mode selectItemAtIndex:1];[controller apply:nil];
     assert(game.canBecomeKeyWindow); // Fullscreen must regain keyboard focus after Settings.
     assert(game.styleMask&NSWindowStyleMaskClosable); // Quit must still close the owned window.
+    [controller keepDisplay:nil];
+    assert(rendering.enabled);
+    [rendering selectItemAtIndex:3];[controller apply:nil];
+    assert(find(content,@"display_confirmation").hidden);
+    assert([controller.settings[@"render_scale"] intValue]==300);
+    [mode selectItemAtIndex:0];[controller apply:nil];[controller keepDisplay:nil];
+    [mode selectItemAtIndex:1];[controller apply:nil];
     [controller revertDisplay:nil];
     NSPopUpButton *resolution=(NSPopUpButton *)find(content,@"output_resolution");
     [resolution selectItemAtIndex:1];[controller apply:nil];

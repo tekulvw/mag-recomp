@@ -54,7 +54,7 @@ static NSStackView *row(NSString *title,NSString *hint,NSView *control) {
     NSString *_path;
     NSStackView *_root,*_ports,*_confirmation;
     NSTextField *_server,*_tcp,*_udp,*_errorLabel,*_status,*_countdown;
-    NSPopUpButton *_mode,*_resolution,*_aa;
+    NSPopUpButton *_mode,*_resolution,*_rendering,*_aa;
     NSButton *_applyButton,*_cancelButton,*_playButton,*_advancedButton;
     NSArray<NSControl*> *_fields;
     BOOL _startup,_needsSave,_firstDisplay,_recovery;
@@ -111,13 +111,15 @@ static NSStackView *row(NSString *title,NSString *hint,NSView *control) {
     heading=label(@"Graphics",14,NO);heading.font=[NSFont boldSystemFontOfSize:14];add(_root,heading);
     _mode=[NSPopUpButton new];[_mode addItemsWithTitles:@[@"Windowed",@"Borderless fullscreen"]];_mode.identifier=@"display_mode";
     _resolution=[NSPopUpButton new];[_resolution addItemsWithTitles:@[@"1280 × 720",@"1920 × 1080",@"2560 × 1440",@"3840 × 2160"]];_resolution.identifier=@"output_resolution";
+    _rendering=[NSPopUpButton new];[_rendering addItemsWithTitles:@[@"Native (100%)",@"1080p (150%)",@"1440p (200%)",@"2160p (300%)"]];_rendering.identifier=@"render_scale";
     _aa=[NSPopUpButton new];[_aa addItemsWithTitles:@[@"Off",@"FXAA"]];_aa.identifier=@"anti_aliasing";
-    for(NSPopUpButton *control in @[_mode,_resolution,_aa]){control.target=self;control.action=@selector(changed:);}
+    for(NSPopUpButton *control in @[_mode,_resolution,_rendering,_aa]){control.target=self;control.action=@selector(changed:);}
     NSStackView *graphics=stack(NSUserInterfaceLayoutOrientationVertical,5);
     add(graphics,row(@"Display mode",@"",_mode));add(graphics,separator());
     add(graphics,row(@"Output resolution",@"Fullscreen uses the desktop size",_resolution));add(graphics,separator());
+    add(graphics,row(@"Rendering resolution",@"Applies on the next launch",_rendering));add(graphics,separator());
     add(graphics,row(@"Anti-aliasing",@"Applies on the next launch",_aa));add(_root,group(graphics));
-    add(_root,label(@"Scene rendering stays at the game's resolution. A larger output scales the image.",11,YES));
+    add(_root,label(@"Rendering percentages scale the game's 720p-height targets. Output resolution sets the window size.",11,YES));
     _confirmation=stack(NSUserInterfaceLayoutOrientationVertical,7);_confirmation.identifier=@"display_confirmation";
     add(_confirmation,label(@"Keep these display settings?",13,NO));_countdown=label(@"",11,YES);add(_confirmation,_countdown);
     NSStackView *confirmationActions=stack(NSUserInterfaceLayoutOrientationHorizontal,8);
@@ -133,7 +135,7 @@ static NSStackView *row(NSString *title,NSString *hint,NSView *control) {
     _applyButton.keyEquivalent=@"\r";
     _playButton=[NSButton buttonWithTitle:@"Play MAG" target:self action:@selector(play:)];_playButton.keyEquivalent=@"\r";_playButton.hidden=YES;_playButton.enabled=!_recovery;_playButton.identifier=@"play";
     for(NSButton *button in @[_cancelButton,_applyButton,_playButton])[footer addArrangedSubview:button];
-    add(_root,footer);_fields=@[_server,_tcp,_udp,_mode,_resolution,_aa];
+    add(_root,footer);_fields=@[_server,_tcp,_udp,_mode,_resolution,_rendering,_aa];
     [self fill:settings];[self changed:nil];
     if(error)[self showError:error.localizedDescription];
     [self fit];[window center];return self;
@@ -149,6 +151,8 @@ static NSStackView *row(NSString *title,NSString *hint,NSView *control) {
     [_mode selectItemAtIndex:[settings[@"display_mode"] isEqual:@"borderless"]?1:0];
     NSInteger index=[@[@1280,@1920,@2560,@3840] indexOfObject:settings[@"output_width"]];
     [_resolution selectItemAtIndex:index==NSNotFound?0:index];
+    index=[@[@100,@150,@200,@300] indexOfObject:settings[@"render_scale"]?:@100];
+    [_rendering selectItemAtIndex:index==NSNotFound?0:index];
     [_aa selectItemAtIndex:[settings[@"anti_aliasing"] isEqual:@"fxaa"]?1:0];
 }
 - (NSDictionary *)draft:(NSError **)error {
@@ -164,6 +168,7 @@ static NSStackView *row(NSString *title,NSString *hint,NSView *control) {
     draft[@"display_mode"]=_mode.indexOfSelectedItem==1?@"borderless":@"windowed";
     NSInteger index=_resolution.indexOfSelectedItem;
     draft[@"output_width"]=@[@1280,@1920,@2560,@3840][index];draft[@"output_height"]=@[@720,@1080,@1440,@2160][index];
+    draft[@"render_scale"]=@[@100,@150,@200,@300][_rendering.indexOfSelectedItem];
     draft[@"anti_aliasing"]=_aa.indexOfSelectedItem==1?@"fxaa":@"off";
     return MAGSettingsValidate(draft,error);
 }
@@ -268,7 +273,7 @@ static NSStackView *row(NSString *title,NSString *hint,NSView *control) {
     NSError *error=nil;
     if(!MAGSettingsSave(_path,draft,&error)){[self showError:error.localizedDescription];return NO;}
     self.settings=draft;_needsSave=NO;_recovery=NO;_playButton.enabled=YES;_errorLabel.hidden=YES;[self changed:nil];
-    _status.stringValue=@"Saved · server and AA apply next launch";return YES;
+    _status.stringValue=@"Saved · connection, rendering and AA apply next launch";return YES;
 }
 - (void)apply:(id)sender {
     if(_pending)return;

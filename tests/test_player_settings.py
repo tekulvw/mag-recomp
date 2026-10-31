@@ -70,6 +70,14 @@ Sint16 SDL_GameControllerGetAxis(SDL_GameController*,SDL_GameControllerAxis);
             (root/'sdata_decrypt.h').write_text('#include <stddef.h>\n#include <stdint.h>\nstatic inline uint8_t* sdata_decrypt(const uint8_t*,size_t,size_t*) { return NULL; }\n')
             sdk=root/'sdk';(sdk/'runtime/ppu').mkdir(parents=True)
             shutil.copytree(root/'libs',sdk/'libs');shutil.copytree(root/'SDL2',sdk/'SDL2')
+            (sdk/'libs/video').mkdir()
+            shutil.copyfile(ROOT/'tests/player_render_backend_fixture.h',sdk/'libs/video/rsx_draw_engine.h')
+            (sdk/'libs/video/rsx_metal_backend.m').write_text('''#include "rsx_draw_engine.h"
+void fixture_video_unregister(void) { rsx_draw_engine_set_backend(0); }
+''')
+            (sdk/'libs/video/rsx_draw_engine.c').write_text('''#include "rsx_draw_engine.h"
+void rsx_draw_engine_set_backend(const rsx_draw_backend *backend) { (void)backend; }
+''')
             shutil.copyfile(root/'sdata_decrypt.h',sdk/'runtime/ppu/sdata_decrypt.h')
             (sdk/'libs/input/cellPad.c').write_text('''#include <SDL2/SDL.h>
 int fixture_input_button(void) { return SDL_GameControllerGetButton(0,SDL_CONTROLLER_BUTTON_A); }
@@ -79,7 +87,7 @@ int fixture_input_axis(void) { return SDL_GameControllerGetAxis(0,SDL_CONTROLLER
 PS3RecompMacOSPadState ps3recomp_pad_macos_state(void) { return (PS3RecompMacOSPadState){7,10,20,30,40}; }
 uint16_t ps3recomp_pad_macos_buttons(void) { return 7; }
 ''')
-            (sdk/'CMakeLists.txt').write_text('''add_library(ps3recomp_runtime STATIC libs/input/cellPad.c libs/input/pad_macos.m)
+            (sdk/'CMakeLists.txt').write_text('''add_library(ps3recomp_runtime STATIC libs/input/cellPad.c libs/input/pad_macos.m libs/video/rsx_metal_backend.m libs/video/rsx_draw_engine.c)
 target_include_directories(ps3recomp_runtime PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 ''')
             (root/'CMakeLists.txt').write_text(f'''cmake_minimum_required(VERSION 3.20)

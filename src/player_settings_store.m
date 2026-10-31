@@ -15,7 +15,7 @@ static id invalid(NSError **error, NSString *message) {
 NSDictionary *MAGSettingsDefaults(void) {
     return @{@"schema_version":@1, @"server_address":@"play.magtest.online", @"tcp_port":@0, @"udp_port":@0,
              @"display_mode":@"windowed", @"output_width":@1280, @"output_height":@720,
-             @"anti_aliasing":@"off"};
+             @"render_scale":@100, @"anti_aliasing":@"off"};
 }
 
 static BOOL integer(id value, NSInteger low, NSInteger high) {
@@ -30,6 +30,11 @@ NSDictionary *MAGSettingsValidate(id value, NSError **error) {
     if (![value isKindOfClass:NSDictionary.class]) return invalid(error, @"Settings must contain an object.");
     NSDictionary *d = value;
     if (!integer(d[@"schema_version"],1,1)) return invalid(error, @"This settings version is not supported.");
+    NSMutableDictionary *normalized = d.mutableCopy;
+    // Schema 1 predates rendering-resolution selection. Migrate only the new
+    // optional field, leaving saved preferences and the on-disk file intact.
+    if (!normalized[@"render_scale"]) normalized[@"render_scale"] = @100;
+    d = normalized;
     if (d.count != MAGSettingsDefaults().count) return invalid(error, @"Settings contain missing or unsupported fields.");
     if (![d[@"server_address"] isKindOfClass:NSString.class]) return invalid(error, @"Enter a server hostname or IPv4 address.");
     NSString *host = [d[@"server_address"] stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet].lowercaseString;
@@ -58,7 +63,8 @@ NSDictionary *MAGSettingsValidate(id value, NSError **error) {
         return invalid(error, @"Choose a supported output size.");
     if (![@[@"off",@"fxaa"] containsObject:d[@"anti_aliasing"]])
         return invalid(error, @"Choose Off or FXAA for anti-aliasing.");
-    NSMutableDictionary *normalized = d.mutableCopy;
+    if (!integer(d[@"render_scale"],100,300) || ![@[@100,@150,@200,@300] containsObject:d[@"render_scale"]])
+        return invalid(error, @"Choose a supported rendering resolution.");
     normalized[@"server_address"] = host;
     return normalized.copy;
 }
