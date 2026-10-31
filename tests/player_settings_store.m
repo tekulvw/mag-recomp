@@ -7,7 +7,7 @@ int main(int argc, char **argv) { @autoreleasepool {
     assert(argc == 2);
     NSString *path = [[NSString stringWithUTF8String:argv[1]] stringByAppendingPathComponent:@"settings.json"];
     NSDictionary *defaults = MAGSettingsDefaults();
-    assert([defaults[@"server_address"] isEqual:@""]);
+    assert([defaults[@"server_address"] isEqual:@"play.magtest.online"]);
     assert([defaults[@"output_width"] intValue] == 1280);
     assert([defaults[@"output_height"] intValue] == 720);
     BOOL exists = YES; NSError *error = nil;

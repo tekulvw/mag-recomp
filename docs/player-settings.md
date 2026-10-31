@@ -6,7 +6,7 @@ Open **MAG → Settings…** or press **Command-comma** while playing. Hold **Op
 
 ## Connection
 
-Enter a server hostname or IPv4 address. Leave it blank to keep the game's existing server configuration. Hostnames must resolve to IPv4 because the guest client uses IPv4 sockets. Advanced connection settings accept optional TCP and UDP ports; blank fields keep the game's defaults.
+New installations default to `play.magtest.online`. Existing saved settings are preserved. Enter a server hostname or IPv4 address to change it, or leave it blank to keep the game's existing server configuration. Hostnames must resolve to IPv4 because the guest client uses IPv4 sockets. Advanced connection settings accept optional TCP and UDP ports; blank fields keep the game's defaults.
 
 Server changes made while playing apply on the **next launch**. They do not move an active session to another server. Account setup, server compatibility and authentication are separate: the panel preserves the game's existing account and ticket policy.
 

@@ -24,6 +24,7 @@ int main(int argc,char**argv){@autoreleasepool{
     NSString *root=[NSString stringWithUTF8String:argv[1]];
     NSString *path=[root stringByAppendingPathComponent:@"settings.json"];
     NSError *error=nil;NSMutableDictionary *settings=MAGSettingsDefaults().mutableCopy;settings[@"anti_aliasing"]=@"fxaa";
+    settings[@"server_address"]=@""; // Keep the synthetic runtime fixture offline.
     assert(MAGSettingsSave(path,settings,&error));
     setenv("MAG_PLAYER_SETTINGS_PATH",path.fileSystemRepresentation,1);
     setenv("MAG_PLAYER_OVERLAY_ROOT",root.fileSystemRepresentation,1);setenv("MAG_PLAYER_SETUP","1",1);

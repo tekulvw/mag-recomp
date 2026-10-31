@@ -13,7 +13,7 @@ static id invalid(NSError **error, NSString *message) {
 }
 
 NSDictionary *MAGSettingsDefaults(void) {
-    return @{@"schema_version":@1, @"server_address":@"", @"tcp_port":@0, @"udp_port":@0,
+    return @{@"schema_version":@1, @"server_address":@"play.magtest.online", @"tcp_port":@0, @"udp_port":@0,
              @"display_mode":@"windowed", @"output_width":@1280, @"output_height":@720,
              @"anti_aliasing":@"off"};
 }
