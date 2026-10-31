@@ -51,6 +51,7 @@ int mag_player_settings_prepare(void) { @autoreleasepool {
             setenv("MAG_LOCAL_NO_TICKET","1",1);
         }
         setenv("PS3_AA",[settings[@"anti_aliasing"] UTF8String],1);
+        setenv("MAG_PLAYER_RENDER_SCALE",[settings[@"render_scale"] stringValue].UTF8String,1);
         return 1;
     }
 } }

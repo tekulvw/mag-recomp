@@ -7,7 +7,7 @@ function(mag_enable_player_settings target sdk)
     target_sources(${target} PRIVATE
         "${player_src}/player_settings_store.m" "${player_src}/player_settings_macos.m"
         "${player_src}/player_settings_runtime.mm" "${player_src}/player_server_overlay.mm"
-        "${player_src}/player_archive.cpp")
+        "${player_src}/player_archive.cpp" "${player_src}/player_render_scale.cpp")
     set_property(SOURCE "${player_src}/main.cpp" TARGET_DIRECTORY ${target}
         APPEND PROPERTY COMPILE_DEFINITIONS MAG_PLAYER_SETTINGS=1)
     set_source_files_properties("${player_src}/player_settings_store.m" "${player_src}/player_settings_macos.m"
@@ -15,6 +15,8 @@ function(mag_enable_player_settings target sdk)
         TARGET_DIRECTORY ${target} PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
     set_source_files_properties("${player_src}/player_server_overlay.mm" TARGET_DIRECTORY ${target}
         PROPERTIES INCLUDE_DIRECTORIES "${sdk}/runtime/ppu")
+    set_source_files_properties("${player_src}/player_render_scale.cpp" TARGET_DIRECTORY ${target}
+        PROPERTIES INCLUDE_DIRECTORIES "${sdk}")
     set_property(TARGET ${target} PROPERTY OBJCXX_STANDARD 20)
     target_link_libraries(${target} PRIVATE ZLIB::ZLIB "-framework AppKit" "-framework QuartzCore")
 
@@ -28,4 +30,8 @@ function(mag_enable_player_settings target sdk)
     set_property(SOURCE "${sdk}/libs/input/pad_macos.m" DIRECTORY "${sdk}"
         APPEND PROPERTY COMPILE_DEFINITIONS ps3recomp_pad_macos_state=mag_sdk_pad_macos_state
         ps3recomp_pad_macos_buttons=mag_sdk_pad_macos_buttons)
+    # Intercept only Metal's backend registration. The SDK draw engine and its
+    # original backend remain intact, and native scale returns that exact backend.
+    set_property(SOURCE "${sdk}/libs/video/rsx_metal_backend.m" DIRECTORY "${sdk}"
+        APPEND PROPERTY COMPILE_DEFINITIONS rsx_draw_engine_set_backend=mag_player_set_render_backend)
 endfunction()

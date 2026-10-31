@@ -19,19 +19,27 @@ Sint16 SDL_GameControllerGetAxis(SDL_GameController*,SDL_GameControllerAxis){ret
 Uint8 mag_player_controller_button(SDL_GameController*,SDL_GameControllerButton);
 Sint16 mag_player_controller_axis(SDL_GameController*,SDL_GameControllerAxis);
 }
+static NSView *find(NSView *view,NSString *identifier) {
+    if([view.identifier isEqual:identifier])return view;
+    for(NSView *child in view.subviews){NSView *match=find(child,identifier);if(match)return match;}
+    return nil;
+}
 int main(int argc,char**argv){@autoreleasepool{
     assert(argc==2);unsetenv("MAG_PLAYER_SETTINGS_PATH");assert(mag_player_settings_prepare()==1);
     NSString *root=[NSString stringWithUTF8String:argv[1]];
     NSString *path=[root stringByAppendingPathComponent:@"settings.json"];
     NSError *error=nil;NSMutableDictionary *settings=MAGSettingsDefaults().mutableCopy;settings[@"anti_aliasing"]=@"fxaa";
+    settings[@"render_scale"]=@200;
     settings[@"server_address"]=@""; // Keep the synthetic runtime fixture offline.
     assert(MAGSettingsSave(path,settings,&error));
     setenv("MAG_PLAYER_SETTINGS_PATH",path.fileSystemRepresentation,1);
     setenv("MAG_PLAYER_OVERLAY_ROOT",root.fileSystemRepresentation,1);setenv("MAG_PLAYER_SETUP","1",1);
     assert(mag_player_settings_prepare()==1);assert(!strcmp(getenv("PS3_AA"),"fxaa"));
+    assert(!strcmp(getenv("MAG_PLAYER_RENDER_SCALE"),"200"));
     // A later settings edit must not change the launcher-to-engine snapshot.
-    settings[@"anti_aliasing"]=@"off";assert(MAGSettingsSave(path,settings,&error));
+    settings[@"anti_aliasing"]=@"off";settings[@"render_scale"]=@300;assert(MAGSettingsSave(path,settings,&error));
     unsetenv("MAG_PLAYER_SETUP");assert(mag_player_settings_prepare()==1);assert(!strcmp(getenv("PS3_AA"),"fxaa"));
+    assert(!strcmp(getenv("MAG_PLAYER_RENDER_SCALE"),"200"));
     assert(!mag_player_input_blocked());
     assert(mag_player_controller_button(NULL,SDL_CONTROLLER_BUTTON_A)==1);
     assert(mag_player_controller_axis(NULL,SDL_CONTROLLER_AXIS_LEFTX)==4000);
@@ -53,6 +61,13 @@ int main(int argc,char**argv){@autoreleasepool{
 #endif
     auto state=ps3recomp_pad_macos_state();assert(state.buttons==0&&state.analog_lx==128&&state.analog_ry==128);
     assert(ps3recomp_pad_macos_buttons()==0);
+    NSPopUpButton *rendering=(NSPopUpButton *)find(panel.window.contentView,@"render_scale");
+    assert(rendering && rendering.indexOfSelectedItem==3); // Preferences were edited after snapshot.
+    [rendering selectItemAtIndex:1];[panel apply:nil];
+    assert([MAGSettingsLoad(path,NULL,&error)[@"render_scale"] intValue]==150);
+    assert(!strcmp(getenv("MAG_PLAYER_RENDER_SCALE"),"200"));
+    NSString *snapshot=[root stringByAppendingPathComponent:@"launch-settings.json"];
+    assert([MAGSettingsLoad(snapshot,NULL,&error)[@"render_scale"] intValue]==200);
     [panel cancel:nil];assert(!mag_player_input_blocked());
     assert(ps3recomp_pad_macos_buttons()==7);
     assert(ps3recomp_pad_macos_state().analog_lx==10);
