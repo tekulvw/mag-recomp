@@ -30,19 +30,34 @@ int main(int argc,char**argv){@autoreleasepool{
     [controller revertDisplay:nil];
     NSPopUpButton *resolution=(NSPopUpButton *)find(content,@"output_resolution");
     [resolution selectItemAtIndex:1];[controller apply:nil];
+    NSInteger keptWidth=1280,keptIndex=0;
+    if(!find(content,@"display_confirmation").hidden){
+        [controller revertDisplay:nil];
+        assert([controller.settings[@"output_width"] intValue]==1280);
+        assert(resolution.indexOfSelectedItem==0);
+        [resolution selectItemAtIndex:1];[controller apply:nil];[controller keepDisplay:nil];
+        assert([controller.settings[@"output_width"] intValue]==1920);
+        keptWidth=1920;keptIndex=1;
+    }else{
+        // A CI/remote display may not fit 1920x1080 at its backing scale.
+        // Rejection must leave saved output intact and explain the problem.
+        assert(!find(content,@"settings_error").hidden);
+        assert([controller.settings[@"output_width"] intValue]==1280);
+        [controller cancel:nil];assert(resolution.indexOfSelectedItem==0);
+    }
+    // Fullscreen is valid independently of the host monitor's pixel count;
+    // exercise the real keep/revert timer without requiring a 1080p display.
+    [mode selectItemAtIndex:1];[controller apply:nil];
     assert(!find(content,@"display_confirmation").hidden);
-    [controller revertDisplay:nil];
-    assert([controller.settings[@"output_width"] intValue]==1280);
-    assert(resolution.indexOfSelectedItem==0);
-    [resolution selectItemAtIndex:1];[controller apply:nil];[controller keepDisplay:nil];
-    assert([controller.settings[@"output_width"] intValue]==1920);
-    [resolution selectItemAtIndex:0];[controller apply:nil];
     NSDate *deadline=[NSDate dateWithTimeIntervalSinceNow:16];
     while(!find(content,@"display_confirmation").hidden&&deadline.timeIntervalSinceNow>0)
         [NSRunLoop.currentRunLoop runMode:NSDefaultRunLoopMode beforeDate:[NSDate dateWithTimeIntervalSinceNow:.1]];
     assert(find(content,@"display_confirmation").hidden);
-    assert([controller.settings[@"output_width"] intValue]==1920);
-    assert(resolution.indexOfSelectedItem==1);
+    assert([controller.settings[@"output_width"] intValue]==keptWidth);
+    assert(resolution.indexOfSelectedItem==keptIndex);
+    assert([controller.settings[@"display_mode"] isEqual:@"windowed"]&&mode.indexOfSelectedItem==0);
+    [mode selectItemAtIndex:1];[controller apply:nil];[controller keepDisplay:nil];
+    assert([controller.settings[@"display_mode"] isEqual:@"borderless"]);
     BOOL exists=NO;NSError *error=nil;
     assert([MAGSettingsLoad(path,&exists,&error) isEqual:controller.settings]&&exists&&!error);
     NSError *damaged=[NSError errorWithDomain:@"fixture" code:1 userInfo:@{NSLocalizedDescriptionKey:@"Damaged settings"}];
