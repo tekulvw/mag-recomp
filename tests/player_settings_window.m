@@ -34,14 +34,8 @@ int main(int argc,char**argv){@autoreleasepool{
     [mode selectItemAtIndex:1];[controller apply:nil];
     assert(game.canBecomeKeyWindow); // Fullscreen must regain keyboard focus after Settings.
     assert(game.styleMask&NSWindowStyleMaskClosable); // Quit must still close the owned window.
-    [controller keepDisplay:nil];
-    assert(rendering.enabled);
-    [rendering selectItemAtIndex:3];[controller apply:nil];
-    assert(find(content,@"display_confirmation").hidden);
-    assert([controller.settings[@"render_scale"] intValue]==300);
-    [mode selectItemAtIndex:0];[controller apply:nil];[controller keepDisplay:nil];
-    [mode selectItemAtIndex:1];[controller apply:nil];
     [controller revertDisplay:nil];
+    assert([controller.settings[@"display_mode"] isEqual:@"windowed"]);
     NSPopUpButton *resolution=(NSPopUpButton *)find(content,@"output_resolution");
     [resolution selectItemAtIndex:1];[controller apply:nil];
     NSInteger keptWidth=1280,keptIndex=0;
@@ -72,6 +66,12 @@ int main(int argc,char**argv){@autoreleasepool{
     assert([controller.settings[@"display_mode"] isEqual:@"windowed"]&&mode.indexOfSelectedItem==0);
     [mode selectItemAtIndex:1];[controller apply:nil];[controller keepDisplay:nil];
     assert([controller.settings[@"display_mode"] isEqual:@"borderless"]);
+    // Test rendering controls after the final fullscreen keep. Returning to a
+    // windowed size can correctly be rejected on a smaller virtual display.
+    assert(rendering.enabled);
+    [rendering selectItemAtIndex:3];[controller apply:nil];
+    assert(find(content,@"display_confirmation").hidden);
+    assert([controller.settings[@"render_scale"] intValue]==300);
     BOOL exists=NO;NSError *error=nil;
     assert([MAGSettingsLoad(path,&exists,&error) isEqual:controller.settings]&&exists&&!error);
     NSError *damaged=[NSError errorWithDomain:@"fixture" code:1 userInfo:@{NSLocalizedDescriptionKey:@"Damaged settings"}];
