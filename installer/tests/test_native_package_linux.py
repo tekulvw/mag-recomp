@@ -94,6 +94,10 @@ int main(void) {
  if(strcmp(getenv("PS3RECOMP_VK_WINDOW"),"1")||strcmp(getenv("PS3RECOMP_VK_GUEST_PROGRAMS"),"1"))return 48;
  if(getenv("PS3_DIAGNOSTIC_TEST")||getenv("MAG_DIAGNOSTIC_TEST")||!getenv("DISPLAY"))return 45;
  const char* request=getenv("MAG_HANDOFF_REQUEST");
+ const char* settings=getenv("MAG_PLAYER_SETTINGS_PATH"),*overlay=getenv("MAG_PLAYER_OVERLAY_ROOT");
+ if(!settings||!overlay)return 49;
+ FILE* state=fopen(request?"launcher-settings.txt":"engine-settings.txt","w");if(!state)return 50;
+ fprintf(state,"%s\n%s\n%d\n%d\n",settings,overlay,getenv("MAG_PLAYER_SETUP")!=NULL,getenv("MAG_PLAYER_SHOW_SETTINGS")!=NULL);fclose(state);
  if(request){FILE* f=fopen(request,"wx");if(!f)return 46;
  fprintf(f,"{\"version\":1,\"token\":\"%s\",\"guest_path\":\"/dev_bdvd/PS3_GAME/USRDIR/bin/mage_g.self\",\"kind\":\"mage_g\"}\n",getenv("MAG_HANDOFF_TOKEN"));fclose(f);puts("launcher fixture");return 90;}
  if(getenv("MAG_ENGINE_ELF")||strcmp(getenv("PS3_BOOT_PATH"),"/dev_bdvd/PS3_GAME/USRDIR/bin/mage_g.self"))return 47;
@@ -110,12 +114,20 @@ int main(void) {
             (workspace/'profiles/retail-v1.0.json').write_text(json.dumps(manifest))
             package({'host':'linux-x86_64'},workspace,install/'MAG')
             moved=root/'relocated installation';install.rename(moved)
-            env=dict(os.environ,DISPLAY=':fixture',PS3_DIAGNOSTIC_TEST='1',MAG_DIAGNOSTIC_TEST='1')
-            run=subprocess.run([str(moved/'MAG/MAG')],env=env,capture_output=True,text=True,timeout=15)
+            env=dict(os.environ,DISPLAY=':fixture',XDG_CONFIG_HOME=str(root/'user-config'),PS3_DIAGNOSTIC_TEST='1',MAG_DIAGNOSTIC_TEST='1')
+            run=subprocess.run([str(moved/'MAG/MAG'),'--settings'],env=env,capture_output=True,text=True,timeout=15)
             self.assertEqual(run.returncode,23,run.stderr)
             logs=list((moved/'logs').glob('launch-*'));self.assertEqual(len(logs),1)
             self.assertEqual((logs[0]/'engine.log').stat().st_mode&0o777,0o600)
             self.assertIn('engine fixture',(logs[0]/'engine.log').read_text())
+            before=(logs[0]/'launcher-settings.txt').read_text().splitlines()
+            after=(logs[0]/'engine-settings.txt').read_text().splitlines()
+            self.assertEqual(before[:2],after[:2])
+            self.assertEqual(before[2:],['1','1'])
+            self.assertEqual(after[2:],['0','0'])
+            self.assertEqual(before[0],str(root/'user-config/MAG/settings.json'))
+            self.assertFalse(Path(before[1]).exists())
+
             (moved/'MAG/bin/MagEngine').write_bytes(b'changed')
             run=subprocess.run([str(moved/'MAG/MAG')],capture_output=True,text=True,timeout=15)
             self.assertEqual(run.returncode,1);self.assertIn('identity changed',run.stderr)

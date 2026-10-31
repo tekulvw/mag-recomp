@@ -20,5 +20,7 @@ https://github.com/pyinstaller/pyinstaller/blob/v6.22.3/COPYING.txt
 
 Build MAG downloads further tools (Python, CMake, Ninja, MinGit, Python wheels and, on
 macOS, SDL2, glslang, SPIRV-Cross and FFmpeg sources) from their official origins at
-pinned versions, under their own licenses. On Windows, Microsoft's Visual Studio Build
+pinned versions, under their own licenses. Windows also builds the pinned official
+zlib source as a static settings-archive dependency (zlib license; https://zlib.net/).
+On Windows, Microsoft's Visual Studio Build
 Tools are installed through Microsoft's own installer and license.

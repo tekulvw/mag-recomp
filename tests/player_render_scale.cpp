@@ -1,6 +1,7 @@
 // This backend records only the resource/coordinate boundary; the separate
 // Metal regression checks real rasterization with synthetic geometry.
 #include "libs/video/rsx_draw_engine.h"
+#include "player_render_scale.h"
 #include <cassert>
 #include <cmath>
 #include <cstdio>
@@ -8,7 +9,6 @@
 #include <cstring>
 #include <string>
 #include <vector>
-extern "C" const rsx_draw_backend *mag_player_render_backend(const rsx_draw_backend*) __attribute__((weak_import));
 extern "C" void rsx_draw_engine_set_backend(const rsx_draw_backend*) {}
 static u32 next_handle=1,last_w,last_h;
 static std::vector<unsigned char> seed_copy;
@@ -38,7 +38,6 @@ static int dread(void*,u32,u32 x,u32 y,u32 w,u32 h,float*out,u32 pitch){
  for(u32 j=0;j<h;j++)for(u32 i=0;i<w;i++)*(float*)((u8*)out+j*pitch+i*4)=float(x+i+10*(y+j));return 0;
 }
 int main(int argc,char**argv){
- assert(mag_player_render_backend && "rendering resolution adapter is missing");
  assert(argc==2);setenv("MAG_PLAYER_RENDER_SCALE",!strcmp(argv[1],"oversize")?"300":argv[1],1);
  rsx_draw_backend base={};base.color_target_create=color;base.depth_target_create=depth;
  base.texture_release=release;base.color_target_release=release;base.depth_target_release=release;
