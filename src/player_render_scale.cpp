@@ -87,9 +87,9 @@ u32 depthSnapshot(void*u,u32 h,u32 w,u32 ht) {
     const Image im={w,ht,dimension(w),dimension(ht),4};
     return remember(original.depth_snapshot(u,h,im.pw,im.ph),im);
 }
-u32 depthAsColor(void*u,u32 h,u32 w,u32 ht,u32 format) {
+template<class Backend> u32 depthAsColor(void*u,u32 h,u32 w,u32 ht,u32 format) {
     const Image im={w,ht,dimension(w),dimension(ht),format==0x92?2u:4u};
-    return remember(original.depth_as_color(u,h,im.pw,im.ph,format),im);
+    return remember(static_cast<Backend&>(original).depth_as_color(u,h,im.pw,im.ph,format),im);
 }
 u32 edge(u32 n){const u64 v=((u64)n*percent+50)/100;if(v>maxDimension)fail("invalid render target rectangle");return (u32)v;}
 void rectangle(u32 &x,u32 &y,u32 &w,u32 &h) {
@@ -100,11 +100,11 @@ void viewport(void*u,float x,float y,float w,float h) {
     const float s=percent/100.0f;original.set_viewport(u,x*s,y*s,w*s,h*s);
 }
 void scissor(void*u,u32 x,u32 y,u32 w,u32 h){rectangle(x,y,w,h);original.set_scissor(u,x,y,w,h);}
-void colorRect(void*u,u32 surface,const float *rgba,u32 x,u32 y,u32 w,u32 h) {
-    rectangle(x,y,w,h);original.clear_color_rect(u,surface,rgba,x,y,w,h);
+template<class Backend> void colorRect(void*u,u32 surface,const float *rgba,u32 x,u32 y,u32 w,u32 h) {
+    rectangle(x,y,w,h);static_cast<Backend&>(original).clear_color_rect(u,surface,rgba,x,y,w,h);
 }
-void depthRect(void*u,u32 depth,u32 flags,float value,u8 stencil,u32 x,u32 y,u32 w,u32 h) {
-    rectangle(x,y,w,h);original.clear_depth_stencil_rect(u,depth,flags,value,stencil,x,y,w,h);
+template<class Backend> void depthRect(void*u,u32 depth,u32 flags,float value,u8 stencil,u32 x,u32 y,u32 w,u32 h) {
+    rectangle(x,y,w,h);static_cast<Backend&>(original).clear_depth_stencil_rect(u,depth,flags,value,stencil,x,y,w,h);
 }
 void colorWrite(void*u,u32 h,u32 x,u32 y,u32 w,u32 ht,const void *rows,u32 pitch) {
     const Image im=image(h);u32 px=x,py=y,pw=w,ph=ht;rectangle(px,py,pw,ph);
@@ -154,6 +154,16 @@ int depthReadback(void*u,u32 h,u32 x,u32 y,u32 w,u32 ht,float*out,u32 pitch) {
     const int status=original.depth_readback(u,h,r.x,r.y,r.w,r.h,(float*)pixels.data(),r.w*4);
     if(!status)reduce(im,r,pixels.data(),x,y,w,ht,out,pitch);return status;
 }
+// Newer SDKs supply these optional paths. Keep the pinned public runtime
+// compatible while preserving exact rectangle/depth-view behavior when present.
+template<class Backend> void optionalCallbacks(Backend &target,const Backend &source) {
+    if constexpr(requires { source.depth_as_color; })
+        if(source.depth_as_color)target.depth_as_color=depthAsColor<Backend>;
+    if constexpr(requires { source.clear_color_rect; })
+        if(source.clear_color_rect)target.clear_color_rect=colorRect<Backend>;
+    if constexpr(requires { source.clear_depth_stencil_rect; })
+        if(source.clear_depth_stencil_rect)target.clear_depth_stencil_rect=depthRect<Backend>;
+}
 void shutdown(void*u){if(original.shutdown)original.shutdown(u);images.clear();}
 }
 
@@ -167,17 +177,15 @@ extern "C" const rsx_draw_backend *mag_player_render_backend(const rsx_draw_back
     if(!original.color_target_create||!original.depth_target_create||!original.pipeline_create||
        !original.set_viewport||!original.set_scissor||!original.readback||!original.depth_readback||
        !original.color_target_release||!original.depth_target_release||!original.texture_release)
-        fail("Metal backend does not support rendering resolution scaling");
+        fail("Selected backend does not support rendering resolution scaling");
     scaled.shutdown=shutdown;scaled.color_target_create=colorCreate;scaled.depth_target_create=depthCreate;
     scaled.color_target_release=colorRelease;scaled.depth_target_release=depthRelease;scaled.texture_release=textureRelease;
     if(original.color_target_write)scaled.color_target_write=colorWrite;
     if(original.surface_view)scaled.surface_view=surfaceView;
     if(original.color_snapshot)scaled.color_snapshot=colorSnapshot;
     if(original.depth_snapshot)scaled.depth_snapshot=depthSnapshot;
-    if(original.depth_as_color)scaled.depth_as_color=depthAsColor;
+    optionalCallbacks(scaled,original);
     scaled.pipeline_create=pipeline;scaled.set_viewport=viewport;scaled.set_scissor=scissor;
-    if(original.clear_color_rect)scaled.clear_color_rect=colorRect;
-    if(original.clear_depth_stencil_rect)scaled.clear_depth_stencil_rect=depthRect;
     scaled.readback=readback;scaled.depth_readback=depthReadback;
     // The packed-depth shortcut operates directly in guest coordinates. Use
     // the existing float readback + guest conversion fallback at higher scale.
