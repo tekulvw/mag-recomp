@@ -152,7 +152,8 @@ void readback(void*u,u32 h,u32 x,u32 y,u32 w,u32 ht,void*out,u32 pitch) {
 int depthReadback(void*u,u32 h,u32 x,u32 y,u32 w,u32 ht,float*out,u32 pitch) {
     const Image im=image(h);const Region r=readRegion(im,x,y,w,ht,pitch);auto pixels=buffer(r.w,r.h,4);
     const int status=original.depth_readback(u,h,r.x,r.y,r.w,r.h,(float*)pixels.data(),r.w*4);
-    if(!status)reduce(im,r,pixels.data(),x,y,w,ht,out,pitch);return status;
+    if(!status)reduce(im,r,pixels.data(),x,y,w,ht,out,pitch);
+    return status;
 }
 // Newer SDKs supply these optional paths. Keep the pinned public runtime
 // compatible while preserving exact rectangle/depth-view behavior when present.
