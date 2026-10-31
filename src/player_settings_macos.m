@@ -105,7 +105,7 @@ static NSStackView *row(NSString *title,NSString *hint,NSView *control) {
     }
     [_tcp.widthAnchor constraintEqualToAnchor:_udp.widthAnchor].active=YES;
     add(connection,_ports);_ports.hidden=YES;add(_root,group(connection));
-    add(_root,label(@"Blank uses the game's server settings. Changes apply on the next launch.",11,YES));
+    add(_root,label(@"Community servers use no PSN ticket. Blank keeps game settings. Changes apply next launch.",11,YES));
     _errorLabel=label(@"",12,NO);_errorLabel.textColor=NSColor.systemRedColor;_errorLabel.identifier=@"settings_error";add(_root,_errorLabel);_errorLabel.hidden=YES;
     NSView *gap=[NSView new];[gap.heightAnchor constraintEqualToConstant:6].active=YES;add(_root,gap);
     heading=label(@"Graphics",14,NO);heading.font=[NSFont boldSystemFontOfSize:14];add(_root,heading);

@@ -8,7 +8,7 @@
 static MAGSettingsController *controller;
 static BOOL attached;
 // Retail v1.0 identity, not game content. Preserve the original script and
-// append only player routing choices; authentication/account policy is unchanged.
+// append the selected community-server profile; account settings are unchanged.
 static NSString *const memberSHA256=@"220ea0f1cfff8dfac86d4ea72fb68200a092304cbf51a1a3046fcf4783af8cfe";
 
 static NSString *environment(const char *key) {
@@ -46,6 +46,9 @@ int mag_player_settings_prepare(void) { @autoreleasepool {
             if(!overlay){showError(error.localizedDescription);if(!launcherPhase)return -1;setup=YES;continue;}
             setenv("PS3_VFS_ROOT",overlay.fileSystemRepresentation,1);
             setenv("PS3_NET_ONLINE","1",1);
+            // The existing retail compatibility hook honors the configured
+            // no-ticket setting after the launcher's own ticket override.
+            setenv("MAG_LOCAL_NO_TICKET","1",1);
         }
         setenv("PS3_AA",[settings[@"anti_aliasing"] UTF8String],1);
         return 1;

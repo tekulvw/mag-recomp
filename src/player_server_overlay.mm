@@ -42,7 +42,8 @@ NSString *MAGCreateServerOverlay(NSString *sourceRoot,NSString *ownedRoot,NSDict
         NSString *destination=[ownedRoot stringByAppendingPathComponent:@"vfs"];
         NSString *markerPath=[ownedRoot stringByAppendingPathComponent:@"server-overlay.json"];
         NSDictionary *identity=@{@"source":sourceRoot,@"server_address":settings[@"server_address"],
-            @"tcp_port":settings[@"tcp_port"],@"udp_port":settings[@"udp_port"],@"member_sha256":expectedMemberSHA256};
+            @"tcp_port":settings[@"tcp_port"],@"udp_port":settings[@"udp_port"],@"member_sha256":expectedMemberSHA256,
+            @"connection_profile":@"community-no-ticket-v1"};
         if([fm fileExistsAtPath:destination]){
             NSData *markerData=[NSData dataWithContentsOfFile:markerPath];
             NSDictionary *marker=markerData?[NSJSONSerialization JSONObjectWithData:markerData options:0 error:NULL]:nil;
@@ -70,6 +71,7 @@ NSString *MAGCreateServerOverlay(NSString *sourceRoot,NSString *ownedRoot,NSDict
         require([sha(originalData) isEqual:expectedMemberSHA256],@"The settings archive does not match the supported retail version. The original was kept.");
         NSString *host=ipv4(settings[@"server_address"]);
         NSMutableString *overrides=[NSMutableString stringWithFormat:@"\n-- MAG player connection override\nMAGClientNetConfig = MAGClientNetConfig or {}\nMAGClientNetConfig.EnableNetwork = true\nMAGClientNetConfig.MAPSServerAddr = \"%@\"\n",host];
+        [overrides appendString:@"MAGClientNetConfig.EnableServerOnClient = false\nMAGClientNetConfig.UseTestClient = false\nMAGClientNetConfig.UseNPTicket = false\n"];
         if([settings[@"tcp_port"] intValue])[overrides appendFormat:@"MAGClientNetConfig.MAPSServerTCPPort = %@\n",settings[@"tcp_port"]];
         if([settings[@"udp_port"] intValue])[overrides appendFormat:@"MAGClientNetConfig.MAPSServerUDPPort = %@\n",settings[@"udp_port"]];
         NSData *extra=[overrides dataUsingEncoding:NSUTF8StringEncoding];
