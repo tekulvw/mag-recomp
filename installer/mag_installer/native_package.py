@@ -78,6 +78,7 @@ def _resolve_dependency(name, source, executable, inherited, token):
 # The contract mirrors src/retail_handoff.cpp and tools/handoff.py exactly.
 _LAUNCHER = r'''
 #import <Foundation/Foundation.h>
+#import <AppKit/AppKit.h>
 #import <CommonCrypto/CommonDigest.h>
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -110,6 +111,7 @@ static int run(NSString *binary,NSString *elf,NSString *cwd,NSDictionary *env,NS
 int main(int argc,char **argv) { @autoreleasepool {
  NSString *app=NSBundle.mainBundle.bundlePath.stringByResolvingSymlinksInPath;
  NSString *root=app.stringByDeletingLastPathComponent;
+ NSString *ownedOverlay=nil;
  @try {
  NSDictionary *m=json([app stringByAppendingPathComponent:@"Contents/Resources/runtime.json"],2097152);
  NSString *(^inApp)(NSString *)=^NSString *(NSString *p){return [app stringByAppendingPathComponent:p].stringByStandardizingPath;};
@@ -128,18 +130,28 @@ int main(int argc,char **argv) { @autoreleasepool {
  NSString *request=[logs stringByAppendingPathComponent:@"handoff-request.json"];
  NSMutableDictionary *env=[NSMutableDictionary dictionaryWithDictionary:@{@"PATH":@"/usr/bin:/bin",@"HOME":[root stringByAppendingPathComponent:@"home"],@"LANG":@"en_US.UTF-8",@"PS3_VFS_ROOT":vfs,@"PS3_BOOT_PATH":@"/dev_bdvd/PS3_GAME/USRDIR/EBOOT.BIN",@"PS3_HLE_UNRESOLVED":@"halt",@"PS3_SYSCALL_UNRESOLVED":@"halt",@"MAG_HANDOFF_REQUEST":request,@"MAG_HANDOFF_TOKEN":token,@"MAG_ENGINE_BINARY":engine,@"MAG_ENGINE_BINARY_SHA256":er[@"binary_sha256"],@"MAG_ENGINE_ELF":engineElf,@"MAG_ENGINE_ELF_SHA256":er[@"elf_sha256"],@"MAG_ENGINE_SELF":engineSelf,@"MAG_ENGINE_SELF_SHA256":m[@"engine_self_sha256"],@"MAG_ENGINE_KEY_SHA256":keyHash(launcherElf)}];
  NSString *tmp=NSTemporaryDirectory();if(tmp)env[@"TMPDIR"]=tmp;
+ char *overlayTemplate=strdup([[tmp?:@"/tmp" stringByAppendingPathComponent:@"mag-player-XXXXXX"] fileSystemRepresentation]);
+ char *created=mkdtemp(overlayTemplate);
+ if(!created){free(overlayTemplate);fail(@"Cannot create the private launch settings folder");}
+ ownedOverlay=[NSString stringWithUTF8String:created];free(overlayTemplate);
+ env[@"MAG_PLAYER_SETTINGS_PATH"]=[NSHomeDirectory() stringByAppendingPathComponent:@"Library/Application Support/MAG/settings.json"];
+ env[@"MAG_PLAYER_OVERLAY_ROOT"]=ownedOverlay;env[@"MAG_PLAYER_SETUP"]=@"1";
+ if((NSEvent.modifierFlags & NSEventModifierFlagOption)||(argc>1&&!strcmp(argv[1],"--settings")))env[@"MAG_PLAYER_SHOW_SETTINGS"]=@"1";
  int result=run(launcher,launcherElf,logs,env,[logs stringByAppendingPathComponent:@"launcher.log"]);
  if(result!=90)return result;
  NSDictionary *expected=@{@"version":@1,@"token":token,@"guest_path":@"/dev_bdvd/PS3_GAME/USRDIR/bin/mage_g.self",@"kind":@"mage_g"};
  if(![json(request,4096) isEqual:expected])fail(@"Engine handoff request identity mismatch");
  check(engine,er[@"binary_sha256"]);check(engineElf,er[@"elf_sha256"]);check(engineSelf,m[@"engine_self_sha256"]);
  for(NSString *k in env.allKeys.copy)if([k hasPrefix:@"MAG_HANDOFF_"]||[k hasPrefix:@"MAG_ENGINE_"])[env removeObjectForKey:k];
+ [env removeObjectForKey:@"MAG_PLAYER_SETUP"];[env removeObjectForKey:@"MAG_PLAYER_SHOW_SETTINGS"];
  env[@"PS3_BOOT_PATH"]=@"/dev_bdvd/PS3_GAME/USRDIR/bin/mage_g.self";
  return run(engine,engineElf,logs,env,[logs stringByAppendingPathComponent:@"engine.log"]);
  } @catch(NSException *e) {
  NSString *message=[NSString stringWithFormat:@"MAG could not start: %@\n",e.reason];
  [message writeToFile:[root stringByAppendingPathComponent:@"launch-error.log"] atomically:YES encoding:NSUTF8StringEncoding error:nil];
  fprintf(stderr,"%s",message.UTF8String);return 1;
+ } @finally {
+ if(ownedOverlay)[NSFileManager.defaultManager removeItemAtPath:ownedOverlay error:nil];
  }
 } }
 '''
@@ -245,7 +257,8 @@ def package(config, workspace, destination, token=None, events=None):
         (resources/'runtime.json').write_text(json.dumps(runtime,indent=2)+'\n')
         source=resources/'launcher.m'; source.write_text(_LAUNCHER)
         supervisor=macos/'MAG'
-        _run_tool(['/usr/bin/xcrun','clang','-x','objective-c','-fobjc-arc','-framework','Foundation',str(source),'-o',str(supervisor)],token)
+        _run_tool(['/usr/bin/xcrun','clang','-x','objective-c','-fobjc-arc','-framework','Foundation',
+                   '-framework','AppKit',str(source),'-o',str(supervisor)],token)
         _ordinary(supervisor).chmod(0o755); source.unlink()
         with (destination/'Contents/Info.plist').open('wb') as stream:
             plistlib.dump({'CFBundleExecutable':'MAG','CFBundleName':'MAG','CFBundleDisplayName':'MAG',

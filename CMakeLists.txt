@@ -298,6 +298,9 @@ endif()
 # Cached getenv for every statically linked caller (src/mag_env_cache.cpp).
 if(APPLE)
     target_sources(${PROJECT_NAME} PRIVATE src/mag_env_cache.cpp)
+    enable_language(OBJC OBJCXX)
+    include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/MagPlayerSettings.cmake")
+    mag_enable_player_settings(${PROJECT_NAME} "${PS3RECOMP_DIR}")
 endif()
 
 # The lifted SPU sources use bare #include "spu_context.h". Scope that include

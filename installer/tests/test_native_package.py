@@ -6,6 +6,7 @@ import tempfile
 import platform
 import subprocess
 import shutil
+import struct
 import unittest
 from unittest.mock import patch
 from mag_installer.model import InstallerError
@@ -110,3 +111,62 @@ class NativePackageTests(unittest.TestCase):
             self.assertEqual(receipt['binary_sha256'],hashlib.sha256(binary.read_bytes()).hexdigest())
             self.assertTrue(any('-change' in c for c in calls))
             self.assertTrue((app/'Contents/Frameworks/libfixture.dylib').is_file())
+
+    @unittest.skipUnless(platform.system() == 'Darwin', 'native supervisor fixture')
+    def test_supervisor_carries_settings_through_handoff_and_cleans_owned_overlay(self):
+        """Two tiny native fixtures stand in for both images; no guest runs."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);workspace=self.fixture(root)
+            source=root/'fixture.c'
+            source.write_text(r'''
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+int main(int argc,char**argv) {
+ if(argc!=2)return 60;
+ int launcher=strstr(argv[1],"EBOOT.elf")!=NULL;
+ const char *path=getenv("MAG_PLAYER_SETTINGS_PATH"),*overlay=getenv("MAG_PLAYER_OVERLAY_ROOT");
+ if(!path||!overlay)return 61;
+ FILE *f=fopen(launcher?"launcher-env.json":"engine-env.json","w");
+ if(!f)return 62;
+ fprintf(f,"{\"settings_path\":\"%s\",\"overlay_root\":\"%s\",\"setup\":%s,\"show\":%s}",
+  path,overlay,getenv("MAG_PLAYER_SETUP")?"true":"false",getenv("MAG_PLAYER_SHOW_SETTINGS")?"true":"false");fclose(f);
+ if(!launcher)return 17;
+ f=fopen(getenv("MAG_HANDOFF_REQUEST"),"w");if(!f)return 63;
+ fprintf(f,"{\"version\":1,\"token\":\"%s\",\"guest_path\":\"/dev_bdvd/PS3_GAME/USRDIR/bin/mage_g.self\",\"kind\":\"mage_g\"}",getenv("MAG_HANDOFF_TOKEN"));fclose(f);
+ return 90;
+}
+''')
+            binary=root/'fixture'
+            subprocess.run(['xcrun','clang',str(source),'-o',str(binary)],check=True,capture_output=True)
+            disc=workspace/'local/retail-v1.0/PS3_GAME/USRDIR'
+            # Minimal artificial ELF structure for the supervisor's key-segment
+            # identity check. These bytes are generated, not game material.
+            elf=bytearray(136);elf[:7]=b'\x7fELF\x02\x02\x01'
+            struct.pack_into('>Q',elf,32,64);struct.pack_into('>HH',elf,54,56,1)
+            struct.pack_into('>I',elf,64,1);struct.pack_into('>Q',elf,72,120)
+            struct.pack_into('>Q',elf,80,0x32A660);struct.pack_into('>Q',elf,96,16)
+            elf[120:]=bytes(range(16));(disc/'EBOOT.elf').write_bytes(elf)
+            (disc/'bin/mage_g.self').write_bytes(b'synthetic self fixture')
+            manifest=json.loads((workspace/'profiles/retail-v1.0.json').read_text())
+            digest=lambda p:hashlib.sha256(p.read_bytes()).hexdigest()
+            manifest['images']['EBOOT']['elf_sha256']=digest(disc/'EBOOT.elf')
+            manifest['images']['mage_g']['source_sha256']=digest(disc/'bin/mage_g.self')
+            (workspace/'profiles/retail-v1.0.json').write_text(json.dumps(manifest))
+            for folder,image in [('build','EBOOT'),('build-engine','mage_g')]:
+                target=workspace/folder/'MagRecomp';shutil.copyfile(binary,target)
+                receipt=target.with_suffix('.receipt.json');record=json.loads(receipt.read_text())
+                record.update(binary_sha256=digest(target),elf_sha256=manifest['images'][image]['elf_sha256'])
+                receipt.write_text(json.dumps(record))
+            app=package({},workspace,root/'MAG.app')
+            result=subprocess.run([str(app/'Contents/MacOS/MAG'),'--settings'],capture_output=True,text=True,timeout=15)
+            self.assertEqual(result.returncode,17,result.stderr)
+            launch=next((root/'logs').glob('launch-*'))
+            before=json.loads((launch/'launcher-env.json').read_text())
+            after=json.loads((launch/'engine-env.json').read_text())
+            self.assertTrue(before['setup']);self.assertTrue(before['show'])
+            self.assertFalse(after['setup']);self.assertFalse(after['show'])
+            self.assertEqual(before['settings_path'],after['settings_path'])
+            self.assertTrue(before['settings_path'].endswith('/Library/Application Support/MAG/settings.json'))
+            self.assertEqual(before['overlay_root'],after['overlay_root'])
+            self.assertFalse(Path(before['overlay_root']).exists())

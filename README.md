@@ -40,6 +40,10 @@ The [installer](installer/README.md) does all of that for you: choose your game 
 installation folder, click **Build MAG**, and it downloads pinned build tools, runs every step on
 your computer and packages the result. Download it from a release.
 
+New macOS builds also include a [native settings panel](docs/player-settings.md) for the game server,
+display mode, output resolution and FXAA. Open **MAG → Settings…** while playing, or hold **Option**
+when launching to open setup first. Settings survive updates and rebuilds.
+
 ## Releases
 
 Versions follow [Semantic Versioning](https://semver.org/) and are managed by

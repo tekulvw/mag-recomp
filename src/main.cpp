@@ -39,6 +39,9 @@
 #include "win32_compat.h"
 #include "macos_runloop.h"
 #include "mag_extension.h"
+#ifdef MAG_PLAYER_SETTINGS
+#include "player_settings_runtime.h"
+#endif
 
 #include <stdint.h>
 #include <stdio.h>
@@ -220,6 +223,9 @@ static DWORD WINAPI frame_clock(LPVOID)
 #endif
     int rsx_ok;
     {MagRsxConsumerLease consumer_lease;rsx_ok=(rsx_backend_init(WINDOW_WIDTH,WINDOW_HEIGHT,title)==0);}
+#ifdef MAG_PLAYER_SETTINGS
+    if (rsx_ok) mag_player_settings_attach();
+#endif
     fprintf(stderr, "[rsx] %s backend init %s\n", RSX_BACKEND_NAME,
             rsx_ok ? "OK -- window open" : "FAILED");
 
@@ -275,6 +281,9 @@ static DWORD WINAPI frame_clock(LPVOID)
 
             int pump_result;
             {MagRsxConsumerLease consumer_lease;pump_result=rsx_backend_pump();}
+#ifdef MAG_PLAYER_SETTINGS
+            if (!pump_result) mag_player_settings_poll();
+#endif
             if (pump_result != 0) {
                 /* A blocked guest may never unwind. End the owned host
                  * session without running teardown against live workers. */
@@ -379,6 +388,11 @@ int main(int argc, char** argv)
         printf("usage: %s <PPU ELF>\n", argv[0]);
         return 2;
     }
+#ifdef MAG_PLAYER_SETTINGS
+    // Setup and recovery run before allocating guest memory or connecting.
+    const int settings_result = mag_player_settings_prepare();
+    if (settings_result <= 0) return settings_result < 0 ? 1 : 0;
+#endif
 
 #ifdef _WIN32
 #pragma comment(lib, "winmm.lib")
