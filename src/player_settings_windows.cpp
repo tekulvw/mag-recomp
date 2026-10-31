@@ -113,6 +113,12 @@ LRESULT CALLBACK proc(HWND w, UINT message, WPARAM wp, LPARAM lp) {
   return DefWindowProcW(w, message, wp, lp);
 }
 LRESULT CALLBACK gameWindowProc(HWND w, UINT message, WPARAM wp, LPARAM lp) {
+  // The frame pump stays live while a worker owns the panel. Suppress native
+  // game-window input too, including Escape handled directly by the backend.
+  if (mag_player_input_blocked() &&
+      ((message >= WM_KEYFIRST && message <= WM_KEYLAST) ||
+       (message >= WM_MOUSEFIRST && message <= WM_MOUSELAST)))
+    return 0;
   if ((message == WM_KEYDOWN && wp == VK_F10) ||
       (message == WM_SYSCOMMAND && (wp & 0xfff0) == settingsCommand)) {
     if (!(lp & (1ll << 30)))

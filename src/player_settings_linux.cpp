@@ -291,6 +291,12 @@ extern "C" SDL_Window *mag_player_create_window(const char *title, int x, int y,
 }
 extern "C" int mag_player_poll_event(SDL_Event *event) {
   while (SDL_PollEvent(event)) {
+    // Keep pumping close/window events while the editor owns input. In
+    // particular, do not forward Escape to the backend during a modal phase.
+    if (event && mag_player_input_blocked() &&
+        ((event->type >= SDL_KEYDOWN && event->type <= SDL_TEXTINPUT) ||
+         (event->type >= SDL_MOUSEMOTION && event->type <= SDL_MOUSEWHEEL)))
+      continue;
     if (event && event->type == SDL_KEYDOWN &&
         event->key.keysym.sym == SDLK_F10) {
       if (!event->key.repeat)
