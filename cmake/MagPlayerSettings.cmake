@@ -7,6 +7,8 @@ function(mag_enable_player_settings target sdk)
     set(_controls_source "${player_src}/player_controls.cpp")
     if(MAG_INPUT_RUST)
         set(_controls_source "${player_src}/player_controls_rust.cpp")
+        set_property(SOURCE "${player_src}/player_input_desktop_macos.mm" TARGET_DIRECTORY ${target}
+            APPEND PROPERTY COMPILE_DEFINITIONS MAG_INPUT_RUST=1)
     endif()
     target_sources(${target} PRIVATE "${_controls_source}" "${player_src}/player_controls_store.cpp" "${player_src}/player_input_capture.cpp" "${player_src}/player_preferences_file.cpp")
     target_sources(${target} PRIVATE
