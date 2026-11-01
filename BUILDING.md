@@ -103,10 +103,30 @@ Each output directory must be new; the generators reject stale output.
   --output generated/retail-v1.0/mage_g
 .venv/bin/python tools/spu_lift.py --output generated/retail-v1.0/spu-eboot
 .venv/bin/python tools/engine_spu_lift.py --output generated/retail-v1.0/spu-engine
+# The engine policy lift is not the full streamed renderer. Include every WWS job.
+.venv/bin/python tools/wws_job_lift.py \
+  --engine-elf local/retail-v1.0/PS3_GAME/USRDIR/bin/mage_g.elf \
+  --engine-profile profiles/retail-v1.0-engine-spu.json \
+  --sdk local/ps3recomp-runtime --sdk-revision RUNTIME_COMMIT_FROM_FRAMEWORK_JSON \
+  --baseline generated/retail-v1.0/spu-engine \
+  --output generated/retail-v1.0/spu-engine-retained --merge-chunks --require-complete
 .venv/bin/python tools/firmware_lift.py --output generated/retail-v1.0/libsre
 .venv/bin/python tools/spu_programs_lift.py --sdk local/ps3recomp-spu-programs \
   --sdk-revision 4c5c05f60a6ae428b16e5ff7075c24a5e4d282ab --output local/spu-programs
 ```
+
+`wws_job_lift.py` uses the runtime SDK revision from `profiles/framework.json`'s
+`ps3recomp.runtime.commit` (substitute its exact value for the placeholder above).
+It scans the validated engine image, lifts all streamed WWS jobs, and emits their
+verified-residency registration. `--require-complete` refuses to advance to CMake
+if any discovered module remains interpreted. The installer runs this stage
+automatically and points the engine build at its final directory. The generated
+registration is ON when `MAG_COMPILED_JOBS` is unset; an explicit `0` disables it
+for comparisons. Constructor-time registration runs before `main()`, so setting
+that default in `main()` would be too late. Unsupported PCs still use the normal
+interpreter fallback. This restores compiled streamed-job coverage, not the
+separate opt-in native/Rust or Group0 GPU replacements. Verified-geometry,
+connected-geometry and audio experiment activation is unchanged.
 
 `spu_programs_lift.py` lifts every SPU program embedded in the engine and checks the result against
 `profiles/retail-v1.0-spu-coverage.json`; the engine build re-runs that check and refuses to configure
@@ -134,7 +154,7 @@ cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DMAG_IMAGE=EBOOT \
 cmake -S . -B build-engine -G Ninja -DCMAKE_BUILD_TYPE=Release -DMAG_IMAGE=mage_g \
   -DPS3RECOMP_DIR="$PWD/local/ps3recomp-runtime" \
   -DRECOMP_DIR="$PWD/generated/retail-v1.0/mage_g" \
-  -DSPU_DIR="$PWD/generated/retail-v1.0/spu-engine" \
+  -DSPU_DIR="$PWD/generated/retail-v1.0/spu-engine-retained" \
   -DMAG_SPU_PROGRAMS_DIR="$PWD/local/spu-programs" \
   -DMAG_FIRMWARE_DIR="$PWD/generated/retail-v1.0/libsre" "${FFMPEG_ARGS[@]}"
 cmake --build build --target MagRecomp -j4

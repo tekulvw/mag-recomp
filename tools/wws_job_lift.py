@@ -6,8 +6,8 @@ code buffer at local store 0x4000, header included. This tool finds the module
 images, bounds each module's code by control-flow reachability from its header
 entry (plus optional measured interpreter entries), lifts that interval with
 the SDK lifter, and emits a registration file that registers each module as a
-verified streamed region (spu_overlay_register_verified_region) when
-MAG_COMPILED_JOBS=1. Original bytes and generated code stay in the private
+verified streamed region (spu_overlay_register_verified_region) by default
+unless MAG_COMPILED_JOBS is explicitly set to a value other than 1. Original bytes and generated code stay in the private
 output directory; the tool itself holds no title bytes.
 """
 import argparse, json, pathlib, re, struct, subprocess, sys
@@ -145,7 +145,7 @@ def emit_registry(modules):
         lines.append('};')
     lines += ['__attribute__((constructor)) static void mag_register_streamed_jobs(void) {',
               '  const char* enabled = getenv("MAG_COMPILED_JOBS");',
-              '  if (!enabled || strcmp(enabled, "1")) return;']
+              '  if (enabled && strcmp(enabled, "1")) return;']
     for m in modules:
         n = m['code_end'] - LOAD_BASE - HEADER
         lines.append(f"  {{ const spu_overlay_code_segment seg = {{0x{LOAD_BASE + HEADER:X}u, {n}u, job_{m['image_id']}_code}};")
@@ -167,10 +167,19 @@ def generated_census(source, prefix):
     return functions, unsupported
 
 
+def require_complete(records):
+    failed = [str(record['image_id']) for record in records if record['status'] != 'lifted']
+    if failed:
+        raise ValueError('incomplete streamed job coverage: ' + ', '.join(failed))
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--engine-elf', type=pathlib.Path, required=True)
-    ap.add_argument('--engine-elf-sha256', required=True)
+    identity = ap.add_mutually_exclusive_group(required=True)
+    identity.add_argument('--engine-elf-sha256')
+    identity.add_argument('--engine-profile', type=pathlib.Path,
+                          help='reviewed engine SPU profile containing elf_sha256')
     ap.add_argument('--sdk', type=pathlib.Path, required=True)
     ap.add_argument('--sdk-revision', required=True)
     ap.add_argument('--baseline', type=pathlib.Path, required=True, help='existing audited SPU directory')
@@ -180,7 +189,15 @@ def main():
     ap.add_argument('--merge-chunks', action='store_true',
                     help='lift each contiguous run between call targets as one host function, so '
                          'branches inside it are gotos instead of drain-loop transfers')
+    ap.add_argument('--require-complete', action='store_true',
+                    help='fail after recording results if any discovered job remains interpreted')
     a = ap.parse_args()
+    preparer_digest = digest(pathlib.Path(__file__))
+    profile_digest = digest(a.engine_profile) if a.engine_profile else None
+    if a.engine_profile:
+        a.engine_elf_sha256 = json.loads(a.engine_profile.read_text())['elf_sha256']
+    if not re.fullmatch('[0-9a-f]{64}', a.engine_elf_sha256):
+        raise ValueError('engine ELF SHA256 must be an exact lowercase identity')
     if digest(a.engine_elf) != a.engine_elf_sha256:
         raise ValueError('engine ELF identity')
     pin = sdk_identity(a.sdk, a.sdk_revision)
@@ -249,14 +266,25 @@ def main():
     (output / REGISTRY).write_text(emit_registry(lifted))
     if sdk_identity(a.sdk, a.sdk_revision) != pin or digest(a.baseline / 'provenance.json') != base_digest:
         raise ValueError('input drift')
+    if digest(pathlib.Path(__file__)) != preparer_digest:
+        raise ValueError('preparer source drift')
     base['wws_job_extension'] = {'engine_elf_sha256': a.engine_elf_sha256, 'SDK_pin': pin,
-                                 'lifter_sha256': digest(lifter), 'runtime_toggle': 'MAG_COMPILED_JOBS=1',
+                                 'preparer_sha256': preparer_digest,
+                                 'lifter_sha256': digest(lifter), 'runtime_toggle': 'default ON; MAG_COMPILED_JOBS=0 explicitly disables',
                                  'attribution_sha256': [digest(p) for p in a.attribution], 'modules': records}
+    if a.engine_profile:
+        if digest(a.engine_profile) != profile_digest:
+            raise ValueError('engine profile drift')
+        base['wws_job_extension']['engine_profile_sha256'] = profile_digest
+    if a.require_complete and any(r['status'] != 'lifted' for r in records):
+        base['status'] = 'incomplete'
     base['outputs'] = {str(f.relative_to(output)): digest(f) for f in sorted(output.rglob('*'))
                        if f.suffix in ('.c', '.h', '.cpp')}
     (output / 'provenance.json').write_text(json.dumps(base, indent=2) + '\n')
     print(json.dumps({'output': str(output), 'modules': len(modules), 'lifted': len(lifted),
                       'interpreted': [r for r in records if r['status'] != 'lifted']}, indent=2))
+    if a.require_complete:
+        require_complete(records)
 
 
 def digest_bytes(data):

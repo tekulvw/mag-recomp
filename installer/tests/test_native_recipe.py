@@ -68,7 +68,7 @@ class NativeRecipeTests(unittest.TestCase):
             root = Path(tmp); config = self.load(root, self.config(root)); workspace = self.workspace(root)
             plan = build_plan(config, workspace); commands = {p['id']: p['argv'] for p in plan}
             self.assertEqual(list(commands), ['prepare-inputs', 'inventory', 'lift-launcher', 'lift-engine', 'splice-engine-dispatcher', 'worker-spu',
-                                              'engine-spu', 'firmware', 'spu-programs', 'configure-launcher',
+                                              'engine-spu', 'streamed-jobs', 'firmware', 'spu-programs', 'configure-launcher',
                                               'build-launcher', 'configure-engine', 'build-engine'])
             self.assertIn(str(workspace / 'local/ps3recomp-lifter-spu'), commands['inventory'])
             self.assertIn(str(workspace / 'local/ps3recomp-lifter-ppu'), commands['lift-engine'])
@@ -76,6 +76,15 @@ class NativeRecipeTests(unittest.TestCase):
             self.assertIn(str(workspace / 'generated/retail-v1.0/mage_g-dispatcher'), ' '.join(commands['configure-engine']))
             self.assertIn(str(workspace / 'local/ps3recomp-runtime'), commands['splice-engine-dispatcher'])
             self.assertIn('-DPS3RECOMP_DIR=' + str(workspace / 'local/ps3recomp-runtime'), commands['configure-engine'])
+            streamed = commands['streamed-jobs']
+            self.assertIn('wws_job_lift.py', ' '.join(streamed))
+            self.assertIn(str(workspace/'local/ps3recomp-runtime'), streamed)
+            self.assertIn(PINS['runtime']['commit'], streamed)
+            self.assertIn('--merge-chunks', streamed)
+            self.assertIn('--require-complete', streamed)
+            self.assertIn('--engine-profile', streamed)
+            self.assertIn('-DSPU_DIR='+str(workspace/'generated/retail-v1.0/spu-engine-retained'), commands['configure-engine'])
+            self.assertIn('-DSPU_DIR='+str(workspace/'generated/retail-v1.0/spu-eboot'), commands['configure-launcher'])
             self.assertIn('-DMAG_SPU_PROGRAMS_DIR=' + str(workspace / 'local/spu-programs'), commands['configure-engine'])
             self.assertIn('-DPS3RECOMP_SAIL_FFMPEG=ON', commands['configure-engine'])
             self.assertEqual(commands['build-engine'][-1], '2')
