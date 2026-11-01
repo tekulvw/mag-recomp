@@ -1,5 +1,6 @@
 """The retail override must remain opt-in and reject mismatched code/config."""
 import subprocess
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -7,6 +8,15 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 class RetailNetworkPolicyTests(unittest.TestCase):
+    @unittest.skipIf(os.name == 'nt', 'Native Windows account fixture covers this policy')
+    def test_explicit_local_account_names(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            binary = Path(tmp) / 'account'
+            subprocess.run(['c++','-std=c++17','-UNDEBUG','-I'+str(ROOT/'src'),
+                str(ROOT/'tests/retail_network_account.cpp'),'-o',str(binary)],check=True,timeout=30)
+            subprocess.run([str(binary)],check=True,timeout=5)
+
+    @unittest.skipIf(os.name == 'nt', 'POSIX compiler fixture; Windows guards use the native account fixture')
     def test_configuration_and_instruction_guards(self):
         with tempfile.TemporaryDirectory() as tmp:
             source=Path(tmp)/'test.cpp'; binary=Path(tmp)/'test'

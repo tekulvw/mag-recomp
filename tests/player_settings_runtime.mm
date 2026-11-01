@@ -62,7 +62,7 @@ int main(int argc,char**argv){@autoreleasepool{
     auto state=ps3recomp_pad_macos_state();assert(state.buttons==0&&state.analog_lx==128&&state.analog_ry==128);
     assert(ps3recomp_pad_macos_buttons()==0);
     NSPopUpButton *rendering=(NSPopUpButton *)find(panel.window.contentView,@"render_scale");
-    assert(rendering && rendering.indexOfSelectedItem==3); // Preferences were edited after snapshot.
+    assert(rendering && rendering.indexOfSelectedItem==2); // The engine starts from its immutable 200% snapshot.
     [rendering selectItemAtIndex:1];[panel apply:nil];
     assert([MAGSettingsLoad(path,NULL,&error)[@"render_scale"] intValue]==150);
     assert(!strcmp(getenv("MAG_PLAYER_RENDER_SCALE"),"200"));

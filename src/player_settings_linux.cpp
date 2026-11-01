@@ -168,6 +168,8 @@ static bool editOnGtk(mag::PlayerSettings &settings, bool setup,
                    settings.tcp_port ? std::to_string(settings.tcp_port) : "");
   auto udp = entry(box, "UDP port (blank uses game default)",
                    settings.udp_port ? std::to_string(settings.udp_port) : "");
+  auto account = entry(box, "Community account (3-15 letters, digits, - or _)",
+                      settings.local_account_name);
   const char *modes[] = {"Windowed", "Borderless fullscreen"};
   auto mode = choice(box, "Display mode", modes, 2,
                      settings.display_mode == "borderless");
@@ -205,6 +207,7 @@ static bool editOnGtk(mag::PlayerSettings &settings, bool setup,
       draft.server_address = text(server);
       draft.tcp_port = number(text(tcp));
       draft.udp_port = number(text(udp));
+      draft.local_account_name = text(account);
       draft.display_mode = index(mode) == 1 ? "borderless" : "windowed";
       const int widths[] = {1280, 1920, 2560, 3840},
                 heights[] = {720, 1080, 1440, 2160};
@@ -223,7 +226,10 @@ static bool editOnGtk(mag::PlayerSettings &settings, bool setup,
 #else
       draft.anti_aliasing = "off";
 #endif
-      settings = mag::validate_player_settings(draft);
+      draft = mag::validate_player_settings(draft);
+      if (!draft.server_address.empty() && draft.local_account_name.empty())
+        throw std::runtime_error("Enter a community account name before playing.");
+      settings = draft;
       applied = true;
       break;
     } catch (const std::exception &e) {

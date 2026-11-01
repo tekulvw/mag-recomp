@@ -6,6 +6,7 @@ namespace mag {
 struct PlayerSettings {
   int schema_version = 1;
   std::string server_address = "play.magtest.online";
+  std::string local_account_name;
   int tcp_port = 0, udp_port = 0;
   std::string display_mode = "windowed";
   int output_width = 1280, output_height = 720, render_scale = 100;

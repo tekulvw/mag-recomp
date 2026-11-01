@@ -53,7 +53,7 @@ static NSStackView *row(NSString *title,NSString *hint,NSView *control) {
 @implementation MAGSettingsController {
     NSString *_path;
     NSStackView *_root,*_ports,*_confirmation;
-    NSTextField *_server,*_tcp,*_udp,*_errorLabel,*_status,*_countdown;
+    NSTextField *_server,*_tcp,*_udp,*_account,*_errorLabel,*_status,*_countdown;
     NSPopUpButton *_mode,*_resolution,*_rendering,*_aa;
     NSButton *_applyButton,*_cancelButton,*_playButton,*_advancedButton;
     NSArray<NSControl*> *_fields;
@@ -92,6 +92,8 @@ static NSStackView *row(NSString *title,NSString *hint,NSView *control) {
     _server=[NSTextField textFieldWithString:@""];_server.placeholderString=@"Use game default";_server.identifier=@"server_address";_server.delegate=self;
     NSStackView *connection=stack(NSUserInterfaceLayoutOrientationVertical,5);
     add(connection,row(@"Game server",@"Hostname or IPv4 address",_server));add(connection,separator());
+    _account=[NSTextField textFieldWithString:@""];_account.identifier=@"local_account_name";_account.delegate=self;
+    add(connection,row(@"Community account",@"3–15 letters, digits, - or _",_account));add(connection,separator());
     _advancedButton=[NSButton buttonWithTitle:@"▸ Advanced connection settings" target:self action:@selector(toggleAdvanced:)];
     _advancedButton.bordered=NO;_advancedButton.alignment=NSTextAlignmentLeft;_advancedButton.font=[NSFont systemFontOfSize:11];
     add(connection,_advancedButton);
@@ -135,7 +137,7 @@ static NSStackView *row(NSString *title,NSString *hint,NSView *control) {
     _applyButton.keyEquivalent=@"\r";
     _playButton=[NSButton buttonWithTitle:@"Play MAG" target:self action:@selector(play:)];_playButton.keyEquivalent=@"\r";_playButton.hidden=YES;_playButton.enabled=!_recovery;_playButton.identifier=@"play";
     for(NSButton *button in @[_cancelButton,_applyButton,_playButton])[footer addArrangedSubview:button];
-    add(_root,footer);_fields=@[_server,_tcp,_udp,_mode,_resolution,_rendering,_aa];
+    add(_root,footer);_fields=@[_server,_tcp,_udp,_account,_mode,_resolution,_rendering,_aa];
     [self fill:settings];[self changed:nil];
     if(error)[self showError:error.localizedDescription];
     [self fit];[window center];return self;
@@ -146,6 +148,7 @@ static NSStackView *row(NSString *title,NSString *hint,NSView *control) {
 - (void)showError:(NSString *)message { _errorLabel.stringValue=message;_errorLabel.hidden=NO;[self fit]; }
 - (void)fill:(NSDictionary *)settings {
     _server.stringValue=settings[@"server_address"];
+    _account.stringValue=settings[@"local_account_name"]?:@"";
     _tcp.stringValue=[settings[@"tcp_port"] intValue]?[settings[@"tcp_port"] stringValue]:@"";
     _udp.stringValue=[settings[@"udp_port"] intValue]?[settings[@"udp_port"] stringValue]:@"";
     [_mode selectItemAtIndex:[settings[@"display_mode"] isEqual:@"borderless"]?1:0];
@@ -157,6 +160,7 @@ static NSStackView *row(NSString *title,NSString *hint,NSView *control) {
 }
 - (NSDictionary *)draft:(NSError **)error {
     NSMutableDictionary *draft=MAGSettingsDefaults().mutableCopy;draft[@"server_address"]=_server.stringValue;
+    draft[@"local_account_name"]=_account.stringValue;
     for(NSArray *pair in @[@[@"tcp_port",_tcp],@[@"udp_port",_udp]]) {
         NSString *text=[((NSTextField*)pair[1]).stringValue stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet];
         if(text.length&&[text rangeOfCharacterFromSet:[NSCharacterSet characterSetWithCharactersInString:@"0123456789"].invertedSet].location!=NSNotFound){
@@ -170,7 +174,12 @@ static NSStackView *row(NSString *title,NSString *hint,NSView *control) {
     draft[@"output_width"]=@[@1280,@1920,@2560,@3840][index];draft[@"output_height"]=@[@720,@1080,@1440,@2160][index];
     draft[@"render_scale"]=@[@100,@150,@200,@300][_rendering.indexOfSelectedItem];
     draft[@"anti_aliasing"]=_aa.indexOfSelectedItem==1?@"fxaa":@"off";
-    return MAGSettingsValidate(draft,error);
+    NSDictionary *validated=MAGSettingsValidate(draft,error);
+    if ([validated[@"server_address"] length] && ![validated[@"local_account_name"] length]) {
+        if(error)*error=[NSError errorWithDomain:@"MAGSettings" code:1 userInfo:@{NSLocalizedDescriptionKey:@"Enter a community account name before playing."}];
+        return nil;
+    }
+    return validated;
 }
 - (void)controlTextDidChange:(NSNotification *)note {[self changed:nil];}
 - (void)changed:(id)sender {

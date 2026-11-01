@@ -21,6 +21,7 @@ int main(int argc, char **argv) { @autoreleasepool {
     assert([normalized[@"server_address"] isEqual:@"community.example.net"]);
     NSMutableDictionary *legacy = normalized.mutableCopy;
     [legacy removeObjectForKey:@"render_scale"];
+    [legacy removeObjectForKey:@"local_account_name"];
     NSData *legacyData = [NSJSONSerialization dataWithJSONObject:legacy options:0 error:&error];
     assert([legacyData writeToFile:path atomically:YES]);
     NSDictionary *migrated = MAGSettingsLoad(path, &exists, &error);
@@ -34,6 +35,22 @@ int main(int argc, char **argv) { @autoreleasepool {
     assert(MAGSettingsSave(path, normalized, &error));
     assert([MAGSettingsLoad(path, &exists, &error) isEqual:normalized] && exists);
     NSData *before = [NSData dataWithContentsOfFile:path];
+    const unichar embeddedNUL[] = {'P','i','l','o','t',0,'O','t','h','e','r'};
+    NSString *nulName = [NSString stringWithCharacters:embeddedNUL length:11];
+    for (id bad in @[@"ab", @"abcdefghijklmnop", @"space name", @"a/b", @"a.b", @"café", @7, nulName]) {
+        NSMutableDictionary *s = defaults.mutableCopy; s[@"local_account_name"] = bad;
+        assert(!MAGSettingsValidate(s, &error));
+        assert(!MAGSettingsSave(path, s, &error));
+        assert([[NSData dataWithContentsOfFile:path] isEqual:before]);
+    }
+    NSMutableDictionary *named=normalized.mutableCopy;
+    for (NSString *name in @[@"Ab3", @"Pilot_7", @"ABCDEFGHIJKLMNO"]) {
+        named[@"local_account_name"]=name;
+        assert(MAGSettingsSave(path,named,&error));
+        assert([MAGSettingsLoad(path,&exists,&error)[@"local_account_name"] isEqual:name]);
+    }
+    assert(MAGSettingsSave(path,normalized,&error));
+    before=[NSData dataWithContentsOfFile:path];
     for (id bad in @[@"https://bad.example", @"bad.example/path", @"bad host", @"::1", @"-bad.example", @"bad..example", @"999.999.1.1", @7]) {
         NSMutableDictionary *s = defaults.mutableCopy; s[@"server_address"] = bad; error = nil;
         assert(!MAGSettingsValidate(s, &error) && error);

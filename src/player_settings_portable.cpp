@@ -1,4 +1,5 @@
 #include "player_settings_portable.h"
+#include "retail_network_policy.h"
 #include <algorithm>
 #include <cctype>
 #include <cerrno>
@@ -160,6 +161,7 @@ std::string quote(const std::string &text) {
 std::string encode(const PlayerSettings &s) {
   return "{\n  \"schema_version\": 1,\n  \"server_address\": " +
          quote(s.server_address) +
+         ",\n  \"local_account_name\": " + quote(s.local_account_name) +
          ",\n  \"tcp_port\": " + std::to_string(s.tcp_port) +
          ",\n  \"udp_port\": " + std::to_string(s.udp_port) +
          ",\n  \"display_mode\": " + quote(s.display_mode) +
@@ -173,7 +175,9 @@ PlayerSettings decode(const std::string &text) {
   PlayerSettings s;
   if (!values.count("render_scale"))
     values["render_scale"] = {false, "100"};
-  if (values.size() != 9)
+  if (!values.count("local_account_name"))
+    values["local_account_name"] = {true, ""};
+  if (values.size() != 10)
     invalid("Settings contain missing or unsupported fields.");
   auto str = [&](const char *key) {
     auto it = values.find(key);
@@ -194,6 +198,7 @@ PlayerSettings decode(const std::string &text) {
   };
   s.schema_version = number("schema_version");
   s.server_address = str("server_address");
+  s.local_account_name = str("local_account_name");
   s.tcp_port = number("tcp_port");
   s.udp_port = number("udp_port");
   s.display_mode = str("display_mode");
@@ -208,6 +213,10 @@ PlayerSettings decode(const std::string &text) {
 PlayerSettings validate_player_settings(PlayerSettings s) {
   if (s.schema_version != 1)
     invalid("This settings version is not supported.");
+  if (!s.local_account_name.empty() &&
+      (s.local_account_name.find('\0') != std::string::npos ||
+       !mag_local_account_name_valid(s.local_account_name.c_str())))
+    invalid("Use 3 to 15 letters, digits, hyphens or underscores for the community account name.");
   auto whitespace = [](unsigned char c) {
     return c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == '\f' ||
            c == '\v';

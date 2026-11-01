@@ -17,6 +17,8 @@ int main(int argc,char**argv){@autoreleasepool{
     [controller attachGameWindow:game];
     NSView *content=controller.window.contentView;
     NSTextField *server=(NSTextField *)find(content,@"server_address");
+    NSTextField *account=(NSTextField *)find(content,@"local_account_name");
+    assert(account);account.stringValue=@"Pilot_7";
     assert(server);server.stringValue=@"bad://server";[controller apply:nil];
     assert(![[NSFileManager defaultManager] fileExistsAtPath:path]);
     server.stringValue=@"community.example.net";[controller apply:nil];
@@ -76,6 +78,7 @@ int main(int argc,char**argv){@autoreleasepool{
     assert([MAGSettingsLoad(path,&exists,&error) isEqual:controller.settings]&&exists&&!error);
     NSError *damaged=[NSError errorWithDomain:@"fixture" code:1 userInfo:@{NSLocalizedDescriptionKey:@"Damaged settings"}];
     MAGSettingsController *recovery=[[MAGSettingsController alloc] initWithPath:[path stringByAppendingString:@".recovery"] settings:MAGSettingsDefaults() error:damaged];
+    ((NSTextField *)find(recovery.window.contentView,@"local_account_name")).stringValue=@"Pilot_7";
     NSButton *play=(NSButton *)find(recovery.window.contentView,@"play");
     assert(play&&!play.enabled);[recovery apply:nil];assert(play.enabled);
     [controller.window layoutIfNeeded];

@@ -13,7 +13,7 @@ static id invalid(NSError **error, NSString *message) {
 }
 
 NSDictionary *MAGSettingsDefaults(void) {
-    return @{@"schema_version":@1, @"server_address":@"play.magtest.online", @"tcp_port":@0, @"udp_port":@0,
+    return @{@"schema_version":@1, @"server_address":@"play.magtest.online", @"local_account_name":@"", @"tcp_port":@0, @"udp_port":@0,
              @"display_mode":@"windowed", @"output_width":@1280, @"output_height":@720,
              @"render_scale":@100, @"anti_aliasing":@"off"};
 }
@@ -34,8 +34,14 @@ NSDictionary *MAGSettingsValidate(id value, NSError **error) {
     // Schema 1 predates rendering-resolution selection. Migrate only the new
     // optional field, leaving saved preferences and the on-disk file intact.
     if (!normalized[@"render_scale"]) normalized[@"render_scale"] = @100;
+    if (!normalized[@"local_account_name"]) normalized[@"local_account_name"] = @"";
     d = normalized;
     if (d.count != MAGSettingsDefaults().count) return invalid(error, @"Settings contain missing or unsupported fields.");
+    NSString *account=d[@"local_account_name"];
+    NSCharacterSet *accountCharacters=[NSCharacterSet characterSetWithCharactersInString:@"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_"];
+    if (![account isKindOfClass:NSString.class] || (account.length &&
+        (account.length < 3 || account.length > 15 || [account rangeOfCharacterFromSet:accountCharacters.invertedSet].location != NSNotFound)))
+        return invalid(error,@"Use 3 to 15 letters, digits, hyphens or underscores for the community account name.");
     if (![d[@"server_address"] isKindOfClass:NSString.class]) return invalid(error, @"Enter a server hostname or IPv4 address.");
     NSString *host = [d[@"server_address"] stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet].lowercaseString;
     if (host.length > 253) return invalid(error, @"The server address is too long.");

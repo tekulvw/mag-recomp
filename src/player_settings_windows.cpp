@@ -13,7 +13,7 @@ HWND game, panel;
 RECT windowedFrame{};
 bool haveWindowedFrame;
 WNDPROC gameProc;
-HWND server, tcp, udp, mode, size;
+HWND server, tcp, udp, account, mode, size;
 bool done, accepted, confirming;
 mag::PlayerSettings draft;
 constexpr UINT settingsCommand = 0x1ff0;
@@ -91,6 +91,7 @@ LRESULT CALLBACK proc(HWND w, UINT message, WPARAM wp, LPARAM lp) {
         draft.server_address = text(server);
         draft.tcp_port = number(tcp);
         draft.udp_port = number(udp);
+        draft.local_account_name = text(account);
         draft.display_mode = SendMessageW(mode, CB_GETCURSEL, 0, 0) == 1
                                  ? "borderless"
                                  : "windowed";
@@ -104,6 +105,8 @@ LRESULT CALLBACK proc(HWND w, UINT message, WPARAM wp, LPARAM lp) {
         draft.render_scale = 100;
         draft.anti_aliasing = "off";
         draft = mag::validate_player_settings(draft);
+        if (!draft.server_address.empty() && draft.local_account_name.empty())
+          throw std::runtime_error("Enter a community account name before playing.");
         accepted = true;
         done = true;
       } catch (const std::exception &e) {
@@ -138,7 +141,8 @@ BOOL CALLBACK findGame(HWND window, LPARAM) {
   GetWindowThreadProcessId(window, &pid);
   wchar_t name[128];
   GetClassNameW(window, name, 128);
-  if (pid == GetCurrentProcessId() && !wcscmp(name, L"ps3recomp_d3d12")) {
+  if (pid == GetCurrentProcessId() &&
+      (!wcscmp(name, L"ps3recomp_d3d12") || !wcscmp(name, L"ps3recomp_null"))) {
     game = window;
     return FALSE;
   }
@@ -166,7 +170,7 @@ bool mag_desktop_edit(mag::PlayerSettings &settings, bool setup,
   panel = CreateWindowExW(
       WS_EX_DLGMODALFRAME, wc.lpszClassName, L"MAG Settings",
       WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU, CW_USEDEFAULT, CW_USEDEFAULT,
-      470, 600, game, nullptr, wc.hInstance, nullptr);
+      470, 660, game, nullptr, wc.hInstance, nullptr);
   if (!panel)
     throw std::runtime_error("Cannot create the settings window.");
   server = entry(L"Community server (blank uses original)",
@@ -175,14 +179,17 @@ bool mag_desktop_edit(mag::PlayerSettings &settings, bool setup,
               settings.tcp_port ? std::to_string(settings.tcp_port) : "", 76);
   udp = entry(L"UDP port (blank uses game default)",
               settings.udp_port ? std::to_string(settings.udp_port) : "", 136);
-  control(L"STATIC", L"Display mode", 0, 20, 196, 410, 20);
-  mode = control(L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_TABSTOP, 20, 218, 410,
+  account = entry(L"Community account (3-15 letters, digits, - or _)",
+                  settings.local_account_name, 196);
+  SendMessageW(account, EM_SETLIMITTEXT, 15, 0);
+  control(L"STATIC", L"Display mode", 0, 20, 256, 410, 20);
+  mode = control(L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_TABSTOP, 20, 278, 410,
                  100);
   for (auto value : {L"Windowed", L"Borderless fullscreen"})
     SendMessageW(mode, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(value));
   SendMessageW(mode, CB_SETCURSEL, settings.display_mode == "borderless", 0);
-  control(L"STATIC", L"Output window size", 0, 20, 256, 410, 20);
-  size = control(L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_TABSTOP, 20, 278, 410,
+  control(L"STATIC", L"Output window size", 0, 20, 316, 410, 20);
+  size = control(L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_TABSTOP, 20, 338, 410,
                  140);
   for (auto value :
        {L"1280 x 720", L"1920 x 1080", L"2560 x 1440", L"3840 x 2160"})
@@ -196,14 +203,14 @@ bool mag_desktop_edit(mag::PlayerSettings &settings, bool setup,
   control(L"STATIC",
           L"Rendering resolution: Native (100%)\nAnti-aliasing: Off\nThe D3D12 "
           L"renderer does not yet support internal scaling or FXAA.",
-          0, 20, 322, 410, 65);
+          0, 20, 382, 410, 65);
   control(L"STATIC",
           L"F10 or the window menu opens settings while playing.\nConnection "
           L"changes apply next launch.",
-          0, 20, 400, 410, 45);
-  control(L"BUTTON", L"Cancel", WS_TABSTOP, 220, 495, 90, 30, IDCANCEL);
+          0, 20, 460, 410, 45);
+  control(L"BUTTON", L"Cancel", WS_TABSTOP, 220, 555, 90, 30, IDCANCEL);
   control(L"BUTTON", setup ? L"Save and Play" : L"Apply",
-          WS_TABSTOP | BS_DEFPUSHBUTTON, 320, 495, 110, 30, IDOK);
+          WS_TABSTOP | BS_DEFPUSHBUTTON, 320, 555, 110, 30, IDOK);
   if (game)
     EnableWindow(game, FALSE);
   ShowWindow(panel, SW_SHOW);

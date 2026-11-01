@@ -34,23 +34,30 @@ int main(int argc, char **argv) {
   assert(!exists && settings.server_address == "play.magtest.online" &&
          settings.render_scale == 100);
   settings.server_address = " Example.COM ";
+  settings.local_account_name = "Pilot_7";
   settings.render_scale = 200;
   settings.tcp_port = 12345;
   mag::save_player_settings(file, settings);
   auto loaded = mag::load_player_settings(file, exists);
   assert(exists && loaded.server_address == "example.com" &&
-         loaded.render_scale == 200 && loaded.tcp_port == 12345);
+         loaded.render_scale == 200 && loaded.tcp_port == 12345 &&
+         loaded.local_account_name == "Pilot_7");
   std::ifstream read(file);
   std::string text((std::istreambuf_iterator<char>(read)), {});
+  read.close();
   auto field = text.find("  \"render_scale\": 200,\n");
   assert(field != std::string::npos);
   text.erase(field, std::string("  \"render_scale\": 200,\n").size());
+  field = text.find("  \"local_account_name\": \"Pilot_7\",\n");
+  assert(field != std::string::npos);
+  text.erase(field, std::string("  \"local_account_name\": \"Pilot_7\",\n").size());
   {
     std::ofstream out(file);
     out << text;
   }
   loaded = mag::load_player_settings(file, exists);
-  assert(loaded.render_scale == 100 && loaded.tcp_port == 12345);
+  assert(loaded.render_scale == 100 && loaded.tcp_port == 12345 &&
+         loaded.local_account_name.empty());
   {
     std::ifstream in(file);
     std::string unchanged((std::istreambuf_iterator<char>(in)), {});
@@ -69,6 +76,20 @@ int main(int argc, char **argv) {
     assert(rejected);
   }
   settings.server_address = "127.0.0.1";
+  for (const std::string &bad : std::vector<std::string>{
+           "ab", "abcdefghijklmnop", "space name", "a/b", "a.b",
+           "caf\xc3\xa9", std::string("Pilot\0Other", 11)}) {
+    settings.local_account_name = bad;
+    bool rejected = false;
+    try { mag::save_player_settings(file, settings); }
+    catch (...) { rejected = true; }
+    assert(rejected);
+  }
+  for (const std::string &name : {"Ab3", "Pilot-7", "ABCDEFGHIJKLMNO"}) {
+    settings.local_account_name = name;
+    mag::save_player_settings(file, settings);
+    assert(mag::load_player_settings(file, exists).local_account_name == name);
+  }
   for (int scale : {0, 99, 101, 400}) {
     settings.render_scale = scale;
     bool rejected = false;

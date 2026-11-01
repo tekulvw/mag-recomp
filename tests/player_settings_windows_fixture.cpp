@@ -123,7 +123,7 @@ void exercise(const fs::path &root) {
   PostMessageW(game, WM_CLOSE, 0, 0); Sleep(50);
   require(keys.load() == 0 && mouse.load() == 0, "Native input leaked to game");
   require(closes.load() == 1, "Settings swallowed a native close event");
-  auto edits = children(p, L"EDIT"); require(edits.size() == 3, "Expected server and port fields");
+  auto edits = children(p, L"EDIT"); require(edits.size() == 4, "Expected server, port and account fields");
   SetWindowTextW(edits[0], L"cancelled.invalid");
   command(p, IDCANCEL); idle(); require(saved().server_address.empty(), "Cancel saved a draft");
 
@@ -149,12 +149,13 @@ void exercise(const fs::path &root) {
   // Keep persists the selected output and next-launch connection settings.
   open(); p = panel(); edits = children(p, L"EDIT");
   SetWindowTextW(edits[0], L"play.magtest.online"); SetWindowTextW(edits[1], L"12345");
+  SetWindowTextW(edits[3], L"Pilot_7");
   output(p, 1); command(p, IDOK); p = panel(L"Keep MAG display settings?");
   pumping(); command(p, IDOK); idle(); dimensions(1920, 1080);
   auto s = saved(); require(s.output_width == 1920 && s.tcp_port == 12345 &&
-      s.server_address == "play.magtest.online", "Keep did not persist selected settings");
+      s.server_address == "play.magtest.online" && s.local_account_name == "Pilot_7", "Keep did not persist selected settings");
   bool present{}; auto snapshot = mag::load_player_settings(root / "overlay/launch-settings.json", present);
-  require(present && snapshot.server_address.empty() && snapshot.output_width == 1280,
+  require(present && snapshot.server_address.empty() && snapshot.local_account_name.empty() && snapshot.output_width == 1280,
           "In-game changes mutated immutable launch snapshot");
 
   require(!!SetWindowPos(game, nullptr, 230, 170, 0, 0, SWP_NOSIZE | SWP_NOZORDER),
@@ -200,17 +201,22 @@ int main(int argc, char **argv) {
   if (argc != 2 && argc != 3) return 2;
   auto root = fs::absolute(argv[1]); fs::create_directories(root / "overlay");
   mag::PlayerSettings initial; initial.server_address.clear();
+  if (argc == 3 && std::string(argv[2]) == "--account") initial.server_address = "play.magtest.online";
   mag::save_player_settings(root / "settings.json", initial);
   _putenv_s("MAG_PLAYER_SETTINGS_PATH", (root / "settings.json").string().c_str());
   _putenv_s("MAG_PLAYER_OVERLAY_ROOT", (root / "overlay").string().c_str());
   _putenv_s("MAG_PLAYER_SETUP", "1");
   _putenv_s("PS3_VFS_ROOT", root.string().c_str());
-  if (argc == 3) {
+  for (const char* key : {"MAG_LOCAL_ACCOUNT_NAME", "PS3_NP_ONLINE_ID",
+                          "PS3RECOMP_OSK_INITIAL_TEXT", "PS3RECOMP_NP_LOCAL_TICKET"})
+    _putenv_s(key, "");
+  const bool liveWindow = argc == 3 && std::string(argv[2]) == "--live-renderer";
+  if (argc == 3 && !liveWindow) {
     const std::string action = argv[2];
-    require(action == "--recover" || action == "--cancel" || action == "--review",
+    require(action == "--recover" || action == "--cancel" || action == "--review" || action == "--account",
             "Unknown setup fixture mode");
     if (action == "--review") _putenv_s("MAG_PLAYER_SHOW_SETTINGS", "1");
-    else std::ofstream(root / "settings.json") << "{broken";
+    else if (action != "--account") std::ofstream(root / "settings.json") << "{broken";
     std::thread setup([&] {
       try {
         auto p = panel();
@@ -222,8 +228,10 @@ int main(int argc, char **argv) {
           await([&] { return !IsWindow(error); }, "Recovery error did not close");
         }
         auto edits = children(p, L"EDIT");
-        require(edits.size() == 3, "Setup fields missing");
-        SetWindowTextW(edits[0], L""); SetWindowTextW(edits[1], L"23456");
+        require(edits.size() == 4, "Setup fields missing");
+        SetWindowTextW(edits[0], action == "--account" ? L"play.magtest.online" : L"");
+        SetWindowTextW(edits[1], L"23456");
+        SetWindowTextW(edits[3], action == "--account" ? L"Pilot_7" : L"");
         command(p, action == "--cancel" ? IDCANCEL : IDOK);
       } catch (const std::exception &e) {
         std::fprintf(stderr, "Win32 setup fixture: %s\n", e.what()); ExitProcess(1);
@@ -237,17 +245,36 @@ int main(int argc, char **argv) {
               "Cancelled recovery changed preferences or created a snapshot");
     } else {
       bool present{}; auto saved = mag::load_player_settings(root / "settings.json", present);
-      require(result == 1 && present && saved.server_address.empty() && saved.tcp_port == 23456,
+      require(result == 1 && present && (action == "--account" || saved.server_address.empty()) && saved.tcp_port == 23456,
               "Prelaunch review/recovery failed to save selected settings");
       auto snapshot = mag::load_player_settings(root / "overlay/launch-settings.json", present);
       require(present && snapshot.tcp_port == 23456, "Prelaunch snapshot did not match saved settings");
+      if (action == "--account") {
+        require(saved.local_account_name == "Pilot_7" && snapshot.local_account_name == "Pilot_7",
+                "Community name was not persisted and snapshotted");
+        for (const char* key : {"MAG_LOCAL_ACCOUNT_NAME", "PS3_NP_ONLINE_ID", "PS3RECOMP_OSK_INITIAL_TEXT"})
+          require(std::string(std::getenv(key)) == "Pilot_7", "Local identity environment missing");
+        require(std::string(std::getenv("PS3RECOMP_NP_LOCAL_TICKET")) == "1", "Local development identity policy missing");
+        saved.local_account_name = "AnotherPilot";
+        mag::save_player_settings(root / "settings.json", saved);
+        _putenv_s("MAG_PLAYER_SETUP", "");
+        require(mag_player_settings_prepare() == 1 && std::string(std::getenv("MAG_LOCAL_ACCOUNT_NAME")) == "Pilot_7",
+                "Engine did not preserve immutable account selection");
+        std::ofstream(root / "settings.json") << "{broken";
+        require(mag_player_settings_prepare() == 1 && std::string(std::getenv("MAG_LOCAL_ACCOUNT_NAME")) == "Pilot_7",
+                "Changed preferences disrupted the existing engine snapshot");
+      }
     }
     std::printf("Win32 prelaunch %s passed\n", action.c_str());
     return 0;
   }
   require(mag_player_settings_prepare() == 1, "Synthetic launch setup failed");
+  for (const char* key : {"MAG_LOCAL_ACCOUNT_NAME", "PS3_NP_ONLINE_ID",
+                          "PS3RECOMP_OSK_INITIAL_TEXT", "PS3RECOMP_NP_LOCAL_TICKET"})
+    require(!std::getenv(key), "Original-server mode selected a local identity");
   WNDCLASSW wc{}; wc.lpfnWndProc = host; wc.hInstance = GetModuleHandleW(nullptr);
-  wc.lpszClassName = L"ps3recomp_d3d12"; RegisterClassW(&wc);
+  wc.lpszClassName = liveWindow ? L"ps3recomp_null" : L"ps3recomp_d3d12";
+  RegisterClassW(&wc);
   game = CreateWindowW(wc.lpszClassName, L"MAG synthetic Windows settings test",
       WS_OVERLAPPEDWINDOW, 0, 0, 1280, 720, nullptr, nullptr, wc.hInstance, nullptr);
   require(game != nullptr, "Cannot create synthetic game window");

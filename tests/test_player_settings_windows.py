@@ -12,6 +12,33 @@ sys.path.insert(0, str(ROOT / 'installer'))
 
 @unittest.skipUnless(os.name == 'nt', 'Native Win32 fixture')
 class WindowsSettingsTests(unittest.TestCase):
+    def test_account_store_migration_and_retail_setter_guards(self):
+        from mag_installer.managed_tools import windows_toolchain_probe, msvc_environment
+        toolchain, detail = windows_toolchain_probe()
+        if not toolchain:
+            self.skipTest(detail)
+        environment = msvc_environment(toolchain['vcvars'])
+        with tempfile.TemporaryDirectory(prefix='mag-account-') as temp:
+            root = Path(temp)
+            for name, sources in (
+                ('store', ['src/player_settings_portable.cpp', 'tests/player_settings_portable.cpp']),
+                ('policy', ['tests/retail_network_account.cpp']),
+            ):
+                with self.subTest(fixture=name):
+                    objects = []
+                    for index, source in enumerate(sources):
+                        obj = root / f'{name}-{index}.obj'
+                        subprocess.run([toolchain['clang_cl'], '/nologo', '/std:c++20', '/EHsc', '/MT',
+                            '/W4', '/WX', '/UNDEBUG', '/D_CRT_SECURE_NO_WARNINGS', '/Isrc', '/c', source,
+                            '/Fo'+str(obj)], cwd=ROOT, env=environment, check=True, timeout=60)
+                        objects.append(str(obj))
+                    binary = root / (name+'.exe')
+                    subprocess.run([toolchain['clang_cl'], '/nologo', *objects, '/Fe'+str(binary)],
+                                   cwd=ROOT, env=environment, check=True, timeout=60)
+                    inputs = root / name
+                    inputs.mkdir()
+                    subprocess.run([str(binary), str(inputs)], env=environment, check=True, timeout=20)
+
     def test_native_dialogs_keep_frames_alive_and_preserve_transactions(self):
         from mag_installer.managed_tools import windows_toolchain_probe, msvc_environment
         toolchain, detail = windows_toolchain_probe()
@@ -47,7 +74,7 @@ class WindowsSettingsTests(unittest.TestCase):
             try:
                 startup = subprocess.STARTUPINFO()
                 startup.lpDesktop = desktop_name
-                for mode in ('', '--recover', '--cancel', '--review'):
+                for mode in ('', '--live-renderer', '--recover', '--cancel', '--review', '--account'):
                     with self.subTest(mode=mode or 'in-game'):
                         arguments = [mode] if mode else []
                         subprocess.run([str(binary), str(Path(temp) / ('private' + mode)), *arguments],

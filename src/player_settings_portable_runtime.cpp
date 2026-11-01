@@ -48,6 +48,8 @@ void setenvValue(const char *key, const std::string &value) {
 // Platform controls expose only implemented renderer capabilities. Existing
 // preferences remain available for review if a different platform saved them.
 void capabilities([[maybe_unused]] const mag::PlayerSettings &s) {
+  if (!s.server_address.empty() && s.local_account_name.empty())
+    throw std::runtime_error("Enter a community account name before playing.");
 #if defined(_WIN32) || !defined(MAG_PLAYER_VULKAN_FXAA)
   if (s.anti_aliasing != "off")
     throw std::runtime_error("This renderer supports AA Off. Review settings "
@@ -79,10 +81,17 @@ extern "C" int mag_player_settings_prepare() {
     if (settingsPath.empty())
       return 1;
     enabled = true;
+    const bool setup = env("MAG_PLAYER_SETUP") != nullptr;
+    auto folder = environmentPath("MAG_PLAYER_OVERLAY_ROOT");
+    if (folder.empty())
+      throw std::runtime_error("The private launch settings folder is unavailable.");
+    auto snapshot = folder / "launch-settings.json";
     bool exists = false;
     std::string error;
     try {
-      saved = mag::load_player_settings(settingsPath, exists);
+      saved = mag::load_player_settings(setup ? settingsPath : snapshot, exists);
+      if (!setup && !exists)
+        throw std::runtime_error("The launch settings snapshot is missing.");
     } catch (const std::exception &e) {
       saved = mag::PlayerSettings{};
       error = e.what();
@@ -93,8 +102,9 @@ extern "C" int mag_player_settings_prepare() {
       } catch (const std::exception &e) {
         error = e.what();
       }
-    const bool setup = env("MAG_PLAYER_SETUP") != nullptr;
-    if (!error.empty() || env("MAG_PLAYER_SHOW_SETTINGS") ||
+    if (!setup && !error.empty())
+      throw std::runtime_error(error);
+    if (!error.empty() || (setup && env("MAG_PLAYER_SHOW_SETTINGS")) ||
         (!exists && setup)) {
       mag_player_set_input_blocked(1);
       bool apply = mag_desktop_edit(saved, true, error.c_str());
@@ -104,19 +114,8 @@ extern "C" int mag_player_settings_prepare() {
       capabilities(saved);
       mag::save_player_settings(settingsPath, saved);
     }
-    auto folder = environmentPath("MAG_PLAYER_OVERLAY_ROOT");
-    if (folder.empty())
-      throw std::runtime_error(
-          "The private launch settings folder is unavailable.");
-    auto snapshot = folder / "launch-settings.json";
     if (setup)
       mag::save_player_settings(snapshot, saved);
-    else {
-      bool present = false;
-      saved = mag::load_player_settings(snapshot, present);
-      if (!present)
-        throw std::runtime_error("The launch settings snapshot is missing.");
-    }
     capabilities(saved);
     if (!saved.server_address.empty()) {
       auto vfs = environmentPath("PS3_VFS_ROOT");
@@ -129,6 +128,10 @@ extern "C" int mag_player_settings_prepare() {
       setenvValue("PS3_VFS_ROOT", std::string(utf8.begin(), utf8.end()));
       setenvValue("PS3_NET_ONLINE", "1");
       setenvValue("MAG_LOCAL_NO_TICKET", "1");
+      setenvValue("MAG_LOCAL_ACCOUNT_NAME", saved.local_account_name);
+      setenvValue("PS3_NP_ONLINE_ID", saved.local_account_name);
+      setenvValue("PS3RECOMP_OSK_INITIAL_TEXT", saved.local_account_name);
+      setenvValue("PS3RECOMP_NP_LOCAL_TICKET", "1");
     }
     setenvValue("PS3_AA", saved.anti_aliasing);
     setenvValue("MAG_PLAYER_RENDER_SCALE", std::to_string(saved.render_scale));

@@ -353,7 +353,7 @@ static void ticket_settings_trace(ppu_context* ctx) {
 static void supply_local_account(ppu_context* ctx, unsigned cfg) {
     const char* selected=getenv("MAG_LOCAL_ACCOUNT_NAME");
     if (!selected) return;
-    if (!cfg || (std::strcmp(selected,"Player") && std::strcmp(selected,"PlayerRetail"))) {
+    if (!cfg || !mag_local_account_name_valid(selected)) {
         fprintf(stderr,"[mag-net] unsupported local account profile\n"); exit(89);
     }
     const unsigned selected_length=(unsigned)std::strlen(selected);
