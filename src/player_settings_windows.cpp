@@ -293,24 +293,41 @@ void mag_desktop_attach(const mag::PlayerSettings &settings) {
 void mag_desktop_apply_display(const mag::PlayerSettings &settings) {
   if (!game)
     return;
+  auto style = [](LONG_PTR value) {
+    SetLastError(ERROR_SUCCESS);
+    if (!SetWindowLongPtrW(game, GWL_STYLE, value) && GetLastError())
+      throw std::runtime_error("Cannot change the game window style.");
+  };
   if (settings.display_mode == "borderless") {
     MONITORINFO info{};
     info.cbSize = sizeof info;
     if (!GetMonitorInfoW(MonitorFromWindow(game, MONITOR_DEFAULTTONEAREST),
                          &info))
       throw std::runtime_error("Cannot determine display bounds.");
-    SetWindowLongPtrW(game, GWL_STYLE, WS_POPUP | WS_VISIBLE);
-    SetWindowPos(game, nullptr, info.rcMonitor.left, info.rcMonitor.top,
+    style(WS_POPUP | WS_VISIBLE);
+    if (!SetWindowPos(game, nullptr, info.rcMonitor.left, info.rcMonitor.top,
                  info.rcMonitor.right - info.rcMonitor.left,
                  info.rcMonitor.bottom - info.rcMonitor.top,
-                 SWP_FRAMECHANGED | SWP_NOZORDER);
+                 SWP_FRAMECHANGED | SWP_NOZORDER))
+      throw std::runtime_error("Cannot apply borderless fullscreen.");
   } else {
     RECT bounds{0, 0, settings.output_width, settings.output_height};
-    AdjustWindowRect(&bounds, WS_OVERLAPPEDWINDOW, FALSE);
-    SetWindowLongPtrW(game, GWL_STYLE, WS_OVERLAPPEDWINDOW | WS_VISIBLE);
-    SetWindowPos(game, nullptr, 0, 0, bounds.right - bounds.left,
+    if (!AdjustWindowRectExForDpi(&bounds, WS_OVERLAPPEDWINDOW, FALSE, 0,
+                                  GetDpiForWindow(game)))
+      throw std::runtime_error("Cannot calculate the game window size.");
+    style(WS_OVERLAPPEDWINDOW | WS_VISIBLE);
+    if (!SetWindowPos(game, nullptr, 0, 0, bounds.right - bounds.left,
                  bounds.bottom - bounds.top,
-                 SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOZORDER);
+                 SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOZORDER))
+      throw std::runtime_error("Cannot apply the output window size.");
+    RECT actual{};
+    if (!GetClientRect(game, &actual))
+      throw std::runtime_error("Cannot verify the output window size.");
+    if (actual.right != settings.output_width ||
+        actual.bottom != settings.output_height)
+      throw std::runtime_error(
+          "This output size does not fit this display in windowed mode. "
+          "Choose a smaller size or borderless fullscreen.");
   }
 }
 extern "C" DWORD WINAPI mag_player_xinput_state(DWORD index,
