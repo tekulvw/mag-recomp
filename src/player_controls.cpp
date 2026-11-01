@@ -24,6 +24,10 @@ struct ControlsState {
     std::map<ActionId,ActiveAction> actions;
     std::vector<ActionEvent> releases;
     std::optional<InputContext> context;
+    std::optional<PhysicalInputSample> sample;
+    std::vector<QueuedInput> sampled_queue;
+    bool sample_invalidated=false;
+    unsigned sample_revoked_sources=0;
     std::optional<HostInputFrame> frame;
     std::map<std::pair<uint64_t,uint32_t>,uint64_t> retired;
 };
@@ -45,7 +49,17 @@ void release_locked(ControlsState& state, std::optional<InputSource> source={}) 
         std::erase_if(state.queue,[&](const auto& e){return !e.revoke_source && e.event.control.source==*source;});
         if(state.queue.size()>=8192) { release_locked(state); return; }
         state.queue.push_back({{},source});
+        if(state.sample && !state.frame && !state.sample_invalidated) {
+            // The sealed raw sample stays immutable. Its semantic projection
+            // loses only the revoked source, after other sealed input events.
+            if(state.sampled_queue.size()>=8192) { release_locked(state); return; }
+            std::erase_if(state.sampled_queue,[&](const auto& e){return !e.revoke_source && e.event.control.source==*source;});
+            state.sampled_queue.push_back({{},source});
+            state.sample_revoked_sources|=1u<<unsigned(*source);
+        }
     } else {
+        state.sample_invalidated=true;
+        state.sampled_queue.clear();
         for (auto& [id,action]:state.actions) if(action.down) {
             state.releases.push_back({id,ActionEventKind::Release,state.next_token++,action.source,true});
             action.down=false; action.sources=0;
@@ -57,11 +71,16 @@ void release_locked(ControlsState& state, std::optional<InputSource> source={}) 
     ++state.generation;
 }
 void retire_locked(ControlsState& state) {
-    if(!state.frame) return;
-    const auto key=state.frame->key;
+    if(!state.sample) return;
+    const auto key=state.sample->key;
+    // No semantic attachment means this poll was rejected/unsupported. Cancel
+    // old held actions and require fresh activation rather than replaying any
+    // of its physical edges or preserving a missed release as a stuck action.
+    if(!state.frame) release_locked(state);
     auto& high=state.retired[{key.process_session,key.player_slot}];
-    high=std::max(high,key.simulation_sequence);
-    state.frame.reset();
+    high=std::max(high,key.sample_sequence);
+    state.frame.reset(); state.sample.reset(); state.sampled_queue.clear();
+    state.sample_invalidated=false; state.sample_revoked_sources=0;
 }
 unsigned bound_sources(const ControlsState& state, ActionId id, InputContext context, const InputPolicy& policy, bool gameplay) {
     unsigned sources=0;
@@ -207,9 +226,14 @@ void mag_controls_configure(const ControlsProfile& profile) {
     release_locked(state);
     state.profile=profile;
     for(const auto& b:profile.bindings) state.actions.try_emplace(b.action);
-    if(profile.mode==InputMode::KBM) {
-        PolicyEvents deny; deny.requested_mode=InputMode::KBM;
-        state.policy=mag_controls_update_policy(state.policy,deny);
+    if(profile.mode!=InputMode::Controller) {
+        // Revocation is immediate even when the next sample cannot attach.
+        // Granting the explicit Controller exception still waits for attachment.
+        PolicyEvents event; event.requested_mode=profile.mode;
+        event.focused=false; event.gameplay=false;
+        event.controller_connected=state.capture.controller_connected;
+        event.stick_neutral=state.capture.stick_neutral;
+        state.policy=mag_controls_update_policy(state.policy,event);
     }
 }
 void mag_controls_set_capture_state(const InputCaptureState& capture) {
@@ -257,28 +281,50 @@ void mag_controls_push_controller_axes(const ControllerAxes& input, bool neutral
     if(neutral) state.controller_axes_rearmed=true;
     if(state.controller_axes_rearmed) state.controller_axes=axes;
 }
-const HostInputFrame& mag_controls_acquire_frame(InputFrameKey key,InputContext context) {
+namespace {
+const PhysicalInputSample& seal_locked(ControlsState& state,InputFrameKey key) {
     if(key.player_slot!=0) throw std::invalid_argument("only local player slot zero is supported");
+    if(!key.process_session || !key.sample_sequence) throw std::invalid_argument("input key identity required");
+    if(state.sample && state.sample->key==key) return *state.sample;
+    const auto owner=std::make_pair(key.process_session,key.player_slot);
+    if(key.sample_sequence<=state.retired[owner] ||
+       (state.sample && state.sample->key.process_session==key.process_session &&
+        state.sample->key.player_slot==key.player_slot && key.sample_sequence<state.sample->key.sample_sequence))
+        throw std::invalid_argument("retired input sample key");
+    retire_locked(state);
+    PhysicalInputSample sample; sample.key=key; sample.capture_generation=state.generation;
+    sample.capture=state.capture;
+    sample.mouse_dx=state.mouse_dx; sample.mouse_dy=state.mouse_dy;
+    sample.mouse_motion_seen=state.mouse_motion_seen; sample.controller_axes=state.controller_axes;
+    state.mouse_dx=0; state.mouse_dy=0; state.mouse_motion_seen=false;
+    state.capture.fresh_stick_deflection=false;
+    state.sampled_queue=std::move(state.queue); state.queue.clear();
+    state.sample_invalidated=false; state.sample_revoked_sources=0;
+    for(const auto& queued:state.sampled_queue) if(!queued.revoke_source) sample.events.push_back(queued.event);
+    state.sample=std::move(sample);
+    return *state.sample;
+}
+const HostInputFrame& attach_locked(ControlsState& state,InputFrameKey key,InputContext context) {
     const bool gameplay=gameplay_context(context);
-    auto& state=controls(); std::lock_guard lock(state.mutex);
-    if(!key.process_session || !key.simulation_sequence) throw std::invalid_argument("input key identity required");
     if(state.frame && state.frame->key==key) {
         if(state.frame->context!=context) throw std::invalid_argument("input context already frozen");
         return *state.frame;
     }
-    const auto owner=std::make_pair(key.process_session,key.player_slot);
-    if(key.simulation_sequence<=state.retired[owner] ||
-       (state.frame && state.frame->key.process_session==key.process_session && state.frame->key.player_slot==key.player_slot && key.simulation_sequence<state.frame->key.simulation_sequence))
-        throw std::invalid_argument("retired input frame key");
-    retire_locked(state);
-    if(state.context && *state.context!=context) release_locked(state);
+    if(!state.sample || state.sample->key!=key) throw std::invalid_argument("input sample must be sealed before attachment");
+    const auto& sample=*state.sample;
+    if(state.sample_invalidated) throw std::invalid_argument("input sample invalidated before attachment");
+    const bool mouse_revoked=state.sample_revoked_sources & (1u<<unsigned(InputSource::Mouse));
+    const bool controller_revoked=state.sample_revoked_sources & (1u<<unsigned(InputSource::Controller));
+    const bool context_changed=state.context && *state.context!=context;
+    if(context_changed) { release_locked(state); state.sampled_queue.clear(); }
     state.context=context;
     HostInputFrame frame; frame.key=key; frame.context=context; frame.capture_generation=state.generation;
     frame.policy=state.policy; frame.policy.mode=state.profile.mode;
     frame.events=std::move(state.releases); state.releases.clear();
     bool kbm=false;
-    const bool accepting=enabled(state) && context!=InputContext::Settings && context!=InputContext::Rebinding;
-    if(accepting) for(const auto& queued:state.queue) {
+    const bool accepting=enabled(state) && sample.capture.focused && sample.capture.supported_context &&
+        context!=InputContext::Settings && context!=InputContext::Rebinding;
+    if(accepting) for(const auto& queued:state.sampled_queue) {
         if(queued.revoke_source) {
             std::erase_if(state.accepted_down,[&](auto c){return c.source==*queued.revoke_source;});
             std::erase_if(state.toggled,[&](auto c){return c.source==*queued.revoke_source;});
@@ -299,21 +345,36 @@ const HostInputFrame& mag_controls_acquire_frame(InputFrameKey key,InputContext 
         if(gameplay && matching && event.down && event.control.source!=InputSource::Controller) kbm=true;
         update_actions(state,frame,event.control.source,gameplay);
     }
-    state.queue.clear();
-    if(accepting && gameplay && mag_controls_gameplay_source_allowed(frame.policy,InputSource::Mouse)) {
-        frame.mouse_dx=state.mouse_dx; frame.mouse_dy=state.mouse_dy;
+    state.sampled_queue.clear();
+    if(accepting && gameplay && !context_changed && !mouse_revoked && mag_controls_gameplay_source_allowed(frame.policy,InputSource::Mouse)) {
+        frame.mouse_dx=sample.mouse_dx; frame.mouse_dy=sample.mouse_dy;
     }
-    state.mouse_dx=0; state.mouse_dy=0;
     PolicyEvents events; events.requested_mode=state.profile.mode; events.focused=accepting; events.gameplay=gameplay;
-    events.controller_connected=state.capture.controller_connected; events.gameplay_kbm=kbm;
-    events.mouse_motion=accepting && gameplay && state.mouse_motion_seen; state.mouse_motion_seen=false; events.mouse_captured=state.capture.mouse_captured;
-    events.stick_neutral=state.capture.stick_neutral; events.fresh_stick_deflection=state.capture.fresh_stick_deflection;
-    state.capture.fresh_stick_deflection=false;
+    events.controller_connected=sample.capture.controller_connected && !controller_revoked; events.gameplay_kbm=kbm;
+    events.mouse_motion=accepting && gameplay && !context_changed && !mouse_revoked && sample.mouse_motion_seen;
+    events.mouse_captured=sample.capture.mouse_captured;
+    events.stick_neutral=controller_revoked || sample.capture.stick_neutral;
+    events.fresh_stick_deflection=!controller_revoked && sample.capture.fresh_stick_deflection;
     state.policy=mag_controls_update_policy(state.policy,events); frame.policy=state.policy;
-    if(accepting && gameplay && mag_controls_gameplay_source_allowed(frame.policy,InputSource::Controller)) frame.controller_axes=state.controller_axes;
+    if(accepting && gameplay && !context_changed && !controller_revoked && mag_controls_gameplay_source_allowed(frame.policy,InputSource::Controller)) frame.controller_axes=sample.controller_axes;
     for(const auto& [id,action]:state.actions) frame.values.push_back({id,action.down ? 1.0 : 0.0});
     state.frame=std::move(frame);
     return *state.frame;
+}
+}
+const PhysicalInputSample& mag_controls_seal_sample(InputFrameKey key) {
+    auto& state=controls(); std::lock_guard lock(state.mutex);
+    return seal_locked(state,key);
+}
+const HostInputFrame& mag_controls_attach_sample(InputFrameKey key,InputContext context) {
+    auto& state=controls(); std::lock_guard lock(state.mutex);
+    return attach_locked(state,key,context);
+}
+const HostInputFrame& mag_controls_acquire_frame(InputFrameKey key,InputContext context) {
+    (void)gameplay_context(context);
+    auto& state=controls(); std::lock_guard lock(state.mutex);
+    (void)seal_locked(state,key);
+    return attach_locked(state,key,context);
 }
 ActionFrameView mag_controls_actions(const HostInputFrame& frame,InputContext context,ConsumptionLedger& ledger) {
     auto& state=controls(); std::lock_guard lock(state.mutex);
@@ -327,7 +388,7 @@ ActionFrameView mag_controls_actions(const HostInputFrame& frame,InputContext co
 }
 void mag_controls_retire_frame(InputFrameKey key) {
     auto& state=controls(); std::lock_guard lock(state.mutex);
-    if(state.frame && state.frame->key==key) retire_locked(state);
+    if(state.sample && state.sample->key==key) retire_locked(state);
 }
 void mag_controls_release_input(InputResetReason reason) {
     auto& state=controls(); std::lock_guard lock(state.mutex);

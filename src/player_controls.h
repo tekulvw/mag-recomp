@@ -62,7 +62,8 @@ struct ControlsProfile {
     std::vector<ControlBinding> bindings;
 };
 struct InputFrameKey {
-    uint64_t process_session=0, simulation_sequence=0;
+    // Advances for an actual input sample, not an outer scheduler callback.
+    uint64_t process_session=0, sample_sequence=0;
     uint32_t player_slot=0;
     friend auto operator<=>(const InputFrameKey&, const InputFrameKey&)=default;
 };
@@ -82,6 +83,17 @@ struct InputCaptureState {
     uint64_t time_ns=0;
 };
 struct PhysicalInputEvent { PhysicalControl control; bool down=false; uint64_t time_ns=0; };
+// A completed input poll, before any gameplay or menu interpretation. Sealing
+// does not accept gameplay input or change Auto's KBM provenance.
+struct PhysicalInputSample {
+    InputFrameKey key;
+    uint64_t capture_generation=0;
+    InputCaptureState capture;
+    int64_t mouse_dx=0, mouse_dy=0;
+    bool mouse_motion_seen=false;
+    std::optional<ControllerAxes> controller_axes;
+    std::vector<PhysicalInputEvent> events;
+};
 struct HostInputFrame {
     InputFrameKey key;
     InputContext context=InputContext::OnFoot;
@@ -107,7 +119,16 @@ void mag_controls_push_mouse(int64_t dx, int64_t dy);
 void mag_controls_push_controller_axes(const ControllerAxes&, bool neutral);
 // Only local player slot zero is supported. Acquisition/retirement and consumers
 // share the simulation thread. Capture callbacks may run on other threads.
-// Reference remains valid only until retirement or acquisition of a different key.
+// References remain valid until retirement or sealing a different key. Sealing
+// without semantic attachment and then retiring rejects that sample, cancels
+// held actions/pending input, and requires fresh activation. An old key never
+// drains new input. Native callers seal only after an actual completed poll.
+const PhysicalInputSample& mag_controls_seal_sample(InputFrameKey key);
+// Attach one proven semantic context to the sealed sample. Events captured after
+// sealing remain queued for the next poll. No physical acquisition happens here.
+const HostInputFrame& mag_controls_attach_sample(InputFrameKey key, InputContext classified_context);
+// Convenience for callers whose physical poll and context are already proven
+// together; native phased integration uses seal/attach separately.
 const HostInputFrame& mag_controls_acquire_frame(InputFrameKey key, InputContext classified_context);
 ActionFrameView mag_controls_actions(const HostInputFrame&, InputContext, ConsumptionLedger&);
 void mag_controls_retire_frame(InputFrameKey key);

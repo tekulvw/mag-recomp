@@ -57,6 +57,24 @@ class PlayerControlsTests(unittest.TestCase):
     def test_disconnect_preserves_queued_cross_source_order(self):
         subprocess.run([str(self.binary), 'device-order'], check=True)
 
+    def test_physical_poll_and_semantic_attachment_are_separate(self):
+        subprocess.run([str(self.binary), 'sample-phases'], check=True)
+
+    def test_skipped_interpretation_and_focus_invalidation(self):
+        subprocess.run([str(self.binary), 'sample-lifecycle'], check=True)
+
+    def test_sealed_input_is_not_reinterpreted_in_a_new_context(self):
+        subprocess.run([str(self.binary), 'sample-contexts'], check=True)
+
+    def test_source_revocation_between_poll_and_interpretation(self):
+        subprocess.run([str(self.binary), 'sample-revocation'], check=True)
+
+    def test_capture_loss_cancels_sealed_mouse_policy_inputs(self):
+        subprocess.run([str(self.binary), 'sample-mouse-revocation'], check=True)
+
+    def test_mode_permission_revocation_precedes_next_sample(self):
+        subprocess.run([str(self.binary), 'configure-policy'], check=True)
+
 
 if __name__ == '__main__':
     unittest.main()

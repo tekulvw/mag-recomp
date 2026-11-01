@@ -283,6 +283,124 @@ static void focus_tests() {
     const auto& fresh=mag_controls_acquire_frame({10,4,0},InputContext::OnFoot);
     check(action_value(fresh,2)==1 && fresh.policy.kbm_used_this_process,"fresh activation restores action without clearing provenance");
 }
+static void sample_phase_tests() {
+    mag_controls_configure(bindings_profile());
+    InputCaptureState capture; capture.mouse_captured=true; capture.controller_connected=true;
+    mag_controls_set_capture_state(capture);
+    ControllerAxes axes; axes.look_x=.25;
+    mag_controls_push_controller_axes(axes,true);
+    mag_controls_push_event({{InputSource::Keyboard,26},true,1});
+    mag_controls_push_mouse(7,-2);
+    const InputFrameKey first{10,1,0};
+    const auto& sample=mag_controls_seal_sample(first);
+    check(sample.mouse_dx==7 && sample.mouse_dy==-2 && sample.events.size()==1,"seal freezes raw physical events/counts");
+    check(sample.controller_axes && sample.controller_axes->look_x==.25,"seal includes this poll's raw axes");
+    check(!mag_controls_current_policy().kbm_used_this_process,"uninterpreted physical input is not accepted gameplay");
+    mag_controls_push_event({{InputSource::Keyboard,26},false,2});
+    mag_controls_push_mouse(99,3); axes.look_x=.75; mag_controls_push_controller_axes(axes,false);
+    check(&mag_controls_seal_sample(first)==&sample && sample.mouse_dx==7 && sample.events.size()==1,"same sample key cannot drain later input");
+    const auto& frame=mag_controls_attach_sample(first,InputContext::OnFoot);
+    check(frame.mouse_dx==7 && frame.mouse_dy==-2 && frame.controller_axes->look_x==.25,"semantic attachment uses sealed data");
+    check(action_value(frame,1)==1 && event_count(frame,1,ActionEventKind::Press)==1,"late key release cannot alter earlier gameplay view");
+    check(frame.policy.kbm_used_this_process && !mag_controls_assist_allowed(frame.policy),"accepted gameplay revokes assist at attachment");
+    check(&mag_controls_attach_sample(first,InputContext::OnFoot)==&frame,"repeated attachment preserves immutable view");
+    const auto& next=mag_controls_seal_sample({10,2,0});
+    check(next.mouse_dx==99 && next.events.size()==1 && next.controller_axes->look_x==.75,"late events/axes wait for next actual poll");
+    const auto& released=mag_controls_attach_sample(next.key,InputContext::OnFoot);
+    check(action_value(released,1)==0 && event_count(released,1,ActionEventKind::Release)==1,"next poll delivers the release once");
+}
+static void sample_lifecycle_tests() {
+    mag_controls_configure(bindings_profile());
+    InputCaptureState capture; capture.mouse_captured=true;
+    mag_controls_set_capture_state(capture);
+    mag_controls_push_event({{InputSource::Mouse,0},true,1});
+    check(action_value(mag_controls_acquire_frame({10,1,0},InputContext::OnFoot),2)==1,"fire held before skipped interpretation");
+    mag_controls_push_event({{InputSource::Mouse,0},false,2});
+    (void)mag_controls_seal_sample({10,2,0});
+    mag_controls_retire_frame({10,2,0});
+    const auto& cancelled=mag_controls_acquire_frame({10,3,0},InputContext::OnFoot);
+    check(action_value(cancelled,2)==0 && event_count(cancelled,2,ActionEventKind::Release)==1 && cancelled.events[0].cleanup,"discarded interpretation cannot leave a missed release stuck");
+    mag_controls_push_mouse(55,0);
+    bool rejected=false;
+    try { (void)mag_controls_seal_sample({10,2,0}); } catch(const std::invalid_argument&) { rejected=true; }
+    check(rejected,"retired raw sample cannot be acquired again");
+    mag_controls_retire_frame({10,2,0});
+    const auto& fresh=mag_controls_seal_sample({10,4,0});
+    check(fresh.mouse_dx==55,"late retire/stale acquire cannot drain a later poll's mouse counts");
+    capture.focused=false; mag_controls_set_capture_state(capture);
+    rejected=false;
+    try { (void)mag_controls_attach_sample(fresh.key,InputContext::OnFoot); } catch(const std::invalid_argument&) { rejected=true; }
+    check(rejected,"focus loss between poll and interpretation rejects the sealed sample");
+    mag_controls_retire_frame({10,4,0});
+    capture.focused=true; mag_controls_set_capture_state(capture);
+    mag_controls_push_event({{InputSource::Keyboard,26},true,3});
+    const auto& next=mag_controls_acquire_frame({10,5,0},InputContext::OnFoot);
+    check(next.mouse_dx==0 && action_value(next,1)==1,"fresh input resumes without replaying cancelled mouse motion");
+}
+static void sample_context_tests() {
+    mag_controls_configure(bindings_profile());
+    InputCaptureState capture; capture.mouse_captured=true;
+    mag_controls_set_capture_state(capture);
+    mag_controls_push_event({{InputSource::Keyboard,26},true,1}); mag_controls_push_mouse(9,0);
+    bool rejected=false;
+    try { (void)mag_controls_seal_sample({10,1,1}); } catch(const std::invalid_argument&) { rejected=true; }
+    check(rejected,"unsupported raw sample slot is rejected before draining input");
+    const auto& sample=mag_controls_seal_sample({10,1,0});
+    check(sample.mouse_dx==9 && sample.events.size()==1,"valid raw sample retains input after rejected slot");
+    const auto& menu=mag_controls_attach_sample(sample.key,InputContext::Menu);
+    check(menu.mouse_dx==0 && !menu.policy.kbm_used_this_process,"menu interpretation does not accept gameplay motion or provenance");
+    rejected=false;
+    try { (void)mag_controls_attach_sample(sample.key,InputContext::OnFoot); } catch(const std::invalid_argument&) { rejected=true; }
+    check(rejected,"same physical press cannot be reinterpreted in a new context");
+    const auto& gameplay=mag_controls_acquire_frame({10,2,0},InputContext::OnFoot);
+    check(action_value(gameplay,1)==0 && !gameplay.policy.kbm_used_this_process,"menu-held key cannot activate on context transition");
+    mag_controls_push_event({{InputSource::Keyboard,26},false,2});
+    mag_controls_push_event({{InputSource::Keyboard,26},true,3});
+    check(action_value(mag_controls_acquire_frame({10,3,0},InputContext::OnFoot),1)==1,"fresh key activation works after the new context is established");
+}
+static void sample_revocation_tests() {
+    mag_controls_configure(bindings_profile());
+    InputCaptureState capture; capture.mouse_captured=true; capture.controller_connected=true;
+    mag_controls_set_capture_state(capture);
+    mag_controls_push_event({{InputSource::Keyboard,26},true,1});
+    (void)mag_controls_acquire_frame({10,1,0},InputContext::OnFoot);
+    mag_controls_push_event({{InputSource::Controller,0},true,2});
+    mag_controls_push_event({{InputSource::Mouse,0},true,3}); mag_controls_push_mouse(8,0);
+    (void)mag_controls_seal_sample({10,2,0});
+    capture.controller_connected=false; mag_controls_set_capture_state(capture);
+    const auto& frame=mag_controls_attach_sample({10,2,0},InputContext::OnFoot);
+    check(action_value(frame,1)==1 && action_value(frame,2)==1 && frame.mouse_dx==8,"controller revocation between phases preserves keyboard hold and sealed mouse input");
+    check(action_value(frame,3)==0 && !frame.controller_axes && !frame.policy.controller_connected,"revoked controller cannot contribute from the sealed sample");
+    check(event_count(frame,1,ActionEventKind::Release)==0 && event_count(frame,2,ActionEventKind::Press)==1,"source revocation cannot create unrelated release/press pairs");
+}
+static void sample_mouse_revocation_tests() {
+    mag_controls_configure(bindings_profile());
+    InputCaptureState capture; capture.mouse_captured=true; capture.controller_connected=true;
+    capture.stick_neutral=false; capture.fresh_stick_deflection=true;
+    mag_controls_set_capture_state(capture);
+    mag_controls_push_event({{InputSource::Mouse,0},true,1}); mag_controls_push_mouse(8,0);
+    (void)mag_controls_seal_sample({10,1,0});
+    capture.mouse_captured=false; mag_controls_set_capture_state(capture);
+    const auto& frame=mag_controls_attach_sample({10,1,0},InputContext::OnFoot);
+    check(frame.mouse_dx==0 && action_value(frame,2)==0,"capture loss revokes sealed mouse contributions");
+    check(!frame.policy.kbm_used_this_process && frame.policy.look_owner==LookOwner::Controller,"revoked mouse cannot latch gameplay provenance or seize look");
+}
+static void configure_policy_tests() {
+    auto profile=bindings_profile(); profile.mode=InputMode::KBM;
+    mag_controls_configure(profile);
+    check(!mag_controls_assist_allowed(mag_controls_current_policy()),"KBM denies assist immediately");
+    profile.mode=InputMode::Controller; mag_controls_configure(profile);
+    check(!mag_controls_assist_allowed(mag_controls_current_policy()),"configuration cannot grant Controller permission before a valid boundary");
+    (void)mag_controls_acquire_frame({10,1,0},InputContext::OnFoot);
+    check(mag_controls_assist_allowed(mag_controls_current_policy()),"explicit Controller permission is available at a valid boundary");
+    profile.mode=InputMode::Auto; mag_controls_configure(profile);
+    check(!mag_controls_assist_allowed(mag_controls_current_policy()),"Auto immediately revokes Controller exception with retained KBM history");
+    (void)mag_controls_seal_sample({10,2,0});
+    InputCaptureState capture; capture.focused=false; mag_controls_set_capture_state(capture);
+    bool rejected=false;
+    try { (void)mag_controls_attach_sample({10,2,0},InputContext::OnFoot); } catch(const std::invalid_argument&) { rejected=true; }
+    check(rejected && !mag_controls_assist_allowed(mag_controls_current_policy()),"rejected sample cannot preserve the old Controller exception");
+}
 int main(int argc, char** argv) {
     try {
         if (argc!=2) return 2;
@@ -290,7 +408,9 @@ int main(int argc, char** argv) {
         if(name=="policy") policy_tests(); else if(name=="mouse") mouse_tests(); else if(name=="controller") controller_tests();
         else if(name=="frames") frame_tests(); else if(name=="bindings") binding_tests(); else if(name=="focus") focus_tests();
         else if(name=="validation") profile_validation_tests(); else if(name=="toggle") toggle_tests(); else if(name=="motion") motion_detection_tests(); else if(name=="axes") axes_tests();
-        else if(name=="device") device_tests(); else if(name=="device-order") device_order_tests(); else return 2;
+        else if(name=="device") device_tests(); else if(name=="device-order") device_order_tests(); else if(name=="sample-phases") sample_phase_tests();
+        else if(name=="sample-lifecycle") sample_lifecycle_tests(); else if(name=="sample-contexts") sample_context_tests(); else if(name=="sample-revocation") sample_revocation_tests();
+        else if(name=="sample-mouse-revocation") sample_mouse_revocation_tests(); else if(name=="configure-policy") configure_policy_tests(); else return 2;
         return 0;
     } catch(const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }
 }
