@@ -21,7 +21,7 @@ fs::path create_server_overlay(const fs::path &source, const fs::path &,
 }
 }
 namespace {
-std::atomic<unsigned> ticks, keys, mouse;
+std::atomic<unsigned> ticks, keys, mouse, closes;
 std::atomic<bool> finished;
 std::atomic<bool> constrainOutput;
 HWND game;
@@ -99,6 +99,7 @@ void dimensions(int width, int height) {
   }
 }
 LRESULT CALLBACK host(HWND w, UINT message, WPARAM wp, LPARAM lp) {
+  if (message == WM_CLOSE) { ++closes; return 0; }
   if (message == WM_GETMINMAXINFO) {
     auto result = DefWindowProcW(w, message, wp, lp);
     // A controlled equivalent of Windows constraining a window larger than
@@ -118,8 +119,10 @@ void exercise(const fs::path &root) {
   // F10, input ownership and Cancel must preserve preferences and frame progress.
   open(); auto p = panel(); pumping();
   PostMessageW(game, WM_KEYDOWN, VK_ESCAPE, 0);
-  PostMessageW(game, WM_LBUTTONDOWN, 0, 0); Sleep(50);
+  PostMessageW(game, WM_LBUTTONDOWN, 0, 0);
+  PostMessageW(game, WM_CLOSE, 0, 0); Sleep(50);
   require(keys.load() == 0 && mouse.load() == 0, "Native input leaked to game");
+  require(closes.load() == 1, "Settings swallowed a native close event");
   auto edits = children(p, L"EDIT"); require(edits.size() == 3, "Expected server and port fields");
   SetWindowTextW(edits[0], L"cancelled.invalid");
   command(p, IDCANCEL); idle(); require(saved().server_address.empty(), "Cancel saved a draft");
@@ -189,13 +192,54 @@ void exercise(const fs::path &root) {
 }
 }
 int main(int argc, char **argv) {
-  if (argc != 2) return 2;
+  if (argc != 2 && argc != 3) return 2;
   auto root = fs::absolute(argv[1]); fs::create_directories(root / "overlay");
   mag::PlayerSettings initial; initial.server_address.clear();
   mag::save_player_settings(root / "settings.json", initial);
   _putenv_s("MAG_PLAYER_SETTINGS_PATH", (root / "settings.json").string().c_str());
   _putenv_s("MAG_PLAYER_OVERLAY_ROOT", (root / "overlay").string().c_str());
   _putenv_s("MAG_PLAYER_SETUP", "1");
+  _putenv_s("PS3_VFS_ROOT", root.string().c_str());
+  if (argc == 3) {
+    const std::string action = argv[2];
+    require(action == "--recover" || action == "--cancel" || action == "--review",
+            "Unknown setup fixture mode");
+    if (action == "--review") _putenv_s("MAG_PLAYER_SHOW_SETTINGS", "1");
+    else std::ofstream(root / "settings.json") << "{broken";
+    std::thread setup([&] {
+      try {
+        auto p = panel();
+        if (action != "--review") {
+          HWND error{};
+          await([&] { error = window(L"#32770", L"MAG Settings"); return error != nullptr; },
+                "Recovery error did not appear");
+          acknowledge(error);
+          await([&] { return !IsWindow(error); }, "Recovery error did not close");
+        }
+        auto edits = children(p, L"EDIT");
+        require(edits.size() == 3, "Setup fields missing");
+        SetWindowTextW(edits[0], L""); SetWindowTextW(edits[1], L"23456");
+        command(p, action == "--cancel" ? IDCANCEL : IDOK);
+      } catch (const std::exception &e) {
+        std::fprintf(stderr, "Win32 setup fixture: %s\n", e.what()); ExitProcess(1);
+      }
+    });
+    auto result = mag_player_settings_prepare(); setup.join();
+    if (action == "--cancel") {
+      require(result == 0, "Cancelled recovery started the game");
+      std::ifstream in(root / "settings.json"); std::string content; in >> content;
+      require(content == "{broken" && !fs::exists(root / "overlay/launch-settings.json"),
+              "Cancelled recovery changed preferences or created a snapshot");
+    } else {
+      bool present{}; auto saved = mag::load_player_settings(root / "settings.json", present);
+      require(result == 1 && present && saved.server_address.empty() && saved.tcp_port == 23456,
+              "Prelaunch review/recovery failed to save selected settings");
+      auto snapshot = mag::load_player_settings(root / "overlay/launch-settings.json", present);
+      require(present && snapshot.tcp_port == 23456, "Prelaunch snapshot did not match saved settings");
+    }
+    std::printf("Win32 prelaunch %s passed\n", action.c_str());
+    return 0;
+  }
   require(mag_player_settings_prepare() == 1, "Synthetic launch setup failed");
   WNDCLASSW wc{}; wc.lpfnWndProc = host; wc.hInstance = GetModuleHandleW(nullptr);
   wc.lpszClassName = L"ps3recomp_d3d12"; RegisterClassW(&wc);

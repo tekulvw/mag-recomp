@@ -47,8 +47,11 @@ class WindowsSettingsTests(unittest.TestCase):
             try:
                 startup = subprocess.STARTUPINFO()
                 startup.lpDesktop = desktop_name
-                subprocess.run([str(binary), str(Path(temp) / 'private')],
-                               env=environment, startupinfo=startup, check=True, timeout=75)
+                for mode in ('', '--recover', '--cancel', '--review'):
+                    with self.subTest(mode=mode or 'in-game'):
+                        arguments = [mode] if mode else []
+                        subprocess.run([str(binary), str(Path(temp) / ('private' + mode)), *arguments],
+                                       env=environment, startupinfo=startup, check=True, timeout=75)
             finally:
                 user32.CloseDesktop(desktop)
 
