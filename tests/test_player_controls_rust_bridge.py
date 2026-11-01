@@ -30,3 +30,5 @@ class RustControlsBridgeTests(unittest.TestCase):
     def test_interaction_hold_and_release_reach_two_independent_consumers(self):subprocess.run([str(self.binary),'interaction'],check=True)
     def test_provisional_ui_reads_do_not_mark_accepted_gameplay(self):subprocess.run([str(self.binary),'policy'],check=True)
     def test_actual_c_abi_rejects_stale_handles_and_serializes_concurrent_calls(self):subprocess.run([str(self.binary),'abi'],check=True)
+
+    def test_focus_loss_allows_repeated_retirement_and_requires_fresh_activation(self):subprocess.run([str(self.binary),'focus'],check=True)

@@ -61,6 +61,18 @@ static void policy_acceptance(){
     require(offered(k,2).down,"accepting policy consumed the action");
     mag_controls_observe(k,2,o);mag_controls_retire_frame(k);
 }
+static void focus_retirement(){
+    setup();mag_controls_push_event({{InputSource::Keyboard,26},true,time_ns()});auto k=frame(1);
+    require(offered(k,1).down,"W did not attach before focus loss");
+    mag_controls_set_window_capture(false,false);
+    require(!mag_controls_frame_valid(k,mag_controls_current_generation()),"old frame survived focus loss");
+    mag_controls_retire_frame(k);mag_controls_retire_frame(k);
+    mag_controls_set_window_capture(true,true);k=frame(2);
+    require(!mag_controls_offer(k,1),"held W replayed after refocus");mag_controls_retire_frame(k);
+    mag_controls_push_event({{InputSource::Keyboard,26},false,time_ns()});
+    mag_controls_push_event({{InputSource::Keyboard,26},true,time_ns()});k=frame(3);
+    require(offered(k,1).down,"fresh W press was lost after focus cleanup");mag_controls_retire_frame(k);
+}
 static void abi_handles(){
     require(mag_input_abi_version()==1,"unexpected ABI");uint64_t handle=0,generation=0;
     require(mag_input_create(1,nullptr,0,&handle)==0,"C create failed");
@@ -75,4 +87,4 @@ static void abi_handles(){
     require(replacement!=handle,"destroyed handle was reused without a generation");
     require(mag_input_destroy(replacement)==0,"replacement destroy failed");
 }
-int main(int argc,char** argv){try{if(argc!=2)return 2;std::string which=argv[1];if(which=="held")held_frames();else if(which=="interaction")interaction();else if(which=="policy")policy_acceptance();else if(which=="abi")abi_handles();else return 2;return 0;}catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}
+int main(int argc,char** argv){try{if(argc!=2)return 2;std::string which=argv[1];if(which=="held")held_frames();else if(which=="interaction")interaction();else if(which=="policy")policy_acceptance();else if(which=="abi")abi_handles();else if(which=="focus")focus_retirement();else return 2;return 0;}catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}
