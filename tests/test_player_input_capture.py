@@ -4,15 +4,17 @@ import subprocess
 import tempfile
 import unittest
 import sys
+import os
 ROOT=Path(__file__).resolve().parents[1]
+SOURCE=Path(os.environ.get('MAG_INPUT_CAPTURE_TEST_SOURCE',ROOT)).resolve()
 class PlayerInputCaptureTests(unittest.TestCase):
     def test_actual_poll_owns_complete_raw_controller_sample(self):
         compiler=shutil.which('clang++') or shutil.which('g++')
         if not compiler:self.skipTest('C++20 compiler required')
         with tempfile.TemporaryDirectory(prefix='mag-input-capture-') as tmp:
             binary=Path(tmp)/'capture'
-            subprocess.run([compiler,'-std=c++20','-Wall','-Wextra','-Werror','-I'+str(ROOT/'src'),
-                            str(ROOT/'tests/player_input_capture.cpp'),str(ROOT/'src/player_input_capture.cpp'),'-o',str(binary)],check=True)
+            subprocess.run([compiler,'-std=c++20','-Wall','-Wextra','-Werror','-I'+str(SOURCE/'src'),
+                            str(ROOT/'tests/player_input_capture.cpp'),str(SOURCE/'src/player_input_capture.cpp'),'-o',str(binary)],check=True)
             subprocess.run([str(binary)],check=True)
 
     @unittest.skipUnless(sys.platform=='darwin','macOS wrapper fixture')
@@ -49,8 +51,8 @@ SDL_bool SDL_GameControllerGetAttached(SDL_GameController*);
 #endif
 ''')
             wrapper=root/'wrapper.o';binary=root/'capture'
-            subprocess.run(['xcrun','clang','-fobjc-arc','-Wall','-Wextra','-Werror','-I'+str(root),'-I'+str(ROOT/'src'),'-c',str(ROOT/'src/player_input_macos.m'),'-o',str(wrapper)],check=True)
-            subprocess.run(['xcrun','clang++','-std=c++20','-Wall','-Wextra','-Werror','-I'+str(root),'-I'+str(ROOT/'src'),str(wrapper),
-                            str(ROOT/'src/player_input_capture.cpp'),str(ROOT/'tests/player_input_macos_capture.cpp'),'-o',str(binary)],check=True)
+            subprocess.run(['xcrun','clang','-fobjc-arc','-Wall','-Wextra','-Werror','-I'+str(root),'-I'+str(SOURCE/'src'),'-c',str(SOURCE/'src/player_input_macos.m'),'-o',str(wrapper)],check=True)
+            subprocess.run(['xcrun','clang++','-std=c++20','-Wall','-Wextra','-Werror','-I'+str(root),'-I'+str(SOURCE/'src'),str(wrapper),
+                            str(SOURCE/'src/player_input_capture.cpp'),str(ROOT/'tests/player_input_macos_capture.cpp'),'-o',str(binary)],check=True)
             subprocess.run([str(binary)],check=True)
 if __name__=='__main__':unittest.main()
