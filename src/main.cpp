@@ -1,3 +1,4 @@
+#include "mag_runtime_defaults.h"
 /*
  * ps3recomp game project -- entry point template.
  *
@@ -382,6 +383,10 @@ static void harness_guest_caller(uint32_t opd, uint64_t a0, uint64_t a1,
 
 int main(int argc, char** argv)
 {
+    if (mag_apply_runtime_defaults() != 0) {
+        fprintf(stderr, "Failed to initialize runtime defaults\n");
+        return 1;
+    }
     setvbuf(stdout, NULL, _IONBF, 0);
     setvbuf(stderr, NULL, _IONBF, 0);
     if (argc < 2) {

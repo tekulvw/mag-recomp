@@ -7,6 +7,20 @@ stays in Git-ignored directories and must not be shared.
 A complete clean bootstrap on a second machine has not yet been verified end to end; please report
 any step that does not work as written.
 
+## Development baseline and normal defaults
+
+Start new work from freshly fetched `origin/main`, then create a focused PR branch. Keep SDK
+checkouts at the exact pins below; historical diagnostic branches and temporary objects are not
+substitutes for those sources. Reconcile with main before publishing and after related PRs merge.
+
+Generated PPU code now defaults to optimization level `1`; use `-DMAG_GENERATED_PPU_OPT=0` for an
+explicit diagnostic build. Use a fresh build directory when switching baselines, because an
+existing CMake cache retains its previous value. The executable supplies `SPU_DISPATCH_CACHE=1`,
+`SPU_MFC_LOOKUP_CACHE=1`, `SPU_FLOAT_RZ=1` and `PS3_VERBOSE=0` before SDK initialization. Explicit
+caller values are preserved, including dispatch-cache `shadow` mode. These settings match the
+retained rendering configuration; they are not a frame-rate guarantee. Experimental renderer
+replacement and capture features remain opt-in.
+
 ## 1. Host dependencies
 
 Apple Silicon macOS with Metal, Xcode Command Line Tools, Python 3.11+, CMake 3.20+, Ninja, SDL2,

@@ -400,7 +400,7 @@ endif()
 #   - the same MAG_GENERATED_PPU_OPT level everywhere. MSVC-style drivers spell
 #     it /Od, /O1, /O2 (clang-cl ignores -O0 and would keep the Release /O2).
 #     x86-64 without FMA flags never contracts, so no contraction switch there.
-set(MAG_GENERATED_PPU_OPT "0" CACHE STRING "Generated title PPU optimization level (diagnostic default0)")
+set(MAG_GENERATED_PPU_OPT "1" CACHE STRING "Generated title PPU optimization level (0 for diagnostics)")
 set_property(CACHE MAG_GENERATED_PPU_OPT PROPERTY STRINGS 0 1 2)
 if(NOT MAG_GENERATED_PPU_OPT MATCHES "^[012]$")
     message(FATAL_ERROR "MAG_GENERATED_PPU_OPT must be0,1,or2")
