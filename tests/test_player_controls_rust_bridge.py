@@ -32,3 +32,5 @@ class RustControlsBridgeTests(unittest.TestCase):
     def test_actual_c_abi_rejects_stale_handles_and_serializes_concurrent_calls(self):subprocess.run([str(self.binary),'abi'],check=True)
 
     def test_focus_loss_allows_repeated_retirement_and_requires_fresh_activation(self):subprocess.run([str(self.binary),'focus'],check=True)
+
+    def test_space_press_and_release_do_not_interrupt_an_existing_w_hold(self):subprocess.run([str(self.binary),'jump-key'],check=True)

@@ -11,7 +11,7 @@ static void require(bool ok,const char* why){if(!ok)throw std::runtime_error(why
 static uint64_t time_ns(){return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();}
 static void setup(){
     ControlsProfile p;p.mode=InputMode::Auto;
-    p.bindings={{{InputSource::Keyboard,26},1},{{InputSource::Keyboard,8},2}};
+    p.bindings={{{InputSource::Keyboard,26},1},{{InputSource::Keyboard,8},2},{{InputSource::Keyboard,44},3}};
     mag_controls_configure(p);mag_controls_set_window_capture(true,true);mag_controls_set_supported_context(true);
 }
 static InputFrameKey frame(uint64_t sequence){InputFrameKey k{17,sequence,0};mag_controls_acquire_frame(k,InputContext::OnFoot);return k;}
@@ -61,6 +61,18 @@ static void policy_acceptance(){
     require(offered(k,2).down,"accepting policy consumed the action");
     mag_controls_observe(k,2,o);mag_controls_retire_frame(k);
 }
+static void independent_jump_key(){
+    setup();mag_controls_push_event({{InputSource::Keyboard,26},true,time_ns()});auto k=frame(1);auto movement=offered(k,1);
+    require(movement.down,"W was not held before Space");mag_controls_observe(k,1,movement);mag_controls_retire_frame(k);
+    mag_controls_push_event({{InputSource::Keyboard,44},true,time_ns()});k=frame(2);
+    require(offered(k,1).down&&offered(k,1).pulse_id==movement.pulse_id,"Space press interrupted held W");
+    auto jump=offered(k,3);require(jump.down,"Space did not produce its own action");
+    mag_controls_observe(k,1,offered(k,1));mag_controls_observe(k,3,jump);mag_controls_retire_frame(k);
+    mag_controls_push_event({{InputSource::Keyboard,44},false,time_ns()});k=frame(3);
+    require(offered(k,1).down&&offered(k,1).pulse_id==movement.pulse_id,"Space release interrupted held W");
+    require(!offered(k,3).down,"Space release was lost");mag_controls_observe(k,3,offered(k,3));mag_controls_observe(k,1,offered(k,1));mag_controls_retire_frame(k);
+    k=frame(4);require(offered(k,1).down&&!mag_controls_offer(k,3),"completed Jump action affected W hold");mag_controls_retire_frame(k);
+}
 static void focus_retirement(){
     setup();mag_controls_push_event({{InputSource::Keyboard,26},true,time_ns()});auto k=frame(1);
     require(offered(k,1).down,"W did not attach before focus loss");
@@ -87,4 +99,4 @@ static void abi_handles(){
     require(replacement!=handle,"destroyed handle was reused without a generation");
     require(mag_input_destroy(replacement)==0,"replacement destroy failed");
 }
-int main(int argc,char** argv){try{if(argc!=2)return 2;std::string which=argv[1];if(which=="held")held_frames();else if(which=="interaction")interaction();else if(which=="policy")policy_acceptance();else if(which=="abi")abi_handles();else if(which=="focus")focus_retirement();else return 2;return 0;}catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}
+int main(int argc,char** argv){try{if(argc!=2)return 2;std::string which=argv[1];if(which=="held")held_frames();else if(which=="interaction")interaction();else if(which=="policy")policy_acceptance();else if(which=="abi")abi_handles();else if(which=="focus")focus_retirement();else if(which=="jump-key")independent_jump_key();else return 2;return 0;}catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}
