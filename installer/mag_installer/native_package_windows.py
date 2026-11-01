@@ -212,6 +212,16 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR arguments, int
     join(request, logs, L"handoff-request.json");
     join(home, g_root, L"home");
     CreateDirectoryW(home, NULL);
+    /* Writable PS3 storage must survive disposable disc/settings views. The
+     * pinned cellGame uses 128-byte host path buffers; a per-launch log path
+     * can overflow those even in an ordinary installation. Install paths are
+     * ASCII, and a content directory can contain up to 31 characters. */
+    wchar_t hdd0[MAX_PATH], hdd1[MAX_PATH];
+    join(hdd0,home,L"hdd0");join(hdd1,home,L"hdd1");
+    if(wcslen(hdd0)+6+31+7>=128)
+        fail(L"Installation path is too long for game data",L"Move the complete installation to a shorter folder and try again");
+    if(!CreateDirectoryW(hdd0,NULL)&&GetLastError()!=ERROR_ALREADY_EXISTS)fail(L"Cannot create game-data storage",hdd0);
+    if(!CreateDirectoryW(hdd1,NULL)&&GetLastError()!=ERROR_ALREADY_EXISTS)fail(L"Cannot create game-cache storage",hdd1);
 
     wchar_t settings[MAX_PATH], config_home[MAX_PATH];
     DWORD config_length=GetEnvironmentVariableW(L"APPDATA",config_home,MAX_PATH);
@@ -227,6 +237,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR arguments, int
     if(arguments&&wcsstr(arguments,L"--settings"))set_env(L"MAG_PLAYER_SHOW_SETTINGS",L"1");
     set_env(L"HOME", home);
     set_env(L"PS3_VFS_ROOT", vfs);
+    set_env(L"PS3_HDD0_ROOT", hdd0);
+    set_env(L"PS3_HDD1_ROOT", hdd1);
     set_env(L"PS3_BOOT_PATH", L"/dev_bdvd/PS3_GAME/USRDIR/EBOOT.BIN");
     set_env(L"PS3_HLE_UNRESOLVED", L"halt");
     set_env(L"PS3_SYSCALL_UNRESOLVED", L"halt");
