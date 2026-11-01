@@ -28,7 +28,7 @@ struct State {
     bool mouse_motion_seen{},last_neutral=true;
     State(){check(mag_input_create(1,nullptr,0,&handle));sync_capture();}
     ~State(){mag_input_destroy(handle);}
-    void sync_capture(){check(mag_input_capture(handle,uint32_t(capture.focused)|(uint32_t(capture.supported_context)<<1)|(uint32_t(capture.mouse_captured)<<2)|(uint32_t(capture.controller_connected)<<3),&generation));}
+    void sync_capture(){const auto previous=generation;check(mag_input_capture(handle,uint32_t(capture.focused)|(uint32_t(capture.supported_context)<<1)|(uint32_t(capture.mouse_captured)<<2)|(uint32_t(capture.controller_connected)<<3),&generation));if(previous!=generation)frame.reset();}
     InputPolicy read_policy(){MagInputPolicy result{};check(mag_input_policy_read(handle,&result));return policy(result);}
     void reset(uint32_t source){check(mag_input_reset(handle,source,&generation));if(source==3){frame.reset();sample.reset();diagnostics.clear();}else std::erase_if(diagnostics,[source](auto event){return uint32_t(event.control.source)==source;});if(source==1 || source==3)mouse_motion_seen=false;if(source==2 || source==3)axes.reset();}
 };

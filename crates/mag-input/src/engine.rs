@@ -109,13 +109,20 @@ impl Engine {
 
     /// End receipt acceptance for a frame without acknowledging its offers.
     pub fn retire(&mut self, key: FrameKey) -> Result<(), Error> {
+        if key.session != self.session || key.sequence == 0 || key.player_slot != 0 {
+            return Err(Error::InvalidFrame);
+        }
         if self.sampled.as_ref().is_some_and(|sample| sample.0 == key) {
             self.cancel_all()?;
             self.last_sequence = key.sequence;
             return Ok(());
         }
         if !self.frame.as_ref().is_some_and(|frame| frame.key == key) {
-            return Err(Error::InvalidFrame);
+            return if key.sequence <= self.last_sequence {
+                Ok(())
+            } else {
+                Err(Error::InvalidFrame)
+            };
         }
         self.frame = None;
         Ok(())
@@ -158,6 +165,9 @@ impl Engine {
 
     fn cancel_all(&mut self) -> Result<(), Error> {
         let generation = self.next_generation()?;
+        if let Some((key, _, _)) = &self.sampled {
+            self.last_sequence = self.last_sequence.max(key.sequence);
+        }
         self.blocked.extend(self.physical.iter().copied());
         self.accepted.clear();
         self.toggled.clear();
@@ -358,6 +368,9 @@ impl Engine {
         }
         if self.context.is_some_and(|old| old != context) {
             self.cancel_all()?;
+            // The new context still gets its simulation opportunity, with no
+            // input inherited from the previous owner or context.
+            self.sampled = Some((key, Vec::new(), MouseMotion::default()));
         }
         self.context = Some(context);
         self.sample(key)?;

@@ -457,3 +457,25 @@ fn retiring_an_uninterpreted_sample_blocks_its_held_controls() {
             .is_none()
     );
 }
+
+#[test]
+fn cancellation_retirement_is_idempotent_and_cannot_reuse_a_sample() {
+    let mut engine = setup(vec![binding(26, MOVE)]);
+    event(&mut engine, 1, 26, true, 10);
+    engine.sample(key(1)).unwrap();
+    engine.set_capture(Capture::default()).unwrap();
+    engine.retire(key(1)).unwrap();
+    engine.retire(key(1)).unwrap();
+    assert!(engine.sample(key(1)).is_err());
+    assert!(engine.retire(key(99)).is_err());
+}
+
+#[test]
+fn changing_owner_after_physical_sealing_cancels_the_sample_without_failing_the_frame() {
+    let mut engine = setup(vec![binding(26, MOVE)]);
+    engine.seal(key(1), 10, context(99)).unwrap();
+    event(&mut engine, 1, 26, true, 20);
+    engine.sample(key(2)).unwrap();
+    let frame = engine.seal(key(2), 30, context(100)).unwrap();
+    assert!(frame.action(MOVE).is_none());
+}
