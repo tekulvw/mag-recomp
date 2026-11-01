@@ -32,6 +32,20 @@ _SUPERVISOR = r'''
 #include "supervisor_config.h"
 
 static wchar_t g_root[MAX_PATH] = L".";
+static wchar_t g_overlay[MAX_PATH];
+static void remove_owned_overlay(const wchar_t *path) {
+    wchar_t pattern[MAX_PATH], child[MAX_PATH];WIN32_FIND_DATAW data;
+    swprintf(pattern,MAX_PATH,L"%ls\\*",path);HANDLE search=FindFirstFileW(pattern,&data);
+    if(search!=INVALID_HANDLE_VALUE){do{
+        if(!wcscmp(data.cFileName,L".")||!wcscmp(data.cFileName,L".."))continue;
+        swprintf(child,MAX_PATH,L"%ls\\%ls",path,data.cFileName);
+        if(data.dwFileAttributes&FILE_ATTRIBUTE_DIRECTORY){if(!(data.dwFileAttributes&FILE_ATTRIBUTE_REPARSE_POINT))remove_owned_overlay(child);else RemoveDirectoryW(child);}
+        else DeleteFileW(child);
+    }while(FindNextFileW(search,&data));FindClose(search);}
+    RemoveDirectoryW(path);
+}
+static void cleanup_overlay(void){if(*g_overlay){remove_owned_overlay(g_overlay);*g_overlay=0;}}
+
 
 static void fail(const wchar_t *message, const wchar_t *detail) {
     wchar_t text[4096];
@@ -44,6 +58,7 @@ static void fail(const wchar_t *message, const wchar_t *detail) {
         DWORD written; if (n > 1) WriteFile(file, utf8, (DWORD)(n - 1), &written, NULL); CloseHandle(file);
     }
     MessageBoxW(NULL, text, L"MAG", MB_OK | MB_ICONERROR);
+    cleanup_overlay();
     ExitProcess(1);
 }
 
@@ -81,7 +96,11 @@ static unsigned char *read_file(const wchar_t *path, DWORD *size_out) {
 
 static void sha256(const unsigned char *data, DWORD length, char *out) {
     unsigned char digest[32];
-    if (BCryptHash(BCRYPT_SHA256_ALG_HANDLE, NULL, 0, (PUCHAR)data, length, digest, 32) < 0) fail(L"SHA-256 is unavailable", NULL);
+    BCRYPT_ALG_HANDLE algorithm = NULL;
+    if (BCryptOpenAlgorithmProvider(&algorithm, BCRYPT_SHA256_ALGORITHM, NULL, 0) < 0) fail(L"SHA-256 is unavailable", NULL);
+    NTSTATUS result = BCryptHash(algorithm, NULL, 0, (PUCHAR)data, length, digest, 32);
+    BCryptCloseAlgorithmProvider(algorithm, 0);
+    if (result < 0) fail(L"SHA-256 failed", NULL);
     hex(digest, 32, out);
 }
 
@@ -193,10 +212,33 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR arguments, int
     join(request, logs, L"handoff-request.json");
     join(home, g_root, L"home");
     CreateDirectoryW(home, NULL);
+    /* Writable PS3 storage must survive disposable disc/settings views. The
+     * pinned cellGame uses 128-byte host path buffers; a per-launch log path
+     * can overflow those even in an ordinary installation. Install paths are
+     * ASCII, and a content directory can contain up to 31 characters. */
+    wchar_t hdd0[MAX_PATH], hdd1[MAX_PATH];
+    join(hdd0,home,L"hdd0");join(hdd1,home,L"hdd1");
+    if(wcslen(hdd0)+6+31+7>=128)
+        fail(L"Installation path is too long for game data",L"Move the complete installation to a shorter folder and try again");
+    if(!CreateDirectoryW(hdd0,NULL)&&GetLastError()!=ERROR_ALREADY_EXISTS)fail(L"Cannot create game-data storage",hdd0);
+    if(!CreateDirectoryW(hdd1,NULL)&&GetLastError()!=ERROR_ALREADY_EXISTS)fail(L"Cannot create game-cache storage",hdd1);
 
+    wchar_t settings[MAX_PATH], config_home[MAX_PATH];
+    DWORD config_length=GetEnvironmentVariableW(L"APPDATA",config_home,MAX_PATH);
+    if(!config_length||config_length>=MAX_PATH)fail(L"The user settings folder is unavailable",NULL);
+    join(settings,config_home,L"MAG\\settings.json");
+    wchar_t overlay_path[MAX_PATH];join(overlay_path,logs,L"player-overlay");
+    if(!CreateDirectoryW(overlay_path,NULL))fail(L"Cannot create the private launch settings folder",overlay_path);
+    lstrcpyW(g_overlay,overlay_path);
     clear_inherited();
+    set_env(L"MAG_PLAYER_SETTINGS_PATH",settings);
+    set_env(L"MAG_PLAYER_OVERLAY_ROOT",g_overlay);
+    set_env(L"MAG_PLAYER_SETUP",L"1");
+    if(arguments&&wcsstr(arguments,L"--settings"))set_env(L"MAG_PLAYER_SHOW_SETTINGS",L"1");
     set_env(L"HOME", home);
     set_env(L"PS3_VFS_ROOT", vfs);
+    set_env(L"PS3_HDD0_ROOT", hdd0);
+    set_env(L"PS3_HDD1_ROOT", hdd1);
     set_env(L"PS3_BOOT_PATH", L"/dev_bdvd/PS3_GAME/USRDIR/EBOOT.BIN");
     set_env(L"PS3_HLE_UNRESOLVED", L"halt");
     set_env(L"PS3_SYSCALL_UNRESOLVED", L"halt");
@@ -218,7 +260,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR arguments, int
 
     join(log, logs, L"launcher.log");
     DWORD result = run(job, launcher, launcher_elf, logs, log);
-    if (result != 90) return (int)result;
+    if (result != 90) {cleanup_overlay();return (int)result;}
 
     char expected[256];
     snprintf(expected, sizeof expected, "{\"version\":1,\"token\":\"%s\",\"guest_path\":\"/dev_bdvd/PS3_GAME/USRDIR/bin/mage_g.self\",\"kind\":\"mage_g\"}\n", token);
@@ -229,9 +271,11 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR arguments, int
     const wchar_t *cleared[] = {L"MAG_HANDOFF_REQUEST", L"MAG_HANDOFF_TOKEN", L"MAG_ENGINE_BINARY", L"MAG_ENGINE_ELF",
         L"MAG_ENGINE_SELF", L"MAG_ENGINE_BINARY_SHA256", L"MAG_ENGINE_ELF_SHA256", L"MAG_ENGINE_SELF_SHA256", L"MAG_ENGINE_KEY_SHA256"};
     for (size_t i = 0; i < sizeof cleared / sizeof cleared[0]; i++) SetEnvironmentVariableW(cleared[i], NULL);
+    SetEnvironmentVariableW(L"MAG_PLAYER_SETUP",NULL);
+    SetEnvironmentVariableW(L"MAG_PLAYER_SHOW_SETTINGS",NULL);
     set_env(L"PS3_BOOT_PATH", L"/dev_bdvd/PS3_GAME/USRDIR/bin/mage_g.self");
     join(log, logs, L"engine.log");
-    return (int)run(job, engine, engine_elf, logs, log);
+    result=run(job, engine, engine_elf, logs, log);cleanup_overlay();return (int)result;
 }
 '''
 

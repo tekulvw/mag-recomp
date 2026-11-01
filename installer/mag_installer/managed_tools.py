@@ -227,6 +227,15 @@ LINUX_LOCK = {'python': {'id': 'python-linux',
 for _key in ('wheel-construct', 'wheel-tabulate', 'wheel-tqdm', 'source-sdl2', 'source-glslang', 'source-spirv-cross', 'source-ffmpeg'):
     LINUX_LOCK[_key] = LOCK[_key]
 
+# Official zlib 1.3.2 source; static /MT build keeps Windows packages DLL-free.
+# https://zlib.net/ publishes this SHA-256; verified against the fossil archive.
+WINDOWS_LOCK['source-zlib'] = {
+    'id':'source-zlib-windows', 'url':'https://zlib.net/fossils/zlib-1.3.2.tar.gz',
+    'size':1502830, 'sha256':'bb329a0a2cd0274d05519d61c667c062e06990d72e125ee2dfa8de64f0119d16',
+    'archive':'tar.gz', 'root':'zlib-1.3.2', 'max_expanded_bytes':67108864, 'max_entries':5000,
+}
+
+
 LOCKS = {'macos-arm64': LOCK, 'windows-x86_64': WINDOWS_LOCK, 'linux-x86_64': LINUX_LOCK}
 SUPPORTED_HOSTS = tuple(LOCKS)
 
@@ -515,7 +524,7 @@ def bootstrap(root, cache=None, token=None, events=None, build_dependencies=True
     Returns tool paths, Python module roots and exact FFmpeg/CMake prefix paths.
     """
     if host_key()=='windows-x86_64':
-        return _bootstrap_windows(root, cache, token, events)
+        return _bootstrap_windows(root, cache, token, events, build_dependencies)
     if host_key()=='linux-x86_64':
         return _bootstrap_linux(root, cache, token, events, build_dependencies)
     if host_key()!='macos-arm64': raise InstallerError('Managed native tools support Apple Silicon Macs and 64-bit Windows PCs')
@@ -777,7 +786,21 @@ class _ElevatedProcess:
         return self.returncode
 
 
-def _bootstrap_windows(root, cache, token, events):
+def windows_dependency_plan(paths, prefix, toolchain):
+    """Build the settings archive dependency using the player's existing C++ tools."""
+    prefix=Path(prefix); build=prefix.parent/'build-zlib'; cmake=str(paths['cmake'])
+    return [
+        {'id':'configure-zlib','cwd':paths['source-zlib'],'argv':[cmake,'-S',str(paths['source-zlib']),'-B',str(build),
+            '-G','Ninja','-DCMAKE_MAKE_PROGRAM='+str(paths['ninja']),'-DCMAKE_BUILD_TYPE=Release',
+            '-DCMAKE_C_COMPILER='+Path(toolchain['clang_cl']).as_posix(),'-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded',
+            '-DCMAKE_INSTALL_PREFIX='+prefix.as_posix(),'-DCMAKE_INSTALL_LIBDIR=lib',
+            '-DZLIB_BUILD_SHARED=OFF','-DZLIB_BUILD_STATIC=ON','-DZLIB_BUILD_TESTING=OFF']},
+        {'id':'build-zlib','cwd':build,'argv':[cmake,'--build',str(build),'--parallel','2']},
+        {'id':'install-zlib','cwd':build,'argv':[cmake,'--install',str(build)]},
+    ]
+
+
+def _bootstrap_windows(root, cache, token, events, build_dependencies=True):
     token = token or Cancellation(); events = events or (lambda event: None)
     root = Path(root).absolute(); root.mkdir(parents=True, exist_ok=True)
     if root.is_symlink(): raise InstallerError('Managed root must not be a symlink')
@@ -791,6 +814,7 @@ def _bootstrap_windows(root, cache, token, events):
             paths[key] = location / spec['executable']
             if key == 'python': python_root = location
         elif key.startswith('wheel-'): sites.append(location)
+        elif key.startswith('source-'): paths[key]=location/spec['root']
     _install_wheels(python_root, sites, token, WINDOWS_LOCK['python']['site_packages'])
     env = {**os.environ, 'PATH': os.pathsep.join((str(Path(paths['python']).parent), str(_system32()))),
            'PYTHONNOUSERSITE': '1', 'TEMP': str(home), 'TMP': str(home)}
@@ -798,7 +822,20 @@ def _bootstrap_windows(root, cache, token, events):
     run_command([str(paths['python']), '-c', 'import Crypto,capstone,construct,tabulate,tqdm'], root,
                 logs / 'python-modules.log', token, env, events, 'python-modules')
     run_command([str(paths['git']), '--version'], root, logs / 'git.log', token, env, events, 'git')
-    paths.update(dependencies_ready=True, cmake_args=[], python_site=[str(p) for p in sites], logs=str(logs))
+    prefix=root/'prefix'
+    if build_dependencies:
+        toolchain,detail=windows_toolchain_probe()
+        if not toolchain:raise InstallerError('Windows C++ tools are required to build settings support: '+detail)
+        build_env=msvc_environment(toolchain['vcvars'],base=env)
+        for key in list(build_env):
+            if key.upper() in ('CL','_CL_','LINK','_LINK_','CFLAGS','CXXFLAGS','LDFLAGS','CC','CXX'):build_env.pop(key)
+        for stage in windows_dependency_plan(paths,prefix,toolchain):
+            Path(stage['cwd']).mkdir(parents=True,exist_ok=True)
+            run_command(stage['argv'],stage['cwd'],logs/(stage['id']+'.log'),token,build_env,events,stage['id'])
+        if not (prefix/'include/zlib.h').is_file() or not (prefix/'lib/zs.lib').is_file():
+            raise InstallerError('Managed Windows zlib did not produce its expected static library and headers')
+        _write_json(prefix/'MANAGED-DEPENDENCIES.json',{'schema_version':1,'zlib_sha256':WINDOWS_LOCK['source-zlib']['sha256']})
+    paths.update(dependencies_ready=build_dependencies, cmake_args=[], python_site=[str(p) for p in sites], logs=str(logs),prefix=str(prefix))
     return {k: str(v) if isinstance(v, Path) else v for k, v in paths.items()}
 
 

@@ -25,3 +25,31 @@ jobs:
         run: python -m unittest discover -s tests -t . -v
       - name: Tool self-tests
         run: python -m unittest discover -s tools -p 'test_*.py' -t . -v
+
+  windows-player-settings:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Verify native compiler availability
+        env:
+          PYTHONPATH: installer
+        run: python -c "from mag_installer.managed_tools import windows_toolchain_probe; toolchain, detail = windows_toolchain_probe(); assert toolchain, detail"
+      - name: Native Win32 settings transactions
+        run: python -m unittest tests.test_player_settings_windows -v
+
+  linux-player-settings:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Native UI and Windows cross compiler
+        run: sudo apt-get update && sudo apt-get install -y libsdl2-dev libgtk-3-0t64 libssl-dev zlib1g-dev xvfb g++-mingw-w64-x86-64-posix
+      - name: Portable settings and synthetic Linux controls
+        run: xvfb-run -a python -m unittest tests.test_player_settings_portable tests.test_player_settings_portable_runtime tests.test_player_settings_linux -v
+      - name: Compile Windows controls and runtime
+        run: x86_64-w64-mingw32-g++-posix -std=c++20 -Wall -Wextra -Werror -fsyntax-only src/player_settings_windows.cpp src/player_settings_portable.cpp src/player_settings_portable_runtime.cpp

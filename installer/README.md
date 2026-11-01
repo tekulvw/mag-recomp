@@ -5,7 +5,7 @@ BCUS98110 v1.0 copy: **choose your game folder and an installation folder → Bu
 same steps as [BUILDING.md](../BUILDING.md) (prepare inputs, inventory, lift, compile) and packages the
 result as `MAG.app` on macOS, `MAG\MAG.exe` on Windows, or `MAG/MAG` on Linux.
 
-New macOS builds include the [compact native settings panel](../docs/player-settings.md).
+New desktop builds include the [native settings panel](../docs/player-settings.md).
 It opens on first launch; use **MAG → Settings…** during play or hold **Option** on launch for recovery.
 
 The installer contains tooling only: this directory, a source kit with this repository's tools,

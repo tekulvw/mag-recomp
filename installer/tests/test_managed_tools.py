@@ -117,4 +117,15 @@ class ManagedToolTests(unittest.TestCase):
         self.assertEqual(plan[-2]['argv'],['/usr/bin/make','-j2'])
         self.assertIn('-DENABLE_OPT=OFF',next(s for s in plan if s['id']=='configure-glslang')['argv'])
         self.assertIn('--disable-autodetect',next(s for s in plan if s['id']=='configure-ffmpeg')['argv'])
+    def test_windows_settings_zlib_is_pinned_and_built_static_with_matching_crt(self):
+        from mag_installer.managed_tools import WINDOWS_LOCK,windows_dependency_plan
+        pin=WINDOWS_LOCK['source-zlib']
+        self.assertEqual(pin['sha256'],'bb329a0a2cd0274d05519d61c667c062e06990d72e125ee2dfa8de64f0119d16')
+        self.assertEqual(pin['size'],1502830)
+        paths={'cmake':'cmake','ninja':'ninja','source-zlib':'sources/zlib'}
+        plan=windows_dependency_plan(paths,Path('owned/prefix'),{'clang_cl':'tools/clang-cl.exe'})
+        self.assertEqual([stage['id'] for stage in plan],['configure-zlib','build-zlib','install-zlib'])
+        for flag in ('-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded','-DZLIB_BUILD_SHARED=OFF','-DZLIB_BUILD_STATIC=ON','-DZLIB_BUILD_TESTING=OFF'):
+            self.assertIn(flag,plan[0]['argv'])
+
 if __name__=='__main__':unittest.main()

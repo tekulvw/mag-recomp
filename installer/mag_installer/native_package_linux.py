@@ -35,6 +35,7 @@ _SUPERVISOR = r'''
 #include "supervisor_config.h"
 namespace fs=std::filesystem;
 static fs::path root;
+struct OwnedOverlay { fs::path path; ~OwnedOverlay(){if(!path.empty()){std::error_code error;fs::remove_all(path,error);}} };
 static volatile sig_atomic_t child=0;
 static void interrupted(int sig) { if(child>0) kill(child,sig); }
 static void fail(const std::string& message) { throw std::runtime_error(message); }
@@ -72,8 +73,9 @@ static int run(const fs::path& binary,const fs::path& elf,const fs::path& cwd,st
  close(fd);child=pid;int status;while(waitpid(pid,&status,0)<0){if(errno!=EINTR)fail("Cannot wait for game");}child=0;
  return WIFEXITED(status)?WEXITSTATUS(status):128+WTERMSIG(status);
 }
-int main() {
+int main(int argc,char **argv) {
  umask(0077);
+ OwnedOverlay overlay;
  try {
  char self[65536];auto n=readlink("/proc/self/exe",self,sizeof self-1);if(n<=0||n==(ssize_t)sizeof self-1)fail("Cannot locate MAG executable");self[n]=0;
  fs::path app=fs::path(self).parent_path();root=app.parent_path();auto workspace=(app/MAG_WORKSPACE).lexically_normal();auto vfs=workspace/"local/retail-v1.0";
@@ -84,12 +86,21 @@ int main() {
  std::map<std::string,std::string> env={{"PATH","/usr/bin:/bin"},{"HOME",(root/"home").string()},{"LANG","C.UTF-8"},{"LD_LIBRARY_PATH",(app/"lib").string()},{"PS3_VFS_ROOT",vfs.string()},{"PS3_BOOT_PATH","/dev_bdvd/PS3_GAME/USRDIR/EBOOT.BIN"},{"PS3RECOMP_VK_WINDOW","1"},{"PS3RECOMP_VK_GUEST_PROGRAMS","1"},{"PS3_HLE_UNRESOLVED","halt"},{"PS3_SYSCALL_UNRESOLVED","halt"},{"MAG_HANDOFF_REQUEST",request.string()},{"MAG_HANDOFF_TOKEN",token},{"MAG_ENGINE_BINARY",engine.string()},{"MAG_ENGINE_ELF",ee.string()},{"MAG_ENGINE_SELF",es.string()},{"MAG_ENGINE_BINARY_SHA256",MAG_ENGINE_SHA256},{"MAG_ENGINE_ELF_SHA256",MAG_ENGINE_ELF_SHA256},{"MAG_ENGINE_SELF_SHA256",MAG_ENGINE_SELF_SHA256},{"MAG_ENGINE_KEY_SHA256",key}};
  // Preserve only desktop transport/session variables, never inherited game diagnostics.
  for(auto name:{"DISPLAY","WAYLAND_DISPLAY","XDG_RUNTIME_DIR","DBUS_SESSION_BUS_ADDRESS","XAUTHORITY","PULSE_SERVER","PIPEWIRE_REMOTE"})if(auto value=getenv(name))env[name]=value;
+ auto settingsHome=getenv("XDG_CONFIG_HOME");auto realHome=getenv("HOME");
+ if((!settingsHome||!*settingsHome)&&(!realHome||!*realHome))fail("The user settings folder is unavailable");
+ fs::path configHome=settingsHome&&*settingsHome?fs::path(settingsHome):fs::path(realHome)/".config";
+ if(!configHome.is_absolute())fail("The user settings folder must be absolute");
+ std::string pattern=(logs/"player-overlay-XXXXXX").string();std::vector<char> temporary(pattern.begin(),pattern.end());temporary.push_back(0);
+ auto created=mkdtemp(temporary.data());if(!created)fail("Cannot create the private launch settings folder");overlay.path=created;
+ env["MAG_PLAYER_SETTINGS_PATH"]=(configHome/"MAG/settings.json").string();env["MAG_PLAYER_OVERLAY_ROOT"]=overlay.path.string();env["MAG_PLAYER_SETUP"]="1";
+ if(argc>1&&!strcmp(argv[1],"--settings"))env["MAG_PLAYER_SHOW_SETTINGS"]="1";
  signal(SIGINT,interrupted);signal(SIGTERM,interrupted);signal(SIGHUP,interrupted);
  int result=run(launcher,le,logs,env,"launcher.log");if(result!=90)return result;
  auto expected="{\"version\":1,\"token\":\""+token+"\",\"guest_path\":\"/dev_bdvd/PS3_GAME/USRDIR/bin/mage_g.self\",\"kind\":\"mage_g\"}\n";
  if(read_file(request,4096)!=expected)fail("Engine handoff request identity mismatch");
  check(engine,MAG_ENGINE_SHA256);check(ee,MAG_ENGINE_ELF_SHA256);check(es,MAG_ENGINE_SELF_SHA256);
  for(auto i=env.begin();i!=env.end();)if(i->first.find("MAG_HANDOFF_")==0||i->first.find("MAG_ENGINE_")==0)i=env.erase(i);else ++i;
+ env.erase("MAG_PLAYER_SETUP");env.erase("MAG_PLAYER_SHOW_SETTINGS");
  env["PS3_BOOT_PATH"]="/dev_bdvd/PS3_GAME/USRDIR/bin/mage_g.self";return run(engine,ee,logs,env,"engine.log");
  }catch(const std::exception& e){std::string msg="MAG could not start: "+std::string(e.what())+"\n";std::cerr<<msg;if(!root.empty()){int fd=open((root/"launch-error.log").c_str(),O_WRONLY|O_CREAT|O_TRUNC|O_NOFOLLOW,0600);if(fd>=0){write(fd,msg.data(),msg.size());close(fd);}}return 1;}
 }
