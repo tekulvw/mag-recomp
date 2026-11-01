@@ -54,4 +54,14 @@ function(mag_enable_input target)
         set_property(TARGET mag_input APPEND PROPERTY INTERFACE_LINK_LIBRARIES m)
     endif()
     target_link_libraries(${target} PRIVATE mag_input)
+    # Stage these separately: mag_apply_extensions initializes its own list.
+    # The caller appends them after collecting extension inputs.
+    set(MAG_INPUT_RECEIPT_EXTRA
+        "rust-input-sources=${_crate}/src"
+        "rust-input-manifest=${_crate}/Cargo.toml"
+        "rust-input-lock=${_crate}/Cargo.lock"
+        "rust-input-toolchain=${_root}/rust-toolchain.toml"
+        "rust-input-build=${CMAKE_CURRENT_FUNCTION_LIST_DIR}/MagInput.cmake"
+        "rust-input-library=${_library}"
+        PARENT_SCOPE)
 endfunction()
