@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.3.0](https://github.com/tekulvw/mag-recomp/compare/v0.2.0...v0.3.0) (2026-11-01)
+
+
+### Features
+
+* add independent internal rendering resolution ([#12](https://github.com/tekulvw/mag-recomp/issues/12)) ([8c3dae8](https://github.com/tekulvw/mag-recomp/commit/8c3dae8031ac8d7bb01a2a9c58d11d59f8aead16))
+* add native macOS player settings and community server defaults ([#11](https://github.com/tekulvw/mag-recomp/issues/11)) ([3541831](https://github.com/tekulvw/mag-recomp/commit/354183110b4594675cfab96025a72ace13c4e612))
+
+
+### Bug Fixes
+
+* restore compiled SPU jobs and reproducible rendering defaults ([#15](https://github.com/tekulvw/mag-recomp/issues/15)) ([303fd1d](https://github.com/tekulvw/mag-recomp/commit/303fd1d1518aa4d9bfab43e33824d2424371e545))
+
 ## [0.2.0](https://github.com/tekulvw/mag-recomp/compare/v0.1.0...v0.2.0) (2026-10-28)
 
 
