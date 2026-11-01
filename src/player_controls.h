@@ -48,10 +48,12 @@ struct PhysicalControl {
     uint32_t code=0;
     friend auto operator<=>(const PhysicalControl&, const PhysicalControl&)=default;
 };
+enum class BindingBehavior { Hold, Toggle };
 struct ControlBinding {
     PhysicalControl control;
     ActionId action=0;
     uint32_t contexts=uint32_t(InputContext::OnFoot);
+    BindingBehavior behavior=BindingBehavior::Hold;
 };
 struct ControlsProfile {
     InputMode mode=InputMode::Auto;

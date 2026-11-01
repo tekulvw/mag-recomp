@@ -217,6 +217,34 @@ static void axes_tests() {
     bool rejected=false; try { mag_controls_push_controller_axes(axes,false); } catch(const std::invalid_argument&) { rejected=true; }
     check(rejected,"nonfinite axis rejected before state mutation");
 }
+static void toggle_tests() {
+    ControlsProfile p;
+    ControlBinding keyboard{{InputSource::Keyboard,26},1,1}; keyboard.behavior=BindingBehavior::Toggle;
+    p.bindings={keyboard,{{InputSource::Controller,0},1,1}};
+    mag_controls_configure(p);
+    InputCaptureState capture; capture.controller_connected=true; mag_controls_set_capture_state(capture);
+    mag_controls_push_event({keyboard.control,true,1}); mag_controls_push_event({keyboard.control,true,2});
+    mag_controls_push_event({keyboard.control,false,3});
+    const auto& first=mag_controls_acquire_frame({10,1,0},InputContext::OnFoot);
+    check(action_value(first,1)==1 && event_count(first,1,ActionEventKind::Press)==1 && event_count(first,1,ActionEventKind::Release)==0,"toggle survives release and ignores duplicate down callback");
+    mag_controls_push_event({{InputSource::Controller,0},true,4});
+    mag_controls_push_event({keyboard.control,true,5}); mag_controls_push_event({keyboard.control,false,6});
+    const auto& mixed=mag_controls_acquire_frame({10,2,0},InputContext::OnFoot);
+    check(action_value(mixed,1)==1 && mixed.events.empty(),"controller hold keeps action down while keyboard toggles off");
+    mag_controls_push_event({{InputSource::Controller,0},false,7});
+    const auto& last=mag_controls_acquire_frame({10,3,0},InputContext::OnFoot);
+    check(action_value(last,1)==0 && event_count(last,1,ActionEventKind::Release)==1,"last active source releases once");
+    mag_controls_push_event({keyboard.control,true,8}); mag_controls_push_event({keyboard.control,false,9});
+    (void)mag_controls_acquire_frame({10,4,0},InputContext::OnFoot);
+    capture.controller_connected=false; mag_controls_set_capture_state(capture);
+    check(action_value(mag_controls_acquire_frame({10,5,0},InputContext::OnFoot),1)==1,"controller disconnect preserves keyboard toggle latch");
+    capture.focused=false; mag_controls_set_capture_state(capture);
+    const auto& off=mag_controls_acquire_frame({10,6,0},InputContext::OnFoot);
+    ConsumptionLedger ledger;
+    check(action_value(off,1)==0 && mag_controls_actions(off,InputContext::OnFoot,ledger).events.size()==1,"focus loss releases toggle latch through consumer");
+    capture.focused=true; mag_controls_set_capture_state(capture);
+    check(action_value(mag_controls_acquire_frame({10,7,0},InputContext::OnFoot),1)==0,"toggle never resumes after lifecycle reset");
+}
 static void focus_tests() {
     mag_controls_configure(bindings_profile());
     mag_controls_push_event({{InputSource::Mouse,0},true,1});
@@ -248,7 +276,7 @@ int main(int argc, char** argv) {
         std::string name=argv[1];
         if(name=="policy") policy_tests(); else if(name=="mouse") mouse_tests(); else if(name=="controller") controller_tests();
         else if(name=="frames") frame_tests(); else if(name=="bindings") binding_tests(); else if(name=="focus") focus_tests();
-        else if(name=="motion") motion_detection_tests(); else if(name=="axes") axes_tests();
+        else if(name=="toggle") toggle_tests(); else if(name=="motion") motion_detection_tests(); else if(name=="axes") axes_tests();
         else if(name=="device") device_tests(); else if(name=="device-order") device_order_tests(); else return 2;
         return 0;
     } catch(const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }

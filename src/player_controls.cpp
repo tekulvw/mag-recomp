@@ -18,7 +18,7 @@ struct ControlsState {
     int64_t mouse_dx=0, mouse_dy=0;
     bool mouse_motion_seen=false, controller_axes_rearmed=false;
     std::optional<ControllerAxes> controller_axes;
-    std::set<PhysicalControl> physical_down, accepted_down, blocked;
+    std::set<PhysicalControl> physical_down, accepted_down, toggled, blocked;
     std::vector<QueuedInput> queue;
     std::map<ActionId,ActiveAction> actions;
     std::vector<ActionEvent> releases;
@@ -49,7 +49,7 @@ void release_locked(ControlsState& state, std::optional<InputSource> source={}) 
             state.releases.push_back({id,ActionEventKind::Release,state.next_token++,action.source,true});
             action.down=false; action.sources=0;
         }
-        state.accepted_down.clear(); state.queue.clear();
+        state.accepted_down.clear(); state.toggled.clear(); state.queue.clear();
     }
     if(!source || *source==InputSource::Mouse) { state.mouse_dx=0; state.mouse_dy=0; state.mouse_motion_seen=false; }
     if(!source || *source==InputSource::Controller) { state.controller_axes.reset(); state.controller_axes_rearmed=false; }
@@ -65,7 +65,8 @@ void retire_locked(ControlsState& state) {
 unsigned bound_sources(const ControlsState& state, ActionId id, InputContext context, const InputPolicy& policy, bool gameplay) {
     unsigned sources=0;
     for(const auto& binding:state.profile.bindings)
-        if(binding.action==id && (binding.contexts & uint32_t(context)) && state.accepted_down.contains(binding.control) &&
+        if(binding.action==id && (binding.contexts & uint32_t(context)) &&
+           (binding.behavior==BindingBehavior::Toggle ? state.toggled.contains(binding.control) : state.accepted_down.contains(binding.control)) &&
            (!gameplay || mag_controls_gameplay_source_allowed(policy,binding.control.source))) sources|=1u<<unsigned(binding.control.source);
     return sources;
 }
@@ -185,6 +186,7 @@ void mag_controls_configure(const ControlsProfile& profile) {
     for(size_t i=0;i<profile.bindings.size();++i) {
         const auto& b=profile.bindings[i];
         if(!b.action || !b.contexts || (b.contexts & ~uint32_t(31)) ||
+           (b.behavior!=BindingBehavior::Hold && b.behavior!=BindingBehavior::Toggle) ||
            !mag_controls_gameplay_source_allowed(InputPolicy{},b.control.source)) throw std::invalid_argument("invalid binding");
         for(size_t j=0;j<i;++j) {
             const auto& a=profile.bindings[j];
@@ -269,14 +271,21 @@ const HostInputFrame& mag_controls_acquire_frame(InputFrameKey key,InputContext 
     if(accepting) for(const auto& queued:state.queue) {
         if(queued.revoke_source) {
             std::erase_if(state.accepted_down,[&](auto c){return c.source==*queued.revoke_source;});
+            std::erase_if(state.toggled,[&](auto c){return c.source==*queued.revoke_source;});
             update_actions(state,frame,*queued.revoke_source,gameplay,true);
             continue;
         }
         const auto& event=queued.event;
         if(gameplay && !mag_controls_gameplay_source_allowed(frame.policy,event.control.source)) continue;
+        const bool fresh=event.down && !state.accepted_down.contains(event.control);
         if(event.down) state.accepted_down.insert(event.control); else state.accepted_down.erase(event.control);
         bool matching=false;
-        for(const auto& b:state.profile.bindings) if(b.control==event.control && (b.contexts & uint32_t(context))) matching=true;
+        for(const auto& b:state.profile.bindings) if(b.control==event.control && (b.contexts & uint32_t(context))) {
+            matching=true;
+            if(fresh && b.behavior==BindingBehavior::Toggle) {
+                if(!state.toggled.erase(event.control)) state.toggled.insert(event.control);
+            }
+        }
         if(gameplay && matching && event.down && event.control.source!=InputSource::Controller) kbm=true;
         update_actions(state,frame,event.control.source,gameplay);
     }
