@@ -5,6 +5,7 @@
 #include <map>
 #include <mutex>
 #include <stdexcept>
+#include <tuple>
 namespace mag {
 namespace {
 struct ActiveAction { bool down=false; InputSource source=InputSource::Keyboard; unsigned sources=0; };
@@ -183,11 +184,15 @@ void mag_controls_configure(const ControlsProfile& profile) {
     InputPolicy mode; PolicyEvents event; event.requested_mode=profile.mode;
     (void)mag_controls_update_policy(mode,event);
     if(profile.bindings.size()>1024) throw std::invalid_argument("too many bindings");
+    std::map<std::tuple<ActionId,bool,uint32_t>,unsigned> binding_counts;
     for(size_t i=0;i<profile.bindings.size();++i) {
         const auto& b=profile.bindings[i];
         if(!b.action || !b.contexts || (b.contexts & ~uint32_t(31)) ||
            (b.behavior!=BindingBehavior::Hold && b.behavior!=BindingBehavior::Toggle) ||
            !mag_controls_gameplay_source_allowed(InputPolicy{},b.control.source)) throw std::invalid_argument("invalid binding");
+        for(uint32_t context=1;context<=16;context<<=1) if(b.contexts & context)
+            if(++binding_counts[{b.action,b.control.source==InputSource::Controller,context}]>2)
+                throw std::invalid_argument("only primary and secondary bindings are supported per input profile and context");
         for(size_t j=0;j<i;++j) {
             const auto& a=profile.bindings[j];
             if(a.control==b.control && (a.contexts & b.contexts)) throw std::invalid_argument("overlapping physical bindings");

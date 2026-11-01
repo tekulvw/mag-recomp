@@ -245,6 +245,19 @@ static void toggle_tests() {
     capture.focused=true; mag_controls_set_capture_state(capture);
     check(action_value(mag_controls_acquire_frame({10,7,0},InputContext::OnFoot),1)==0,"toggle never resumes after lifecycle reset");
 }
+static void profile_validation_tests() {
+    auto p=bindings_profile(); mag_controls_configure(p);
+    mag_controls_push_event({{InputSource::Keyboard,26},true,1});
+    (void)mag_controls_acquire_frame({10,1,0},InputContext::OnFoot);
+    p.bindings.push_back({{InputSource::Keyboard,27},1,1});
+    bool rejected=false; try { mag_controls_configure(p); } catch(const std::invalid_argument&) { rejected=true; }
+    check(rejected,"a third binding in the same input profile/context is rejected");
+    check(action_value(mag_controls_acquire_frame({10,2,0},InputContext::OnFoot),1)==1,"invalid profile cannot mutate active inputs");
+    p.bindings.back().contexts=uint32_t(InputContext::Vehicle);
+    mag_controls_configure(p);
+    p.bindings.push_back({{InputSource::Controller,1},1,1});
+    mag_controls_configure(p);
+}
 static void focus_tests() {
     mag_controls_configure(bindings_profile());
     mag_controls_push_event({{InputSource::Mouse,0},true,1});
@@ -276,7 +289,7 @@ int main(int argc, char** argv) {
         std::string name=argv[1];
         if(name=="policy") policy_tests(); else if(name=="mouse") mouse_tests(); else if(name=="controller") controller_tests();
         else if(name=="frames") frame_tests(); else if(name=="bindings") binding_tests(); else if(name=="focus") focus_tests();
-        else if(name=="toggle") toggle_tests(); else if(name=="motion") motion_detection_tests(); else if(name=="axes") axes_tests();
+        else if(name=="validation") profile_validation_tests(); else if(name=="toggle") toggle_tests(); else if(name=="motion") motion_detection_tests(); else if(name=="axes") axes_tests();
         else if(name=="device") device_tests(); else if(name=="device-order") device_order_tests(); else return 2;
         return 0;
     } catch(const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }

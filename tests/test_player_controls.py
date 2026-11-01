@@ -45,6 +45,9 @@ class PlayerControlsTests(unittest.TestCase):
     def test_captured_motion_with_zero_net_displacement(self):
         subprocess.run([str(self.binary), 'motion'], check=True)
 
+    def test_primary_secondary_validation_preserves_active_inputs(self):
+        subprocess.run([str(self.binary), 'validation'], check=True)
+
     def test_hold_and_toggle_bindings_across_sources(self):
         subprocess.run([str(self.binary), 'toggle'], check=True)
 
