@@ -343,7 +343,7 @@ pub unsafe extern "C" fn mag_input_seal(
             runtime.recognizers.clear();
             runtime.recognition_generation = frame.generation;
         }
-        runtime.now_ns = now_ns;
+        runtime.now_ns = frame.time_ns;
         unsafe {
             output.write(FrameRecord {
                 generation: frame.generation,

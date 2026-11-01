@@ -102,6 +102,7 @@ pub struct MouseMotion {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Frame {
     pub key: FrameKey,
+    pub time_ns: u64,
     pub generation: u64,
     pub context: ContextKey,
     pub actions: Vec<(u32, Offer)>,
