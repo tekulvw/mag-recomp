@@ -101,3 +101,129 @@ fn blocked_input_requires_neutral_before_a_fresh_press() {
         0
     );
 }
+
+#[test]
+fn double_tap_and_repeat_boundaries_are_distinct() {
+    let mut gesture = Recognizer::default();
+    gesture
+        .update(1, 10, pulse(true, 0), 1.0, false, config())
+        .unwrap();
+    gesture
+        .update(2, 20, pulse(false, 10), 0.0, false, config())
+        .unwrap();
+    let second = Offer {
+        pulse_id: 2,
+        down: true,
+        physical_duration_ns: 0,
+        source_mask: 1,
+    };
+    let down = gesture
+        .update(3, 50, Some(second), 1.0, false, config())
+        .unwrap();
+    assert_ne!(down.events & Events::TAP_DOWN, 0);
+    let up = gesture
+        .update(
+            4,
+            60,
+            Some(Offer {
+                down: false,
+                physical_duration_ns: 10,
+                ..second
+            }),
+            0.0,
+            false,
+            config(),
+        )
+        .unwrap();
+    assert_ne!(up.events & Events::DOUBLE_TAP, 0);
+    assert_eq!(
+        gesture
+            .update(5, 500, None, 0.0, false, config())
+            .unwrap()
+            .events
+            & Events::SINGLE_TAP,
+        0
+    );
+    let mut held = Recognizer::default();
+    let first = held
+        .update(1, 10, pulse(true, 149), 1.0, false, config())
+        .unwrap();
+    assert_eq!(first.events & Events::REPEAT, 0);
+    assert_ne!(
+        held.update(2, 20, pulse(true, 150), 1.0, false, config())
+            .unwrap()
+            .events
+            & Events::REPEAT,
+        0
+    );
+    assert_eq!(
+        held.update(3, 30, pulse(true, 199), 1.0, false, config())
+            .unwrap()
+            .events
+            & Events::REPEAT,
+        0
+    );
+    assert_ne!(
+        held.update(4, 40, pulse(true, 200), 1.0, false, config())
+            .unwrap()
+            .events
+            & Events::REPEAT,
+        0
+    );
+}
+
+#[test]
+fn a_first_tap_completes_before_a_later_independent_press() {
+    let mut gesture = Recognizer::default();
+    gesture
+        .update(1, 10, pulse(true, 0), 1.0, false, config())
+        .unwrap();
+    gesture
+        .update(2, 20, pulse(false, 10), 0.0, false, config())
+        .unwrap();
+    let next = gesture
+        .update(
+            3,
+            300,
+            Some(Offer {
+                pulse_id: 2,
+                ..pulse(true, 0).unwrap()
+            }),
+            1.0,
+            false,
+            config(),
+        )
+        .unwrap();
+    assert_ne!(next.events & Events::SINGLE_TAP, 0);
+    assert_ne!(next.events & Events::DOWN, 0);
+    assert_eq!(next.events & Events::TAP_DOWN, 0);
+}
+
+#[test]
+fn analog_threshold_and_change_epsilon_are_independent() {
+    let mut gesture = Recognizer::default();
+    let config = Config {
+        down_threshold: 0.75,
+        change_epsilon: 0.1,
+        ..config()
+    };
+    let below = gesture.update(1, 10, None, 0.5, false, config).unwrap();
+    assert_eq!(below.events & Events::DOWN, 0);
+    assert_ne!(below.events & Events::CHANGE, 0);
+    assert_eq!(
+        gesture
+            .update(2, 20, None, 0.55, false, config)
+            .unwrap()
+            .events
+            & Events::CHANGE,
+        0
+    );
+    assert_ne!(
+        gesture
+            .update(3, 30, None, 0.8, false, config)
+            .unwrap()
+            .events
+            & Events::DOWN,
+        0
+    );
+}

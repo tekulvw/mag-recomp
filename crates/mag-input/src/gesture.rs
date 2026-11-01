@@ -174,6 +174,13 @@ impl Recognizer {
             0
         };
         self.last_value = value;
+        if self
+            .last_tap
+            .is_some_and(|tap| now.saturating_sub(tap) > config.double_tap_gap_ns)
+        {
+            events |= Events::SINGLE_TAP;
+            self.last_tap = None;
+        }
         if down && !self.down {
             self.down_time = now;
             self.elapsed = 0;
@@ -233,14 +240,6 @@ impl Recognizer {
                     self.last_tap = Some(now)
                 }
             }
-        }
-        if !down
-            && self
-                .last_tap
-                .is_some_and(|tap| now.saturating_sub(tap) > config.double_tap_gap_ns)
-        {
-            events |= Events::SINGLE_TAP;
-            self.last_tap = None
         }
         let phase = if down {
             match (self.pressed, self.second) {
