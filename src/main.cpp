@@ -414,7 +414,11 @@ int main(int argc, char** argv)
      * EdgeZlib output legitimately uses that range, including the SDK's
      * default GCM labels/control/tables. Select a separate runtime window
      * before ELF/module loading, graphics initialization or guest threads. */
-    ppu_hle_inject_base = 0x70000000u;
+    /* Leave 0x70000000 available for the title's aligned graphics mapping.
+     * Particle pointers use bit 30 to distinguish absolute addresses from
+     * relative offsets; forcing that mapping up to 0x80000000 breaks the
+     * address round trip. This runtime window also stays below local VRAM. */
+    ppu_hle_inject_base = 0xB0000000u;
 
     uint32_t entry = ppu_load_elf(argv[1]);
     if (!entry) {
