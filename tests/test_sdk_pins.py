@@ -35,6 +35,11 @@ class PinTableTests(unittest.TestCase):
             self.assertEqual(load(name)['sdk_revision'], ppu['commit'], name)
         self.assertEqual(load('retail-v1.0-spu-coverage.json')['lifter_revision'], spu['commit'])
 
+    def test_dispatcher_splice_uses_the_available_pinned_sdk(self):
+        profile = load('retail-v1.0-ppu-jumptable-splice.json')
+        self.assertEqual(profile['after']['revision'], self.table['runtime']['commit'])
+        self.assertEqual(profile['before']['revision'], self.table['lifter-ppu']['commit'])
+
     def test_building_guide_uses_the_table(self):
         guide = (ROOT / 'BUILDING.md').read_text()
         for role, pin in self.table.items():

@@ -138,6 +138,7 @@ REQUIRED_SOURCE_FILES = (
     'tools/prepare_inputs.py', 'tools/inventory.py', 'tools/lift.py',
     'tools/spu_lift.py', 'tools/engine_spu_lift.py', 'tools/firmware_lift.py',
     'tools/spu_programs_lift.py', 'tools/provenance.py',
+    'tools/wws_job_lift.py', 'tools/verified_spu_jobs.py',
     'tools/movie_picture_hooks.py', 'tools/graphics_trace_hooks.py',
     'tools/installer_ppu_splice.py', 'tools/partial_ppu_relift.py', 'tools/ppu_function_splice.py',
     'profiles/retail-v1.0-ppu-jumptable-splice.json',
@@ -205,6 +206,16 @@ def build_plan(config, workspace):
            '--profile', workspace / 'profiles/retail-v1.0-ppu-jumptable-splice.json')
     script('worker-spu', 'spu_lift.py', '--output', paths['worker-spu'])
     script('engine-spu', 'engine_spu_lift.py', '--output', paths['engine-spu'])
+    # The policy/task lift alone leaves streamed render jobs interpreted.
+    # Generate and register every discovered WWS module before configuring CMake.
+    engine_spu_base = paths['engine-spu']
+    paths['engine-spu'] = generated / 'spu-engine-retained'
+    script('streamed-jobs', 'wws_job_lift.py',
+           '--engine-elf', disc / 'bin/mage_g.elf',
+           '--engine-profile', workspace / 'profiles/retail-v1.0-engine-spu.json',
+           '--sdk', sdk['runtime'], '--sdk-revision', pins['runtime']['commit'],
+           '--baseline', engine_spu_base, '--output', paths['engine-spu'],
+           '--merge-chunks', '--require-complete')
     script('firmware', 'firmware_lift.py', '--output', paths['firmware'])
     script('spu-programs', 'spu_programs_lift.py', '--sdk', sdk['spu-programs'],
            '--sdk-revision', pins['spu-programs']['commit'], '--output', paths['spu-programs'])
