@@ -69,6 +69,7 @@ def prepare(base, output, work, elf, inventory, nonlocal_profile, before_sdk, af
         if provenance.get(key) != expected:
             raise ValueError('Splice base provenance differs from reviewed generation inputs: ' + key)
     decoder = pinned_blob(before_sdk, profile['before']['revision'], 'tools/ppu_disasm.py', profile['decoder_sha256'])
+    parser = pinned_blob(before_sdk, profile['before']['revision'], 'tools/elf_parser.py', profile['elf_parser_sha256'])
     lifters = {name: pinned_blob(sdk, profile[name]['revision'], 'tools/ppu_lifter.py', profile[name]['lifter_sha256'])
                for name, sdk in (('before', before_sdk), ('after', after_sdk))}
     work.mkdir(parents=True)
@@ -76,6 +77,10 @@ def prepare(base, output, work, elf, inventory, nonlocal_profile, before_sdk, af
     with tempfile.TemporaryDirectory(prefix='dispatcher-relift-', dir=output.parent) as temporary:
         temporary = Path(temporary)
         (temporary / 'ppu_disasm.py').write_bytes(decoder)
+        # The isolated lifter subprocess needs its ELF parser beside it.
+        # Without it the SDK falls back to treating the entire ELF as raw
+        # instructions, changing function discovery and continuation checks.
+        (temporary / 'elf_parser.py').write_bytes(parser)
         for name in ('before', 'after'):
             lifter = temporary / ('lifter_' + name + '.py'); lifter.write_bytes(lifters[name])
             commands[name] = [sys.executable, str(lifter), str(elf), '--functions', str(funcs),
@@ -92,7 +97,8 @@ def prepare(base, output, work, elf, inventory, nonlocal_profile, before_sdk, af
         record = verify_result(output, profile)
         record['installer_dispatcher_splice'] = {'profile': profile, 'commands': commands,
                                                 'nonlocal_profile_sha256': digest(nonlocal_profile),
-                                                'decoder_source_revision': profile['before']['revision']}
+                                                'decoder_source_revision': profile['before']['revision'],
+                                                'parser_source_revision': profile['before']['revision']}
         (output / 'provenance.json').write_text(json.dumps(record, indent=2) + '\n')
     return output
 
