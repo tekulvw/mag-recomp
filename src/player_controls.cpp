@@ -179,8 +179,10 @@ ControllerLookRequest mag_controls_controller_look(double x, double y, const Con
             angular(settings.x_gain*gain),angular(settings.y_gain*gain),native};
 }
 void mag_controls_validate_profile(const ControlsProfile& profile) {
-    (void)mag_controls_mouse_look(0,0,profile.mouse,AimMode::Hip);
-    (void)mag_controls_controller_look(0,0,profile.controller,AimMode::Hip);
+    for(auto mode:{AimMode::Hip,AimMode::ADS,AimMode::Scoped}) {
+        (void)mag_controls_mouse_look(1,1,profile.mouse,mode);
+        (void)mag_controls_controller_look(0,0,profile.controller,mode);
+    }
     InputPolicy mode; PolicyEvents event; event.requested_mode=profile.mode;
     (void)mag_controls_update_policy(mode,event);
     if(profile.bindings.size()>1024) throw std::invalid_argument("too many bindings");

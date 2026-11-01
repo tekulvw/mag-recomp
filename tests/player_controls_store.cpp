@@ -30,6 +30,10 @@ int main(int argc,char** argv) {
     check(!mag_controls_save_profile(path,invalid,catalog) && read(path)==good,"unknown action rejects before replacing previous profile");
     invalid=profile; invalid.mouse.radians_per_count=std::numeric_limits<double>::quiet_NaN();
     check(!mag_controls_save_profile(path,invalid,catalog) && read(path)==good,"invalid sensitivity preserves previous profile");
+    invalid=profile; invalid.mouse.scoped_gain=1e300;
+    check(!mag_controls_save_profile(path,invalid,catalog) && read(path)==good,"unrepresentable scoped mouse gain rejected before runtime");
+    invalid=profile; invalid.controller.ads_gain=1e300;
+    check(!mag_controls_save_profile(path,invalid,catalog) && read(path)==good,"unrepresentable controller ADS rate rejected before runtime");
     invalid=profile; invalid.controller.inner_x=.9; invalid.controller.outer_x=.2;
     check(!mag_controls_save_profile(path,invalid,catalog) && read(path)==good,"invalid deadzones preserve previous profile");
     for(const std::string& bad:std::vector<std::string>{"{broken", "{}", good+"garbage"}) {
