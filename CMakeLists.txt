@@ -16,6 +16,7 @@ if(NOT MAG_WORKSPACE STREQUAL CMAKE_CURRENT_SOURCE_DIR AND EXISTS "${MAG_WORKSPA
     set(MAG_FRAMEWORK_FILE "${MAG_WORKSPACE}/profiles/framework.json")
 endif()
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/MagExtensions.cmake")
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/MagInput.cmake")
 
 # ---------------------------------------------------------------------------
 # Standards
@@ -448,6 +449,7 @@ if(MAG_FIRMWARE_SOURCES)
         "${MAG_FIRMWARE_DIR}/provenance.json"
         "${CMAKE_CURRENT_SOURCE_DIR}/profiles/retail-v1.0-firmware.json")
 endif()
+mag_enable_input(${PROJECT_NAME})
 mag_apply_extensions(${PROJECT_NAME})
 set(MAG_EXTENSION_RECEIPT_ARGS "")
 foreach(extra IN LISTS MAG_RECEIPT_EXTRA)

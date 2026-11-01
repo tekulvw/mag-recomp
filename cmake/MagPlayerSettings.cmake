@@ -4,7 +4,11 @@
 function(mag_enable_player_settings target sdk)
     get_filename_component(player_src "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/../src" ABSOLUTE)
     find_package(ZLIB REQUIRED)
-    target_sources(${target} PRIVATE "${player_src}/player_controls.cpp" "${player_src}/player_controls_store.cpp" "${player_src}/player_input_capture.cpp" "${player_src}/player_preferences_file.cpp")
+    set(_controls_source "${player_src}/player_controls.cpp")
+    if(MAG_INPUT_RUST)
+        set(_controls_source "${player_src}/player_controls_rust.cpp")
+    endif()
+    target_sources(${target} PRIVATE "${_controls_source}" "${player_src}/player_controls_store.cpp" "${player_src}/player_input_capture.cpp" "${player_src}/player_preferences_file.cpp")
     target_sources(${target} PRIVATE
         "${player_src}/player_settings_store.m" "${player_src}/player_settings_macos.m"
         "${player_src}/player_settings_runtime.mm" "${player_src}/player_server_overlay.mm" "${player_src}/player_input_desktop_macos.mm"
