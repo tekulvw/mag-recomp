@@ -157,6 +157,9 @@ void exercise(const fs::path &root) {
   require(present && snapshot.server_address.empty() && snapshot.output_width == 1280,
           "In-game changes mutated immutable launch snapshot");
 
+  require(!!SetWindowPos(game, nullptr, 230, 170, 0, 0, SWP_NOSIZE | SWP_NOZORDER),
+          "Cannot position synthetic window");
+  RECT previousFrame{}; GetWindowRect(game, &previousFrame);
   open(); p = panel();
   auto boxes = children(p, L"COMBOBOX");
   SendMessageW(boxes[0], CB_SETCURSEL, 1, 0); command(p, IDOK);
@@ -168,6 +171,8 @@ void exercise(const fs::path &root) {
   require(EqualRect(&frame, &monitor.rcMonitor) && !(GetWindowLongPtrW(game, GWL_STYLE) & WS_CAPTION),
           "Borderless fullscreen did not cover its monitor");
   pumping(); command(p, IDCANCEL); idle(); dimensions(1920, 1080);
+  GetWindowRect(game, &frame);
+  require(EqualRect(&frame, &previousFrame), "Fullscreen revert lost the previous window placement");
   require(saved().display_mode == "windowed", "Revert saved borderless mode");
 
   // Windows can report success while clamping a requested output. Such a

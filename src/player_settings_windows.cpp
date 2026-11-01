@@ -10,6 +10,8 @@
 #include <xinput.h>
 namespace {
 HWND game, panel;
+RECT windowedFrame{};
+bool haveWindowedFrame;
 WNDPROC gameProc;
 HWND server, tcp, udp, mode, size;
 bool done, accepted, confirming;
@@ -299,6 +301,11 @@ void mag_desktop_apply_display(const mag::PlayerSettings &settings) {
       throw std::runtime_error("Cannot change the game window style.");
   };
   if (settings.display_mode == "borderless") {
+    if (GetWindowLongPtrW(game, GWL_STYLE) & WS_CAPTION) {
+      if (!GetWindowRect(game, &windowedFrame))
+        throw std::runtime_error("Cannot save the game window placement.");
+      haveWindowedFrame = true;
+    }
     MONITORINFO info{};
     info.cbSize = sizeof info;
     if (!GetMonitorInfoW(MonitorFromWindow(game, MONITOR_DEFAULTTONEAREST),
@@ -311,14 +318,18 @@ void mag_desktop_apply_display(const mag::PlayerSettings &settings) {
                  SWP_FRAMECHANGED | SWP_NOZORDER))
       throw std::runtime_error("Cannot apply borderless fullscreen.");
   } else {
+    const bool restorePlacement = haveWindowedFrame &&
+        !(GetWindowLongPtrW(game, GWL_STYLE) & WS_CAPTION);
     RECT bounds{0, 0, settings.output_width, settings.output_height};
     if (!AdjustWindowRectExForDpi(&bounds, WS_OVERLAPPEDWINDOW, FALSE, 0,
                                   GetDpiForWindow(game)))
       throw std::runtime_error("Cannot calculate the game window size.");
     style(WS_OVERLAPPEDWINDOW | WS_VISIBLE);
-    if (!SetWindowPos(game, nullptr, 0, 0, bounds.right - bounds.left,
+    if (!SetWindowPos(game, nullptr, windowedFrame.left, windowedFrame.top,
+                 bounds.right - bounds.left,
                  bounds.bottom - bounds.top,
-                 SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOZORDER))
+                 SWP_FRAMECHANGED | SWP_NOZORDER |
+                     (restorePlacement ? 0 : SWP_NOMOVE)))
       throw std::runtime_error("Cannot apply the output window size.");
     RECT actual{};
     if (!GetClientRect(game, &actual))
