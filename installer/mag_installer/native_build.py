@@ -14,7 +14,7 @@ from .pipeline import _exclusive_lock, _write_json, run_command
 from .safety import Cancellation
 
 SOURCE_DIRS = ('src', 'tools', 'cmake')
-SOURCE_FILES = ('CMakeLists.txt', 'LICENSE', 'LICENSE.ps3recomp', 'NOTICE.md')
+SOURCE_FILES = ('CMakeLists.txt', 'LICENSE', 'LICENSE.ps3recomp', 'NOTICE.md', 'rust-toolchain.toml')
 EXCLUDED = {'.git', '__pycache__', 'target', 'node_modules', '.venv'}
 
 
@@ -48,6 +48,10 @@ def _source_files(root, token=None):
         if (root / name).exists(): yield _ordinary(root / name, False)
     for name in SOURCE_DIRS:
         yield from _files(root / name, token, EXCLUDED)
+    # Keep the public portable core and lockfile, excluding Cargo build output.
+    crate = root / 'crates/mag-input'
+    if crate.exists():
+        yield from _files(crate, token, EXCLUDED)
     for name in ('profiles',):
         for path in (root / name).glob('*.json'):
             # Written per machine from the player's files (prepare_inputs, inventory).

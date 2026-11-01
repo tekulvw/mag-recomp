@@ -147,4 +147,17 @@ class NativeBuildTests(unittest.TestCase):
             with self.assertRaisesRegex(InstallerError,'receipt'): native._validate_receipts(root,'wrong-sdk')
             self.assertEqual(len(native._validate_receipts(root, 'a'*40)),2); (root/'build-engine'/native.binary_name()).write_bytes(b'changed')
             with self.assertRaisesRegex(InstallerError,'receipt'): native._validate_receipts(root, 'a'*40)
+
+    def test_rust_source_and_lock_are_copied_without_build_outputs(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp).resolve()
+            for name in native.SOURCE_DIRS:(root/name).mkdir()
+            crate=root/'crates/mag-input';(crate/'src').mkdir(parents=True)
+            for name in ('Cargo.toml','Cargo.lock','src/lib.rs'):(crate/name).write_text('synthetic')
+            (root/'rust-toolchain.toml').write_text('synthetic pinned toolchain')
+            (crate/'target').mkdir();(crate/'target/private.o').write_bytes(b'BUILD OUTPUT')
+            paths={p.relative_to(root).as_posix() for p in native._source_files(root)}
+            self.assertTrue({'rust-toolchain.toml','crates/mag-input/Cargo.toml','crates/mag-input/Cargo.lock','crates/mag-input/src/lib.rs'}<=paths)
+            self.assertFalse(any('/target/' in p for p in paths))
+
 if __name__=='__main__': unittest.main()

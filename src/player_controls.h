@@ -1,0 +1,165 @@
+#pragma once
+#include <cstdint>
+#include <compare>
+#include <optional>
+#include <set>
+#include <vector>
+namespace mag {
+enum class InputMode { Auto, Controller, KBM };
+enum class InputSource { Keyboard, Mouse, Controller };
+enum class LookOwner { Controller, Mouse };
+enum class AimMode { Hip, ADS, Scoped };
+enum class ControllerResponse { Native, Linear };
+struct InputPolicy {
+    InputMode mode=InputMode::Auto;
+    LookOwner look_owner=LookOwner::Controller;
+    bool kbm_used_this_process=false, stick_rearmed=true, controller_connected=false;
+};
+struct PolicyEvents {
+    std::optional<InputMode> requested_mode;
+    bool focused=true, gameplay=true, controller_connected=false;
+    bool gameplay_kbm=false, mouse_motion=false, mouse_captured=false;
+    bool stick_neutral=true, fresh_stick_deflection=false;
+};
+struct MouseLookSettings {
+    double radians_per_count=.001, x_gain=1, y_gain=1;
+    double hip_gain=1, ads_gain=1, scoped_gain=1;
+    bool invert_y=false;
+};
+struct MouseLookDelta { double yaw=0, pitch=0; };
+struct ControllerLookSettings {
+    ControllerResponse response=ControllerResponse::Native;
+    double inner_x=0, inner_y=0, outer_x=0, outer_y=0;
+    double x_gain=1, y_gain=1, hip_gain=1, ads_gain=1, scoped_gain=1;
+    bool invert_x=false, invert_y=false;
+};
+// Samples before cellPad quantization; sticks signed [-1,1], triggers [0,1].
+struct ControllerAxes {
+    double move_x=0, move_y=0, look_x=0, look_y=0, left_trigger=0, right_trigger=0;
+};
+struct ControllerLookRequest {
+    double x=0, y=0, rate_scale_x=1, rate_scale_y=1;
+    bool use_native_curve=true;
+};
+enum class InputContext : uint32_t { OnFoot=1, Vehicle=2, Turret=4, Tactical=8, Menu=16, Settings=32, Rebinding=64 };
+using ActionId=uint32_t;
+struct PhysicalControl {
+    InputSource source=InputSource::Keyboard;
+    uint32_t code=0;
+    friend auto operator<=>(const PhysicalControl&, const PhysicalControl&)=default;
+};
+enum class BindingBehavior { Hold, Toggle };
+struct ControlBinding {
+    PhysicalControl control;
+    ActionId action=0;
+    uint32_t contexts=uint32_t(InputContext::OnFoot);
+    BindingBehavior behavior=BindingBehavior::Hold;
+};
+struct ControlsProfile {
+    InputMode mode=InputMode::Auto;
+    MouseLookSettings mouse;
+    ControllerLookSettings controller;
+    std::vector<ControlBinding> bindings;
+};
+struct InputFrameKey {
+    // Advances for an actual input sample, not an outer scheduler callback.
+    uint64_t process_session=0, sample_sequence=0;
+    uint32_t player_slot=0;
+    friend auto operator<=>(const InputFrameKey&, const InputFrameKey&)=default;
+};
+enum class InputResetReason { Focus, Capture, Context, Mode, Device, Actor };
+enum class ActionEventKind { Press, Release, Tap, Hold, Repeat, DoubleTap };
+struct ActionEvent {
+    ActionId action=0;
+    ActionEventKind kind=ActionEventKind::Press;
+    uint64_t token=0;
+    InputSource source=InputSource::Keyboard;
+    bool cleanup=false;
+    uint64_t time_ns=0;
+};
+struct ActionValue { ActionId action=0; double value=0; };
+struct InputCaptureState {
+    bool focused=true, supported_context=true, mouse_captured=false, controller_connected=false;
+    bool stick_neutral=true, fresh_stick_deflection=false;
+    uint64_t time_ns=0;
+};
+struct PhysicalInputEvent { PhysicalControl control; bool down=false; uint64_t time_ns=0; uint64_t device=0; };
+// A completed input poll, before any gameplay or menu interpretation. Sealing
+// does not accept gameplay input or change Auto's KBM provenance.
+struct PhysicalInputSample {
+    InputFrameKey key;
+    uint64_t capture_generation=0;
+    InputCaptureState capture;
+    double mouse_dx=0, mouse_dy=0;
+    bool mouse_motion_seen=false;
+    std::optional<ControllerAxes> controller_axes;
+    std::vector<PhysicalInputEvent> events;
+};
+struct InputInterpretation {
+    InputContext context=InputContext::OnFoot;
+    // For Native response, the native adapter observes its conditioned physical
+    // half-axis channels after polling and before handler consumption. This is
+    // an interpretation of the sealed sample, not another hardware sample.
+    std::optional<bool> controller_neutral;
+};
+struct HostInputFrame {
+    InputFrameKey key;
+    InputContext context=InputContext::OnFoot;
+    uint64_t capture_generation=0;
+    InputPolicy policy;
+    double mouse_dx=0, mouse_dy=0;
+    std::optional<ControllerAxes> controller_axes;
+    std::vector<ActionValue> values;
+    std::vector<ActionEvent> events;
+};
+struct ConsumptionLedger {
+    std::set<uint64_t> consumed;
+    bool consume(uint64_t token) { return consumed.insert(token).second; }
+};
+struct ActionFrameView { std::vector<ActionValue> values; std::vector<ActionEvent> events; };
+void mag_controls_validate_profile(const ControlsProfile& profile);
+void mag_controls_configure(const ControlsProfile& profile);
+void mag_controls_set_capture_state(const InputCaptureState& state);
+// Independent producers update only the fields they own.
+void mag_controls_set_window_capture(bool focused,bool mouse_captured);
+void mag_controls_set_supported_context(bool supported);
+void mag_controls_set_controller_connection(bool connected);
+void mag_controls_push_event(const PhysicalInputEvent& event);
+void mag_controls_push_mouse(int64_t dx, int64_t dy);
+void mag_controls_push_relative_mouse(double dx,double dy);
+// Backend reports neutral without changing the supplied sample. A reset requires
+// one neutral sample before accepting a new deflection. No host curve is added.
+void mag_controls_push_controller_axes(const ControllerAxes&, bool neutral);
+void mag_controls_capture_controller_axes(const ControllerAxes&);
+// A native poll may use the SDK cache without a fresh raw backend refresh.
+// Clear only the raw sample, preserving connection and neutral/rearm history.
+void mag_controls_clear_controller_sample();
+// Only local player slot zero is supported. Acquisition/retirement and consumers
+// share the simulation thread. Capture callbacks may run on other threads.
+// References remain valid until retirement or sealing a different key. Sealing
+// without semantic attachment and then retiring rejects that sample, cancels
+// held actions/pending input, and requires fresh activation. An old key never
+// drains new input. Native callers seal only after an actual completed poll.
+const PhysicalInputSample& mag_controls_seal_sample(InputFrameKey key);
+// Attach one proven semantic context to the sealed sample. Events captured after
+// sealing remain queued for the next poll. No physical acquisition happens here.
+const HostInputFrame& mag_controls_attach_sample(InputFrameKey key, InputContext classified_context);
+const HostInputFrame& mag_controls_attach_sample(InputFrameKey key, const InputInterpretation&);
+// Convenience for callers whose physical poll and context are already proven
+// together; native phased integration uses seal/attach separately.
+const HostInputFrame& mag_controls_acquire_frame(InputFrameKey key, InputContext classified_context);
+ActionFrameView mag_controls_actions(const HostInputFrame&, InputContext, ConsumptionLedger&);
+void mag_controls_retire_frame(InputFrameKey key);
+void mag_controls_release_input(InputResetReason reason);
+void mag_controls_release_source(InputSource source);
+bool mag_controls_frame_valid(InputFrameKey key, uint64_t capture_generation);
+uint64_t mag_controls_current_generation();
+InputPolicy mag_controls_current_policy();
+InputPolicy mag_controls_update_policy(const InputPolicy&, const PolicyEvents&);
+// Permission only. Native eligibility and completed cache cleanup are additional gates.
+bool mag_controls_assist_allowed(const InputPolicy&);
+bool mag_controls_gameplay_source_allowed(const InputPolicy&, InputSource);
+// Canonical counts: right-positive X, down-positive Y. Angles: right/up-positive.
+MouseLookDelta mag_controls_mouse_look(double dx, double dy, const MouseLookSettings&, AimMode);
+ControllerLookRequest mag_controls_controller_look(double x, double y, const ControllerLookSettings&, AimMode);
+} // namespace mag
