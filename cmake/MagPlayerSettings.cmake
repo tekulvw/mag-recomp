@@ -4,6 +4,7 @@
 function(mag_enable_player_settings target sdk)
     get_filename_component(player_src "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/../src" ABSOLUTE)
     find_package(ZLIB REQUIRED)
+    target_sources(${target} PRIVATE "${player_src}/player_controls.cpp" "${player_src}/player_input_capture.cpp")
     target_sources(${target} PRIVATE
         "${player_src}/player_settings_store.m" "${player_src}/player_settings_macos.m"
         "${player_src}/player_settings_runtime.mm" "${player_src}/player_server_overlay.mm"
@@ -26,7 +27,9 @@ function(mag_enable_player_settings target sdk)
         PROPERTIES INCLUDE_DIRECTORIES "${sdk}")
     set_property(SOURCE "${sdk}/libs/input/cellPad.c" DIRECTORY "${sdk}"
         APPEND PROPERTY COMPILE_DEFINITIONS SDL_GameControllerGetButton=mag_player_controller_button
-        SDL_GameControllerGetAxis=mag_player_controller_axis)
+        SDL_GameControllerGetAxis=mag_player_controller_axis
+        SDL_GameControllerUpdate=mag_player_controller_update SDL_GameControllerOpen=mag_player_controller_open
+        SDL_GameControllerClose=mag_player_controller_close SDL_GameControllerGetAttached=mag_player_controller_attached)
     set_property(SOURCE "${sdk}/libs/input/pad_macos.m" DIRECTORY "${sdk}"
         APPEND PROPERTY COMPILE_DEFINITIONS ps3recomp_pad_macos_state=mag_sdk_pad_macos_state
         ps3recomp_pad_macos_buttons=mag_sdk_pad_macos_buttons)

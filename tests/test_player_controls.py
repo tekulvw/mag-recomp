@@ -75,6 +75,9 @@ class PlayerControlsTests(unittest.TestCase):
     def test_mode_permission_revocation_precedes_next_sample(self):
         subprocess.run([str(self.binary), 'configure-policy'], check=True)
 
+    def test_native_conditioned_neutral_is_attached_without_another_poll(self):
+        subprocess.run([str(self.binary), 'native-neutral'], check=True)
+
 
 if __name__ == '__main__':
     unittest.main()

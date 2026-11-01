@@ -17,7 +17,7 @@ struct ControlsState {
     InputPolicy policy;
     uint64_t generation=1, next_token=1;
     int64_t mouse_dx=0, mouse_dy=0;
-    bool mouse_motion_seen=false, controller_axes_rearmed=false;
+    bool mouse_motion_seen=false, controller_axes_rearmed=false, last_native_neutral=true;
     std::optional<ControllerAxes> controller_axes;
     std::set<PhysicalControl> physical_down, accepted_down, toggled, blocked;
     std::vector<QueuedInput> queue;
@@ -67,7 +67,7 @@ void release_locked(ControlsState& state, std::optional<InputSource> source={}) 
         state.accepted_down.clear(); state.toggled.clear(); state.queue.clear();
     }
     if(!source || *source==InputSource::Mouse) { state.mouse_dx=0; state.mouse_dy=0; state.mouse_motion_seen=false; }
-    if(!source || *source==InputSource::Controller) { state.controller_axes.reset(); state.controller_axes_rearmed=false; }
+    if(!source || *source==InputSource::Controller) { state.controller_axes.reset(); state.controller_axes_rearmed=false; state.last_native_neutral=true; }
     ++state.generation;
 }
 void retire_locked(ControlsState& state) {
@@ -269,18 +269,30 @@ void mag_controls_push_mouse(int64_t dx,int64_t dy) {
     try { state.mouse_dx=add_counts(state.mouse_dx,dx); state.mouse_dy=add_counts(state.mouse_dy,dy); }
     catch(...) { release_locked(state); throw; }
 }
-void mag_controls_push_controller_axes(const ControllerAxes& input, bool neutral) {
+namespace {
+ControllerAxes normalize_axes(const ControllerAxes& input) {
     ControllerAxes axes=input;
     for(double* value:{&axes.move_x,&axes.move_y,&axes.look_x,&axes.look_y,&axes.left_trigger,&axes.right_trigger})
         if(!std::isfinite(*value)) throw std::invalid_argument("invalid controller axis");
     axes.move_x=std::clamp(axes.move_x,-1.0,1.0); axes.move_y=std::clamp(axes.move_y,-1.0,1.0);
     axes.look_x=std::clamp(axes.look_x,-1.0,1.0); axes.look_y=std::clamp(axes.look_y,-1.0,1.0);
     axes.left_trigger=std::clamp(axes.left_trigger,0.0,1.0); axes.right_trigger=std::clamp(axes.right_trigger,0.0,1.0);
+    return axes;
+}
+}
+void mag_controls_push_controller_axes(const ControllerAxes& input,bool neutral) {
+    const auto axes=normalize_axes(input);
     auto& state=controls(); std::lock_guard lock(state.mutex);
     if(!enabled(state) || !state.capture.controller_connected) return;
     if(neutral) state.controller_axes_rearmed=true;
     if(state.controller_axes_rearmed) state.controller_axes=axes;
 }
+void mag_controls_capture_controller_axes(const ControllerAxes& input) {
+    const auto axes=normalize_axes(input);
+    auto& state=controls(); std::lock_guard lock(state.mutex);
+    if(enabled(state) && state.capture.controller_connected) state.controller_axes=axes;
+}
+
 namespace {
 const PhysicalInputSample& seal_locked(ControlsState& state,InputFrameKey key) {
     if(key.player_slot!=0) throw std::invalid_argument("only local player slot zero is supported");
@@ -304,7 +316,7 @@ const PhysicalInputSample& seal_locked(ControlsState& state,InputFrameKey key) {
     state.sample=std::move(sample);
     return *state.sample;
 }
-const HostInputFrame& attach_locked(ControlsState& state,InputFrameKey key,InputContext context) {
+const HostInputFrame& attach_locked(ControlsState& state,InputFrameKey key,InputContext context,std::optional<bool> native_neutral={}) {
     const bool gameplay=gameplay_context(context);
     if(state.frame && state.frame->key==key) {
         if(state.frame->context!=context) throw std::invalid_argument("input context already frozen");
@@ -353,10 +365,20 @@ const HostInputFrame& attach_locked(ControlsState& state,InputFrameKey key,Input
     events.controller_connected=sample.capture.controller_connected && !controller_revoked; events.gameplay_kbm=kbm;
     events.mouse_motion=accepting && gameplay && !context_changed && !mouse_revoked && sample.mouse_motion_seen;
     events.mouse_captured=sample.capture.mouse_captured;
-    events.stick_neutral=controller_revoked || sample.capture.stick_neutral;
-    events.fresh_stick_deflection=!controller_revoked && sample.capture.fresh_stick_deflection;
+    bool neutral=sample.capture.stick_neutral,fresh=sample.capture.fresh_stick_deflection;
+    if(native_neutral) {
+        neutral=*native_neutral;
+        fresh=false;
+        if(accepting && !context_changed && !controller_revoked && sample.capture.controller_connected) {
+            fresh=state.controller_axes_rearmed && state.last_native_neutral && !neutral;
+            if(neutral) state.controller_axes_rearmed=true;
+            state.last_native_neutral=neutral;
+        }
+    }
+    events.stick_neutral=controller_revoked || neutral;
+    events.fresh_stick_deflection=!controller_revoked && fresh;
     state.policy=mag_controls_update_policy(state.policy,events); frame.policy=state.policy;
-    if(accepting && gameplay && !context_changed && !controller_revoked && mag_controls_gameplay_source_allowed(frame.policy,InputSource::Controller)) frame.controller_axes=sample.controller_axes;
+    if(accepting && gameplay && !context_changed && !controller_revoked && state.controller_axes_rearmed && mag_controls_gameplay_source_allowed(frame.policy,InputSource::Controller)) frame.controller_axes=sample.controller_axes;
     for(const auto& [id,action]:state.actions) frame.values.push_back({id,action.down ? 1.0 : 0.0});
     state.frame=std::move(frame);
     return *state.frame;
@@ -369,6 +391,10 @@ const PhysicalInputSample& mag_controls_seal_sample(InputFrameKey key) {
 const HostInputFrame& mag_controls_attach_sample(InputFrameKey key,InputContext context) {
     auto& state=controls(); std::lock_guard lock(state.mutex);
     return attach_locked(state,key,context);
+}
+const HostInputFrame& mag_controls_attach_sample(InputFrameKey key,const InputInterpretation& interpretation) {
+    auto& state=controls(); std::lock_guard lock(state.mutex);
+    return attach_locked(state,key,interpretation.context,interpretation.controller_neutral);
 }
 const HostInputFrame& mag_controls_acquire_frame(InputFrameKey key,InputContext context) {
     (void)gameplay_context(context);

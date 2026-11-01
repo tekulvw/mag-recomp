@@ -401,6 +401,27 @@ static void configure_policy_tests() {
     try { (void)mag_controls_attach_sample({10,2,0},InputContext::OnFoot); } catch(const std::invalid_argument&) { rejected=true; }
     check(rejected && !mag_controls_assist_allowed(mag_controls_current_policy()),"rejected sample cannot preserve the old Controller exception");
 }
+static void native_neutral_tests() {
+    mag_controls_configure(bindings_profile());
+    InputCaptureState capture;capture.controller_connected=true;capture.mouse_captured=true;
+    // Legacy/backend metadata deliberately disagrees with the actual native
+    // interpretation; it must not override that later observation.
+    capture.stick_neutral=true;capture.fresh_stick_deflection=true;mag_controls_set_capture_state(capture);
+    ControllerAxes axes;axes.look_x=.7;mag_controls_capture_controller_axes(axes);mag_controls_push_mouse(1,0);
+    const auto& raw=mag_controls_seal_sample({10,1,0});
+    check(raw.controller_axes && raw.controller_axes->look_x==.7,"raw capture retains un-rearmed physical axes for later native interpretation");
+    const auto& held=mag_controls_attach_sample(raw.key,InputInterpretation{InputContext::OnFoot,false});
+    check(!held.controller_axes && held.policy.look_owner==LookOwner::Mouse,"held stick without native neutral cannot rearm or reclaim look");
+    check(!mag_controls_attach_sample(raw.key,InputInterpretation{InputContext::OnFoot,true}).controller_axes,"repeated callback cannot reinterpret the frozen neutral observation");
+    axes.look_x=.001;mag_controls_capture_controller_axes(axes);
+    (void)mag_controls_seal_sample({10,2,0});
+    const auto& neutral=mag_controls_attach_sample({10,2,0},InputInterpretation{InputContext::OnFoot,true});
+    check(neutral.controller_axes && neutral.controller_axes->look_x==.001 && neutral.policy.look_owner==LookOwner::Mouse,"native neutral rearms without adding a host deadzone or seizing look");
+    axes.look_x=.4;mag_controls_capture_controller_axes(axes);
+    (void)mag_controls_seal_sample({10,3,0});
+    const auto& fresh=mag_controls_attach_sample({10,3,0},InputInterpretation{InputContext::OnFoot,false});
+    check(fresh.controller_axes && fresh.policy.look_owner==LookOwner::Controller && !mag_controls_assist_allowed(fresh.policy),"fresh native deflection reclaims look without restoring assist");
+}
 int main(int argc, char** argv) {
     try {
         if (argc!=2) return 2;
@@ -410,7 +431,7 @@ int main(int argc, char** argv) {
         else if(name=="validation") profile_validation_tests(); else if(name=="toggle") toggle_tests(); else if(name=="motion") motion_detection_tests(); else if(name=="axes") axes_tests();
         else if(name=="device") device_tests(); else if(name=="device-order") device_order_tests(); else if(name=="sample-phases") sample_phase_tests();
         else if(name=="sample-lifecycle") sample_lifecycle_tests(); else if(name=="sample-contexts") sample_context_tests(); else if(name=="sample-revocation") sample_revocation_tests();
-        else if(name=="sample-mouse-revocation") sample_mouse_revocation_tests(); else if(name=="configure-policy") configure_policy_tests(); else return 2;
+        else if(name=="sample-mouse-revocation") sample_mouse_revocation_tests(); else if(name=="configure-policy") configure_policy_tests(); else if(name=="native-neutral") native_neutral_tests(); else return 2;
         return 0;
     } catch(const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }
 }

@@ -94,6 +94,13 @@ struct PhysicalInputSample {
     std::optional<ControllerAxes> controller_axes;
     std::vector<PhysicalInputEvent> events;
 };
+struct InputInterpretation {
+    InputContext context=InputContext::OnFoot;
+    // For Native response, the native adapter observes its conditioned physical
+    // half-axis channels after polling and before handler consumption. This is
+    // an interpretation of the sealed sample, not another hardware sample.
+    std::optional<bool> controller_neutral;
+};
 struct HostInputFrame {
     InputFrameKey key;
     InputContext context=InputContext::OnFoot;
@@ -117,6 +124,7 @@ void mag_controls_push_mouse(int64_t dx, int64_t dy);
 // Backend reports neutral without changing the supplied sample. A reset requires
 // one neutral sample before accepting a new deflection. No host curve is added.
 void mag_controls_push_controller_axes(const ControllerAxes&, bool neutral);
+void mag_controls_capture_controller_axes(const ControllerAxes&);
 // Only local player slot zero is supported. Acquisition/retirement and consumers
 // share the simulation thread. Capture callbacks may run on other threads.
 // References remain valid until retirement or sealing a different key. Sealing
@@ -127,6 +135,7 @@ const PhysicalInputSample& mag_controls_seal_sample(InputFrameKey key);
 // Attach one proven semantic context to the sealed sample. Events captured after
 // sealing remain queued for the next poll. No physical acquisition happens here.
 const HostInputFrame& mag_controls_attach_sample(InputFrameKey key, InputContext classified_context);
+const HostInputFrame& mag_controls_attach_sample(InputFrameKey key, const InputInterpretation&);
 // Convenience for callers whose physical poll and context are already proven
 // together; native phased integration uses seal/attach separately.
 const HostInputFrame& mag_controls_acquire_frame(InputFrameKey key, InputContext classified_context);
