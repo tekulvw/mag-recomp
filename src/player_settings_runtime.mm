@@ -1,6 +1,7 @@
 #import "player_settings_runtime.h"
 #import "player_settings_macos.h"
 #import "player_server_overlay.h"
+#include "player_input_desktop.h"
 #import <QuartzCore/CAMetalLayer.h>
 #include <cstring>
 #include <cstdlib>
@@ -25,7 +26,7 @@ int mag_player_settings_prepare(void) { @autoreleasepool {
     BOOL exists=NO;NSError *error=nil;
     NSDictionary *settings=MAGSettingsLoad(path,&exists,&error);
     controller=[[MAGSettingsController alloc] initWithPath:path settings:settings?:MAGSettingsDefaults() error:error];
-    controller.editingChanged=^(BOOL editing){mag_player_set_input_blocked(editing);};
+    controller.editingChanged=^(BOOL editing){mag_player_set_input_blocked(editing);mag_input_desktop_refresh();};
     BOOL launcherPhase=environment("MAG_PLAYER_SETUP")!=nil;
     BOOL setup=error||environment("MAG_PLAYER_SHOW_SETTINGS")||(!exists&&environment("MAG_PLAYER_SETUP"));
     for(;;){
@@ -72,17 +73,20 @@ static void installMenu(NSWindow *game) {
 }
 
 void mag_player_settings_attach(void) {
-    if(!controller||attached)return;
+    if(attached)return;
     void (^attach)(void)=^{
         for(NSWindow *window in NSApp.windows)if(window!=controller.window&&[window.contentView.layer isKindOfClass:CAMetalLayer.class]){
-            [controller attachGameWindow:window];installMenu(window);attached=YES;break;
+            if(controller){[controller attachGameWindow:window];installMenu(window);}
+            mag_input_desktop_attach_window((__bridge void*)window);attached=YES;break;
         }
     };
     if(NSThread.isMainThread)attach();else dispatch_sync(dispatch_get_main_queue(),attach);
 }
 
 void mag_player_settings_poll(void) {
-    if(!controller||!attached)return;
+    if(!attached)return;
+    mag_input_desktop_refresh();
+    if(!controller)return;
     // The backend can reset the drawable when the guest changes display buffers.
     // Keep output dimensions separate from those guest render targets.
     if(NSThread.isMainThread)[controller refreshOutput];

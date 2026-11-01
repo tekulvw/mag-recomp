@@ -75,6 +75,7 @@ struct ActionEvent {
     uint64_t token=0;
     InputSource source=InputSource::Keyboard;
     bool cleanup=false;
+    uint64_t time_ns=0;
 };
 struct ActionValue { ActionId action=0; double value=0; };
 struct InputCaptureState {
@@ -89,7 +90,7 @@ struct PhysicalInputSample {
     InputFrameKey key;
     uint64_t capture_generation=0;
     InputCaptureState capture;
-    int64_t mouse_dx=0, mouse_dy=0;
+    double mouse_dx=0, mouse_dy=0;
     bool mouse_motion_seen=false;
     std::optional<ControllerAxes> controller_axes;
     std::vector<PhysicalInputEvent> events;
@@ -106,7 +107,7 @@ struct HostInputFrame {
     InputContext context=InputContext::OnFoot;
     uint64_t capture_generation=0;
     InputPolicy policy;
-    int64_t mouse_dx=0, mouse_dy=0;
+    double mouse_dx=0, mouse_dy=0;
     std::optional<ControllerAxes> controller_axes;
     std::vector<ActionValue> values;
     std::vector<ActionEvent> events;
@@ -119,12 +120,20 @@ struct ActionFrameView { std::vector<ActionValue> values; std::vector<ActionEven
 void mag_controls_validate_profile(const ControlsProfile& profile);
 void mag_controls_configure(const ControlsProfile& profile);
 void mag_controls_set_capture_state(const InputCaptureState& state);
+// Independent producers update only the fields they own.
+void mag_controls_set_window_capture(bool focused,bool mouse_captured);
+void mag_controls_set_supported_context(bool supported);
+void mag_controls_set_controller_connection(bool connected);
 void mag_controls_push_event(const PhysicalInputEvent& event);
 void mag_controls_push_mouse(int64_t dx, int64_t dy);
+void mag_controls_push_relative_mouse(double dx,double dy);
 // Backend reports neutral without changing the supplied sample. A reset requires
 // one neutral sample before accepting a new deflection. No host curve is added.
 void mag_controls_push_controller_axes(const ControllerAxes&, bool neutral);
 void mag_controls_capture_controller_axes(const ControllerAxes&);
+// A native poll may use the SDK cache without a fresh raw backend refresh.
+// Clear only the raw sample, preserving connection and neutral/rearm history.
+void mag_controls_clear_controller_sample();
 // Only local player slot zero is supported. Acquisition/retirement and consumers
 // share the simulation thread. Capture callbacks may run on other threads.
 // References remain valid until retirement or sealing a different key. Sealing
@@ -142,13 +151,15 @@ const HostInputFrame& mag_controls_acquire_frame(InputFrameKey key, InputContext
 ActionFrameView mag_controls_actions(const HostInputFrame&, InputContext, ConsumptionLedger&);
 void mag_controls_retire_frame(InputFrameKey key);
 void mag_controls_release_input(InputResetReason reason);
+void mag_controls_release_source(InputSource source);
 bool mag_controls_frame_valid(InputFrameKey key, uint64_t capture_generation);
+uint64_t mag_controls_current_generation();
 InputPolicy mag_controls_current_policy();
 InputPolicy mag_controls_update_policy(const InputPolicy&, const PolicyEvents&);
 // Permission only. Native eligibility and completed cache cleanup are additional gates.
 bool mag_controls_assist_allowed(const InputPolicy&);
 bool mag_controls_gameplay_source_allowed(const InputPolicy&, InputSource);
 // Canonical counts: right-positive X, down-positive Y. Angles: right/up-positive.
-MouseLookDelta mag_controls_mouse_look(int64_t dx, int64_t dy, const MouseLookSettings&, AimMode);
+MouseLookDelta mag_controls_mouse_look(double dx, double dy, const MouseLookSettings&, AimMode);
 ControllerLookRequest mag_controls_controller_look(double x, double y, const ControllerLookSettings&, AimMode);
 } // namespace mag

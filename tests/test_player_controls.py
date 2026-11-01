@@ -78,6 +78,18 @@ class PlayerControlsTests(unittest.TestCase):
     def test_native_conditioned_neutral_is_attached_without_another_poll(self):
         subprocess.run([str(self.binary), 'native-neutral'], check=True)
 
+    def test_raw_fractional_mouse_motion_is_not_quantized(self):
+        subprocess.run([str(self.binary), 'precise-mouse'], check=True)
+
+    def test_window_and_device_producers_preserve_each_others_state(self):
+        subprocess.run([str(self.binary), 'capture-producers'], check=True)
+
+    def test_keyboard_and_mouse_disconnect_release_only_their_source(self):
+        subprocess.run([str(self.binary), 'source-disconnect'], check=True)
+
+    def test_action_transitions_preserve_physical_timestamps_and_short_pulses(self):
+        subprocess.run([str(self.binary), 'action-time'], check=True)
+
 
 if __name__ == '__main__':
     unittest.main()

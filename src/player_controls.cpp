@@ -16,7 +16,7 @@ struct ControlsState {
     InputCaptureState capture;
     InputPolicy policy;
     uint64_t generation=1, next_token=1;
-    int64_t mouse_dx=0, mouse_dy=0;
+    double mouse_dx=0, mouse_dy=0;
     bool mouse_motion_seen=false, controller_axes_rearmed=false, last_native_neutral=true;
     std::optional<ControllerAxes> controller_axes;
     std::set<PhysicalControl> physical_down, accepted_down, toggled, blocked;
@@ -70,6 +70,16 @@ void release_locked(ControlsState& state, std::optional<InputSource> source={}) 
     if(!source || *source==InputSource::Controller) { state.controller_axes.reset(); state.controller_axes_rearmed=false; state.last_native_neutral=true; }
     ++state.generation;
 }
+void update_capture_locked(ControlsState& state,const InputCaptureState& capture) {
+    if(capture.time_ns<state.capture.time_ns) throw std::invalid_argument("input time moved backwards");
+    if((state.capture.focused && !capture.focused) || (state.capture.supported_context && !capture.supported_context)) release_locked(state);
+    else {
+        if(state.capture.mouse_captured && !capture.mouse_captured) release_locked(state,InputSource::Mouse);
+        if(state.capture.controller_connected && !capture.controller_connected) release_locked(state,InputSource::Controller);
+    }
+    state.capture=capture;
+}
+
 void retire_locked(ControlsState& state) {
     if(!state.sample) return;
     const auto key=state.sample->key;
@@ -90,22 +100,22 @@ unsigned bound_sources(const ControlsState& state, ActionId id, InputContext con
            (!gameplay || mag_controls_gameplay_source_allowed(policy,binding.control.source))) sources|=1u<<unsigned(binding.control.source);
     return sources;
 }
-void update_actions(ControlsState& state, HostInputFrame& frame, InputSource source, bool gameplay, bool cleanup=false) {
+void update_actions(ControlsState& state, HostInputFrame& frame, InputSource source, bool gameplay, bool cleanup=false,uint64_t time_ns=0) {
     for(auto& [id,action]:state.actions) {
         const unsigned sources=bound_sources(state,id,frame.context,frame.policy,gameplay);
         const bool down=sources!=0;
         if(down!=action.down) {
             if(cleanup && down) continue; // Revocation can never grant an action.
-            frame.events.push_back({id,down ? ActionEventKind::Press : ActionEventKind::Release,state.next_token++,source,cleanup});
+            frame.events.push_back({id,down ? ActionEventKind::Press : ActionEventKind::Release,state.next_token++,source,cleanup,time_ns});
             action.down=down; action.source=source;
         }
         action.sources=sources;
     }
 }
-int64_t add_counts(int64_t a, int64_t b) {
-    if((b>0 && a>std::numeric_limits<int64_t>::max()-b) || (b<0 && a<std::numeric_limits<int64_t>::min()-b))
-        throw std::invalid_argument("mouse count overflow");
-    return a+b;
+double add_counts(double a,double b) {
+    const double result=a+b;
+    if(!std::isfinite(a) || !std::isfinite(b) || !std::isfinite(result))throw std::invalid_argument("invalid relative mouse counts");
+    return result;
 }
 void positive(double value) {
     if (!std::isfinite(value) || value<=0) throw std::invalid_argument("look gains must be finite and positive");
@@ -178,7 +188,7 @@ bool mag_controls_gameplay_source_allowed(const InputPolicy& policy, InputSource
     }
     return false;
 }
-MouseLookDelta mag_controls_mouse_look(int64_t dx, int64_t dy, const MouseLookSettings& settings, AimMode mode) {
+MouseLookDelta mag_controls_mouse_look(double dx, double dy, const MouseLookSettings& settings, AimMode mode) {
     positive(settings.radians_per_count); positive(settings.x_gain); positive(settings.y_gain);
     const double gain=mode_gain(mode,settings.hip_gain,settings.ads_gain,settings.scoped_gain);
     return {angular(double(dx)*settings.radians_per_count*settings.x_gain*gain),
@@ -238,14 +248,24 @@ void mag_controls_configure(const ControlsProfile& profile) {
 }
 void mag_controls_set_capture_state(const InputCaptureState& capture) {
     auto& state=controls(); std::lock_guard lock(state.mutex);
-    if(capture.time_ns<state.capture.time_ns) throw std::invalid_argument("input time moved backwards");
-    if((state.capture.focused && !capture.focused) || (state.capture.supported_context && !capture.supported_context)) release_locked(state);
-    else {
-        if(state.capture.mouse_captured && !capture.mouse_captured) release_locked(state,InputSource::Mouse);
-        if(state.capture.controller_connected && !capture.controller_connected) release_locked(state,InputSource::Controller);
-    }
-    state.capture=capture;
+    update_capture_locked(state,capture);
 }
+void mag_controls_set_window_capture(bool focused,bool mouse_captured) {
+    auto& state=controls();std::lock_guard lock(state.mutex);
+    auto capture=state.capture;capture.focused=focused;capture.mouse_captured=mouse_captured;
+    update_capture_locked(state,capture);
+}
+void mag_controls_set_supported_context(bool supported) {
+    auto& state=controls();std::lock_guard lock(state.mutex);
+    auto capture=state.capture;capture.supported_context=supported;
+    update_capture_locked(state,capture);
+}
+void mag_controls_set_controller_connection(bool connected) {
+    auto& state=controls();std::lock_guard lock(state.mutex);
+    auto capture=state.capture;capture.controller_connected=connected;
+    update_capture_locked(state,capture);
+}
+
 void mag_controls_push_event(const PhysicalInputEvent& event) {
     if(!mag_controls_gameplay_source_allowed(InputPolicy{},event.control.source)) throw std::invalid_argument("invalid physical source");
     auto& state=controls(); std::lock_guard lock(state.mutex);
@@ -262,13 +282,14 @@ void mag_controls_push_event(const PhysicalInputEvent& event) {
     if(state.queue.size()>=8192) { release_locked(state); return; }
     state.queue.push_back({event,{}});
 }
-void mag_controls_push_mouse(int64_t dx,int64_t dy) {
+void mag_controls_push_relative_mouse(double dx,double dy) {
     auto& state=controls(); std::lock_guard lock(state.mutex);
     if(!enabled(state) || !state.capture.mouse_captured) return;
     state.mouse_motion_seen |= dx!=0 || dy!=0;
     try { state.mouse_dx=add_counts(state.mouse_dx,dx); state.mouse_dy=add_counts(state.mouse_dy,dy); }
     catch(...) { release_locked(state); throw; }
 }
+void mag_controls_push_mouse(int64_t dx,int64_t dy) {mag_controls_push_relative_mouse(double(dx),double(dy));}
 namespace {
 ControllerAxes normalize_axes(const ControllerAxes& input) {
     ControllerAxes axes=input;
@@ -280,6 +301,7 @@ ControllerAxes normalize_axes(const ControllerAxes& input) {
     return axes;
 }
 }
+void mag_controls_clear_controller_sample() {auto& state=controls();std::lock_guard lock(state.mutex);state.controller_axes.reset();}
 void mag_controls_push_controller_axes(const ControllerAxes& input,bool neutral) {
     const auto axes=normalize_axes(input);
     auto& state=controls(); std::lock_guard lock(state.mutex);
@@ -355,7 +377,7 @@ const HostInputFrame& attach_locked(ControlsState& state,InputFrameKey key,Input
             }
         }
         if(gameplay && matching && event.down && event.control.source!=InputSource::Controller) kbm=true;
-        update_actions(state,frame,event.control.source,gameplay);
+        update_actions(state,frame,event.control.source,gameplay,false,event.time_ns);
     }
     state.sampled_queue.clear();
     if(accepting && gameplay && !context_changed && !mouse_revoked && mag_controls_gameplay_source_allowed(frame.policy,InputSource::Mouse)) {
@@ -420,10 +442,15 @@ void mag_controls_release_input(InputResetReason reason) {
     auto& state=controls(); std::lock_guard lock(state.mutex);
     if(reason==InputResetReason::Device) release_locked(state,InputSource::Controller); else release_locked(state);
 }
+void mag_controls_release_source(InputSource source) {
+    if(source!=InputSource::Keyboard && source!=InputSource::Mouse && source!=InputSource::Controller) throw std::invalid_argument("invalid physical source");
+    auto& state=controls();std::lock_guard lock(state.mutex);release_locked(state,source);
+}
 bool mag_controls_frame_valid(InputFrameKey key,uint64_t generation) {
     auto& state=controls(); std::lock_guard lock(state.mutex);
     return state.frame && state.frame->key==key && state.generation==generation && enabled(state);
 }
+uint64_t mag_controls_current_generation() {auto& state=controls();std::lock_guard lock(state.mutex);return state.generation;}
 InputPolicy mag_controls_current_policy() {
     auto& state=controls(); std::lock_guard lock(state.mutex); return state.policy;
 }

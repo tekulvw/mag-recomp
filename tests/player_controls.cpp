@@ -421,6 +421,62 @@ static void native_neutral_tests() {
     (void)mag_controls_seal_sample({10,3,0});
     const auto& fresh=mag_controls_attach_sample({10,3,0},InputInterpretation{InputContext::OnFoot,false});
     check(fresh.controller_axes && fresh.policy.look_owner==LookOwner::Controller && !mag_controls_assist_allowed(fresh.policy),"fresh native deflection reclaims look without restoring assist");
+    mag_controls_clear_controller_sample();
+    const auto& cached=mag_controls_acquire_frame({10,4,0},InputContext::OnFoot);
+    check(!cached.controller_axes && cached.policy.controller_connected,"missing backend refresh does not reuse raw axes or invent a disconnect");
+}
+static void precise_mouse_tests() {
+    mag_controls_configure(bindings_profile());InputCaptureState capture;capture.mouse_captured=true;mag_controls_set_capture_state(capture);
+    mag_controls_push_relative_mouse(.125,-.25);mag_controls_push_relative_mouse(.125,-.25);
+    const auto& frame=mag_controls_acquire_frame({10,1,0},InputContext::OnFoot);
+    check(close(frame.mouse_dx,.25) && close(frame.mouse_dy,-.5),"fractional raw device deltas are not quantized to integer counts");
+    const auto delta=mag_controls_mouse_look(frame.mouse_dx,frame.mouse_dy,MouseLookSettings{},AimMode::Hip);
+    check(close(delta.yaw,.00025) && close(delta.pitch,.0005),"fractional raw movement reaches angular conversion without dt");
+    mag_controls_push_relative_mouse(.125,.25);mag_controls_push_relative_mouse(-.125,-.25);
+    const auto& cancelled=mag_controls_acquire_frame({10,2,0},InputContext::OnFoot);
+    check(cancelled.mouse_dx==0 && cancelled.mouse_dy==0 && cancelled.policy.kbm_used_this_process,"zero-net fractional movement retains accepted provenance");
+    bool rejected=false;try {mag_controls_push_relative_mouse(std::numeric_limits<double>::quiet_NaN(),0);}catch(const std::invalid_argument&){rejected=true;}
+    check(rejected,"nonfinite hardware deltas are rejected without carrying motion");
+    check(mag_controls_acquire_frame({10,3,0},InputContext::OnFoot).mouse_dx==0,"invalid device delta clears pending relative motion");
+}
+static void capture_producer_tests() {
+    mag_controls_configure(bindings_profile());InputCaptureState capture;capture.controller_connected=true;mag_controls_set_capture_state(capture);
+    mag_controls_set_window_capture(false,false);
+    const auto& off=mag_controls_seal_sample({10,1,0});
+    check(!off.capture.focused && off.capture.controller_connected,"window producer cannot overwrite independent physical controller connection");
+    (void)mag_controls_attach_sample(off.key,InputContext::OnFoot);
+    mag_controls_set_controller_connection(false);
+    const auto& disconnected=mag_controls_seal_sample({10,2,0});
+    check(!disconnected.capture.focused && !disconnected.capture.controller_connected,"device producer cannot restore window focus");
+    (void)mag_controls_attach_sample(disconnected.key,InputContext::OnFoot);
+    mag_controls_set_supported_context(false);mag_controls_set_window_capture(true,true);
+    const auto& unsupported=mag_controls_seal_sample({10,3,0});
+    check(unsupported.capture.focused && unsupported.capture.mouse_captured && !unsupported.capture.supported_context,"window producer cannot grant native context support");
+    (void)mag_controls_attach_sample(unsupported.key,InputContext::OnFoot);
+    mag_controls_set_supported_context(true);mag_controls_set_controller_connection(true);mag_controls_push_relative_mouse(.5,0);
+    const auto& ready=mag_controls_acquire_frame({10,4,0},InputContext::OnFoot);
+    check(ready.mouse_dx==.5 && ready.policy.controller_connected,"independent producers compose without losing capture or device state");
+}
+static void source_disconnect_tests() {
+    auto profile=bindings_profile();mag_controls_configure(profile);
+    InputCaptureState capture;capture.mouse_captured=true;mag_controls_set_capture_state(capture);
+    mag_controls_push_event({{InputSource::Keyboard,26},true,1});
+    mag_controls_push_event({{InputSource::Mouse,0},true,2});
+    const auto& held=mag_controls_acquire_frame({10,1,0},InputContext::OnFoot);
+    check(action_value(held,1)==1 && action_value(held,2)==1,"keyboard and mouse initially held");
+    mag_controls_release_source(InputSource::Mouse);
+    const auto& mouseLost=mag_controls_acquire_frame({10,2,0},InputContext::OnFoot);
+    check(action_value(mouseLost,1)==1 && action_value(mouseLost,2)==0,"mouse disconnect preserves keyboard");
+    mag_controls_release_source(InputSource::Keyboard);
+    check(action_value(mag_controls_acquire_frame({10,3,0},InputContext::OnFoot),1)==0,"keyboard disconnect releases only its contribution");
+}
+static void action_time_tests() {
+    mag_controls_configure(bindings_profile());InputCaptureState capture;capture.mouse_captured=true;mag_controls_set_capture_state(capture);
+    for(auto [down,time]:{std::pair{true,100u},{false,110u},{true,120u},{false,130u}})
+        mag_controls_push_event({{InputSource::Mouse,0},down,time});
+    const auto& frame=mag_controls_acquire_frame({10,1,0},InputContext::OnFoot);
+    check(action_value(frame,2)==0 && frame.events.size()==4,"completed short pulses retain multiplicity despite terminal up");
+    for(unsigned i=0;i<4;++i)check(frame.events[i].time_ns==100+10*i,"native delivery can recover physical pulse duration and order");
 }
 int main(int argc, char** argv) {
     try {
@@ -431,7 +487,8 @@ int main(int argc, char** argv) {
         else if(name=="validation") profile_validation_tests(); else if(name=="toggle") toggle_tests(); else if(name=="motion") motion_detection_tests(); else if(name=="axes") axes_tests();
         else if(name=="device") device_tests(); else if(name=="device-order") device_order_tests(); else if(name=="sample-phases") sample_phase_tests();
         else if(name=="sample-lifecycle") sample_lifecycle_tests(); else if(name=="sample-contexts") sample_context_tests(); else if(name=="sample-revocation") sample_revocation_tests();
-        else if(name=="sample-mouse-revocation") sample_mouse_revocation_tests(); else if(name=="configure-policy") configure_policy_tests(); else if(name=="native-neutral") native_neutral_tests(); else return 2;
+        else if(name=="sample-mouse-revocation") sample_mouse_revocation_tests(); else if(name=="configure-policy") configure_policy_tests(); else if(name=="native-neutral") native_neutral_tests();
+        else if(name=="precise-mouse") precise_mouse_tests(); else if(name=="capture-producers") capture_producer_tests(); else if(name=="source-disconnect") source_disconnect_tests(); else if(name=="action-time") action_time_tests(); else return 2;
         return 0;
     } catch(const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }
 }
