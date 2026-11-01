@@ -1,6 +1,6 @@
 //! Timestamped physical pulses offered until their native consumer observes them.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
 
 const MAX_ACTIONS: usize = 1024;
@@ -30,11 +30,18 @@ impl fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct Contributor {
+    pub source: u8,
+    pub device: u64,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Offer {
     pub pulse_id: u64,
     pub down: bool,
     pub physical_duration_ns: u64,
+    pub source_mask: u8,
 }
 
 #[derive(Debug)]
@@ -44,6 +51,7 @@ struct Pulse {
     up_time: Option<u64>,
     presenting_up: bool,
     observed: bool,
+    contributors: BTreeSet<Contributor>,
 }
 
 #[derive(Debug, Default)]
@@ -65,6 +73,16 @@ pub struct Delivery {
 impl Delivery {
     /// Queue a logical physical edge; aggregation precedes this operation.
     pub fn push(&mut self, action: u32, down: bool, time_ns: u64) -> Result<(), Error> {
+        self.push_from(action, down, time_ns, BTreeSet::new())
+    }
+
+    pub fn push_from(
+        &mut self,
+        action: u32,
+        down: bool,
+        time_ns: u64,
+        contributors: BTreeSet<Contributor>,
+    ) -> Result<(), Error> {
         if action == 0 {
             return Err(Error::InvalidAction);
         }
@@ -98,6 +116,7 @@ impl Delivery {
                 up_time: None,
                 presenting_up: false,
                 observed: false,
+                contributors,
             });
             self.pulse_count += 1;
         } else {
@@ -145,6 +164,10 @@ impl Delivery {
             pulse_id: pulse.id,
             down: !pulse.presenting_up,
             physical_duration_ns: pulse.up_time.unwrap_or(now).saturating_sub(pulse.down_time),
+            source_mask: pulse
+                .contributors
+                .iter()
+                .fold(0, |sources, contributor| sources | contributor.source),
         })
     }
 
@@ -166,5 +189,50 @@ impl Delivery {
         self.now = None;
         self.newest_event = 0;
         // Never reuse pulse identities, including across capture resets.
+    }
+
+    pub fn update_contributors(
+        &mut self,
+        action: u32,
+        contributors: &BTreeSet<Contributor>,
+    ) -> Result<(), Error> {
+        let pulse = self
+            .actions
+            .get_mut(&action)
+            .and_then(|state| state.pulses.back_mut())
+            .filter(|pulse| pulse.up_time.is_none())
+            .ok_or(Error::InvalidTransition)?;
+        pulse.contributors.clone_from(contributors);
+        Ok(())
+    }
+
+    /// Revoke only the matching devices, without emitting a gameplay release.
+    pub fn cancel_sources(&mut self, sources: u8, device: Option<u64>) {
+        for state in self.actions.values_mut() {
+            state.pulses.retain_mut(|pulse| {
+                if pulse.contributors.is_empty() {
+                    return true;
+                }
+                pulse.contributors.retain(|contributor| {
+                    contributor.source & sources == 0
+                        || device.is_some_and(|id| id != contributor.device)
+                });
+                if !pulse.contributors.is_empty() {
+                    return true;
+                }
+                self.pulse_count -= 1;
+                false
+            });
+            state.physically_down = state
+                .pulses
+                .back()
+                .is_some_and(|pulse| pulse.up_time.is_none());
+        }
+    }
+
+    pub fn cancel_action(&mut self, action: u32) {
+        if let Some(state) = self.actions.remove(&action) {
+            self.pulse_count -= state.pulses.len();
+        }
     }
 }
