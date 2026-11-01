@@ -1,5 +1,5 @@
 #include "player_controls_store.h"
-#include "player_settings_portable.h"
+#include "player_preferences_file.h"
 #include <fstream>
 #include <iostream>
 #include <iterator>
@@ -14,8 +14,8 @@ int main(int argc,char** argv) {
     if(argc!=2) return 2;
     const std::filesystem::path root=argv[1], path=root/"controls.json", old=root/"settings.json";
     const ActionId catalog[]={1,2};
-    PlayerSettings settings; settings.server_address="example.test"; settings.render_scale=200;
-    save_player_settings(old,settings); const auto original=read(old);
+    const std::string original=R"({"schema_version":1,"server_address":"example.test","render_scale":200})";
+    write_player_preferences_file(old,original);
     const auto defaults=mag_controls_load_profile(path,catalog);
     check(defaults.mode==InputMode::Auto && defaults.bindings.empty(),"missing controls return defaults without changing old settings");
     ControlsProfile profile; profile.mode=InputMode::KBM; profile.mouse.ads_gain=.4; profile.mouse.scoped_gain=.2;
@@ -75,8 +75,7 @@ int main(int argc,char** argv) {
     check(read(path)==good && read(blocked)=="parent is a file","failed save preserves existing files");
     for(const auto& item:std::filesystem::directory_iterator(root))
         check(item.path().filename().string().find(".next.")==std::string::npos,"temporary save files cleaned");
-    bool exists=false; const auto old_loaded=load_player_settings(old,exists);
-    check(exists && old_loaded.server_address=="example.test" && old_loaded.render_scale==200,"legacy settings still load unchanged");
+    check(read_player_preferences_file(old)==original,"legacy settings bytes still load unchanged");
     return 0;
  } catch(const std::exception& error) { std::cerr<<error.what()<<'\n'; return 1; }
 }
