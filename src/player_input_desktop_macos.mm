@@ -29,6 +29,9 @@ void mainQueue(void (^block)(void)) {if(NSThread.isMainThread)block();else dispa
 @implementation MAGRawDesktopInput {
     std::set<PhysicalControl> held;
     DesktopButtonAggregation mouseHeld;
+#if MAG_INPUT_RUST
+    std::set<std::pair<uint32_t,uint64_t>> rustMouseHeld;
+#endif
 @public
     DesktopCaptureGate gate;
 
@@ -45,7 +48,16 @@ void mainQueue(void (^block)(void)) {if(NSThread.isMainThread)block();else dispa
 }
 - (void)mouseButton:(uint32_t)code device:(uintptr_t)device down:(BOOL)down epoch:(uint64_t)epoch time:(uint64_t)time {
     if(!self.installed || epoch!=self.epoch)return;
+#if MAG_INPUT_RUST
+    [self refresh];
+    if(!self.installed || epoch!=self.epoch || (down && !self.ready))return;
+    const auto identity=std::make_pair(code,uint64_t(device));
+    if(!down && !rustMouseHeld.contains(identity))return;
+    if(down)rustMouseHeld.insert(identity);else rustMouseHeld.erase(identity);
+    mag_controls_push_event({{InputSource::Mouse,code},bool(down),time,uint64_t(device)});
+#else
     if(auto edge=mouseHeld.update(code,device,down))[self button:{InputSource::Mouse,code} down:*edge epoch:epoch time:time];
+#endif
 }
 - (void)restoreCallbacks {
     ++self.epoch;gate.invalidate();gate.publish(false,false);self.ready=NO;
@@ -57,6 +69,9 @@ void mainQueue(void (^block)(void)) {if(NSThread.isMainThread)block();else dispa
     [self restoreCallbacks];
     mag_controls_release_source(InputSource::Keyboard);mag_controls_release_source(InputSource::Mouse);
     for(auto control:held)mag_controls_push_event({control,false,now()});held.clear();mouseHeld.clear();
+#if MAG_INPUT_RUST
+    for(auto [code,device]:rustMouseHeld)mag_controls_push_event({{InputSource::Mouse,code},false,now(),device});rustMouseHeld.clear();
+#endif
     if(!self.installed)return;
     const uint64_t epoch=self.epoch;
     __weak MAGRawDesktopInput* weakSelf=self;
@@ -156,8 +171,12 @@ void mainQueue(void (^block)(void)) {if(NSThread.isMainThread)block();else dispa
             NSMutableArray* buttons=[@[input.leftButton,input.rightButton?:NSNull.null,input.middleButton?:NSNull.null] mutableCopy];
             if(input.auxiliaryButtons)[buttons addObjectsFromArray:input.auxiliaryButtons];
             for(NSUInteger index=0;index<buttons.count;++index)if(buttons[index]!=NSNull.null && [buttons[index] isPressed]) {
-                PhysicalControl control{InputSource::Mouse,uint32_t(index)};held.insert(control);
-                (void)mouseHeld.update(uint32_t(index),(uintptr_t)(__bridge void*)buttons[index],true);mag_controls_push_event({control,true,now()});
+                PhysicalControl control{InputSource::Mouse,uint32_t(index)};
+#if MAG_INPUT_RUST
+                const uint64_t device=(uintptr_t)(__bridge void*)buttons[index];rustMouseHeld.emplace(uint32_t(index),device);mag_controls_push_event({control,true,now(),device});
+#else
+                held.insert(control);(void)mouseHeld.update(uint32_t(index),(uintptr_t)(__bridge void*)buttons[index],true);mag_controls_push_event({control,true,now()});
+#endif
             }
         }
     }
@@ -165,7 +184,11 @@ void mainQueue(void (^block)(void)) {if(NSThread.isMainThread)block();else dispa
     self.relative=ready && rawMouse.load(std::memory_order_acquire);
     gate.publish(ready,self.relative);
     mag_controls_set_window_capture(ready,self.relative);
-    if(!self.installed) {for(auto control:held)mag_controls_push_event({control,false,now()});held.clear();mouseHeld.clear();}
+    if(!self.installed) {for(auto control:held)mag_controls_push_event({control,false,now()});held.clear();mouseHeld.clear();
+#if MAG_INPUT_RUST
+        for(auto [code,device]:rustMouseHeld)mag_controls_push_event({{InputSource::Mouse,code},false,now(),device});rustMouseHeld.clear();
+#endif
+    }
 }
 @end
 namespace { MAGRawDesktopInput* desktop; }

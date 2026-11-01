@@ -83,7 +83,7 @@ struct InputCaptureState {
     bool stick_neutral=true, fresh_stick_deflection=false;
     uint64_t time_ns=0;
 };
-struct PhysicalInputEvent { PhysicalControl control; bool down=false; uint64_t time_ns=0; };
+struct PhysicalInputEvent { PhysicalControl control; bool down=false; uint64_t time_ns=0; uint64_t device=0; };
 // A completed input poll, before any gameplay or menu interpretation. Sealing
 // does not accept gameplay input or change Auto's KBM provenance.
 struct PhysicalInputSample {

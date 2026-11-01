@@ -428,3 +428,32 @@ fn a_mouse_sample_is_fractional_finite_and_not_replayed() {
     assert_eq!(second.mouse.dx, 0.5);
     assert_eq!(engine.seal(key(3), 50, context(99)).unwrap().mouse.dx, 0.0);
 }
+
+#[test]
+fn physical_sample_excludes_events_arriving_before_later_interpretation() {
+    let mut engine = setup(vec![binding(26, MOVE), binding(8, INTERACT)]);
+    event(&mut engine, 1, 26, true, 10);
+    engine.sample(key(1)).unwrap();
+    event(&mut engine, 1, 8, true, 15);
+    let first = engine.seal(key(1), 20, context(99)).unwrap();
+    assert!(first.action(MOVE).unwrap().down);
+    assert!(first.action(INTERACT).is_none());
+    let next = engine.seal(key(2), 30, context(99)).unwrap();
+    assert!(next.action(INTERACT).unwrap().down);
+}
+
+#[test]
+fn retiring_an_uninterpreted_sample_blocks_its_held_controls() {
+    let mut engine = setup(vec![binding(26, MOVE)]);
+    event(&mut engine, 1, 26, true, 10);
+    engine.sample(key(1)).unwrap();
+    engine.retire(key(1)).unwrap();
+    assert!(engine.seal(key(1), 20, context(99)).is_err());
+    assert!(
+        engine
+            .seal(key(2), 30, context(99))
+            .unwrap()
+            .action(MOVE)
+            .is_none()
+    );
+}

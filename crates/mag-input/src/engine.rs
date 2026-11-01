@@ -50,6 +50,7 @@ pub struct Engine {
     frame: Option<Frame>,
     last_sequence: u64,
     last_time: Option<u64>,
+    sampled: Option<(FrameKey, Vec<Event>, MouseMotion)>,
 }
 
 impl Engine {
@@ -74,11 +75,26 @@ impl Engine {
             frame: None,
             last_sequence: 0,
             last_time: None,
+            sampled: None,
         })
     }
 
     pub fn generation(&self) -> u64 {
         self.generation
+    }
+
+    pub fn current_frame(&self, key: FrameKey) -> Result<&Frame, Error> {
+        self.frame
+            .as_ref()
+            .filter(|frame| frame.key == key && frame.generation == self.generation)
+            .ok_or(Error::InvalidFrame)
+    }
+
+    pub fn reset(&mut self, source: Option<Source>) -> Result<(), Error> {
+        match source {
+            Some(source) => self.cancel_source(source, None),
+            None => self.cancel_all(),
+        }
     }
 
     /// Replace bindings atomically, requiring held controls to be released first.
@@ -93,10 +109,44 @@ impl Engine {
 
     /// End receipt acceptance for a frame without acknowledging its offers.
     pub fn retire(&mut self, key: FrameKey) -> Result<(), Error> {
+        if self.sampled.as_ref().is_some_and(|sample| sample.0 == key) {
+            self.cancel_all()?;
+            self.last_sequence = key.sequence;
+            return Ok(());
+        }
         if !self.frame.as_ref().is_some_and(|frame| frame.key == key) {
             return Err(Error::InvalidFrame);
         }
         self.frame = None;
+        Ok(())
+    }
+
+    /// Freeze ingress at a physical poll; interpretation may occur later.
+    pub fn sample(&mut self, key: FrameKey) -> Result<(), Error> {
+        if self.sampled.as_ref().is_some_and(|sample| sample.0 == key)
+            || self.frame.as_ref().is_some_and(|frame| frame.key == key)
+        {
+            return Ok(());
+        }
+        if key.session != self.session
+            || key.sequence <= self.last_sequence
+            || key.sequence == 0
+            || key.player_slot != 0
+        {
+            return Err(Error::InvalidFrame);
+        }
+        if let Some((previous, _, _)) = &self.sampled {
+            if previous.sequence >= key.sequence {
+                return Err(Error::InvalidFrame);
+            }
+            self.cancel_all()?;
+        }
+        self.frame = None;
+        self.sampled = Some((
+            key,
+            std::mem::take(&mut self.pending),
+            std::mem::take(&mut self.mouse),
+        ));
         Ok(())
     }
 
@@ -116,6 +166,7 @@ impl Engine {
         self.delivery.cancel();
         self.mouse = MouseMotion::default();
         self.frame = None;
+        self.sampled = None;
         self.generation = generation;
         Ok(())
     }
@@ -249,6 +300,12 @@ impl Engine {
         self.toggled.retain(|control| !matches(control));
         self.pending
             .retain(|event| !matches(&event.device_control()));
+        if let Some((_, events, motion)) = &mut self.sampled {
+            events.retain(|event| !matches(&event.device_control()));
+            if source == Source::Mouse {
+                *motion = MouseMotion::default();
+            }
+        }
         self.delivery.cancel_sources(source.bit(), device);
         let actions: Vec<_> = self.logical.keys().copied().collect();
         for action in actions {
@@ -303,7 +360,9 @@ impl Engine {
             self.cancel_all()?;
         }
         self.context = Some(context);
-        for event in std::mem::take(&mut self.pending) {
+        self.sample(key)?;
+        let (_, events, motion) = self.sampled.take().ok_or(Error::InvalidFrame)?;
+        for event in events {
             let control = event.device_control();
             if event.down {
                 self.accepted.insert(control);
@@ -337,10 +396,9 @@ impl Engine {
             generation: self.generation,
             context,
             actions,
-            mouse: self.mouse,
+            mouse: motion,
             look_allowed: self.capture.active() && self.capture.mouse_captured,
         };
-        self.mouse = MouseMotion::default();
         self.last_sequence = key.sequence;
         self.last_time = Some(now_ns);
         self.frame = Some(frame.clone());
