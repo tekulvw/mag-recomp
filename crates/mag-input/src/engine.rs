@@ -406,6 +406,7 @@ impl Engine {
             .collect();
         let frame = Frame {
             key,
+            time_ns: now_ns,
             generation: self.generation,
             context,
             actions,

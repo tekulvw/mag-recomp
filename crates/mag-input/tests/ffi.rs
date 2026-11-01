@@ -142,3 +142,44 @@ fn provisional_routing_does_not_accept_kbm_until_an_exact_receipt() {
         assert_eq!(mag_input_destroy(handle), 0);
     }
 }
+
+#[test]
+fn resealing_an_existing_frame_cannot_change_its_recognition_time() {
+    unsafe {
+        let mut handle = 0;
+        let mut generation = 0;
+        assert_eq!(mag_input_create(1, std::ptr::null(), 0, &mut handle), 0);
+        assert_eq!(mag_input_capture(handle, 7, &mut generation), 0);
+        let key = FrameKeyRecord {
+            session: 1,
+            sequence: 1,
+            slot: 0,
+            reserved: 0,
+        };
+        assert_eq!(
+            mag_input_seal(handle, key, 10, 99, 1, &mut FrameRecord::default()),
+            0
+        );
+        let config = mag_input::gesture::Config {
+            press_delay_ns: 100,
+            ..Default::default()
+        };
+        let mut first = RecognitionRecord::default();
+        assert_eq!(
+            mag_input_recognize(handle, key, 1, 1, 1, 1.0, 0, config, &mut first),
+            0
+        );
+        assert_eq!(
+            mag_input_seal(handle, key, 50, 99, 1, &mut FrameRecord::default()),
+            0
+        );
+        let mut again = RecognitionRecord::default();
+        assert_eq!(
+            mag_input_recognize(handle, key, 1, 1, 1, 1.0, 0, config, &mut again),
+            0
+        );
+        assert_eq!(first.elapsed_ns, again.elapsed_ns);
+        assert_eq!(first.events, again.events);
+        assert_eq!(mag_input_destroy(handle), 0);
+    }
+}
