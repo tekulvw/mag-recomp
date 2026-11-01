@@ -97,6 +97,7 @@ struct ConsumptionLedger {
     bool consume(uint64_t token) { return consumed.insert(token).second; }
 };
 struct ActionFrameView { std::vector<ActionValue> values; std::vector<ActionEvent> events; };
+void mag_controls_validate_profile(const ControlsProfile& profile);
 void mag_controls_configure(const ControlsProfile& profile);
 void mag_controls_set_capture_state(const InputCaptureState& state);
 void mag_controls_push_event(const PhysicalInputEvent& event);

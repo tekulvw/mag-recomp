@@ -178,7 +178,7 @@ ControllerLookRequest mag_controls_controller_look(double x, double y, const Con
             native ? y : linear_axis(y,settings.inner_y,settings.outer_y),
             angular(settings.x_gain*gain),angular(settings.y_gain*gain),native};
 }
-void mag_controls_configure(const ControlsProfile& profile) {
+void mag_controls_validate_profile(const ControlsProfile& profile) {
     (void)mag_controls_mouse_look(0,0,profile.mouse,AimMode::Hip);
     (void)mag_controls_controller_look(0,0,profile.controller,AimMode::Hip);
     InputPolicy mode; PolicyEvents event; event.requested_mode=profile.mode;
@@ -198,6 +198,9 @@ void mag_controls_configure(const ControlsProfile& profile) {
             if(a.control==b.control && (a.contexts & b.contexts)) throw std::invalid_argument("overlapping physical bindings");
         }
     }
+}
+void mag_controls_configure(const ControlsProfile& profile) {
+    mag_controls_validate_profile(profile);
     auto& state=controls(); std::lock_guard lock(state.mutex);
     release_locked(state);
     state.profile=profile;
