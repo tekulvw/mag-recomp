@@ -1,0 +1,2 @@
+# This reviewed source patch has a byte-level SHA-256 pin in its profile.
+/tools/ppu_dispatcher_spill.patch text eol=lf
