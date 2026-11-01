@@ -5,6 +5,7 @@
 #include <limits>
 #include <mutex>
 namespace {
+std::atomic<bool> keyboard_owned{false};
 struct Capture {
     std::mutex mutex;
     std::atomic<bool> collecting{false};
@@ -24,6 +25,12 @@ bool current(const Capture& c,void* controller) {
 }
 }
 extern "C" {
+void mag_input_capture_set_keyboard_owner(int owned) {
+    keyboard_owned.store(owned!=0,std::memory_order_release);
+}
+int mag_input_capture_keyboard_owned(void) {
+    return keyboard_owned.load(std::memory_order_acquire);
+}
 int mag_input_capture_poll_begin(uint64_t sequence) {
     auto& c=capture();std::lock_guard lock(c.mutex);
     if(!sequence || sequence<=c.last_sample || c.active_sample)return 0;

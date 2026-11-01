@@ -16,6 +16,10 @@ typedef struct MagInputControllerSample {
 int mag_input_capture_poll_begin(uint64_t input_sample_sequence);
 int mag_input_capture_poll_complete(uint64_t input_sample_sequence,MagInputControllerSample*);
 void mag_input_capture_poll_abort(uint64_t input_sample_sequence);
+// The replacement gameplay engine owns keyboard interpretation in this scope.
+// This suppresses only a legacy keyboard fallback, never physical controllers.
+void mag_input_capture_set_keyboard_owner(int owned);
+int mag_input_capture_keyboard_owned(void);
 void mag_input_capture_controller_open(void* controller,unsigned native_port);
 void mag_input_capture_controller_close(void* controller);
 void mag_input_capture_backend_begin(void);

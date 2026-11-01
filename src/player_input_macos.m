@@ -11,11 +11,11 @@ void mag_player_set_input_blocked(int value) {atomic_store_explicit(&blocked,!!v
 PS3RecompMacOSPadState mag_sdk_pad_macos_state(void);
 uint16_t mag_sdk_pad_macos_buttons(void);
 PS3RecompMacOSPadState ps3recomp_pad_macos_state(void) {
-    if(mag_player_input_blocked())return (PS3RecompMacOSPadState){0,128,128,128,128};
+    if(mag_player_input_blocked() || mag_input_capture_keyboard_owned())return (PS3RecompMacOSPadState){0,128,128,128,128};
     return mag_sdk_pad_macos_state();
 }
 uint16_t ps3recomp_pad_macos_buttons(void) {
-    return mag_player_input_blocked()?0:mag_sdk_pad_macos_buttons();
+    return (mag_player_input_blocked() || mag_input_capture_keyboard_owned())?0:mag_sdk_pad_macos_buttons();
 }
 Uint8 mag_player_controller_button(SDL_GameController *controller,SDL_GameControllerButton button) {
     Uint8 raw=SDL_GameControllerGetButton(controller,button);

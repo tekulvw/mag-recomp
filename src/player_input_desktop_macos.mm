@@ -17,11 +17,15 @@ void mainQueue(void (^block)(void)) {if(NSThread.isMainThread)block();else dispa
 @interface MAGRawDesktopInput : NSObject
 @property(weak) NSWindow* window;
 @property(nonatomic) BOOL installed,ready,relative,oldMouseEvents;
+@property(nonatomic) BOOL needsRecapture;
+@property NSUInteger cursorHides;
+@property(strong) id clickMonitor;
 @property uint64_t epoch;
 @property(strong) NSMutableArray* observers;
 @property(strong) NSMutableArray* restorers;
 @property(strong) GCKeyboardInput* keyboard;
 - (void)refresh;
+- (void)requestRecapture;
 - (void)rebuild;
 - (void)button:(PhysicalControl)control down:(BOOL)down epoch:(uint64_t)epoch time:(uint64_t)time;
 - (void)mouseButton:(uint32_t)code device:(uintptr_t)device down:(BOOL)down epoch:(uint64_t)epoch time:(uint64_t)time;
@@ -128,17 +132,26 @@ void mainQueue(void (^block)(void)) {if(NSThread.isMainThread)block();else dispa
     [self refresh];
 }
 - (void)setRelative:(BOOL)relative {
-    if(_relative==relative)return;
+    if(_relative==relative && (!relative || !self.needsRecapture))return;
     if(relative) {
         // Pair cursor ownership only after successful relative-mode acquisition.
-        if(CGAssociateMouseAndMouseCursorPosition(false)!=kCGErrorSuccess)return;
-        self.oldMouseEvents=self.window.acceptsMouseMovedEvents;self.window.acceptsMouseMovedEvents=YES;
-        [NSCursor hide];_relative=YES;
+        if(CGAssociateMouseAndMouseCursorPosition(false)!=kCGErrorSuccess) {
+            if(_relative)[self setRelative:NO];
+            return;
+        }
+        if(!_relative) {self.oldMouseEvents=self.window.acceptsMouseMovedEvents;self.window.acceptsMouseMovedEvents=YES;}
+        // Reapply this adapter's hide request after activation/click without
+        // accumulating hide counts or changing keyboard capture ownership.
+        while(self.cursorHides) {[NSCursor unhide];--self.cursorHides;}
+        [NSCursor hide];++self.cursorHides;
+        _relative=YES;self.needsRecapture=NO;
     } else {
-        CGAssociateMouseAndMouseCursorPosition(true);[NSCursor unhide];
+        CGAssociateMouseAndMouseCursorPosition(true);
+        while(self.cursorHides) {[NSCursor unhide];--self.cursorHides;}
         self.window.acceptsMouseMovedEvents=self.oldMouseEvents;_relative=NO;
     }
 }
+- (void)requestRecapture {self.needsRecapture=YES;[self refresh];}
 - (void)refresh {
     if(requested.load(std::memory_order_acquire)!=bool(self.installed)) {
         self.installed=requested.load(std::memory_order_acquire);
@@ -146,7 +159,17 @@ void mainQueue(void (^block)(void)) {if(NSThread.isMainThread)block();else dispa
             __weak MAGRawDesktopInput* weakSelf=self;
             NSNotificationCenter* center=NSNotificationCenter.defaultCenter;
             for(NSNotificationName name in @[NSWindowDidBecomeKeyNotification,NSWindowDidResignKeyNotification,NSApplicationDidBecomeActiveNotification,NSApplicationDidResignActiveNotification])
-                [self.observers addObject:[center addObserverForName:name object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification*){[weakSelf refresh];}]];
+                [self.observers addObject:[center addObserverForName:name object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification* note){
+                    MAGRawDesktopInput* owner=weakSelf;
+                    if([note.name isEqualToString:NSApplicationDidBecomeActiveNotification] ||
+                       ([note.name isEqualToString:NSWindowDidBecomeKeyNotification] && note.object==owner.window))[owner requestRecapture];
+                    else [owner refresh];
+                }]];
+            self.clickMonitor=[NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskLeftMouseDown|NSEventMaskRightMouseDown handler:^NSEvent*(NSEvent* event){
+                MAGRawDesktopInput* owner=weakSelf;
+                if(owner.installed && event.window==owner.window)dispatch_async(dispatch_get_main_queue(),^{[weakSelf requestRecapture];});
+                return event;
+            }];
             [self.observers addObject:[center addObserverForName:NSWindowWillCloseNotification object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification* note){
                 MAGRawDesktopInput* owner=weakSelf;if(note.object==owner.window){owner.relative=NO;owner.window=nil;[owner refresh];}
             }]];
@@ -155,15 +178,18 @@ void mainQueue(void (^block)(void)) {if(NSThread.isMainThread)block();else dispa
             [self rebuild];return;
         }
         for(id token in self.observers)[NSNotificationCenter.defaultCenter removeObserver:token];[self.observers removeAllObjects];
+        if(self.clickMonitor){[NSEvent removeMonitor:self.clickMonitor];self.clickMonitor=nil;}
         [self restoreCallbacks];rawMouse.store(false,std::memory_order_release);
     }
-    const BOOL command=(NSEvent.modifierFlags & NSEventModifierFlagCommand)!=0 || [self.keyboard buttonForKeyCode:GCKeyCodeLeftGUI].isPressed || [self.keyboard buttonForKeyCode:GCKeyCodeRightGUI].isPressed;
+    // GameController can retain a Command press released in another app. The
+    // current OS modifier state owns shortcut gating when focus returns.
+    const BOOL command=(NSEvent.modifierFlags & NSEventModifierFlagCommand)!=0;
     const BOOL ready=self.installed && self.window.isKeyWindow && NSApp.isActive && !mag_player_input_blocked() && !command;
     if(ready && !self.ready) {
         // Do not activate controls already held when returning from another
         // app or the settings panel. Their eventual releases unblock the core.
         mag_controls_set_window_capture(false,false);
-        for(uint32_t code=4;code<=231;++code)if([self.keyboard buttonForKeyCode:(GCKeyCode)code].isPressed) {
+        for(uint32_t code=4;code<=231;++code)if(code!=GCKeyCodeLeftGUI && code!=GCKeyCodeRightGUI && [self.keyboard buttonForKeyCode:(GCKeyCode)code].isPressed) {
             PhysicalControl control{InputSource::Keyboard,code};held.insert(control);mag_controls_push_event({control,true,now()});
         }
         for(GCMouse* mouse in GCMouse.mice) {
