@@ -10,7 +10,7 @@
     "lifter_sha256": "b603e97109e1ceb42e19dacf5ca29c239e3b93d98ca085a9a4d544f6c392b8e3"
   },
   "after": {
-    "revision": "c062d984d57b80f8763f8679a135192a114765ac",
+    "revision": "07c92a9fac58a31c3d77c0b3e40ef4329d8c70ce",
     "lifter_sha256": "4a3f1c53f2a6c94f4538cd5b4d7f7c6c0a4176ba1447adde550ecee9379977c8"
   },
   "reason": "Recover the stack-spilled jump-table base and retain the dispatcher case blocks as internal labels",
