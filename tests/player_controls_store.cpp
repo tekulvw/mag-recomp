@@ -47,6 +47,10 @@ int main(int argc,char** argv) {
     };
     const std::vector<std::string> malformed={
         changed("\"schema_version\":1","\"schema_version\":2"),
+        changed("\"schema_version\":1","\"schema_version\":1.00000000000000001"),
+        changed("\"schema_version\":1","\"schema_version\":1e0"),
+        changed("\"contexts\":1","\"contexts\":1.00000000000000001"),
+        changed("\"action\":1","\"action\":1.00000000000000001"),
         changed("\"schema_version\":1","\"schema_version\":01"),
         changed("\"schema_version\":1","\"schema_version\":1e999"),
         changed("\"mode\":\"kbm\"","\"mode\":true"),

@@ -1,6 +1,7 @@
 #include "player_controls_store.h"
 #include "player_preferences_file.h"
 #include <algorithm>
+#include <charconv>
 #include <cmath>
 #include <iomanip>
 #include <limits>
@@ -78,7 +79,7 @@ struct Parser {
         std::istringstream stream(std::string(input.substr(begin,at-begin))); stream.imbue(std::locale::classic());
         double value; stream>>value;
         if(!stream || stream.peek()!=std::char_traits<char>::eof() || !std::isfinite(value)) invalid();
-        return number(value);
+        auto result=number(value); result.text=std::string(input.substr(begin,at-begin)); return result;
     }
 };
 void fields(const Json& j,std::initializer_list<const char*> names) {
@@ -87,7 +88,14 @@ void fields(const Json& j,std::initializer_list<const char*> names) {
 }
 const Json& get(const Json& j,const char* name) { auto it=j.object.find(name); if(j.kind!=Json::Object || it==j.object.end()) invalid(); return it->second; }
 double num(const Json& j) { if(j.kind!=Json::Number) invalid(); return j.number; }
-uint32_t integer(const Json& j) { const double n=num(j); if(n<0 || n>std::numeric_limits<uint32_t>::max() || std::floor(n)!=n) invalid(); return static_cast<uint32_t>(n); }
+uint32_t integer(const Json& j) {
+    // IDs, codes, masks and the schema use canonical unsigned decimal tokens,
+    // as the existing preferences do. Never round a fractional token into an ID.
+    if(j.kind!=Json::Number || j.text.empty() || !std::all_of(j.text.begin(),j.text.end(),[](char c){return c>='0' && c<='9';})) invalid();
+    uint32_t value=0; const auto parsed=std::from_chars(j.text.data(),j.text.data()+j.text.size(),value);
+    if(parsed.ec!=std::errc() || parsed.ptr!=j.text.data()+j.text.size()) invalid();
+    return value;
+}
 bool flag(const Json& j) { if(j.kind!=Json::Boolean) invalid(); return j.boolean; }
 const std::string& str(const Json& j) { if(j.kind!=Json::String) invalid(); return j.text; }
 void validate(const ControlsProfile& profile,std::span<const ActionId> catalog) {
