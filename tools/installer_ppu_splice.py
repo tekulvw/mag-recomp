@@ -9,6 +9,7 @@ from pathlib import Path
 import argparse
 import hashlib
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -17,6 +18,8 @@ if __package__ in (None, ''):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from tools.partial_ppu_relift import pinned_blob
 from tools.ppu_function_splice import functions
+
+PATCHES = Path(__file__).resolve().parent
 
 
 def digest(path):
@@ -27,6 +30,31 @@ def digest(path):
 def require_hash(path, expected):
     if digest(path) != expected:
         raise ValueError('Splice input identity mismatch: ' + str(path))
+
+
+def patched_lifter(source, pin, directory):
+    """Reconstruct only the reviewed SDK fix, never a newer tool's other changes."""
+    name = pin['patch_file']
+    if not name or Path(name).name != name:
+        raise ValueError('Lifter patch must be an ordinary sibling file')
+    patch = PATCHES / name
+    if patch.is_symlink() or not patch.is_file():
+        raise ValueError('Lifter patch must be an ordinary sibling file')
+    require_hash(patch, pin['patch_sha256'])
+    target = directory / 'tools/ppu_lifter.py'
+    target.parent.mkdir(parents=True)
+    target.write_bytes(source)
+    environment = {key: value for key, value in os.environ.items() if not key.startswith('GIT_')}
+    environment.update(GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL=os.devnull)
+    # A fresh repository also makes application independent of the caller's
+    # repository-relative prefix; an enclosing checkout's index is never used.
+    subprocess.run(['git', 'init', '--quiet', '--template=', str(directory)],
+                   env=environment, check=True, capture_output=True)
+    subprocess.run(['git', '-c', 'core.autocrlf=false', 'apply', '--whitespace=error', '-'],
+                   input=patch.read_bytes(), cwd=directory, env=environment,
+                   check=True, capture_output=True)
+    require_hash(target, pin['lifter_sha256'])
+    return target.read_bytes()
 
 
 def verify_result(output, profile):
@@ -70,8 +98,18 @@ def prepare(base, output, work, elf, inventory, nonlocal_profile, before_sdk, af
             raise ValueError('Splice base provenance differs from reviewed generation inputs: ' + key)
     decoder = pinned_blob(before_sdk, profile['before']['revision'], 'tools/ppu_disasm.py', profile['decoder_sha256'])
     parser = pinned_blob(before_sdk, profile['before']['revision'], 'tools/elf_parser.py', profile['elf_parser_sha256'])
-    lifters = {name: pinned_blob(sdk, profile[name]['revision'], 'tools/ppu_lifter.py', profile[name]['lifter_sha256'])
-               for name, sdk in (('before', before_sdk), ('after', after_sdk))}
+    lifters = {}
+    for name, sdk in (('before', before_sdk), ('after', after_sdk)):
+        pin = profile[name]
+        if 'patch_file' in pin:
+            if (pin['revision'] != profile['before']['revision'] or
+                    pin['base_lifter_sha256'] != profile['before']['lifter_sha256']):
+                raise ValueError('A narrow patch must use the exact reviewed before lifter')
+            # Frozen kits may contain shallow role checkouts. Read the base
+            # from its own role rather than assume the runtime has its history.
+            sdk = before_sdk
+        lifters[name] = pinned_blob(sdk, pin['revision'], 'tools/ppu_lifter.py',
+                                   pin.get('base_lifter_sha256', pin['lifter_sha256']))
     work.mkdir(parents=True)
     commands = {}
     with tempfile.TemporaryDirectory(prefix='dispatcher-relift-', dir=output.parent) as temporary:
@@ -82,7 +120,10 @@ def prepare(base, output, work, elf, inventory, nonlocal_profile, before_sdk, af
         # instructions, changing function discovery and continuation checks.
         (temporary / 'elf_parser.py').write_bytes(parser)
         for name in ('before', 'after'):
-            lifter = temporary / ('lifter_' + name + '.py'); lifter.write_bytes(lifters[name])
+            source = lifters[name]
+            if 'patch_file' in profile[name]:
+                source = patched_lifter(source, profile[name], temporary / ('source-' + name))
+            lifter = temporary / ('lifter_' + name + '.py'); lifter.write_bytes(source)
             commands[name] = [sys.executable, str(lifter), str(elf), '--functions', str(funcs),
                               '--hle-stubs', str(imports), '--code-end', str(summary['code_end']),
                               '--jobs', '2', '--nonlocal-control-flow', str(config), '--output', str(temporary / name)]
@@ -91,7 +132,9 @@ def prepare(base, output, work, elf, inventory, nonlocal_profile, before_sdk, af
         command = [sys.executable, str(Path(__file__).with_name('ppu_function_splice.py')),
                    '--base', str(base), '--before', str(temporary / 'before'), '--after', str(temporary / 'after'),
                    '--output', str(output), '--sdk', str(after_sdk), '--before-revision', profile['before']['revision'],
-                   '--after-revision', profile['after']['revision'], '--only', profile['function'], '--reason', profile['reason']]
+                   '--after-revision', profile['after']['revision'] +
+                       ('+' + profile['after']['patch_revision'] if 'patch_file' in profile['after'] else ''),
+                   '--only', profile['function'], '--reason', profile['reason']]
         with (work / 'splice.log').open('w') as log:
             subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, check=True)
         record = verify_result(output, profile)

@@ -1,5 +1,6 @@
 """Synthetic generated functions only; no title files or external SDK required."""
 import copy
+import difflib
 import hashlib
 import json
 from pathlib import Path
@@ -89,3 +90,36 @@ class InstallerPPUSpliceTests(unittest.TestCase):
                 else: profile['body_sha256'] = '0'*64
                 with patch.object(tool, 'pinned_blob', side_effect=pinned), self.assertRaisesRegex(ValueError, 'hash mismatch|reviewed body'):
                     tool.prepare(**args)
+
+    def narrow_fixture(self, root):
+        args, pinned, before, after, other = self.fixture(root)
+        profile = args['profile']
+        old = pinned(None, 'a'*40, 'tools/ppu_lifter.py', profile['before']['lifter_sha256'])
+        new = pinned(None, 'b'*40, 'tools/ppu_lifter.py', profile['after']['lifter_sha256'])
+        delta = ''.join(difflib.unified_diff(old.decode().splitlines(True), new.decode().splitlines(True),
+                                           fromfile='a/tools/ppu_lifter.py', tofile='b/tools/ppu_lifter.py')).encode()
+        (root / 'fix.patch').write_bytes(delta)
+        profile['after'].update(revision='a'*40, base_lifter_sha256=sha(old),
+                                patch_file='fix.patch', patch_sha256=sha(delta), patch_revision='c'*40)
+        return args, pinned, after, other
+
+    def test_narrow_pinned_patch_reconstructs_only_reviewed_lifter_change(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            args, pinned, after, other = self.narrow_fixture(root)
+            with patch.object(tool, 'pinned_blob', side_effect=pinned), patch.object(tool, 'PATCHES', root):
+                output = tool.prepare(**args)
+            self.assertEqual((output / 'ppu_recomp_000.cpp').read_text(), after + other)
+            record = json.loads((output / 'provenance.json').read_text())
+            self.assertEqual(record['function_splices'][-1]['after_revision'], 'a'*40 + '+' + 'c'*40)
+
+    def test_narrow_patch_rejects_changed_patch_and_result_identity(self):
+        for field in ('patch_sha256', 'lifter_sha256'):
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                args, pinned, *_ = self.narrow_fixture(root)
+                args['profile']['after'][field] = '0'*64
+                with patch.object(tool, 'pinned_blob', side_effect=pinned), patch.object(tool, 'PATCHES', root):
+                    with self.assertRaisesRegex(ValueError, 'identity mismatch'):
+                        tool.prepare(**args)
+                self.assertFalse(args['output'].exists())
