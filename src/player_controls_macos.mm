@@ -33,6 +33,7 @@ NSError* error(const std::exception& e){return [NSError errorWithDomain:@"MAGCon
     NSTimeInterval _captureDeadline;
     id _monitor;
     NSMutableArray* _restorers;
+    NSMutableArray* _captureObservers;
     std::set<uint32_t> _heldKeys;
     std::set<uintptr_t> _heldMouse;
     NSMutableDictionary<NSValue*,NSNumber*>* _controllerHeld;
@@ -55,7 +56,7 @@ NSError* error(const std::exception& e){return [NSError errorWithDomain:@"MAGCon
     [scroll.heightAnchor constraintEqualToConstant:305].active=YES;[_rows.widthAnchor constraintEqualToAnchor:scroll.contentView.widthAnchor].active=YES;addFullWidth(_root,scroll);
     _hint=text(@"Choose a binding, then press a key or button. Escape cancels capture.",true);_hint.identifier=@"controls_hint";addFullWidth(_root,_hint);
     auto reset=[NSButton buttonWithTitle:@"Reset Keyboard & Mouse" target:self action:@selector(resetDevice:)];reset.identifier=@"controls_reset";addFullWidth(_root,reset);
-    addFullWidth(_root,text(@"Stick movement and look use the game's native response. Bindings apply to on-foot play; menu controls stay native.",true));
+    addFullWidth(_root,text(@"Bindings apply to on-foot gameplay and its HUD actions. Stick movement and look retain native response.",true));
     [self reloadControls];
 }
 - (BOOL)controlsDirty{return _dirty;}
@@ -63,7 +64,8 @@ NSError* error(const std::exception& e){return [NSError errorWithDomain:@"MAGCon
 - (void)reloadControls {
     [self cancelBindingCapture];
     if(!_root)return;
-    try{_actions=mag_controls_settings_registration().actions;_saved=mag_controls_settings_load();_draft=_saved;_recovery=false;_mode.enabled=YES;_sensitivity.enabled=YES;_invert.enabled=YES;if(mag_controls_settings_registration().mode_override)_hint.stringValue=@"A startup mode override is active. Apply controls to use the selected mode.";_loaded=true;_dirty=false;[self fill];}
+    _hint.stringValue=@"Choose a binding, then press a key or button. Escape cancels capture.";
+    try{_actions=mag_controls_settings_registration().actions;_saved=mag_controls_settings_load();_draft=_saved;_recovery=false;_mode.enabled=YES;_sensitivity.enabled=YES;_invert.enabled=YES;if(auto overrideMode=mag_controls_settings_registration().mode_override){NSString* name=*overrideMode==InputMode::Auto?@"Automatic":*overrideMode==InputMode::KBM?@"Keyboard & Mouse":@"Controller";_hint.stringValue=[NSString stringWithFormat:@"Startup mode override: %@. Apply controls to use the selected mode.",name];}_loaded=true;_dirty=false;[self fill];}
     catch(const std::exception& e){_loaded=false;_dirty=false;_recovery=true;[self rebuildRows];_hint.stringValue=[ns(e.what()) stringByAppendingString:@" Use Reset to review defaults before replacing this profile."];_mode.enabled=NO;_sensitivity.enabled=NO;_invert.enabled=NO;}
     [self notify];
 }
@@ -134,6 +136,12 @@ NSError* error(const std::exception& e){return [NSError errorWithDomain:@"MAGCon
     [self cancelBindingCapture];_captureAction=_actions.at(size_t(sender.tag)/2).id;_captureSlot=unsigned(sender.tag%2);_captureController=_device.selectedSegment==1;_capturing=true;_captureDeadline=NSProcessInfo.processInfo.systemUptime+15;const auto epoch=++_epoch;
     _hint.stringValue=_captureController?@"Release held controls, then press a controller button. Escape cancels.":@"Press a key or mouse button. Escape cancels. Command shortcuts stay with macOS.";
     __weak MAGControlsSettingsController* weakSelf=self;
+    // Cancel immediately when ownership changes. A timer alone can miss a
+    // complete loss/regain between ticks and accept an old queued GC down.
+    _captureObservers=[NSMutableArray new];
+    NSNotificationCenter* center=NSNotificationCenter.defaultCenter;
+    [_captureObservers addObject:[center addObserverForName:NSWindowDidResignKeyNotification object:self.view.window queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification*){[weakSelf cancelBindingCapture];}]];
+    [_captureObservers addObject:[center addObserverForName:NSApplicationDidResignActiveNotification object:NSApp queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification*){[weakSelf cancelBindingCapture];}]];
     _monitor=[NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskKeyDown|NSEventMaskKeyUp|NSEventMaskFlagsChanged|NSEventMaskLeftMouseDown|NSEventMaskLeftMouseUp|NSEventMaskRightMouseDown|NSEventMaskRightMouseUp|NSEventMaskOtherMouseDown|NSEventMaskOtherMouseUp handler:^NSEvent*(NSEvent* e){
         auto owner=weakSelf;if(!owner || !owner->_capturing)return e;
         if(e.window!=owner.view.window || (e.modifierFlags&NSEventModifierFlagCommand)){[owner cancelBindingCapture];return e;}
@@ -154,7 +162,10 @@ NSError* error(const std::exception& e){return [NSError errorWithDomain:@"MAGCon
     }
 }
 - (void)cancelBindingCapture {
-    _capturing=false;++_epoch;if(_monitor){[NSEvent removeMonitor:_monitor];_monitor=nil;}
+    const bool active=_capturing;_capturing=false;++_epoch;
+    for(id observer in _captureObservers)[NSNotificationCenter.defaultCenter removeObserver:observer];_captureObservers=nil;
+    if(active)_hint.stringValue=@"Binding capture canceled.";
+    if(_monitor){[NSEvent removeMonitor:_monitor];_monitor=nil;}
     [_controllerTimer invalidate];_controllerTimer=nil;for(void(^restore)(void) in _restorers)restore();[_restorers removeAllObjects];_controllerHeld=nil;
 }
 - (void)dealloc {[self cancelBindingCapture];}

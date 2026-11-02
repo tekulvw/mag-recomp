@@ -3,6 +3,10 @@
 #include "player_controls_store.h"
 #include <cassert>
 using namespace mag;
+@interface MAGControlsSettingsController (CaptureFixture)
+- (void)beginBinding:(NSButton*)sender;
+- (void)acceptControl:(PhysicalControl)control;
+@end
 static NSView* find(NSView* view,NSString* identifier){if([view.identifier isEqual:identifier])return view;for(NSView* child in view.subviews){auto result=find(child,identifier);if(result)return result;}return nil;}
 static void change(NSControl* control){[NSApp sendAction:control.action to:control.target from:control];}
 int main(int argc,char**argv){@autoreleasepool{
@@ -26,6 +30,17 @@ int main(int argc,char**argv){@autoreleasepool{
     auto clear=(NSButton*)find(pane.view,@"clear_binding_5_0");assert(clear.enabled);[clear performClick:nil];assert(pane.controlsDirty);[controller cancel:nil];assert(!pane.controlsDirty);
     clear=(NSButton*)find(pane.view,@"clear_binding_5_0");assert(clear.enabled);[clear performClick:nil];[controller apply:nil];assert(applied==2);auto saved=mag_controls_settings_load();assert(saved.controller_remap);assert(std::none_of(saved.bindings.begin(),saved.bindings.end(),[](auto b){return b.action==5&&b.control.source==InputSource::Controller;}));
     [controller showSettings:nil];[controller.window layoutIfNeeded];
+    device.selectedSegment=0;change(device);
+    auto jump=(NSButton*)find(pane.view,@"binding_5_0");assert(jump.enabled);
+    [pane beginBinding:jump];
+    auto hint=(NSTextField*)find(pane.view,@"controls_hint");assert([hint.stringValue hasPrefix:@"Press a key"]);
+    [NSNotificationCenter.defaultCenter postNotificationName:NSWindowDidResignKeyNotification object:controller.window];
+    assert([hint.stringValue isEqual:@"Binding capture canceled."]);
+    [pane acceptControl:{InputSource::Keyboard,27}];assert(!pane.controlsDirty);
+    [pane beginBinding:jump];
+    [NSNotificationCenter.defaultCenter postNotificationName:NSApplicationDidResignActiveNotification object:NSApp];
+    assert([hint.stringValue isEqual:@"Binding capture canceled."]);
+    [pane acceptControl:{InputSource::Keyboard,27}];assert(!pane.controlsDirty);
     for(unsigned page=0;page<2;++page){device.selectedSegment=page;change(device);[controller.window.contentView layoutSubtreeIfNeeded];auto content=controller.window.contentView;auto rep=[content bitmapImageRepForCachingDisplayInRect:content.bounds];[content cacheDisplayInRect:content.bounds toBitmapImageRep:rep];[[rep representationUsingType:NSBitmapImageFileTypePNG properties:@{}] writeToFile:[[NSString stringWithUTF8String:argv[1]] stringByAppendingPathComponent:page?@"controller-settings.png":@"kbm-settings.png"] atomically:YES];}
     [controller cancel:nil];mag_controls_settings_unregister();puts("controls panel apply/cancel/unbind preserve general settings passed");
 }}
