@@ -20,7 +20,8 @@
     X(vkCreateImage) X(vkDestroyImage) X(vkGetImageMemoryRequirements) X(vkBindImageMemory) \
     X(vkCreateImageView) X(vkDestroyImageView) X(vkCreateFramebuffer) X(vkDestroyFramebuffer) \
     X(vkCmdBeginRenderPass) X(vkCmdEndRenderPass) X(vkCmdSetViewport) X(vkCmdSetScissor) \
-    X(vkCmdBindVertexBuffers) X(vkCmdBindIndexBuffer) X(vkCmdDrawIndexed) X(vkCmdCopyImageToBuffer)
+    X(vkCmdBindVertexBuffers) X(vkCmdBindIndexBuffer) X(vkCmdDrawIndexed) X(vkCmdCopyImageToBuffer) \
+    X(vkCreateSampler) X(vkDestroySampler) X(vkCmdCopyBufferToImage)
 
 typedef struct frontend_vk_family {
     uint64_t id, last_version; uint32_t public_versions; struct frontend_vk_family *next;
@@ -29,17 +30,23 @@ typedef struct frontend_vk_buffer {
     uint64_t id, version, length; uint32_t public_ref, readers, writers; int seed_zero,gpu_written;
     VkBuffer gpu; VkDeviceMemory memory; void *mapped; struct frontend_vk_buffer *next;
 } frontend_vk_buffer;
+typedef struct frontend_vk_scene_image {VkImage image;VkDeviceMemory memory;VkImageView view;VkImageLayout layout;VkImageAspectFlags aspect;} frontend_vk_scene_image;
 typedef struct frontend_vk_pipeline {
     uint64_t id; uint32_t public_ref, references, count; int graphics;VkRenderPass render_pass;
     mag_native_binding_layout bindings[16];
     VkDescriptorSetLayout descriptors; VkPipelineLayout layout; VkPipeline gpu;
+    int scene;mag_native_scene_graphics_desc scene_desc;
+    mag_native_scene_buffer_layout scene_buffers[32];mag_native_scene_texture_layout scene_textures[32];VkDescriptorSetLayout scene_sets[2];
     struct frontend_vk_pipeline *next;
 } frontend_vk_pipeline;
 typedef struct frontend_vk_slot {
     VkCommandPool pool; VkCommandBuffer command; VkFence fence; VkDescriptorPool descriptors;
+    uint32_t descriptor_sets,descriptor_counts[4];
     mag_native_ticket ticket; uint32_t occupied, count;
     frontend_vk_buffer *buffers[64]; uint32_t writes[64]; frontend_vk_pipeline *pipeline;
-    frontend_vk_pipeline *batch_pipelines[32];uint32_t batch_count;
+    frontend_vk_pipeline *batch_pipelines[MAG_NATIVE_BATCH_MAX_COMMANDS + MAG_NATIVE_SCENE_MAX_DRAWS];uint32_t batch_count;
+    frontend_vk_scene_image scene_images[16];uint32_t scene_image_count,scene_pass_count;
+    VkFramebuffer scene_framebuffers[16];VkRenderPass scene_renderpasses[16];VkSampler scene_samplers[3];
     VkImage color,depth;VkDeviceMemory color_memory,depth_memory;
     VkImageView color_view,depth_view;VkFramebuffer framebuffer;
 } frontend_vk_slot;
@@ -82,6 +89,7 @@ static void pipeline_dispose(frontend_vk *c, frontend_vk_pipeline *p) {
     if (p->gpu) c->vkDestroyPipeline(c->owner.device, p->gpu, NULL);
     if (p->layout) c->vkDestroyPipelineLayout(c->owner.device, p->layout, NULL);
     if (p->descriptors) c->vkDestroyDescriptorSetLayout(c->owner.device, p->descriptors, NULL);
+    for(unsigned i=0;i<2;++i)if(p->scene_sets[i])c->vkDestroyDescriptorSetLayout(c->owner.device,p->scene_sets[i],NULL);
     if(p->render_pass)c->vkDestroyRenderPass(c->owner.device,p->render_pass,NULL);
     free(p);
 }
@@ -97,8 +105,13 @@ static void batch_attachments_release(frontend_vk *c,frontend_vk_slot *slot){
     slot->color=slot->depth=VK_NULL_HANDLE;slot->color_memory=slot->depth_memory=VK_NULL_HANDLE;
 }
 
+static void scene_attachments_release(frontend_vk *c,frontend_vk_slot *slot){
+ for(uint32_t i=0;i<slot->scene_pass_count;++i){if(slot->scene_framebuffers[i])c->vkDestroyFramebuffer(c->owner.device,slot->scene_framebuffers[i],NULL);if(slot->scene_renderpasses[i])c->vkDestroyRenderPass(c->owner.device,slot->scene_renderpasses[i],NULL);slot->scene_framebuffers[i]=VK_NULL_HANDLE;slot->scene_renderpasses[i]=VK_NULL_HANDLE;}slot->scene_pass_count=0;
+ for(uint32_t i=0;i<slot->scene_image_count;++i){frontend_vk_scene_image *im=&slot->scene_images[i];if(im->view)c->vkDestroyImageView(c->owner.device,im->view,NULL);if(im->image)c->vkDestroyImage(c->owner.device,im->image,NULL);if(im->memory)c->vkFreeMemory(c->owner.device,im->memory,NULL);memset(im,0,sizeof(*im));}slot->scene_image_count=0;
+ for(unsigned i=0;i<3;++i){if(slot->scene_samplers[i])c->vkDestroySampler(c->owner.device,slot->scene_samplers[i],NULL);slot->scene_samplers[i]=VK_NULL_HANDLE;}
+}
 static void slot_release(frontend_vk *c, frontend_vk_slot *slot) {
-    batch_attachments_release(c,slot);
+    batch_attachments_release(c,slot);scene_attachments_release(c,slot);
     for(uint32_t i=0;i<slot->batch_count;++i){frontend_vk_pipeline *p=slot->batch_pipelines[i];if(!--p->references&&!p->public_ref)pipeline_dispose(c,p);}
     slot->batch_count=0;
     for (uint32_t i = 0; i < slot->count; ++i) {
@@ -131,7 +144,7 @@ static int buffer_create(void *opaque, mag_native_buffer previous,
     if (!b) return MAG_NATIVE_ALLOCATION_FAILED;
     b->length = desc->byte_length;b->seed_zero=!desc->initial_bytes;
     VkBufferCreateInfo info = {.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, .size = b->length,
-        .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+        .usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
         .sharingMode = VK_SHARING_MODE_EXCLUSIVE};
     if (c->vkCreateBuffer(c->owner.device, &info, NULL, &b->gpu) != VK_SUCCESS) goto fail;
     VkMemoryRequirements requirements; c->vkGetBufferMemoryRequirements(c->owner.device, b->gpu, &requirements);
@@ -375,8 +388,9 @@ static int close_context(void *opaque) {
 }
 
 #include "mag_render_vulkan_batch.inc"
+#include "mag_render_vulkan_scene.inc"
 static const mag_native_ops operations = {caps, buffer_create, buffer_release, buffer_read,
-    pipeline_create, pipeline_release, submit, poll, close_context, graphics_create, submit_batch, NULL, NULL, NULL, NULL, NULL, NULL};
+    pipeline_create, pipeline_release, submit, poll, close_context, graphics_create, submit_batch, scene_graphics_create, submit_scene, NULL, NULL, NULL, NULL, scene_graphics_create_v2};
 int mag_native_vulkan_create(const MagRenderHostOwner *host,mag_native_device **out) {
     if (!host || !out || host->backend!=MAG_RENDER_HOST_VULKAN) return MAG_NATIVE_INVALID;
     *out=NULL;int status=host->retain(host->userdata,host->lifetime);
@@ -398,12 +412,13 @@ int mag_native_vulkan_create(const MagRenderHostOwner *host,mag_native_device **
         VkCommandPoolCreateInfo pool={.sType=VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,.queueFamilyIndex=host->queue_family};
         VkCommandBufferAllocateInfo command={.sType=VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,.level=VK_COMMAND_BUFFER_LEVEL_PRIMARY,.commandBufferCount=1};
         VkFenceCreateInfo fence={.sType=VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
-        VkDescriptorPoolSize sizes[2]={{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,512},{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,512}};
-        VkDescriptorPoolCreateInfo descriptors={.sType=VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,.maxSets=32,.poolSizeCount=2,.pPoolSizes=sizes};
+        VkDescriptorPoolSize sizes[4]={{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,2048},{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,2048},{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,1024},{VK_DESCRIPTOR_TYPE_SAMPLER,1024}};
+        VkDescriptorPoolCreateInfo descriptors={.sType=VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,.maxSets=160,.poolSizeCount=4,.pPoolSizes=sizes};
         VkResult result=c->vkCreateCommandPool(c->owner.device,&pool,NULL,&slot->pool);command.commandPool=slot->pool;
         if(result==VK_SUCCESS) result=c->vkAllocateCommandBuffers(c->owner.device,&command,&slot->command);
         if(result==VK_SUCCESS) result=c->vkCreateFence(c->owner.device,&fence,NULL,&slot->fence);
         if(result==VK_SUCCESS) result=c->vkCreateDescriptorPool(c->owner.device,&descriptors,NULL,&slot->descriptors);
+        if(result==VK_SUCCESS){slot->descriptor_sets=160;slot->descriptor_counts[0]=2048;slot->descriptor_counts[1]=2048;slot->descriptor_counts[2]=1024;slot->descriptor_counts[3]=1024;}
         if(result!=VK_SUCCESS) {close_context(c);return MAG_NATIVE_ALLOCATION_FAILED;}
     }
     *out=mag_native_wrap(&operations,c);if(!*out) {close_context(c);return MAG_NATIVE_ALLOCATION_FAILED;}

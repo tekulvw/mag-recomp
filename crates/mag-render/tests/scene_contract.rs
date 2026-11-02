@@ -558,3 +558,97 @@ fn disabled_depth_cannot_write_and_failed_image_admission_is_atomic() {
         Err(SceneError::InvalidBindings)
     ));
 }
+
+#[test]
+fn explicit_interleaved_stride_accepts_float3_uv_color_and_rejects_torn_vertex() {
+    struct Interleaved(u32);
+    impl PipelineCatalog for Interleaved {
+        fn owner_generation(&self) -> u64 {
+            1
+        }
+        fn bindings(&self, _: u64) -> Option<&[BindingRequirement]> {
+            None
+        }
+    }
+    impl SceneCatalog for Interleaved {
+        fn scene_graphics(&self, id: u64) -> Option<GraphicsLayout> {
+            (id == 2).then_some(GraphicsLayout {
+                vertex_stride: self.0,
+                color_attachment: true,
+                fragment_stage: true,
+                depth_attachment: false,
+                depth: DepthState {
+                    compare: DepthCompare::Disabled,
+                    write: false,
+                },
+                blend: Blend::Opaque,
+                buffers: vec![],
+                textures: vec![],
+            })
+        }
+    }
+    fn make(stride: u32) -> Result<PreparedScene, SceneError> {
+        let catalog = Interleaved(stride);
+        let mut batch = BatchBuilder::new(
+            1,
+            BatchLimits {
+                max_commands: 1,
+                max_gpu_buffers: 1,
+                max_gpu_bytes: 1024,
+                max_uploads: 2,
+            },
+        )
+        .unwrap();
+        // Four bytes of allocator padding, then3 prepared24-byte vertices.
+        let vertices = batch.upload(source(vec![0; 76])).unwrap();
+        let indices = batch.upload(source(vec![0; 12])).unwrap();
+        let base = batch.prepare_scene_prefix(&catalog).unwrap();
+        let mut scene = SceneBuilder::new(
+            base,
+            SceneLimits {
+                max_images: 1,
+                max_passes: 1,
+                max_draws: 1,
+                max_bytes: 1024,
+            },
+        )
+        .unwrap();
+        let color = scene
+            .image(ImageDesc {
+                width: 8,
+                height: 8,
+                format: ImageFormat::Rgba8,
+            })
+            .unwrap();
+        scene
+            .render_pass(RenderPass {
+                color: Some(ColorAttachment {
+                    image: color,
+                    load: Load::Clear([0.; 4]),
+                    store: Store::Store,
+                }),
+                depth: None,
+                draws: vec![SceneDraw {
+                    pipeline: 2,
+                    vertices: ReadSource::Upload(vertices),
+                    indices: ReadSource::Upload(indices),
+                    vertex_range: ByteRange {
+                        offset: 4,
+                        length: 72,
+                    },
+                    index_range: ByteRange {
+                        offset: 0,
+                        length: 12,
+                    },
+                    index_count: 3,
+                    buffers: vec![],
+                    textures: vec![],
+                }],
+            })
+            .unwrap();
+        scene.prepare(&catalog)
+    }
+    assert!(make(24).is_ok());
+    assert!(matches!(make(32), Err(SceneError::InvalidBindings)));
+    assert!(matches!(make(0), Err(SceneError::InvalidBindings)));
+}

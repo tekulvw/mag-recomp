@@ -21,7 +21,7 @@ static int stage_source(const mag_native_shader_stage *s) {
 }
 static int scene_graphics_schema(const mag_native_scene_graphics_desc *d) {
     if (!d || d->struct_size != sizeof(*d) || d->abi_version != MAG_NATIVE_SCENE_ABI ||
-        d->vertex_stride != 16 || d->color_format > MAG_NATIVE_SCENE_RGBA8 ||
+        d->vertex_stride < 4 || d->vertex_stride > 2048 || d->vertex_stride % 4 || d->color_format > MAG_NATIVE_SCENE_RGBA8 ||
         (d->depth_format != 0 && d->depth_format != MAG_NATIVE_SCENE_D32) ||
         (!d->color_format && !d->depth_format) || d->depth_compare > MAG_NATIVE_SCENE_DEPTH_ALWAYS ||
         d->depth_write > 1 || d->blend > MAG_NATIVE_SCENE_ALPHA || (!d->color_format && d->blend) ||
@@ -62,8 +62,8 @@ static int scene_graphics_schema(const mag_native_scene_graphics_desc *d) {
 }
 int mag_native_scene_graphics_validate(const mag_native_scene_graphics_desc *d) {
     int status = scene_graphics_schema(d);
-    if (status)
-        return status;
+    if (status || d->vertex_stride != 16)
+        return MAG_NATIVE_INVALID;
     if (!stage_source(&d->vertex))
         return MAG_NATIVE_INVALID;
     if (d->color_format || d->fragment.source_length) {
@@ -72,6 +72,29 @@ int mag_native_scene_graphics_validate(const mag_native_scene_graphics_desc *d) 
     } else if (d->fragment.source || d->fragment.source_length || d->fragment.entry ||
                d->fragment.entry_length || d->fragment.language)
         return MAG_NATIVE_INVALID;
+    return MAG_NATIVE_OK;
+}
+int mag_native_scene_graphics_v2_validate(const mag_native_scene_graphics_v2_desc *v) {
+    if(!v || v->struct_size!=sizeof(*v) || v->abi_version!=2 || v->reserved ||
+       !v->attributes || !v->attribute_count || v->attribute_count>16)return MAG_NATIVE_INVALID;
+    const mag_native_scene_graphics_desc *d=&v->base;
+    if(scene_graphics_schema(d) || !stage_source(&d->vertex))return MAG_NATIVE_INVALID;
+    if(d->color_format || d->fragment.source_length){if(!stage_source(&d->fragment))return MAG_NATIVE_INVALID;}
+    else if(d->fragment.source || d->fragment.entry || d->fragment.entry_length || d->fragment.language)return MAG_NATIVE_INVALID;
+    uint32_t seen=0;
+    for(uint32_t i=0;i<v->attribute_count;++i){
+        const mag_native_vertex_attribute *a=&v->attributes[i];
+        uint32_t bytes=a->format>=MAG_NATIVE_VERTEX_FLOAT && a->format<=MAG_NATIVE_VERTEX_FLOAT4?a->format*4u:
+            a->format==MAG_NATIVE_VERTEX_UNORM8X4?4u:0u;
+        if(a->reserved || a->location>=16 || (seen&(1u<<a->location)) || !bytes ||
+           a->offset>d->vertex_stride || bytes>d->vertex_stride-a->offset ||
+           (a->format!=MAG_NATIVE_VERTEX_UNORM8X4 && a->offset%4u))return MAG_NATIVE_INVALID;
+        for(uint32_t j=0;j<i;++j){const mag_native_vertex_attribute *b=&v->attributes[j];
+            uint32_t bbytes=b->format<=MAG_NATIVE_VERTEX_FLOAT4?b->format*4u:4u;
+            if(a->offset<b->offset+bbytes && b->offset<a->offset+bytes)return MAG_NATIVE_INVALID;
+        }
+        seen|=1u<<a->location;
+    }
     return MAG_NATIVE_OK;
 }
 static int read_buffer(const mag_native_scene *s, mag_native_buffer b, uint64_t off, uint64_t len,
@@ -232,11 +255,11 @@ int mag_native_scene_validate(const mag_native_scene *s, const mag_native_scene_
             if (!g || scene_graphics_schema(g) || d->reserved || d->buffer_count != g->buffer_count ||
                 d->texture_count != g->texture_count || (d->buffer_count && !d->buffers) ||
                 (d->texture_count && !d->textures) || !d->index_count || d->index_count % 3 ||
-                d->index_length < (uint64_t)d->index_count * 4 || d->vertex_length % 16 ||
+                d->index_length < (uint64_t)d->index_count * 4 || d->vertex_length % g->vertex_stride ||
                 g->color_format != (p->color.image == MAG_NATIVE_SCENE_NONE ? 0 : MAG_NATIVE_SCENE_RGBA8) ||
                 g->depth_format != (p->depth.image == MAG_NATIVE_SCENE_NONE ? 0 : MAG_NATIVE_SCENE_D32))
                 return MAG_NATIVE_INVALID;
-            if (read_buffer(s, d->vertices, d->vertex_offset, d->vertex_length, 16, infos, writers, u) ||
+            if (read_buffer(s, d->vertices, d->vertex_offset, d->vertex_length, 4, infos, writers, u) ||
                 read_buffer(s, d->indices, d->index_offset, d->index_length, 4, infos, writers, u))
                 return MAG_NATIVE_INVALID;
             uint32_t slots[2] = {0}, textures[2] = {0}, samplers[2] = {0}, sampler_kinds[2][16] = {{0}};

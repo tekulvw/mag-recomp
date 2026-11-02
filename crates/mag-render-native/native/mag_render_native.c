@@ -2,6 +2,7 @@
  * Copyright (c) 2026 Ned Heller / sp00nznet. MIT; see LICENSE.ps3recomp.
  * Frontend-owned implementation; no SDK runtime/header dependency. */
 #include "mag_render_native_internal.h"
+#include "mag_render_scene_validate.h"
 #include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
@@ -122,4 +123,11 @@ int mag_native_submit_scene_frame(mag_native_device *device,const mag_native_sce
  if(out)memset(out,0,sizeof(*out));
  if(!device||!scene||!frame||!out||scene->struct_size!=sizeof(*scene)||scene->abi_version!=MAG_NATIVE_SCENE_ABI||!ref.device_generation||!ref.id||frame->abi_version!=MAG_RENDER_HOST_FRAME_ABI||frame->struct_size!=sizeof(*frame)||!frame->owner_lifetime||!frame->reservation||!frame->preflight||!frame->committed||!frame->cancel)return MAG_NATIVE_INVALID;
  return device->ops->submit_scene_frame?device->ops->submit_scene_frame(device->context,scene,ref,frame,out):MAG_NATIVE_UNSUPPORTED;
+}
+
+int mag_native_scene_graphics_create_v2(mag_native_device *device,const mag_native_scene_graphics_v2_desc *desc,mag_native_pipeline *out){
+ if(out)memset(out,0,sizeof(*out));
+ if(!device||!out)return MAG_NATIVE_INVALID;
+ int status=mag_native_scene_graphics_v2_validate(desc);if(status)return status;
+ return device->ops->scene_graphics_create_v2?device->ops->scene_graphics_create_v2(device->context,desc,out):MAG_NATIVE_UNSUPPORTED;
 }

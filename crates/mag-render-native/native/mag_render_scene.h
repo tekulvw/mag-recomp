@@ -47,6 +47,26 @@ typedef struct mag_native_scene_graphics_desc {
     uint32_t buffer_count, texture_count;
     const mag_native_scene_texture_layout *textures;
 } mag_native_scene_graphics_desc;
+/* Explicit prepared vertex bytes; no guest packing or attribute defaults are
+ * inferred. ABI1 remains Float4 LOC0/stride16. V2 accepts one interleaved stream
+ * (Metal slot16, Vulkan/D3D stream0); shader locations map to MSL attributes/SPIR-V
+ * locations/HLSL LOC semantic indices identically. */
+enum mag_native_vertex_format {
+    MAG_NATIVE_VERTEX_FLOAT=1, MAG_NATIVE_VERTEX_FLOAT2=2,
+    MAG_NATIVE_VERTEX_FLOAT3=3, MAG_NATIVE_VERTEX_FLOAT4=4,
+    MAG_NATIVE_VERTEX_UNORM8X4=5
+};
+typedef struct mag_native_vertex_attribute {
+    uint32_t location,format,offset,reserved;
+} mag_native_vertex_attribute;
+typedef struct mag_native_scene_graphics_v2_desc {
+    uint32_t struct_size,abi_version;
+    mag_native_scene_graphics_desc base;
+    const mag_native_vertex_attribute *attributes;
+    uint32_t attribute_count,reserved;
+} mag_native_scene_graphics_v2_desc;
+int mag_native_scene_graphics_create_v2(mag_native_device *,const mag_native_scene_graphics_v2_desc *,mag_native_pipeline *);
+int mag_native_scene_graphics_v2_layout(uint32_t *,uint32_t);
 typedef struct mag_native_scene_image {
     uint32_t format, width, height, reserved;
     mag_native_buffer upload; /* zero=fresh attachment; nonzero=immutable CPU RGBA seed */

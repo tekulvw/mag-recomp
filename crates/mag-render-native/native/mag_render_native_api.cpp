@@ -90,3 +90,12 @@ extern "C" int mag_native_client_layout(uint32_t *out,uint32_t words){
  if(!out||words!=sizeof(layout)/sizeof(layout[0]))return MAG_NATIVE_INVALID;
  for(uint32_t i=0;i<words;++i){out[i]=layout[i];}return MAG_NATIVE_OK;
 }
+
+extern "C" int mag_native_scene_graphics_v2_layout(uint32_t *out,uint32_t words){
+ const uint32_t layout[]={LAYOUT(mag_native_vertex_attribute),OFFSET(mag_native_vertex_attribute,offset),
+ LAYOUT(mag_native_scene_graphics_v2_desc),OFFSET(mag_native_scene_graphics_v2_desc,base),
+ OFFSET(mag_native_scene_graphics_v2_desc,attributes),OFFSET(mag_native_scene_graphics_v2_desc,attribute_count),
+ MAG_NATIVE_VERTEX_FLOAT,MAG_NATIVE_VERTEX_FLOAT2,MAG_NATIVE_VERTEX_FLOAT3,MAG_NATIVE_VERTEX_FLOAT4,MAG_NATIVE_VERTEX_UNORM8X4};
+ if(!out||words!=sizeof(layout)/sizeof(layout[0]))return MAG_NATIVE_INVALID;
+ for(uint32_t i=0;i<words;++i){out[i]=layout[i];}return MAG_NATIVE_OK;
+}

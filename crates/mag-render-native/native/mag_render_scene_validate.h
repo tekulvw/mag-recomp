@@ -23,6 +23,7 @@ typedef struct mag_native_scene_usage {
 /* Pure admission checks used by every native encoder; callbacks only inspect
  * actual generation-qualified native registry entries. No GPU effects. */
 int mag_native_scene_graphics_validate(const mag_native_scene_graphics_desc *);
+int mag_native_scene_graphics_v2_validate(const mag_native_scene_graphics_v2_desc *);
 int mag_native_scene_validate(const mag_native_scene *, const mag_native_scene_registry *,
                               mag_native_scene_usage *);
 #endif

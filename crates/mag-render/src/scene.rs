@@ -381,8 +381,8 @@ impl SceneBuilder {
                 || !draw.index_count.is_multiple_of(3)
                 || !draw.index_range.offset.is_multiple_of(4)
                 || draw.index_range.length < u64::from(draw.index_count) * 4
-                || !draw.vertex_range.offset.is_multiple_of(16)
-                || !draw.vertex_range.length.is_multiple_of(16)
+                || !draw.vertex_range.offset.is_multiple_of(4)
+                || !draw.vertex_range.length.is_multiple_of(4)
             {
                 return Err(SceneError::InvalidDraw);
             }
@@ -505,7 +505,13 @@ impl SceneBuilder {
                     .ok_or(SceneError::UnknownPipeline)?;
                 if schema.color_attachment != pass.color.is_some()
                     || schema.depth_attachment != pass.depth.is_some()
-                    || schema.vertex_stride != 16
+                    || schema.vertex_stride < 4
+                    || schema.vertex_stride > 2048
+                    || !schema.vertex_stride.is_multiple_of(4)
+                    || !draw
+                        .vertex_range
+                        .length
+                        .is_multiple_of(u64::from(schema.vertex_stride))
                     || schema.buffers.len() != draw.buffers.len()
                     || schema.textures.len() != draw.textures.len()
                     || (pass.color.is_none() && schema.blend != Blend::Opaque)

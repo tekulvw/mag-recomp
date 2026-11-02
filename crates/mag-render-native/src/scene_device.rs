@@ -22,6 +22,7 @@ pub struct TextureLayout {
     pub reserved: u32,
 }
 #[repr(C)]
+#[derive(Clone, Copy)]
 pub struct SceneGraphicsDesc {
     pub struct_size: u32,
     pub abi_version: u32,
@@ -37,6 +38,29 @@ pub struct SceneGraphicsDesc {
     pub buffer_count: u32,
     pub texture_count: u32,
     pub textures: *const TextureLayout,
+}
+/// Prepared interleaved vertex fields, never guest layout inference.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct VertexAttribute {
+    pub location: u32,
+    pub format: u32,
+    pub offset: u32,
+    pub reserved: u32,
+}
+pub const VERTEX_FLOAT: u32 = 1;
+pub const VERTEX_FLOAT2: u32 = 2;
+pub const VERTEX_FLOAT3: u32 = 3;
+pub const VERTEX_FLOAT4: u32 = 4;
+pub const VERTEX_UNORM8X4: u32 = 5;
+#[repr(C)]
+pub struct SceneGraphicsV2Desc {
+    pub struct_size: u32,
+    pub abi_version: u32,
+    pub base: SceneGraphicsDesc,
+    pub attributes: *const VertexAttribute,
+    pub attribute_count: u32,
+    pub reserved: u32,
 }
 #[repr(C)]
 struct Image {
@@ -112,6 +136,12 @@ struct Scene {
 }
 unsafe extern "C" {
     fn mag_native_scene_layout(out: *mut u32, words: u32) -> i32;
+    fn mag_native_scene_graphics_create_v2(
+        context: *mut c_void,
+        desc: *const SceneGraphicsV2Desc,
+        out: *mut Pipeline,
+    ) -> i32;
+    fn mag_native_scene_graphics_v2_layout(out: *mut u32, words: u32) -> i32;
     fn mag_native_scene_graphics_create(
         context: *mut c_void,
         desc: *const SceneGraphicsDesc,
@@ -232,6 +262,31 @@ impl SceneDevice<'_> {
         if status != 0 {
             return Err(status);
         }
+        unsafe { self.register_graphics(desc, out) }
+    }
+    /// Explicit attributes and stride for canonical prepared vertex bytes. All
+    /// ranges and locations validate before platform pipeline compilation.
+    /// # Safety
+    /// Shader sources, binding arrays and attribute arrays are valid synchronous
+    /// ranges. Location semantics match the supplied translated vertex stage.
+    pub unsafe fn graphics_pipeline_v2(&mut self, desc: &SceneGraphicsV2Desc) -> Result<u64, i32> {
+        checked_graphics_v2_layout()?;
+        if self.inner.pipelines.len() >= self.inner.limits.max_pipelines {
+            return Err(-5);
+        }
+        let mut out = Pipeline::default();
+        let status =
+            unsafe { mag_native_scene_graphics_create_v2(self.inner.api.device, desc, &mut out) };
+        if status != 0 {
+            return Err(status);
+        }
+        unsafe { self.register_graphics(&desc.base, out) }
+    }
+    unsafe fn register_graphics(
+        &mut self,
+        desc: &SceneGraphicsDesc,
+        out: Pipeline,
+    ) -> Result<u64, i32> {
         let buffers = if desc.buffer_count == 0 {
             &[]
         } else {
@@ -734,10 +789,93 @@ fn checked_scene_layout() -> Result<(), i32> {
     }
     Ok(())
 }
+fn checked_graphics_v2_layout() -> Result<(), i32> {
+    let expected = [
+        size_of::<VertexAttribute>() as u32,
+        align_of::<VertexAttribute>() as u32,
+        offset_of!(VertexAttribute, offset) as u32,
+        size_of::<SceneGraphicsV2Desc>() as u32,
+        align_of::<SceneGraphicsV2Desc>() as u32,
+        offset_of!(SceneGraphicsV2Desc, base) as u32,
+        offset_of!(SceneGraphicsV2Desc, attributes) as u32,
+        offset_of!(SceneGraphicsV2Desc, attribute_count) as u32,
+        VERTEX_FLOAT,
+        VERTEX_FLOAT2,
+        VERTEX_FLOAT3,
+        VERTEX_FLOAT4,
+        VERTEX_UNORM8X4,
+    ];
+    let mut actual = [0; 13];
+    let status =
+        unsafe { mag_native_scene_graphics_v2_layout(actual.as_mut_ptr(), actual.len() as u32) };
+    if status != 0 {
+        return Err(status);
+    }
+    if actual != expected {
+        return Err(-1);
+    }
+    Ok(())
+}
 #[cfg(test)]
 mod abi_tests {
+    use super::*;
+    unsafe extern "C" {
+        fn mag_native_scene_graphics_v2_validate(desc: *const SceneGraphicsV2Desc) -> i32;
+    }
+    #[test]
+    fn real_common_preflight_accepts_prepared_material_attributes_and_rejects_aliases() {
+        let mut base = std::mem::MaybeUninit::uninit();
+        assert_eq!(
+            unsafe { crate::client::mag_render_client_diagnostic_pipeline(1, base.as_mut_ptr()) },
+            0
+        );
+        let mut base = unsafe { base.assume_init() };
+        base.vertex_stride = 24;
+        let mut attributes = [
+            VertexAttribute {
+                location: 0,
+                format: VERTEX_FLOAT3,
+                offset: 0,
+                reserved: 0,
+            },
+            VertexAttribute {
+                location: 3,
+                format: VERTEX_FLOAT2,
+                offset: 12,
+                reserved: 0,
+            },
+            VertexAttribute {
+                location: 6,
+                format: VERTEX_UNORM8X4,
+                offset: 20,
+                reserved: 0,
+            },
+        ];
+        let validate = |attributes: &[VertexAttribute]| {
+            let desc = SceneGraphicsV2Desc {
+                struct_size: size_of::<SceneGraphicsV2Desc>() as u32,
+                abi_version: 2,
+                base,
+                attributes: attributes.as_ptr(),
+                attribute_count: attributes.len() as u32,
+                reserved: 0,
+            };
+            unsafe { mag_native_scene_graphics_v2_validate(&desc) }
+        };
+        assert_eq!(validate(&attributes), 0);
+        attributes[1].offset = 8;
+        assert_eq!(validate(&attributes), -1);
+        attributes[1].offset = 12;
+        attributes[1].location = 0;
+        assert_eq!(validate(&attributes), -1);
+        attributes[1].location = 3;
+        attributes[2].offset = 24;
+        assert_eq!(validate(&attributes), -1);
+    }
+
     #[test]
     fn scene_c_rust_offsets_alignments_and_sizes_match() {
         super::checked_scene_layout().unwrap();
+        super::checked_graphics_v2_layout().unwrap();
     }
 }

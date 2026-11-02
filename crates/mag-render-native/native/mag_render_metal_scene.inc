@@ -49,11 +49,8 @@ static id<MTLFunction> metal_scene_function(MagRenderMetal *c, const mag_native_
         return nil;
     return [lib newFunctionWithName:entry];
 }
-static int metal_scene_graphics_create(void *opaque, const mag_native_scene_graphics_desc *desc,
-                                       mag_native_pipeline *out) {
-    int status = mag_native_scene_graphics_validate(desc);
-    if (status)
-        return status;
+static int metal_scene_graphics_create_layout(void *opaque, const mag_native_scene_graphics_desc *desc,
+                                       const mag_native_vertex_attribute *attributes,uint32_t attribute_count,mag_native_pipeline *out) {
     MagRenderMetal *c = context(opaque);
     if (c->next_pipeline == UINT64_MAX)
         return MAG_NATIVE_ALLOCATION_FAILED;
@@ -66,9 +63,10 @@ static int metal_scene_graphics_create(void *opaque, const mag_native_scene_grap
             return MAG_NATIVE_UNSUPPORTED;
     }
     MTLVertexDescriptor *v = [MTLVertexDescriptor new];
-    v.attributes[0].format = MTLVertexFormatFloat4;
-    v.attributes[0].bufferIndex = 16;
-    v.layouts[16].stride = 16;
+    const MTLVertexFormat formats[]={MTLVertexFormatInvalid,MTLVertexFormatFloat,MTLVertexFormatFloat2,MTLVertexFormatFloat3,MTLVertexFormatFloat4,MTLVertexFormatUChar4Normalized};
+    for(uint32_t i=0;i<attribute_count;++i){const mag_native_vertex_attribute *a=&attributes[i];
+        v.attributes[a->location].format=formats[a->format];v.attributes[a->location].offset=a->offset;v.attributes[a->location].bufferIndex=16;}
+    v.layouts[16].stride = desc->vertex_stride;
     v.layouts[16].stepFunction = MTLVertexStepFunctionPerVertex;
     MTLRenderPipelineDescriptor *pd = [MTLRenderPipelineDescriptor new];
     pd.vertexFunction = vertex;
@@ -120,6 +118,15 @@ static int metal_scene_graphics_create(void *opaque, const mag_native_scene_grap
     c->pipelines[@(id)] = p;
     *out = (mag_native_pipeline){c->generation, id};
     return MAG_NATIVE_OK;
+}
+static int metal_scene_graphics_create(void *opaque,const mag_native_scene_graphics_desc *desc,mag_native_pipeline *out){
+    int status=mag_native_scene_graphics_validate(desc);if(status)return status;
+    const mag_native_vertex_attribute attributes[]={{0,MAG_NATIVE_VERTEX_FLOAT4,0,0}};
+    return metal_scene_graphics_create_layout(opaque,desc,attributes,1,out);
+}
+static int metal_scene_graphics_create_v2(void *opaque,const mag_native_scene_graphics_v2_desc *desc,mag_native_pipeline *out){
+    int status=mag_native_scene_graphics_v2_validate(desc);if(status)return status;
+    return metal_scene_graphics_create_layout(opaque,&desc->base,desc->attributes,desc->attribute_count,out);
 }
 static int metal_scene_owned(void *opaque, const mag_native_scene *scene, mag_native_ticket *out,MagRenderImportedImage *target) {
     MagRenderMetal *c = context(opaque);
