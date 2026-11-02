@@ -66,6 +66,23 @@ fn in_process_fragment_preserves_independent_uniform_texture_sampler_slots() {
     assert_eq!(p.buffers, vec![BufferBinding { slot: 1, bytes: 32 }]);
     assert_eq!(p.textures, vec![0]);
     assert_eq!(p.samplers, vec![0]);
+    assert_eq!(
+        p.texture_bindings,
+        vec![TextureBinding {
+            slot: 0,
+            dimension: TextureDimension::D2,
+            arrayed: false,
+            multisampled: false,
+            sample_kind: TextureSampleKind::Float
+        }]
+    );
+    assert_eq!(
+        p.sampler_bindings,
+        vec![SamplerBinding {
+            slot: 0,
+            comparison: false
+        }]
+    );
     assert!(p.msl.contains("[[buffer(1)]]"));
     assert!(p.msl.contains("[[texture(0)]]"));
     assert!(p.msl.contains("[[sampler(0)]]"));
@@ -184,4 +201,28 @@ fn centroid_and_2d_controls_lower_to_actual_native_programs() {
     assert!(p.msl.contains("centroid_perspective"), "{}", p.msl);
     assert!(p.hlsl.contains("centroid float4 tc0"));
     assert!(p.hlsl.starts_with("#define RSX_FRAGCOORD_W_IS_RCP 1\n"));
+}
+
+#[test]
+fn texture_shape_and_comparison_survive_native_reflection() {
+    let mut cube = fragment_program();
+    cube.source = cube
+        .source
+        .replace("Texture2D", "TextureCube")
+        .replace(".xy)", ".xyz)");
+    let p = lower(&cube, Stage::Fragment).unwrap();
+    assert_eq!(p.texture_bindings[0].dimension, TextureDimension::Cube);
+    let mut depth = fragment_program();
+    depth.source = depth
+        .source
+        .replace("Texture2D", "Texture2D<float>")
+        .replace("SamplerState", "SamplerComparisonState");
+    // Use the actual emitted operation, preserving the source input and body.
+    depth.source = depth
+        .source
+        .replace(".Sample(", ".SampleCmpLevelZero(")
+        .replace(".xy)", ".xy, 0.5)");
+    let p = lower(&depth, Stage::Fragment).unwrap();
+    assert_eq!(p.texture_bindings[0].sample_kind, TextureSampleKind::Depth);
+    assert!(p.sampler_bindings[0].comparison);
 }

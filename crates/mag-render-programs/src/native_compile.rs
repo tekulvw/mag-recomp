@@ -25,6 +25,33 @@ pub struct BufferBinding {
     pub slot: u32,
     pub bytes: u32,
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TextureDimension {
+    D1,
+    D2,
+    D3,
+    Cube,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TextureSampleKind {
+    Float,
+    Sint,
+    Uint,
+    Depth,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TextureBinding {
+    pub slot: u32,
+    pub dimension: TextureDimension,
+    pub arrayed: bool,
+    pub multisampled: bool,
+    pub sample_kind: TextureSampleKind,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SamplerBinding {
+    pub slot: u32,
+    pub comparison: bool,
+}
 #[derive(Debug)]
 pub struct NativeProgram {
     pub stage: Stage,
@@ -40,6 +67,8 @@ pub struct NativeProgram {
     pub buffers: Vec<BufferBinding>,
     pub textures: Vec<u32>,
     pub samplers: Vec<u32>,
+    pub texture_bindings: Vec<TextureBinding>,
+    pub sampler_bindings: Vec<SamplerBinding>,
     pub vertex_locations: Vec<u32>,
 }
 unsafe extern "C" {
@@ -250,6 +279,8 @@ pub fn lower(program: &HlslProgram, stage: Stage) -> Result<NativeProgram, Strin
     let mut buffers = Vec::new();
     let mut textures = Vec::new();
     let mut samplers = Vec::new();
+    let mut texture_bindings = Vec::new();
+    let mut sampler_bindings = Vec::new();
     let mut resources = naga::back::msl::EntryPointResources::default();
     let mut spv = naga::back::spv::Options {
         lang_version: (1, 3),
@@ -282,25 +313,54 @@ pub fn lower(program: &HlslProgram, stage: Stage) -> Result<NativeProgram, Strin
             (
                 AddressSpace::Handle,
                 TypeInner::Image {
-                    arrayed: false,
-                    class:
-                        naga::ImageClass::Sampled {
-                            kind: naga::ScalarKind::Float,
-                            multi: false,
-                        },
-                    ..
+                    dim,
+                    arrayed,
+                    class,
                 },
             ) if (16..32).contains(&binding.binding) => {
-                target.texture = Some((binding.binding - 16) as u8);
-                textures.push(binding.binding - 16);
+                let (sample_kind, multisampled) = match class {
+                    naga::ImageClass::Sampled { kind, multi } => (
+                        match kind {
+                            naga::ScalarKind::Float => TextureSampleKind::Float,
+                            naga::ScalarKind::Sint => TextureSampleKind::Sint,
+                            naga::ScalarKind::Uint => TextureSampleKind::Uint,
+                            _ => return Err("unsupported sampled scalar kind".into()),
+                        },
+                        *multi,
+                    ),
+                    naga::ImageClass::Depth { multi } => (TextureSampleKind::Depth, *multi),
+                    _ => {
+                        return Err(
+                            "storage/external images are outside owned material contract".into(),
+                        );
+                    }
+                };
+                let slot = binding.binding - 16;
+                target.texture = Some(slot as u8);
+                textures.push(slot);
+                texture_bindings.push(TextureBinding {
+                    slot,
+                    dimension: match dim {
+                        naga::ImageDimension::D1 => TextureDimension::D1,
+                        naga::ImageDimension::D2 => TextureDimension::D2,
+                        naga::ImageDimension::D3 => TextureDimension::D3,
+                        naga::ImageDimension::Cube => TextureDimension::Cube,
+                    },
+                    arrayed: *arrayed,
+                    multisampled,
+                    sample_kind,
+                });
             }
-            (AddressSpace::Handle, TypeInner::Sampler { comparison: false })
+            (AddressSpace::Handle, TypeInner::Sampler { comparison })
                 if (32..48).contains(&binding.binding) =>
             {
-                target.sampler = Some(naga::back::msl::BindSamplerTarget::Resource(
-                    (binding.binding - 32) as u8,
-                ));
-                samplers.push(binding.binding - 32);
+                let slot = binding.binding - 32;
+                target.sampler = Some(naga::back::msl::BindSamplerTarget::Resource(slot as u8));
+                samplers.push(slot);
+                sampler_bindings.push(SamplerBinding {
+                    slot,
+                    comparison: *comparison,
+                });
             }
             _ => {
                 return Err(format!(
@@ -356,6 +416,8 @@ pub fn lower(program: &HlslProgram, stage: Stage) -> Result<NativeProgram, Strin
     buffers.sort_by_key(|v| v.slot);
     textures.sort();
     samplers.sort();
+    texture_bindings.sort_by_key(|b| b.slot);
+    sampler_bindings.sort_by_key(|b| b.slot);
     vertex_locations.sort();
     Ok(NativeProgram {
         stage,
@@ -377,6 +439,8 @@ pub fn lower(program: &HlslProgram, stage: Stage) -> Result<NativeProgram, Strin
         buffers,
         textures,
         samplers,
+        texture_bindings,
+        sampler_bindings,
         vertex_locations,
     })
 }
