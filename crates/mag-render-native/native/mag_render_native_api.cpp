@@ -42,5 +42,6 @@ extern "C" int mag_native_batch_layout(uint32_t *out,uint32_t words){
     LAYOUT(mag_native_batch), OFFSET(mag_native_batch,resources), OFFSET(mag_native_batch,resource_count), OFFSET(mag_native_batch,commands)
     };
     if(!out||words!=sizeof(layout)/sizeof(layout[0]))return MAG_NATIVE_INVALID;
-    for(uint32_t i=0;i<words;++i)out[i]=layout[i];return MAG_NATIVE_OK;
+    for(uint32_t i=0;i<words;++i) { out[i]=layout[i]; }
+    return MAG_NATIVE_OK;
 }
