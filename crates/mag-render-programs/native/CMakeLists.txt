@@ -11,6 +11,10 @@ set_target_properties(mag_render_program_compiler PROPERTIES POSITION_INDEPENDEN
 # SPIRV-Tools legalization dependency. Reject unfamiliar link expressions.
 function(collect_library name)
   string(REGEX REPLACE "^\\$<LINK_ONLY:([^>]+)>$" "\\1" name "${name}")
+  if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND name MATCHES "^(rt|m|dl|pthread)$")
+    set_property(GLOBAL APPEND PROPERTY MAG_COMPILER_LIBRARIES "system|${name}\n")
+    return()
+  endif()
   if(NOT TARGET "${name}")
     message(FATAL_ERROR "Unsupported compiler package dependency: ${name}")
   endif()

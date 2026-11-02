@@ -28,7 +28,7 @@ def check(args):
         raise RuntimeError("spirv-val is required")
     if args.require_hlsl_compiler and not (args.glslang or args.dxc):
         raise RuntimeError("glslangValidator or dxc is required")
-    for name, executable in (("spirv_val", args.spirv_val), ("glslang", args.glslang), ("dxc", args.dxc)):
+    for name, executable in (("spirv_val", args.spirv_val), ("spirv_opt", args.spirv_opt), ("glslang", args.glslang), ("dxc", args.dxc)):
         if executable:
             report["tool_versions"][name] = run([executable, "--version"])
     for name, stage, glslang_stage, target in (
@@ -51,15 +51,25 @@ def check(args):
         if manifest["stage"] != stage or manifest["targets"]["hlsl"]["shader_model"] != target:
             raise RuntimeError("unexpected typed shader stage/target")
         statuses = {"naga_ir": "passed", "spirv_val": "pending", "hlsl_glslang": "pending",
-                    "hlsl_dxc": "pending", "metal_compiler": "pending", "gpu_execution": "pending"}
+                    "hlsl_dxc": "pending", "hlsl_spirv_legalization": "pending",
+                    "metal_compiler": "pending", "gpu_execution": "pending"}
         if args.spirv_val:
             run([args.spirv_val, "--target-env", "vulkan1.1", directory / "shader.spv"])
             statuses["spirv_val"] = "passed"
         if args.glslang:
             generated_spv = directory / "from-hlsl.spv"
+            raw_spv = directory / "from-hlsl-raw.spv" if args.spirv_opt else generated_spv
             run([args.glslang, "-D", "-V", "--target-env", "vulkan1.1", "-S", glslang_stage,
-                 "-e", manifest["targets"]["hlsl"]["entry_point"], "-o", generated_spv,
+                 "-e", manifest["targets"]["hlsl"]["entry_point"], "-o", raw_spv,
                  directory / "shader.hlsl"])
+            # Some distribution glslang builds leave HLSL sampler temporaries
+            # in pre-legalized SPIR-V even after returning success. Run the
+            # standard HLSL legalization pass explicitly, retaining raw output.
+            # Naga's direct Vulkan output above is still validated unchanged.
+            if args.spirv_opt:
+                run([args.spirv_opt, "--target-env=vulkan1.1", "--legalize-hlsl",
+                     raw_spv, "-o", generated_spv])
+                statuses["hlsl_spirv_legalization"] = "passed"
             if args.spirv_val:
                 run([args.spirv_val, "--target-env", "vulkan1.1", generated_spv])
             statuses["hlsl_glslang"] = "passed"
@@ -78,6 +88,7 @@ def main():
                         ("mag-render-shaders.exe" if sys.platform == "win32" else "mag-render-shaders"))
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--spirv-val", default=shutil.which("spirv-val"))
+    parser.add_argument("--spirv-opt", default=shutil.which("spirv-opt"))
     parser.add_argument("--glslang", default=shutil.which("glslangValidator"))
     parser.add_argument("--dxc", default=shutil.which("dxc"))
     parser.add_argument("--require-spirv-val", action="store_true")

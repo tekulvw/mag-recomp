@@ -35,6 +35,31 @@ class GeneratedValidationTests(unittest.TestCase):
                 self.assertEqual(statuses["metal_compiler"], "pending")
                 self.assertIn("passed", (statuses["hlsl_glslang"], statuses["hlsl_dxc"]))
 
+    def test_hlsl_sampler_temporaries_require_explicit_legalization(self):
+        glslang, optimizer, validator = (shutil.which(tool) for tool in
+                                        ("glslangValidator", "spirv-opt", "spirv-val"))
+        self.assertTrue(glslang and optimizer and validator)
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            subprocess.run([str(TOOL), "--source", str(ROOT / "shaders/render_frontend/scene_lit_fragment.wgsl"),
+                            "--stage", "fragment", "--out-dir", str(directory)], check=True,
+                           capture_output=True, text=True)
+            manifest = json.loads((directory / "manifest.json").read_text())
+            raw, legal = directory / "raw.spv", directory / "legal.spv"
+            # Force the same pre-legalized form observed from Ubuntu's glslang
+            #16.2 package; this is a real compiler output, not a mocked error.
+            subprocess.run([glslang, "-D", "-Od", "-V", "--target-env", "vulkan1.1", "-S", "frag",
+                            "-e", manifest["targets"]["hlsl"]["entry_point"], "-o", str(raw),
+                            str(directory / "shader.hlsl")], check=True, capture_output=True, text=True)
+            rejected = subprocess.run([validator, "--target-env", "vulkan1.1", str(raw)],
+                                      capture_output=True, text=True)
+            self.assertNotEqual(rejected.returncode, 0)
+            self.assertIn("Cannot store to OpTypeImage", rejected.stderr)
+            subprocess.run([optimizer, "--target-env=vulkan1.1", "--legalize-hlsl", str(raw),
+                            "-o", str(legal)], check=True, capture_output=True, text=True)
+            subprocess.run([validator, "--target-env", "vulkan1.1", str(legal)],
+                           check=True, capture_output=True, text=True)
+
     def test_missing_required_validator_fails_without_success_report(self):
         with tempfile.TemporaryDirectory() as temporary:
             # A previous successful report must not survive a failed rerun.

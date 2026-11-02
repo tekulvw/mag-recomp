@@ -32,8 +32,7 @@ fn in_process_compiler_produces_owned_metal_and_vulkan_with_exact_uniform_layout
     assert!(p.msl.contains("[[buffer(0)]]"));
     assert!(!p.hlsl.contains("vk::location"));
 }
-#[test]
-fn in_process_fragment_preserves_independent_uniform_texture_sampler_slots() {
+fn fragment_program() -> HlslProgram {
     let words: [u32; 4] = [
         (0x17 << 24) | (15 << 9) | (4 << 13) | 1,
         1 | 0x1c800 | (7 << 18),
@@ -44,7 +43,7 @@ fn in_process_fragment_preserves_independent_uniform_texture_sampler_slots() {
         .iter()
         .flat_map(|w| w.rotate_left(16).to_be_bytes())
         .collect();
-    let source = fragment(FragmentProgram {
+    fragment(FragmentProgram {
         bytes: &bytes,
         shader_control: 0x40,
         cube_mask: 0,
@@ -58,7 +57,11 @@ fn in_process_fragment_preserves_independent_uniform_texture_sampler_slots() {
         unnormalized_mask: 0,
         texture_dimensions: [[1, 1]; 16],
     })
-    .unwrap();
+    .unwrap()
+}
+#[test]
+fn in_process_fragment_preserves_independent_uniform_texture_sampler_slots() {
+    let source = fragment_program();
     let p = lower(&source, Stage::Fragment).unwrap();
     assert_eq!(p.buffers, vec![BufferBinding { slot: 1, bytes: 32 }]);
     assert_eq!(p.textures, vec![0]);
@@ -99,7 +102,13 @@ fn generated_vulkan_module_passes_independent_validator() {
         process::Command,
         time::{SystemTime, UNIX_EPOCH},
     };
-    let p = lower(&vertex_program(), Stage::Vertex).unwrap();
+    let programs = [
+        ("vertex", lower(&vertex_program(), Stage::Vertex).unwrap()),
+        (
+            "fragment",
+            lower(&fragment_program(), Stage::Fragment).unwrap(),
+        ),
+    ];
     let root = std::env::temp_dir().join(format!(
         "mag-native-program-{}-{}",
         std::process::id(),
@@ -109,24 +118,26 @@ fn generated_vulkan_module_passes_independent_validator() {
             .as_nanos()
     ));
     fs::create_dir(&root).unwrap();
-    let path = root.join("vertex.spv");
-    fs::write(
-        &path,
-        p.spirv
-            .iter()
-            .flat_map(|w| w.to_le_bytes())
-            .collect::<Vec<_>>(),
-    )
-    .unwrap();
-    let result = Command::new("spirv-val")
-        .args(["--target-env", "vulkan1.1"])
-        .arg(&path)
-        .output()
+    for (name, p) in programs {
+        let path = root.join(format!("{name}.spv"));
+        fs::write(
+            &path,
+            p.spirv
+                .iter()
+                .flat_map(|w| w.to_le_bytes())
+                .collect::<Vec<_>>(),
+        )
         .unwrap();
-    assert!(
-        result.status.success(),
-        "{}",
-        String::from_utf8_lossy(&result.stderr)
-    );
+        let result = Command::new("spirv-val")
+            .args(["--target-env", "vulkan1.1"])
+            .arg(&path)
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+    }
     fs::remove_dir_all(root).unwrap();
 }
