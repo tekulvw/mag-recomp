@@ -35,7 +35,7 @@ typedef struct frontend_vk_pipeline {
     uint64_t id; uint32_t public_ref, references, count; int graphics;VkRenderPass render_pass;
     mag_native_binding_layout bindings[16];
     VkDescriptorSetLayout descriptors; VkPipelineLayout layout; VkPipeline gpu;
-    int scene;mag_native_scene_graphics_desc scene_desc;
+    int scene;uint32_t scene_binding_model;mag_native_scene_graphics_desc scene_desc;
     mag_native_scene_buffer_layout scene_buffers[32];mag_native_scene_texture_layout scene_textures[32];VkDescriptorSetLayout scene_sets[2];
     struct frontend_vk_pipeline *next;
 } frontend_vk_pipeline;

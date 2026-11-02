@@ -23,13 +23,13 @@ static int metal_scene_compute_info(void *opaque, mag_native_pipeline ref,
     return MAG_NATIVE_OK;
 }
 static int metal_scene_graphics_info(void *opaque, mag_native_pipeline ref,
-                                     const mag_native_scene_graphics_desc **out) {
+                                     const mag_native_scene_graphics_desc **out,uint32_t *model) {
     MagRenderPipeline *p = find_pipeline(context(opaque), ref);
     if (!p)
         return MAG_NATIVE_STALE;
     if (!p->graphics || !p->scene)
         return MAG_NATIVE_INVALID;
-    *out = &p->scene_desc;
+    *out = &p->scene_desc;*model=p->scene_binding_model;
     return MAG_NATIVE_OK;
 }
 static id<MTLFunction> metal_scene_function(MagRenderMetal *c, const mag_native_shader_stage *s) {
@@ -50,7 +50,7 @@ static id<MTLFunction> metal_scene_function(MagRenderMetal *c, const mag_native_
     return [lib newFunctionWithName:entry];
 }
 static int metal_scene_graphics_create_layout(void *opaque, const mag_native_scene_graphics_desc *desc,
-                                       const mag_native_vertex_attribute *attributes,uint32_t attribute_count,mag_native_pipeline *out) {
+                                       const mag_native_vertex_attribute *attributes,uint32_t attribute_count,uint32_t binding_model,mag_native_pipeline *out) {
     MagRenderMetal *c = context(opaque);
     if (c->next_pipeline == UINT64_MAX)
         return MAG_NATIVE_ALLOCATION_FAILED;
@@ -99,7 +99,7 @@ static int metal_scene_graphics_create_layout(void *opaque, const mag_native_sce
     if (!depth_gpu)
         return MAG_NATIVE_ALLOCATION_FAILED;
     MagRenderPipeline *p = [MagRenderPipeline new];
-    p->scene = 1;
+    p->scene = 1;p->scene_binding_model=binding_model;
     p->graphics = graphics;
     p->depth = depth_gpu;
     p->scene_desc = *desc;
@@ -122,11 +122,11 @@ static int metal_scene_graphics_create_layout(void *opaque, const mag_native_sce
 static int metal_scene_graphics_create(void *opaque,const mag_native_scene_graphics_desc *desc,mag_native_pipeline *out){
     int status=mag_native_scene_graphics_validate(desc);if(status)return status;
     const mag_native_vertex_attribute attributes[]={{0,MAG_NATIVE_VERTEX_FLOAT4,0,0}};
-    return metal_scene_graphics_create_layout(opaque,desc,attributes,1,out);
+    return metal_scene_graphics_create_layout(opaque,desc,attributes,1,0,out);
 }
 static int metal_scene_graphics_create_v2(void *opaque,const mag_native_scene_graphics_v2_desc *desc,mag_native_pipeline *out){
     int status=mag_native_scene_graphics_v2_validate(desc);if(status)return status;
-    return metal_scene_graphics_create_layout(opaque,&desc->base,desc->attributes,desc->attribute_count,out);
+    return metal_scene_graphics_create_layout(opaque,&desc->base,desc->attributes,desc->attribute_count,desc->binding_model,out);
 }
 static int metal_scene_owned(void *opaque, const mag_native_scene *scene, mag_native_ticket *out,MagRenderImportedImage *target) {
     MagRenderMetal *c = context(opaque);

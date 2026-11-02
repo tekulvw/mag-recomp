@@ -52,6 +52,7 @@ typedef struct mag_native_scene_graphics_desc {
  * inferred. ABI1 remains Float4 LOC0/stride16. V2 accepts one interleaved stream
  * (Metal slot16, Vulkan/D3D stream0); shader locations map to MSL attributes/SPIR-V
  * locations/HLSL LOC semantic indices identically. */
+enum mag_native_scene_binding_model { MAG_NATIVE_SCENE_BINDINGS_COMBINED=0, MAG_NATIVE_SCENE_BINDINGS_NAMESPACED=1 };
 enum mag_native_vertex_format {
     MAG_NATIVE_VERTEX_FLOAT=1, MAG_NATIVE_VERTEX_FLOAT2=2,
     MAG_NATIVE_VERTEX_FLOAT3=3, MAG_NATIVE_VERTEX_FLOAT4=4,
@@ -64,7 +65,10 @@ typedef struct mag_native_scene_graphics_v2_desc {
     uint32_t struct_size,abi_version;
     mag_native_scene_graphics_desc base;
     const mag_native_vertex_attribute *attributes;
-    uint32_t attribute_count,reserved;
+    uint32_t attribute_count,binding_model;
+    /* model0: legacy combined slots. model1: independent bN/tN/sN (0..15).
+     * Vulkan set0vertex/set1fragment, bufferN/texture16+N/sampler32+N;
+     * Metal indices and D3D register indices remain logical N. */
 } mag_native_scene_graphics_v2_desc;
 int mag_native_scene_graphics_create_v2(mag_native_device *,const mag_native_scene_graphics_v2_desc *,mag_native_pipeline *);
 int mag_native_scene_graphics_v2_layout(uint32_t *,uint32_t);

@@ -45,8 +45,12 @@ int main(void) {
     d.attribute_count = 0;
     assert(mag_native_scene_graphics_v2_validate(&d) == MAG_NATIVE_INVALID);
     d.attribute_count = 3;
-    d.reserved = 1;
-    assert(mag_native_scene_graphics_v2_validate(&d) == MAG_NATIVE_INVALID);
+    mag_native_scene_buffer_layout buffer={.stage=MAG_NATIVE_SCENE_FRAGMENT,.binding={.slot=0,.access=MAG_NATIVE_READ,.minimum_bytes=16,.runtime_size_index=MAG_NATIVE_NO_SIZE_INDEX,.alignment_bytes=4,.binding_kind=MAG_NATIVE_UNIFORM}};
+    mag_native_scene_texture_layout texture={MAG_NATIVE_SCENE_FRAGMENT,0,0,MAG_NATIVE_SCENE_RGBA8,0,0};
+    d.base.buffers=&buffer;d.base.buffer_count=1;d.base.textures=&texture;d.base.texture_count=1;
+    d.binding_model=1;assert(mag_native_scene_graphics_v2_validate(&d)==0); /* independent b0/t0/s0 */
+    d.binding_model=0;assert(mag_native_scene_graphics_v2_validate(&d)==MAG_NATIVE_INVALID);
+    d.binding_model=99;assert(mag_native_scene_graphics_v2_validate(&d)==MAG_NATIVE_INVALID);
     puts("PASS: explicit Float3/UV/color layout; duplicate location, overlapping fields, bad alignment, "
          "short stride and unknown formats refuse before PSO creation");
     return 0;

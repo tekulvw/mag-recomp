@@ -48,6 +48,8 @@ pub struct VertexAttribute {
     pub offset: u32,
     pub reserved: u32,
 }
+pub const BINDINGS_COMBINED: u32 = 0;
+pub const BINDINGS_NAMESPACED: u32 = 1;
 pub const VERTEX_FLOAT: u32 = 1;
 pub const VERTEX_FLOAT2: u32 = 2;
 pub const VERTEX_FLOAT3: u32 = 3;
@@ -60,7 +62,7 @@ pub struct SceneGraphicsV2Desc {
     pub base: SceneGraphicsDesc,
     pub attributes: *const VertexAttribute,
     pub attribute_count: u32,
-    pub reserved: u32,
+    pub binding_model: u32,
 }
 #[repr(C)]
 struct Image {
@@ -808,8 +810,11 @@ fn checked_graphics_v2_layout() -> Result<(), i32> {
         VERTEX_FLOAT3,
         VERTEX_FLOAT4,
         VERTEX_UNORM8X4,
+        offset_of!(SceneGraphicsV2Desc, binding_model) as u32,
+        BINDINGS_COMBINED,
+        BINDINGS_NAMESPACED,
     ];
-    let mut actual = [0; 13];
+    let mut actual = [0; 16];
     let status =
         unsafe { mag_native_scene_graphics_v2_layout(actual.as_mut_ptr(), actual.len() as u32) };
     if status != 0 {
@@ -825,6 +830,59 @@ mod abi_tests {
     use super::*;
     unsafe extern "C" {
         fn mag_native_scene_graphics_v2_validate(desc: *const SceneGraphicsV2Desc) -> i32;
+    }
+    #[test]
+    fn material_namespaces_allow_same_unit_for_buffer_texture_and_sampler() {
+        let mut base = std::mem::MaybeUninit::uninit();
+        assert_eq!(
+            unsafe { crate::client::mag_render_client_diagnostic_pipeline(1, base.as_mut_ptr()) },
+            0
+        );
+        let mut base = unsafe { base.assume_init() };
+        let buffer = BufferLayout {
+            stage: 1,
+            reserved: 0,
+            binding: BindingLayout {
+                slot: 0,
+                access: 1,
+                minimum_bytes: 16,
+                runtime_array_stride: 0,
+                runtime_size_index: u32::MAX,
+                alignment_bytes: 4,
+                binding_kind: 1,
+            },
+        };
+        let texture = TextureLayout {
+            stage: 1,
+            texture_slot: 0,
+            sampler_slot: 0,
+            format: 1,
+            comparison: 0,
+            reserved: 0,
+        };
+        base.buffers = &buffer;
+        base.buffer_count = 1;
+        base.textures = &texture;
+        base.texture_count = 1;
+        let attribute = VertexAttribute {
+            location: 0,
+            format: VERTEX_FLOAT4,
+            offset: 0,
+            reserved: 0,
+        };
+        let mut desc = SceneGraphicsV2Desc {
+            struct_size: size_of::<SceneGraphicsV2Desc>() as u32,
+            abi_version: 2,
+            base,
+            attributes: &attribute,
+            attribute_count: 1,
+            binding_model: BINDINGS_NAMESPACED,
+        };
+        assert_eq!(unsafe { mag_native_scene_graphics_v2_validate(&desc) }, 0);
+        desc.binding_model = BINDINGS_COMBINED;
+        assert_eq!(unsafe { mag_native_scene_graphics_v2_validate(&desc) }, -1);
+        desc.binding_model = 99;
+        assert_eq!(unsafe { mag_native_scene_graphics_v2_validate(&desc) }, -1);
     }
     #[test]
     fn real_common_preflight_accepts_prepared_material_attributes_and_rejects_aliases() {
@@ -862,7 +920,7 @@ mod abi_tests {
                 base,
                 attributes: attributes.as_ptr(),
                 attribute_count: attributes.len() as u32,
-                reserved: 0,
+                binding_model: 0,
             };
             unsafe { mag_native_scene_graphics_v2_validate(&desc) }
         };
@@ -876,7 +934,7 @@ mod abi_tests {
             },
             attributes: attributes.as_ptr(),
             attribute_count: 3,
-            reserved: 0,
+            binding_model: 0,
         };
         assert_eq!(unsafe { mag_native_scene_graphics_v2_validate(&bgra) }, 0);
         attributes[1].offset = 8;

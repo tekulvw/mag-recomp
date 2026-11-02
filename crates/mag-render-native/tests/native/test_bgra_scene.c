@@ -4,6 +4,7 @@
 #include <assert.h>
 #include <stdio.h>
 static mag_native_scene_graphics_desc graphics;
+static uint32_t graphics_model;
 static int buffer_info(void *c, mag_native_buffer b, mag_native_scene_buffer_info *out) {
     (void)c;
     if (b.device_generation != 7 || b.version != 1 || b.id < 1 || b.id > 2)
@@ -17,11 +18,11 @@ static int compute_info(void *c, mag_native_pipeline p, mag_native_scene_compute
     (void)out;
     return MAG_NATIVE_STALE;
 }
-static int graphics_info(void *c, mag_native_pipeline p, const mag_native_scene_graphics_desc **out) {
+static int graphics_info(void *c, mag_native_pipeline p, const mag_native_scene_graphics_desc **out,uint32_t *model) {
     (void)c;
     if (p.device_generation != 7 || p.id != 1)
         return MAG_NATIVE_STALE;
-    *out = &graphics;
+    *out = &graphics;*model=graphics_model;
     return 0;
 }
 int main(void) {

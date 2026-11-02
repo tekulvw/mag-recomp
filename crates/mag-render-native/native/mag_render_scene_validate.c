@@ -20,8 +20,8 @@ static int stage_source(const mag_native_shader_stage *s) {
     return s->source && s->source_length && s->source_length <= 1024 * 1024 && s->entry && s->entry_length &&
            s->entry_length <= 128 && s->language >= MAG_NATIVE_MSL && s->language <= MAG_NATIVE_SPIRV;
 }
-static int scene_graphics_schema(const mag_native_scene_graphics_desc *d) {
-    if (!d || d->struct_size != sizeof(*d) || d->abi_version != MAG_NATIVE_SCENE_ABI ||
+static int scene_graphics_schema(const mag_native_scene_graphics_desc *d,uint32_t model) {
+    if (model>1 || !d || d->struct_size != sizeof(*d) || d->abi_version != MAG_NATIVE_SCENE_ABI ||
         d->vertex_stride < 4 || d->vertex_stride > 2048 || d->vertex_stride % 4 || (d->color_format && !color_format(d->color_format)) ||
         (d->depth_format != 0 && d->depth_format != MAG_NATIVE_SCENE_D32) ||
         (!d->color_format && !d->depth_format) || d->depth_compare > MAG_NATIVE_SCENE_DEPTH_ALWAYS ||
@@ -30,7 +30,7 @@ static int scene_graphics_schema(const mag_native_scene_graphics_desc *d) {
         d->buffer_count > 32 || d->texture_count > 32 || (d->buffer_count && !d->buffers) ||
         (d->texture_count && !d->textures))
         return MAG_NATIVE_INVALID;
-    uint32_t slots[2] = {0}, samplers[2] = {0}, comparison[2] = {0};
+    uint32_t slots[2] = {0}, textures[2]={0}, samplers[2] = {0}, comparison[2] = {0};
     for (uint32_t i = 0; i < d->buffer_count; ++i) {
         const mag_native_scene_buffer_layout *r = &d->buffers[i];
         const mag_native_binding_layout *b = &r->binding;
@@ -45,11 +45,12 @@ static int scene_graphics_schema(const mag_native_scene_graphics_desc *d) {
     for (uint32_t i = 0; i < d->texture_count; ++i) {
         const mag_native_scene_texture_layout *t = &d->textures[i];
         if (t->stage > 1 || t->reserved || (t->stage == 1 && !d->fragment.source_length) ||
-            t->texture_slot >= 16 || t->sampler_slot >= 16 || t->texture_slot == t->sampler_slot ||
-            (slots[t->stage] & (1u << t->texture_slot)) || (!color_format(t->format) && t->format!=MAG_NATIVE_SCENE_D32) ||
+            t->texture_slot >= 16 || t->sampler_slot >= 16 || (!model && t->texture_slot == t->sampler_slot) ||
+            ((model?textures[t->stage]:slots[t->stage]) & (1u << t->texture_slot)) || (!color_format(t->format) && t->format!=MAG_NATIVE_SCENE_D32) ||
             t->comparison > 1 || (t->comparison && t->format != MAG_NATIVE_SCENE_D32))
             return MAG_NATIVE_INVALID;
-        slots[t->stage] |= 1u << t->texture_slot;
+        textures[t->stage] |= 1u << t->texture_slot;
+        if(!model)slots[t->stage] |= 1u << t->texture_slot;
         uint32_t bit = 1u << t->sampler_slot;
         if ((samplers[t->stage] & bit) && !!(comparison[t->stage] & bit) != !!t->comparison)
             return MAG_NATIVE_INVALID;
@@ -57,12 +58,12 @@ static int scene_graphics_schema(const mag_native_scene_graphics_desc *d) {
         if (t->comparison)
             comparison[t->stage] |= bit;
     }
-    if ((slots[0] & samplers[0]) || (slots[1] & samplers[1]))
+    if (!model && ((slots[0] & samplers[0]) || (slots[1] & samplers[1])))
         return MAG_NATIVE_INVALID;
     return MAG_NATIVE_OK;
 }
 int mag_native_scene_graphics_validate(const mag_native_scene_graphics_desc *d) {
-    int status = scene_graphics_schema(d);
+    int status = scene_graphics_schema(d,0);
     if (status || d->vertex_stride != 16)
         return MAG_NATIVE_INVALID;
     if (!stage_source(&d->vertex))
@@ -76,10 +77,10 @@ int mag_native_scene_graphics_validate(const mag_native_scene_graphics_desc *d) 
     return MAG_NATIVE_OK;
 }
 int mag_native_scene_graphics_v2_validate(const mag_native_scene_graphics_v2_desc *v) {
-    if(!v || v->struct_size!=sizeof(*v) || v->abi_version!=2 || v->reserved ||
+    if(!v || v->struct_size!=sizeof(*v) || v->abi_version!=2 || v->binding_model>1 ||
        !v->attributes || !v->attribute_count || v->attribute_count>16)return MAG_NATIVE_INVALID;
     const mag_native_scene_graphics_desc *d=&v->base;
-    if(scene_graphics_schema(d) || !stage_source(&d->vertex))return MAG_NATIVE_INVALID;
+    if(scene_graphics_schema(d,v->binding_model) || !stage_source(&d->vertex))return MAG_NATIVE_INVALID;
     if(d->color_format || d->fragment.source_length){if(!stage_source(&d->fragment))return MAG_NATIVE_INVALID;}
     else if(d->fragment.source || d->fragment.entry || d->fragment.entry_length || d->fragment.language)return MAG_NATIVE_INVALID;
     uint32_t seen=0;
@@ -250,10 +251,11 @@ int mag_native_scene_validate(const mag_native_scene *s, const mag_native_scene_
         for (uint32_t draw_index = 0; draw_index < p->draw_count; ++draw_index) {
             const mag_native_scene_draw *d = &p->draws[draw_index];
             const mag_native_scene_graphics_desc *g = NULL;
-            int status = r->graphics(r->context, d->pipeline, &g);
+            uint32_t binding_model=0;
+            int status = r->graphics(r->context, d->pipeline, &g,&binding_model);
             if (status)
                 return status;
-            if (!g || scene_graphics_schema(g) || d->reserved || d->buffer_count != g->buffer_count ||
+            if (!g || scene_graphics_schema(g,binding_model) || d->reserved || d->buffer_count != g->buffer_count ||
                 d->texture_count != g->texture_count || (d->buffer_count && !d->buffers) ||
                 (d->texture_count && !d->textures) || !d->index_count || d->index_count % 3 ||
                 d->index_length < (uint64_t)d->index_count * 4 || d->vertex_length % g->vertex_stride ||

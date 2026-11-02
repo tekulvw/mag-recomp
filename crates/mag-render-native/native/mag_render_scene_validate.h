@@ -13,7 +13,7 @@ typedef struct mag_native_scene_registry {
     void *context;
     int (*buffer)(void *, mag_native_buffer, mag_native_scene_buffer_info *);
     int (*compute)(void *, mag_native_pipeline, mag_native_scene_compute_info *);
-    int (*graphics)(void *, mag_native_pipeline, const mag_native_scene_graphics_desc **);
+    int (*graphics)(void *, mag_native_pipeline, const mag_native_scene_graphics_desc **,uint32_t *binding_model);
     uint64_t uniform_alignment, storage_alignment, max_uniform_bytes, max_storage_bytes;
 } mag_native_scene_registry;
 typedef struct mag_native_scene_usage {

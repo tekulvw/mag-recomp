@@ -52,7 +52,8 @@ static int scene_renderpass(frontend_vk *c, uint32_t color, uint32_t depth, cons
 }
 static int scene_graphics_create_layout(void *opaque, const mag_native_scene_graphics_desc *desc,
                                         const mag_native_vertex_attribute *attributes,
-                                        uint32_t attribute_count, mag_native_pipeline *out) {
+                                        uint32_t attribute_count, uint32_t binding_model,
+                                        mag_native_pipeline *out) {
     frontend_vk *c = opaque;
     if (c->failed)
         return MAG_NATIVE_DEVICE_FAILED;
@@ -113,9 +114,10 @@ static int scene_graphics_create_layout(void *opaque, const mag_native_scene_gra
     if (status)
         goto done;
     status = MAG_NATIVE_UNSUPPORTED;
+    uint32_t total_resources[4] = {0};
     for (unsigned stage = 0; stage < 2; ++stage) {
-        VkDescriptorSetLayoutBinding bindings[16];
-        uint32_t count = 0, seen = 0;
+        VkDescriptorSetLayoutBinding bindings[48];
+        uint32_t count = 0, samplers_seen = 0;
         for (uint32_t i = 0; i < desc->buffer_count; ++i)
             if (desc->buffers[i].stage == stage) {
                 const mag_native_binding_layout *b = &desc->buffers[i].binding;
@@ -124,22 +126,53 @@ static int scene_graphics_create_layout(void *opaque, const mag_native_scene_gra
                     b->binding_kind == MAG_NATIVE_UNIFORM ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER
                                                           : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                     1, stage ? VK_SHADER_STAGE_FRAGMENT_BIT : VK_SHADER_STAGE_VERTEX_BIT, NULL};
-                seen |= 1u << b->slot;
             }
         for (uint32_t i = 0; i < desc->texture_count; ++i)
             if (desc->textures[i].stage == stage) {
                 const mag_native_scene_texture_layout *t = &desc->textures[i];
                 bindings[count++] = (VkDescriptorSetLayoutBinding){
-                    t->texture_slot, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1,
+                    (binding_model ? 16u : 0u) + t->texture_slot, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1,
                     stage ? VK_SHADER_STAGE_FRAGMENT_BIT : VK_SHADER_STAGE_VERTEX_BIT, NULL};
-                seen |= 1u << t->texture_slot;
-                if (!(seen & (1u << t->sampler_slot))) {
+
+                if (!(samplers_seen & (1u << t->sampler_slot))) {
                     bindings[count++] = (VkDescriptorSetLayoutBinding){
-                        t->sampler_slot, VK_DESCRIPTOR_TYPE_SAMPLER, 1,
+                        (binding_model ? 32u : 0u) + t->sampler_slot, VK_DESCRIPTOR_TYPE_SAMPLER, 1,
                         stage ? VK_SHADER_STAGE_FRAGMENT_BIT : VK_SHADER_STAGE_VERTEX_BIT, NULL};
-                    seen |= 1u << t->sampler_slot;
+                    samplers_seen |= 1u << t->sampler_slot;
                 }
             }
+        uint32_t resources[4] = {0};
+        for (uint32_t i = 0; i < count; ++i) {
+            switch (bindings[i].descriptorType) {
+            case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER:
+                ++resources[0];
+                break;
+            case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER:
+                ++resources[1];
+                break;
+            case VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE:
+                ++resources[2];
+                break;
+            case VK_DESCRIPTOR_TYPE_SAMPLER:
+                ++resources[3];
+                break;
+            default:
+                goto done;
+            }
+        }
+        const VkPhysicalDeviceLimits *limits = &c->owner.properties.limits;
+        if (resources[0] > limits->maxPerStageDescriptorUniformBuffers ||
+            resources[1] > limits->maxPerStageDescriptorStorageBuffers ||
+            resources[2] > limits->maxPerStageDescriptorSampledImages ||
+            resources[3] > limits->maxPerStageDescriptorSamplers || count > limits->maxPerStageResources)
+            goto done;
+        for (unsigned i = 0; i < 4; ++i)
+            total_resources[i] += resources[i];
+        if (total_resources[0] > limits->maxDescriptorSetUniformBuffers ||
+            total_resources[1] > limits->maxDescriptorSetStorageBuffers ||
+            total_resources[2] > limits->maxDescriptorSetSampledImages ||
+            total_resources[3] > limits->maxDescriptorSetSamplers)
+            goto done;
         VkDescriptorSetLayoutCreateInfo info = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
                                                 .bindingCount = count,
                                                 .pBindings = bindings};
@@ -236,6 +269,7 @@ static int scene_graphics_create_layout(void *opaque, const mag_native_scene_gra
     p->public_ref = 1;
     p->graphics = 1;
     p->scene = 1;
+    p->scene_binding_model = binding_model;
     p->scene_desc = *desc;
     if (desc->buffer_count)
         memcpy(p->scene_buffers, desc->buffers, desc->buffer_count * sizeof(*desc->buffers));
@@ -266,14 +300,15 @@ static int scene_graphics_create(void *opaque, const mag_native_scene_graphics_d
     if (status)
         return status;
     const mag_native_vertex_attribute attributes[] = {{0, MAG_NATIVE_VERTEX_FLOAT4, 0, 0}};
-    return scene_graphics_create_layout(opaque, desc, attributes, 1, out);
+    return scene_graphics_create_layout(opaque, desc, attributes, 1, 0, out);
 }
 static int scene_graphics_create_v2(void *opaque, const mag_native_scene_graphics_v2_desc *desc,
                                     mag_native_pipeline *out) {
     int status = mag_native_scene_graphics_v2_validate(desc);
     if (status)
         return status;
-    return scene_graphics_create_layout(opaque, &desc->base, desc->attributes, desc->attribute_count, out);
+    return scene_graphics_create_layout(opaque, &desc->base, desc->attributes, desc->attribute_count,
+                                        desc->binding_model, out);
 }
 static int scene_buffer_info(void *opaque, mag_native_buffer ref, mag_native_scene_buffer_info *out) {
     frontend_vk_buffer *b = buffer_find(opaque, ref);
@@ -292,13 +327,14 @@ static int scene_compute_info(void *opaque, mag_native_pipeline ref, mag_native_
     return MAG_NATIVE_OK;
 }
 static int scene_graphics_info(void *opaque, mag_native_pipeline ref,
-                               const mag_native_scene_graphics_desc **out) {
+                               const mag_native_scene_graphics_desc **out, uint32_t *model) {
     frontend_vk_pipeline *p = pipeline_find(opaque, ref);
     if (!p)
         return MAG_NATIVE_STALE;
     if (!p->scene)
         return MAG_NATIVE_INVALID;
     *out = &p->scene_desc;
+    *model = p->scene_binding_model;
     return MAG_NATIVE_OK;
 }
 static void scene_image_transition(frontend_vk *c, frontend_vk_slot *slot, uint32_t index,
@@ -329,7 +365,7 @@ static int scene_descriptors(frontend_vk *c, frontend_vk_slot *slot, frontend_vk
                                          .pSetLayouts = pipeline->scene_sets};
     if (c->vkAllocateDescriptorSets(c->owner.device, &alloc, sets) != VK_SUCCESS)
         return MAG_NATIVE_ALLOCATION_FAILED;
-    VkWriteDescriptorSet writes[64];
+    VkWriteDescriptorSet writes[96];
     VkDescriptorBufferInfo buffers[32];
     VkDescriptorImageInfo images[64];
     uint32_t count = 0, image_count = 0, samplers[2] = {0};
@@ -357,22 +393,24 @@ static int scene_descriptors(frontend_vk *c, frontend_vk_slot *slot, frontend_vk
                                                       im->aspect == VK_IMAGE_ASPECT_DEPTH_BIT
                                                           ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL
                                                           : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-        writes[count++] = (VkWriteDescriptorSet){.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                                                 .dstSet = sets[t->stage],
-                                                 .dstBinding = t->texture_slot,
-                                                 .descriptorCount = 1,
-                                                 .descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
-                                                 .pImageInfo = &images[image_count++]};
+        writes[count++] =
+            (VkWriteDescriptorSet){.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                                   .dstSet = sets[t->stage],
+                                   .dstBinding = (pipeline->scene_binding_model ? 16u : 0u) + t->texture_slot,
+                                   .descriptorCount = 1,
+                                   .descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
+                                   .pImageInfo = &images[image_count++]};
         if (!(samplers[t->stage] & (1u << t->sampler_slot))) {
             samplers[t->stage] |= 1u << t->sampler_slot;
             images[image_count] = (VkDescriptorImageInfo){slot->scene_samplers[t->sampler], VK_NULL_HANDLE,
                                                           VK_IMAGE_LAYOUT_UNDEFINED};
-            writes[count++] = (VkWriteDescriptorSet){.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                                                     .dstSet = sets[t->stage],
-                                                     .dstBinding = t->sampler_slot,
-                                                     .descriptorCount = 1,
-                                                     .descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER,
-                                                     .pImageInfo = &images[image_count++]};
+            writes[count++] = (VkWriteDescriptorSet){
+                .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                .dstSet = sets[t->stage],
+                .dstBinding = (pipeline->scene_binding_model ? 32u : 0u) + t->sampler_slot,
+                .descriptorCount = 1,
+                .descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER,
+                .pImageInfo = &images[image_count++]};
         }
     }
     c->vkUpdateDescriptorSets(c->owner.device, count, writes, 0, NULL);

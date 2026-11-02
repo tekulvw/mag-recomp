@@ -25,7 +25,7 @@
     id<MTLRenderPipelineState> graphics;id<MTLDepthStencilState> depth;
     mag_native_binding_layout bindings[MAG_NATIVE_MAX_BINDINGS];
     uint32_t binding_count, sizes_count;
-    int scene;mag_native_scene_graphics_desc scene_desc;
+    int scene;uint32_t scene_binding_model;mag_native_scene_graphics_desc scene_desc;
     mag_native_scene_buffer_layout scene_buffers[32];
     mag_native_scene_texture_layout scene_textures[32];
 }
