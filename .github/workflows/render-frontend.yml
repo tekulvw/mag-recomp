@@ -37,13 +37,13 @@ jobs:
         run: cargo fetch --manifest-path crates/mag-render/Cargo.toml --locked
       - name: Format
         working-directory: crates/mag-render
-        run: cargo fmt --check
+        run: cargo fmt --all --check
       - name: Clippy
         working-directory: crates/mag-render
-        run: cargo clippy --locked --offline --all-targets -- -D warnings
-      - name: Unit and accounting tests
+        run: cargo clippy --all-features --locked --offline --all-targets -- -D warnings
+      - name: Unit, SDK ABI and accounting tests
         working-directory: crates/mag-render
-        run: cargo test --locked --offline
+        run: cargo test --all-features --locked --offline
       - name: Real static library C++ linkage and rebuild
         run: python -m unittest tests.test_rust_render_build -v
       - name: Fetch locked shader translator dependencies

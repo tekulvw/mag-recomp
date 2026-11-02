@@ -10,6 +10,10 @@ description = "Portable render identities and independent removal accounting"
 name = "mag_render"
 crate-type = ["rlib", "staticlib"]
 
+[features]
+default = []
+sdk-compute = []
+
 [dependencies]
 serde = { version = "=1.0.228", features = ["derive"] }
 serde_json = "=1.0.149"

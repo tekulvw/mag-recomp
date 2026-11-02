@@ -6,3 +6,6 @@ pub mod types;
 pub mod resources;
 
 pub mod backend;
+
+#[cfg(feature = "sdk-compute")]
+pub mod sdk_compute;

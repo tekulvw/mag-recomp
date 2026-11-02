@@ -176,6 +176,11 @@ impl<D: RenderDevice> RenderBackend<D> {
             faulted: false,
         })
     }
+    /// Read-only adapter access for diagnostics/capabilities. Native readback
+    /// remains BUSY until actual terminal receipts have been polled.
+    pub fn device(&self) -> &D {
+        self.device.as_ref().expect("backend retains device owner")
+    }
     pub fn context(&self) -> BackendContext {
         self.context
     }
