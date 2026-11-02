@@ -117,3 +117,9 @@ int mag_native_submit_scene_target(mag_native_device *device,const mag_native_sc
  if(!device||!scene||!out||scene->struct_size!=sizeof(*scene)||scene->abi_version!=MAG_NATIVE_SCENE_ABI||!ref.device_generation||!ref.id)return MAG_NATIVE_INVALID;
  return device->ops->submit_scene_target?device->ops->submit_scene_target(device->context,scene,ref,out):MAG_NATIVE_UNSUPPORTED;
 }
+
+int mag_native_submit_scene_frame(mag_native_device *device,const mag_native_scene *scene,mag_native_image ref,const MagRenderHostFrame *frame,mag_native_ticket *out){
+ if(out)memset(out,0,sizeof(*out));
+ if(!device||!scene||!frame||!out||scene->struct_size!=sizeof(*scene)||scene->abi_version!=MAG_NATIVE_SCENE_ABI||!ref.device_generation||!ref.id||frame->abi_version!=MAG_RENDER_HOST_FRAME_ABI||frame->struct_size!=sizeof(*frame)||!frame->owner_lifetime||!frame->reservation||!frame->preflight||!frame->committed||!frame->cancel)return MAG_NATIVE_INVALID;
+ return device->ops->submit_scene_frame?device->ops->submit_scene_frame(device->context,scene,ref,frame,out):MAG_NATIVE_UNSUPPORTED;
+}

@@ -371,3 +371,23 @@ static int metal_submit_scene_target(void *opaque,const mag_native_scene *scene,
   return metal_scene_owned(opaque,scene,out,target);
  }@catch(NSException *e){(void)e;return out->submission_id?MAG_NATIVE_INDETERMINATE:MAG_NATIVE_DEVICE_FAILED;}@finally{c->host.end(c->host.userdata,c->host.lifetime);}
 }
+
+static int metal_submit_scene_frame(void *opaque,const mag_native_scene *scene,mag_native_image ref,const MagRenderHostFrame *frame,mag_native_ticket *out){
+ MagRenderMetal *c=context(opaque);if(frame->owner_lifetime!=c->host.lifetime||ref.device_generation!=c->generation||!ref.id)return MAG_NATIVE_STALE;
+ MagRenderImportedImage *target=c->images[@(ref.id)];if(!target)return MAG_NATIVE_STALE;
+ int status=c->host.try_begin(c->host.userdata,c->host.lifetime);if(status)return status<0?status:MAG_NATIVE_DEVICE_FAILED;
+ int reserved=0;
+ @try{
+  status=target->host.validate(target->host.userdata,target->host.owner_lifetime,target->host.resource_id,target->host.resource_generation);if(status)return status<0?status:MAG_NATIVE_DEVICE_FAILED;
+  status=frame->preflight(frame->userdata,frame->owner_lifetime,frame->reservation,target->host.resource_id,target->host.resource_generation);if(status)return status<0?status:MAG_NATIVE_DEVICE_FAILED;reserved=1;
+  if(!scene->images||scene->output_image>=scene->image_count){frame->cancel(frame->userdata,frame->owner_lifetime,frame->reservation);return MAG_NATIVE_INVALID;}
+  const mag_native_scene_image *im=&scene->images[scene->output_image];if(im->format!=target->host.format||im->width!=target->host.width||im->height!=target->host.height||im->upload.id||im->upload.device_generation||im->upload.version){frame->cancel(frame->userdata,frame->owner_lifetime,frame->reservation);return MAG_NATIVE_INVALID;}
+  status=metal_scene_owned(opaque,scene,out,target);
+  if(status<0){frame->cancel(frame->userdata,frame->owner_lifetime,frame->reservation);return status;}
+  int publication=frame->committed(frame->userdata,frame->owner_lifetime,frame->reservation,out->device_generation,out->submission_id,status?1u:0u);
+  return publication?MAG_NATIVE_INDETERMINATE:status;
+ }@catch(NSException *error){(void)error;
+  if(out->submission_id){if(reserved)frame->committed(frame->userdata,frame->owner_lifetime,frame->reservation,out->device_generation,out->submission_id,1);return MAG_NATIVE_INDETERMINATE;}
+  if(reserved)frame->cancel(frame->userdata,frame->owner_lifetime,frame->reservation);return MAG_NATIVE_DEVICE_FAILED;
+ }@finally{c->host.end(c->host.userdata,c->host.lifetime);}
+}

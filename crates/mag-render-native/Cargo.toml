@@ -19,6 +19,9 @@ d3d12 = []
 [dependencies]
 mag-render = { path = "../mag-render", features = ["sdk-compute"] }
 
+[build-dependencies]
+mag-render-shaders = { path = "../mag-render-shaders" }
+
 [lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
 

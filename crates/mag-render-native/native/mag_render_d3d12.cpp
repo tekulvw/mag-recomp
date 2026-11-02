@@ -1292,7 +1292,7 @@ static const mag_native_ops operations = {caps,
                                           nullptr,
                                           nullptr,
                                           nullptr,
-                                          nullptr};
+                                          nullptr , nullptr};
 static int compiler_path(std::string &out) {
   DWORD count = GetEnvironmentVariableW(L"PS3RECOMP_DXC_LIBRARY", nullptr, 0);
   if (!count)

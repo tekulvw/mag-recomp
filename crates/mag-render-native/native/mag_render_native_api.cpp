@@ -1,6 +1,7 @@
 #include "mag_render_native_api.h"
 #include "mag_render_batch.h"
 #include "mag_render_scene.h"
+#include "mag_render_host_frame.h"
 #include <cstddef>
 #define LAYOUT(t) uint32_t(sizeof(t)), uint32_t(alignof(t))
 #define OFFSET(t,f) uint32_t(offsetof(t,f))
@@ -67,6 +68,25 @@ extern "C" int mag_native_scene_layout(uint32_t *out,uint32_t words){
 
 extern "C" int mag_native_image_layout(uint32_t *out,uint32_t words){
  const uint32_t layout[]={LAYOUT(MagRenderHostImage),OFFSET(MagRenderHostImage,width),OFFSET(MagRenderHostImage,owner_lifetime),OFFSET(MagRenderHostImage,resource_generation),OFFSET(MagRenderHostImage,image),OFFSET(MagRenderHostImage,userdata),OFFSET(MagRenderHostImage,retain),OFFSET(MagRenderHostImage,validate),LAYOUT(mag_native_image),OFFSET(mag_native_image,id)};
+ if(!out||words!=sizeof(layout)/sizeof(layout[0]))return MAG_NATIVE_INVALID;
+ for(uint32_t i=0;i<words;++i){out[i]=layout[i];}return MAG_NATIVE_OK;
+}
+
+extern "C" int mag_native_frame_layout(uint32_t *out,uint32_t words){
+ const uint32_t layout[]={LAYOUT(MagRenderFrameSource),OFFSET(MagRenderFrameSource,engine_update_id),OFFSET(MagRenderFrameSource,source_publication),LAYOUT(MagRenderHostFrame),OFFSET(MagRenderHostFrame,owner_lifetime),OFFSET(MagRenderHostFrame,userdata),OFFSET(MagRenderHostFrame,preflight),OFFSET(MagRenderHostFrame,cancel),LAYOUT(MagRenderFrameEvent),OFFSET(MagRenderFrameEvent,source),OFFSET(MagRenderFrameEvent,native_device_generation),OFFSET(MagRenderFrameEvent,target_generation),OFFSET(MagRenderFrameEvent,drawable_id),OFFSET(MagRenderFrameEvent,presented_time)};
+ if(!out||words!=sizeof(layout)/sizeof(layout[0]))return MAG_NATIVE_INVALID;
+ for(uint32_t i=0;i<words;++i){out[i]=layout[i];}return MAG_NATIVE_OK;
+}
+
+#include "../../../src/mag_render_client.h"
+extern "C" int mag_native_client_layout(uint32_t *out,uint32_t words){
+ const uint32_t layout[]={
+ LAYOUT(MagRenderClientSource),LAYOUT(MagRenderClientDraw),
+ OFFSET(MagRenderClientDraw,positions),OFFSET(MagRenderClientDraw,unresolved_obligations),
+ LAYOUT(MagRenderClientInput),OFFSET(MagRenderClientInput,target),OFFSET(MagRenderClientInput,frame),OFFSET(MagRenderClientInput,clear_color),
+ LAYOUT(MagRenderClientReceipt),OFFSET(MagRenderClientReceipt,ticket),OFFSET(MagRenderClientReceipt,unresolved_obligations),
+ LAYOUT(MagRenderClientDrawIdentity),MAG_NATIVE_SCENE_MAX_DRAWS,MAG_RENDER_CLIENT_MAX_DRAWS
+ };
  if(!out||words!=sizeof(layout)/sizeof(layout[0]))return MAG_NATIVE_INVALID;
  for(uint32_t i=0;i<words;++i){out[i]=layout[i];}return MAG_NATIVE_OK;
 }

@@ -204,3 +204,7 @@ pub mod host_image;
 pub extern "C" fn mag_render_native_abi_version() -> u32 {
     1
 }
+
+mod client;
+
+pub mod host_frame;

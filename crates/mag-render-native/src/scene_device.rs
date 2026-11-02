@@ -2,6 +2,8 @@
 //! and bounded pending ownership as BatchDevice. No second device or queue.
 use super::*;
 use mag_render::scene;
+/// Explicit whole-scene budget; over-capacity refuses before GPU effects.
+pub const MAX_SCENE_DRAWS: usize = 16384;
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct BufferLayout {
@@ -116,6 +118,13 @@ unsafe extern "C" {
         out: *mut Pipeline,
     ) -> i32;
     fn mag_native_submit_scene(context: *mut c_void, scene: *const Scene, out: *mut Ticket) -> i32;
+    fn mag_native_submit_scene_frame(
+        context: *mut c_void,
+        scene: *const Scene,
+        target: crate::host_image::NativeImage,
+        frame: *const crate::host_frame::HostFrame,
+        out: *mut Ticket,
+    ) -> i32;
     fn mag_native_submit_scene_target(
         context: *mut c_void,
         scene: *const Scene,
@@ -124,6 +133,7 @@ unsafe extern "C" {
     ) -> i32;
 }
 pub struct SceneDevice<'owner> {
+    frame: Option<crate::host_frame::HostFrame>,
     target: Option<crate::host_image::NativeImage>,
     inner: BatchDevice<'owner>,
     graphics: BTreeMap<u64, scene::GraphicsLayout>,
@@ -132,13 +142,68 @@ impl NativeContext {
     pub fn scene(&mut self, limits: BatchDeviceLimits) -> Result<SceneDevice<'_>, i32> {
         checked_scene_layout()?;
         Ok(SceneDevice {
+            frame: None,
             target: None,
             inner: self.batch(limits)?,
             graphics: BTreeMap::new(),
         })
     }
 }
+impl SceneDevice<'static> {
+    /// Own the context directly; no leaked borrow or self-referential Rust value.
+    pub fn from_owned_context(
+        context: NativeContext,
+        limits: BatchDeviceLimits,
+    ) -> Result<Self, i32> {
+        checked_scene_layout()?;
+        Ok(Self {
+            frame: None,
+            target: None,
+            inner: context.into_batch(limits)?,
+            graphics: BTreeMap::new(),
+        })
+    }
+}
 impl SceneDevice<'_> {
+    /// # Safety
+    /// Callbacks must be the genuine owner's non-unwinding reservation provider.
+    /// Early preparation errors leave cancellation to the reservation owner.
+    pub unsafe fn frame_context(&mut self, frame: crate::host_frame::HostFrame) -> Result<(), i32> {
+        if !frame.valid() {
+            return Err(-1);
+        }
+        crate::host_frame::checked_layout()?;
+        self.frame = Some(frame);
+        Ok(())
+    }
+    /// Native identity for actual accepted or indeterminate pending work only.
+    pub fn native_ticket(&self, ticket: SubmissionTicket) -> Option<(u64, u64)> {
+        self.inner
+            .pending
+            .iter()
+            .find(|p| p.rust == ticket)
+            .map(|p| (p.native.device_generation, p.native.submission_id))
+    }
+    /// # Safety
+    /// The image must satisfy the genuine process-lived HostImage provider contract.
+    pub unsafe fn import_target(
+        &mut self,
+        image: &crate::host_image::HostImage,
+    ) -> Result<crate::host_image::ImageHandle, i32> {
+        let context = self.inner.owned_context.as_mut().ok_or(-2)?;
+        let handle = unsafe { context.import_image(image) }?;
+        self.target = Some(handle.raw);
+        Ok(handle)
+    }
+    pub fn release_target(&mut self, image: crate::host_image::ImageHandle) -> Result<(), i32> {
+        self.target = None;
+        self.frame = None;
+        self.inner
+            .owned_context
+            .as_mut()
+            .ok_or(-2)?
+            .release_image(image)
+    }
     pub(crate) fn set_output_target(
         &mut self,
         image: crate::host_image::NativeImage,
@@ -252,7 +317,7 @@ impl SceneDevice<'_> {
                 .iter()
                 .map(|p| p.draws.len())
                 .sum::<usize>()
-                > 64
+                > MAX_SCENE_DRAWS
         {
             return Err(-1);
         }
@@ -399,6 +464,9 @@ impl RenderDevice for SceneDevice<'_> {
         let reject = |code: i32| SubmitDisposition::DefinitelyRejected {
             code: code.unsigned_abs(),
         };
+        if self.frame.is_some() && self.target.is_none() {
+            return reject(-1);
+        }
         if self.inner.pending.len() + self.inner.ready.len() >= 2 {
             return reject(-4);
         }
@@ -572,7 +640,15 @@ impl RenderDevice for SceneDevice<'_> {
         };
         let mut native = Ticket::default();
         let status = unsafe {
-            if let Some(target) = self.target {
+            if let (Some(target), Some(frame)) = (self.target, self.frame.as_ref()) {
+                mag_native_submit_scene_frame(
+                    self.inner.api.device,
+                    &scene,
+                    target,
+                    frame,
+                    &mut native,
+                )
+            } else if let Some(target) = self.target {
                 mag_native_submit_scene_target(self.inner.api.device, &scene, target, &mut native)
             } else {
                 mag_native_submit_scene(self.inner.api.device, &scene, &mut native)

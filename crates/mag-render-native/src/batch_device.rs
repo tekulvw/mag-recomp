@@ -118,15 +118,32 @@ pub struct BatchDevice<'owner> {
     completed: VecDeque<Completed>,
     ready: VecDeque<BackendEvent>,
     _owner: PhantomData<&'owner mut NativeContext>,
+    // An owned driver keeps the native context alive without a self-reference.
+    owned_context: Option<NativeContext>,
 }
 impl NativeContext {
     pub fn batch(&mut self, limits: BatchDeviceLimits) -> Result<BatchDevice<'_>, i32> {
+        BatchDevice::from_api(self.api()?, limits, None)
+    }
+    pub(crate) fn into_batch(
+        mut self,
+        limits: BatchDeviceLimits,
+    ) -> Result<BatchDevice<'static>, i32> {
+        let api = self.api()?;
+        BatchDevice::from_api(api, limits, Some(self))
+    }
+}
+impl<'owner> BatchDevice<'owner> {
+    fn from_api(
+        api: SdkApi,
+        limits: BatchDeviceLimits,
+        owned_context: Option<NativeContext>,
+    ) -> Result<Self, i32> {
         if limits.max_bytes == 0 || limits.max_bytes > 64 * 1024 * 1024 || limits.max_pipelines == 0
         {
             return Err(-1);
         }
         checked_batch_layout()?;
-        let api = self.api()?;
         // Reuse the existing checked function-table ABI validator.
         let checked = unsafe {
             SdkComputeDevice::from_api(
@@ -163,6 +180,7 @@ impl NativeContext {
             completed,
             ready,
             _owner: PhantomData,
+            owned_context,
         })
     }
 }

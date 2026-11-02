@@ -60,7 +60,12 @@ function(mag_enable_render_frontend target)
     set(_extra_dependencies "")
     if(MAG_RENDER_FRONTEND_NATIVE)
         file(GLOB_RECURSE _native_sources CONFIGURE_DEPENDS "${_crate}/native/*" "${_root}/crates/mag-render/src/*.rs")
+        file(GLOB_RECURSE _shader_sources CONFIGURE_DEPENDS "${_root}/crates/mag-render-shaders/src/*.rs")
         list(APPEND _extra_dependencies ${_native_sources} "${_crate}/build.rs" "${_crate}/CMakeLists.txt"
+            ${_shader_sources} "${_root}/crates/mag-render-shaders/Cargo.toml"
+            "${_root}/shaders/render_frontend/scene_vertex.wgsl"
+            "${_root}/shaders/render_frontend/scene_fragment.wgsl"
+            "${_root}/src/mag_render_client.h"
             "${_root}/crates/mag-render/Cargo.toml" "${_root}/crates/mag-render/Cargo.lock")
     endif()
     add_custom_command(OUTPUT "${_library}"
@@ -92,7 +97,6 @@ function(mag_enable_render_frontend target)
             set_property(TARGET mag_render APPEND PROPERTY INTERFACE_LINK_LIBRARIES "-framework Metal" "-framework Foundation")
         endif()
         target_sources(${target} PRIVATE "${_root}/src/mag_render_host_bridge.cpp")
-        target_compile_definitions(${target} PRIVATE MAG_RENDER_FRONTEND_NATIVE=1)
     endif()
     target_link_libraries(${target} PRIVATE mag_render)
     # Append only after mag_apply_extensions has initialized MAG_RECEIPT_EXTRA.
@@ -104,7 +108,12 @@ function(mag_enable_render_frontend target)
             "rust-render-native-builder=${_crate}/build.rs"
             "rust-render-native-core=${_root}/crates/mag-render/src"
             "rust-render-host-bridge=${_root}/src/mag_render_host_bridge.cpp"
-            "rust-render-host-header=${_root}/src/mag_render_host_bridge.h")
+            "rust-render-host-header=${_root}/src/mag_render_host_bridge.h"
+            "rust-render-client-header=${_root}/src/mag_render_client.h"
+            "rust-render-client-shader-generator=${_root}/crates/mag-render-shaders/src"
+            "rust-render-client-shader-manifest=${_root}/crates/mag-render-shaders/Cargo.toml"
+            "rust-render-client-vertex=${_root}/shaders/render_frontend/scene_vertex.wgsl"
+            "rust-render-client-fragment=${_root}/shaders/render_frontend/scene_fragment.wgsl")
     endif()
     set(MAG_RENDER_RECEIPT_EXTRA
         "rust-render-sources=${_crate}/src"
