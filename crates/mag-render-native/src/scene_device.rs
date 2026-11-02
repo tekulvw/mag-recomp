@@ -205,6 +205,23 @@ impl SceneDevice<'static> {
     }
 }
 impl SceneDevice<'_> {
+    /// Drop only the public pipeline reference. Pending native submissions own
+    /// independent references until genuine terminal receipts.
+    pub fn release_graphics_pipeline(&mut self, id: u64) -> Result<(), i32> {
+        if !self.graphics.contains_key(&id) {
+            return Err(-3);
+        }
+        let definition = self.inner.pipelines.get(&id).ok_or(-3)?;
+        let status = unsafe {
+            self.inner.api.pipeline_release.unwrap()(self.inner.api.device, definition.handle)
+        };
+        if status != 0 {
+            return Err(status);
+        }
+        self.inner.pipelines.remove(&id);
+        self.graphics.remove(&id);
+        Ok(())
+    }
     /// # Safety
     /// Callbacks must be the genuine owner's non-unwinding reservation provider.
     /// Early preparation errors leave cancellation to the reservation owner.

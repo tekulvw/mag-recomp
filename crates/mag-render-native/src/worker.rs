@@ -58,6 +58,45 @@ impl Drop for TargetPin {
         };
     }
 }
+struct OwnedScene {
+    packet: client::scene_packet::ScenePacket,
+    target: TargetPin,
+}
+impl TargetPin {
+    unsafe fn copy(image: *const HostImage, frame: *const HostFrame) -> Result<Self, i32> {
+        let image = *unsafe { checked_ref(image) }?;
+        let frame = *unsafe { checked_ref(frame) }?;
+        if image.abi_version != 1
+            || image.struct_size as usize != size_of::<HostImage>()
+            || image.reserved != 0
+            || image.reserved1 != 0
+            || image.owner_lifetime == 0
+            || image.resource_id == 0
+            || image.resource_generation == 0
+            || image.width == 0
+            || image.height == 0
+            || image.retain.is_none()
+            || image.release.is_none()
+            || image.validate.is_none()
+            || !frame.valid()
+            || frame.owner_lifetime != image.owner_lifetime
+        {
+            return Err(-1);
+        }
+        let status = unsafe {
+            (image.retain.unwrap())(
+                image.userdata,
+                image.owner_lifetime,
+                image.resource_id,
+                image.resource_generation,
+            )
+        };
+        if status != 0 {
+            return Err(status);
+        }
+        Ok(Self { image, frame })
+    }
+}
 struct OwnedInput {
     source: client::Source,
     intended: u64,
@@ -236,6 +275,9 @@ impl OwnedInput {
     }
 }
 trait Driver {
+    fn scene(&mut self, _: OwnedScene) -> (i32, client::Receipt) {
+        (-2, client::Receipt::default())
+    }
     fn submit(&mut self, input: OwnedInput) -> (i32, client::Receipt);
     fn poll(&mut self) -> (i32, client::Receipt);
     fn close(&mut self) -> i32;
@@ -244,6 +286,14 @@ struct ClientDriver {
     session: u64,
 }
 impl Driver for ClientDriver {
+    fn scene(&mut self, input: OwnedScene) -> (i32, client::Receipt) {
+        client::scene_packet::submit(
+            self.session,
+            input.packet,
+            &input.target.image,
+            input.target.frame,
+        )
+    }
     fn submit(&mut self, input: OwnedInput) -> (i32, client::Receipt) {
         input.submit(self.session)
     }
@@ -258,6 +308,7 @@ impl Driver for ClientDriver {
 }
 type Reply = (i32, client::Receipt);
 enum Command {
+    Scene(Box<OwnedScene>, SyncSender<Reply>),
     Submit(Box<OwnedInput>, SyncSender<Reply>),
     Poll(SyncSender<Reply>),
     Close(SyncSender<Reply>),
@@ -293,6 +344,9 @@ impl Worker {
                 }
                 while let Ok(command) = receive.recv() {
                     match command {
+                        Command::Scene(input, reply) => {
+                            let _ = reply.send(driver.scene(*input));
+                        }
                         Command::Submit(input, reply) => {
                             let _ = reply.send(driver.submit(*input));
                         }
@@ -535,6 +589,64 @@ pub unsafe extern "C" fn mag_render_client_worker_submit(
     }
     result
 }
+/// Copy a complete material/attribute scene into the existing fixed worker.
+/// The acknowledgement reports CPU queue admission, never GPU completion.
+/// # Safety
+/// All packet ranges are readable for this call; target/frame callbacks are
+/// genuine, process-lived and thread-independent under the existing worker
+/// contract. The caller must not cancel the frame until this ACK returns.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mag_render_client_worker_submit_scene(
+    id: u64,
+    input: *const client::scene_packet::raw::Desc,
+    out: *mut client::Receipt,
+) -> i32 {
+    if out.is_null() {
+        return -1;
+    }
+    unsafe {
+        *out = client::Receipt {
+            abi_version: 1,
+            struct_size: size_of::<client::Receipt>() as u32,
+            flags: 1,
+            ..client::Receipt::default()
+        }
+    };
+    let status = ffi(
+        || {
+            let worker = get(id)?;
+            let _serial = worker.serial.try_lock().map_err(|_| -4)?;
+            let input = unsafe { checked_ref(input) }?;
+            let packet = unsafe {
+                client::scene_packet::ScenePacket::copy(
+                    input,
+                    worker.max_draws as usize,
+                    worker.max_bytes,
+                )
+            }?;
+            let target = unsafe { TargetPin::copy(input.target, input.frame) }?;
+            unsafe {
+                (*out).source = packet.source;
+                (*out).intended_items = packet.intended;
+            }
+            let owned = OwnedScene { packet, target };
+            let (status, receipt) =
+                worker.call_serial(|reply| Command::Scene(Box::new(owned), reply), true)?;
+            unsafe {
+                *out = receipt;
+            }
+            Ok(status)
+        },
+        1,
+    );
+    unsafe {
+        (*out).status = status;
+        if status > 0 {
+            (*out).flags |= 3;
+        }
+    }
+    status
+}
 /// Non-waiting terminal check on the same fixed native thread. Physical present
 /// events remain separate SDK host observations; this API does not poll them.
 /// # Safety
@@ -717,6 +829,23 @@ mod tests {
         }
     }
     impl Driver for AffineDriver {
+        fn scene(&mut self, input: OwnedScene) -> Reply {
+            self.record("scene");
+            assert_eq!(input.packet.programs[0].source, b"authored stage 0");
+            assert_eq!(input.packet.passes[0].draws[0].partition, 10);
+            assert_eq!(
+                input.packet.images[1].bytes.as_deref(),
+                Some(&[127, 20, 30, 255][..])
+            );
+            self.pending = true;
+            (
+                0,
+                client::Receipt {
+                    ticket: 29,
+                    ..client::Receipt::default()
+                },
+            )
+        }
         fn submit(&mut self, input: OwnedInput) -> Reply {
             self.record("submit");
             assert_eq!(input.positions[0], [1., 2., 3., 1.]);
@@ -799,6 +928,52 @@ mod tests {
         let fixed = events[0].1;
         assert_ne!(fixed, caller);
         assert!(events.iter().all(|e| e.1 == fixed));
+    }
+    #[test]
+    fn full_material_packet_uses_same_affine_actor_and_target_pin() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let observed = events.clone();
+        let caller = thread::current().id();
+        let worker = Worker::start(
+            move || {
+                Ok(AffineDriver {
+                    thread: thread::current().id(),
+                    events: observed,
+                    pending: false,
+                    _not_send: PhantomData,
+                })
+            },
+            32,
+            1 << 20,
+        )
+        .unwrap();
+        with_input(|input, _, pins| {
+            let target = unsafe { TargetPin::copy(input.target, input.frame) }.unwrap();
+            assert_eq!(pins.load(Ordering::SeqCst), 1);
+            let owned = OwnedScene {
+                packet: client::scene_packet::packet_tests::fixture(),
+                target,
+            };
+            assert_eq!(
+                worker
+                    .call(|r| Command::Scene(Box::new(owned), r), true)
+                    .unwrap()
+                    .1
+                    .ticket,
+                29
+            );
+            assert_eq!(pins.load(Ordering::SeqCst), 0);
+            assert_eq!(worker.call(Command::Close, false).unwrap().0, -4);
+            worker.call(Command::Poll, false).unwrap();
+            assert_eq!(worker.call(Command::Close, false).unwrap().0, 0);
+            worker.join.lock().unwrap().take().unwrap().join().unwrap();
+        });
+        let events = events.lock().unwrap();
+        assert_eq!(
+            events.iter().map(|e| e.0).collect::<Vec<_>>(),
+            ["scene", "close", "poll", "close", "drop"]
+        );
+        assert!(events.iter().all(|e| e.1 != caller && e.1 == events[0].1));
     }
     #[test]
     fn concurrent_operation_is_busy_before_work_is_enqueued() {

@@ -111,5 +111,6 @@ fn main() {
     println!("cargo:rerun-if-env-changed=MAG_RENDER_DXC_INCLUDE_DIR");
     println!("cargo:rerun-if-changed=native");
     println!("cargo:rerun-if-changed=../../src/mag_render_client.h");
+    println!("cargo:rerun-if-changed=../../src/mag_render_scene_packet.h");
     println!("cargo:rerun-if-changed=CMakeLists.txt");
 }

@@ -262,6 +262,8 @@ struct Pending {
     identities: Vec<DrawIdentity>,
 }
 struct Session {
+    native_backend: u32,
+    packet_cache: scene_packet::PipelineCache,
     backend: RenderBackend<Driver>,
     pipeline: u64,
     color_format: ImageFormat,
@@ -421,7 +423,7 @@ pub unsafe extern "C" fn mag_render_client_create(
             context,
             BatchDeviceLimits {
                 max_bytes,
-                max_pipelines: 1,
+                max_pipelines: 257,
                 diagnostic_readback: false,
             },
         )?;
@@ -429,7 +431,7 @@ pub unsafe extern "C" fn mag_render_client_create(
         let backend = RenderBackend::new(
             Driver(RefCell::new(device)),
             BackendLimits {
-                max_leases_per_submission: 2,
+                max_leases_per_submission: crate::batch_device::scene_device::MAX_SCENE_RESOURCES,
                 max_bytes_per_submission: max_bytes as usize,
             },
         )
@@ -441,6 +443,8 @@ pub unsafe extern "C" fn mag_render_client_create(
             s.borrow_mut().insert(
                 id,
                 Session {
+                    native_backend: unsafe { (*owner).backend },
+                    packet_cache: scene_packet::PipelineCache::default(),
                     backend,
                     pipeline,
                     color_format: if d.color_format == 3 {
@@ -1033,3 +1037,6 @@ mod tests {
         assert_eq!(mag_render_client_close(u64::MAX), -3)
     }
 }
+
+#[path = "scene_packet.rs"]
+pub mod scene_packet;
