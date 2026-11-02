@@ -8,6 +8,7 @@ extern "C" {
 #endif
 /* Narrow original-owner metadata only. No discovery/new device, guest packet
  * construction, or fallback. Caller must retain returned metadata before use. */
+int mag_render_frontend_native_boundary(uint64_t *original_ticket);
 int mag_render_frontend_borrow_owner(MagRenderHostOwner *);
 int mag_render_frontend_borrow_image(uint64_t owner_lifetime, uint32_t backend_surface, MagRenderHostImage *);
 int mag_render_frontend_reserve_frame(const MagRenderHostImage *, const MagRenderFrameSource *,

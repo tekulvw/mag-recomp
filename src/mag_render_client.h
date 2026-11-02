@@ -65,6 +65,23 @@ int mag_render_client_poll(uint64_t,MagRenderClientReceipt*);
 int mag_render_client_draw_identities(uint64_t,uint64_t,MagRenderClientDrawIdentity*,uint32_t,uint32_t*);
 /* -4 preserves a live session with pending or undelivered terminal results. */
 int mag_render_client_close(uint64_t);
+/* Fixed frontend worker for migrating FIFO consumers. Create uses the embedded
+ * diagnostic stage provider. All NativeContext/session work stays on one worker
+ * thread. All geometry is copied before enqueue; submit waits for CPU queue-
+ * commit ACK only, never GPU completion. Host retain/release/try_begin/end and
+ * image retain/release must be genuine, process-lived, cross-thread callable,
+ * and must not acquire the original FIFO consumer lease or wait for GPU work.
+ * Caller owns the real frame reservation through ACK; do not cancel concurrently.
+ * Negative ACK leaves cancellation to the caller on its consumer/lifecycle thread
+ * (native precommit refusal may already cancel it). Never replay/cancel positive
+ * indeterminate ACK. Max2 workers; concurrent operations return BUSY.
+ * Poll checks native terminal receipts; physical present uses host frame events
+ * separately, outside FIFO callback. Close refuses pending/undelivered results;
+ * it never calls SDK shutdown-retry or waits for a GPU fence. */
+int mag_render_client_worker_create(const MagRenderHostOwner*,uint32_t max_draws,uint64_t max_bytes,uint64_t *worker);
+int mag_render_client_worker_submit(uint64_t,const MagRenderClientInput*,MagRenderClientReceipt*);
+int mag_render_client_worker_poll(uint64_t,MagRenderClientReceipt*);
+int mag_render_client_worker_close(uint64_t);
 #ifdef __cplusplus
 }
 #endif

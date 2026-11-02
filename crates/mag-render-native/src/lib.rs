@@ -208,3 +208,5 @@ pub extern "C" fn mag_render_native_abi_version() -> u32 {
 mod client;
 
 pub mod host_frame;
+
+pub mod worker;

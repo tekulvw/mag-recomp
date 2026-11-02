@@ -113,3 +113,13 @@ extern "C" int mag_render_frontend_poll_frames(MagRenderFrameEvent *out, uint32_
     return -2;
 #endif
 }
+
+extern "C" int mag_render_frontend_native_boundary(uint64_t *ticket) {
+    if (!ticket) return -1;
+    *ticket = 0;
+#if defined(__APPLE__)
+    return rsx_metal_backend_native_boundary(ticket);
+#else
+    return -2;
+#endif
+}
