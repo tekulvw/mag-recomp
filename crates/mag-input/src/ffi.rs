@@ -51,6 +51,14 @@ pub struct OfferRecord {
     pub source_mask: u32,
 }
 
+#[derive(Default)]
+struct RecognitionState {
+    recognizer: crate::gesture::Recognizer,
+    sources: u8,
+    action: u32,
+    native_contribution: bool,
+}
+
 struct Runtime {
     engine: Engine,
     faulted: bool,
@@ -59,7 +67,7 @@ struct Runtime {
     capture_flags: u32,
     recognition_generation: u64,
     shared_native_actions: BTreeSet<u32>,
-    recognizers: BTreeMap<(u64, u64), (crate::gesture::Recognizer, u8, u32)>,
+    recognizers: BTreeMap<(u64, u64), RecognitionState>,
 }
 #[derive(Default)]
 struct Registry {
@@ -233,7 +241,13 @@ pub unsafe extern "C" fn mag_input_configure(
         Err(status) => return status,
     };
     operate(handle, |runtime| {
-        runtime.engine.configure(bindings).map_err(|_| ENGINE_ERROR)
+        runtime
+            .engine
+            .configure(bindings)
+            .map_err(|_| ENGINE_ERROR)?;
+        runtime.recognizers.clear();
+        runtime.recognition_generation = runtime.engine.generation();
+        Ok(())
     })
 }
 /// # Safety
@@ -258,9 +272,9 @@ pub unsafe extern "C" fn mag_input_capture(handle: u64, flags: u32, output: *mut
             runtime.recognizers.clear()
         } else {
             let menu = runtime.engine.menu_context();
-            runtime.recognizers.retain(|_, (_, sources, _)| {
-                !((!menu && lost & 4 != 0 && *sources & 2 != 0)
-                    || (lost & 8 != 0 && *sources & 4 != 0))
+            runtime.recognizers.retain(|_, state| {
+                !((!menu && lost & 4 != 0 && state.sources & 2 != 0)
+                    || (lost & 8 != 0 && state.sources & 4 != 0))
             })
         }
         runtime.capture_flags = flags;
@@ -348,11 +362,11 @@ pub unsafe extern "C" fn mag_input_seal(
             .seal(key(record)?, now_ns, next)
             .map_err(|_| ENGINE_ERROR)?;
         if runtime.recognition_generation != frame.generation {
-            runtime.recognizers.retain(|_, (_, sources, action)| {
-                shared.contains(action)
+            runtime.recognizers.retain(|_, state| {
+                shared.contains(&state.action)
                     || (native_shared
-                        && *sources == 4
-                        && runtime.shared_native_actions.contains(action))
+                        && state.native_contribution
+                        && runtime.shared_native_actions.contains(&state.action))
             });
             runtime.recognition_generation = frame.generation;
         }
@@ -439,7 +453,7 @@ pub unsafe extern "C" fn mag_input_reset(handle: u64, tag: u32, output: *mut u64
         } else {
             runtime
                 .recognizers
-                .retain(|_, (_, sources, _)| *sources & (1 << tag) == 0)
+                .retain(|_, state| state.sources & (1 << tag) == 0)
         }
         runtime.recognition_generation = runtime.engine.generation();
         unsafe { output.write(runtime.engine.generation()) };
@@ -588,16 +602,20 @@ pub unsafe extern "C" fn mag_input_recognize(
         {
             return Err(CAPACITY);
         }
-        let (recognizer, sources, recognized_action) =
-            runtime.recognizers.entry((consumer, control)).or_default();
-        if *recognized_action != 0 && *recognized_action != action {
+        let state = runtime.recognizers.entry((consumer, control)).or_default();
+        if state.action != 0 && state.action != action {
             return Err(INVALID);
         }
-        *recognized_action = action;
-        *sources = offer.map_or(if value > 0.0 { 4 } else { *sources }, |offer| {
-            offer.source_mask
-        });
-        let output_value = recognizer
+        state.action = action;
+        if let Some(offer) = offer {
+            state.sources = offer.source_mask;
+            state.native_contribution = false;
+        } else if value > 0.0 {
+            state.sources = 4;
+            state.native_contribution = true;
+        }
+        let output_value = state
+            .recognizer
             .update(
                 record.sequence,
                 runtime.now_ns,

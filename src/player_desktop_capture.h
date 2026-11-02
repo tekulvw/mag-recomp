@@ -5,22 +5,35 @@
 #include <optional>
 #include <set>
 namespace mag {
-// A single atomic stamp carries readiness and generation. Callback receipt may
-// run on a device queue; publication and delivery belong to the window thread.
+// One atomic stamp carries independent button/readiness and motion epochs.
+// Intentional menu relative-mode changes invalidate motion, preserving buttons.
 class DesktopCaptureGate {
     std::atomic<uint64_t> state_{};
+    static constexpr uint64_t epochMask=(uint64_t(1)<<31)-1;
+    static uint64_t advance(uint64_t state,bool buttons,bool motion) {
+        return (state&3)|((((state>>2)+uint64_t(buttons))&epochMask)<<2)|((((state>>33)+uint64_t(motion))&epochMask)<<33);
+    }
 public:
     struct Stamp {uint64_t state{};};
     Stamp stamp() const {return {state_.load(std::memory_order_acquire)};}
-    void publish(bool ready,bool relative) {
-        const auto old=state_.load(std::memory_order_relaxed);
+    void publish(bool ready,bool relative,bool relative_only=false) {
+        auto old=state_.load(std::memory_order_relaxed);
         const uint64_t flags=uint64_t(ready)|(uint64_t(ready && relative)<<1);
-        if((old&3)!=flags)state_.store(((old&~uint64_t(3))+4)|flags,std::memory_order_release);
+        while((old&3)!=flags) {
+            const bool buttons=((old&1)!=(flags&1)) || !relative_only;
+            const uint64_t next=(advance(old,buttons,true)&~uint64_t(3))|flags;
+            if(state_.compare_exchange_weak(old,next,std::memory_order_release,std::memory_order_relaxed))break;
+        }
     }
-    void invalidate() {state_.fetch_add(4,std::memory_order_acq_rel);}
+    void invalidate() {
+        auto old=state_.load(std::memory_order_relaxed);
+        while(!state_.compare_exchange_weak(old,advance(old,true,true),std::memory_order_release,std::memory_order_relaxed)){}
+    }
     bool accepts(Stamp receipt,bool motion=false) const {
         const auto current=state_.load(std::memory_order_acquire);
-        return receipt.state==current && (current&1) && (!motion || (current&2));
+        if(motion)return receipt.state==current && (current&1) && (current&2);
+        constexpr uint64_t buttonMask=(epochMask<<2)|1;
+        return (receipt.state&buttonMask)==(current&buttonMask) && (current&1);
     }
 };
 // Window-thread ownership. Every physical device contributes independently;

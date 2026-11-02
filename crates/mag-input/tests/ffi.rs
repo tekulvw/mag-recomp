@@ -369,3 +369,123 @@ fn explicit_native_button_keeps_its_recognizer_without_a_host_offer() {
         assert_eq!(mag_input_destroy(handle), OK);
     }
 }
+
+#[test]
+fn remapped_controller_offer_is_not_a_native_shared_contribution() {
+    unsafe {
+        let binding = BindingRecord {
+            source: 2,
+            code: 6,
+            action: 77,
+            contexts: 1,
+            behavior: 0,
+        };
+        let mut handle = 0;
+        assert_eq!(mag_input_create(1, &binding, 1, &mut handle), OK);
+        assert_eq!(mag_input_shared_native_actions(handle, &77, 1), OK);
+        let mut generation = 0;
+        assert_eq!(mag_input_capture(handle, 11, &mut generation), OK);
+        assert_eq!(mag_input_event(handle, 1, 2, 6, 1, 10, generation), OK);
+        let key = |sequence| FrameKeyRecord {
+            session: 1,
+            sequence,
+            slot: 0,
+            reserved: 0,
+        };
+        let mut frame = FrameRecord::default();
+        let mut value = RecognitionRecord::default();
+        assert_eq!(mag_input_seal(handle, key(1), 20, 99, 1, &mut frame), OK);
+        assert_eq!(
+            mag_input_recognize(
+                handle,
+                key(1),
+                1,
+                1,
+                77,
+                1.0,
+                0,
+                mag_input::gesture::Config::default(),
+                &mut value
+            ),
+            OK
+        );
+        assert_ne!(value.events & 1, 0);
+        assert_eq!(mag_input_seal(handle, key(2), 30, 99, 16, &mut frame), OK);
+        assert_eq!(
+            mag_input_recognize(
+                handle,
+                key(2),
+                1,
+                1,
+                77,
+                0.0,
+                0,
+                mag_input::gesture::Config::default(),
+                &mut value
+            ),
+            OK
+        );
+        assert_eq!(value.events & mag_input::gesture::Events::UP, 0);
+        assert_eq!(mag_input_destroy(handle), OK);
+    }
+}
+
+#[test]
+fn configure_cancels_recognizers_even_when_capture_flags_are_unchanged() {
+    unsafe {
+        let binding = BindingRecord {
+            source: 0,
+            code: 41,
+            action: 1,
+            contexts: 1,
+            behavior: 0,
+        };
+        let mut handle = 0;
+        assert_eq!(mag_input_create(1, &binding, 1, &mut handle), OK);
+        let mut generation = 0;
+        assert_eq!(mag_input_capture(handle, 3, &mut generation), OK);
+        assert_eq!(mag_input_event(handle, 1, 0, 41, 1, 10, generation), OK);
+        let key = |sequence| FrameKeyRecord {
+            session: 1,
+            sequence,
+            slot: 0,
+            reserved: 0,
+        };
+        let mut frame = FrameRecord::default();
+        let mut value = RecognitionRecord::default();
+        assert_eq!(mag_input_seal(handle, key(1), 20, 99, 1, &mut frame), OK);
+        assert_eq!(
+            mag_input_recognize(
+                handle,
+                key(1),
+                1,
+                1,
+                1,
+                1.0,
+                0,
+                mag_input::gesture::Config::default(),
+                &mut value
+            ),
+            OK
+        );
+        assert_eq!(mag_input_configure(handle, &binding, 1), OK);
+        assert_eq!(mag_input_capture(handle, 3, &mut generation), OK);
+        assert_eq!(mag_input_seal(handle, key(2), 30, 99, 1, &mut frame), OK);
+        assert_eq!(
+            mag_input_recognize(
+                handle,
+                key(2),
+                1,
+                1,
+                1,
+                0.0,
+                0,
+                mag_input::gesture::Config::default(),
+                &mut value
+            ),
+            OK
+        );
+        assert_eq!(value.events & mag_input::gesture::Events::UP, 0);
+        assert_eq!(mag_input_destroy(handle), OK);
+    }
+}

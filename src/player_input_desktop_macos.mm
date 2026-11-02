@@ -16,7 +16,7 @@ void mainQueue(void (^block)(void)) {if(NSThread.isMainThread)block();else dispa
 }
 @interface MAGRawDesktopInput : NSObject
 @property(weak) NSWindow* window;
-@property(nonatomic) BOOL installed,ready,relative,oldMouseEvents;
+@property(nonatomic) BOOL installed,ready,relative,oldMouseEvents,mouseModeEnabled;
 @property(nonatomic) BOOL needsRecapture;
 @property NSUInteger cursorHides;
 @property(strong) id clickMonitor;
@@ -40,7 +40,7 @@ void mainQueue(void (^block)(void)) {if(NSThread.isMainThread)block();else dispa
     DesktopCaptureGate gate;
 
 }
-- (instancetype)init {if((self=[super init])) {_observers=[NSMutableArray new];_restorers=[NSMutableArray new];}return self;}
+- (instancetype)init {if((self=[super init])) {_mouseModeEnabled=mouseEnabled.load(std::memory_order_acquire);_observers=[NSMutableArray new];_restorers=[NSMutableArray new];}return self;}
 - (void)button:(PhysicalControl)control down:(BOOL)down epoch:(uint64_t)epoch time:(uint64_t)time {
     [self refresh];
     if(!self.installed || epoch!=self.epoch)return;
@@ -207,8 +207,11 @@ void mainQueue(void (^block)(void)) {if(NSThread.isMainThread)block();else dispa
         }
     }
     self.ready=ready;
-    self.relative=ready && rawMouse.load(std::memory_order_acquire) && mouseEnabled.load(std::memory_order_acquire);
-    gate.publish(ready,self.relative);
+    const bool mouseMode=mouseEnabled.load(std::memory_order_acquire);
+    const bool intentionalModeChange=bool(self.mouseModeEnabled)!=mouseMode;
+    self.mouseModeEnabled=mouseMode;
+    self.relative=ready && rawMouse.load(std::memory_order_acquire) && mouseMode;
+    gate.publish(ready,self.relative,intentionalModeChange);
     mag_controls_set_window_capture(ready,self.relative);
     if(!self.installed) {for(auto control:held)mag_controls_push_event({control,false,now()});held.clear();mouseHeld.clear();
 #if MAG_INPUT_RUST
