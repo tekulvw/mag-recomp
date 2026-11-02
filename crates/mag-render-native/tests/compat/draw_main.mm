@@ -135,9 +135,10 @@ static void check_rejected_batches(const MagRenderHostOwner *owner, const mag_na
 int mag_render_draw_main(const char *directory, bool diagnostic) {
     @autoreleasepool {
         NSString *root = [NSString stringWithUTF8String:directory];
-        Shader first = {}, prepare = {}, vertex = {}, fragment = {};
-        if (!first.load(root, @"copy_transform", true) || !prepare.load(root, @"scene_prepare", true) ||
-            !vertex.load(root, @"scene_vertex", false) || !fragment.load(root, @"scene_fragment", false))
+        Shader first = {}, legacy = {}, prepare = {}, vertex = {}, fragment = {};
+        if (!first.load(root, @"scene_transform", true) || !legacy.load(root, @"copy_transform", true) ||
+            !prepare.load(root, @"scene_prepare", true) || !vertex.load(root, @"scene_vertex", false) ||
+            !fragment.load(root, @"scene_fragment", false))
             return 2;
         mag_native_graphics_desc graphics = {sizeof(graphics), 1, vertex.stage(), fragment.stage(), 16, 0};
         MagRenderHostOwner owner = {};
@@ -145,7 +146,7 @@ int mag_render_draw_main(const char *directory, bool diagnostic) {
             mag_render_test_owner_close(1);
             return 3;
         }
-        check_rejected_batches(&owner, &first.compute);
+        check_rejected_batches(&owner, &legacy.compute);
         NSString *name = [NSString stringWithUTF8String:mag_render_test_owner_name()];
         DrawProbeReport report = {};
         report.abi_version = 1;
@@ -165,6 +166,7 @@ int mag_render_draw_main(const char *directory, bool diagnostic) {
             @"retained_after_terminal" : @(report.retained_after_terminal),
             @"center_rgba" : @(report.center_rgba),
             @"outside_rgba" : @(report.outside_rgba),
+            @"produced_uniform_consumer" : @YES,
             @"native_rejection_cases" : @8,
             @"diagnostic_readback" : @(diagnostic),
             @"compute_dispatches_per_batch" : @2,

@@ -4,6 +4,7 @@
 #include "mag_render_vulkan.h"
 #include "mag_render_native_internal.h"
 #include <stdlib.h>
+#include <math.h>
 #include <string.h>
 
 #define FRONTEND_VK_FUNCTIONS(X) \
@@ -15,17 +16,21 @@
     X(vkBeginCommandBuffer) X(vkEndCommandBuffer) X(vkCreateFence) X(vkDestroyFence) X(vkResetFences) X(vkGetFenceStatus) \
     X(vkCreateDescriptorPool) X(vkDestroyDescriptorPool) X(vkResetDescriptorPool) X(vkAllocateDescriptorSets) \
     X(vkUpdateDescriptorSets) X(vkCmdPipelineBarrier) X(vkCmdBindPipeline) X(vkCmdBindDescriptorSets) X(vkCmdDispatch) \
-    X(vkQueueSubmit) X(vkDeviceWaitIdle)
+    X(vkQueueSubmit) X(vkCreateGraphicsPipelines) X(vkCreateRenderPass) X(vkDestroyRenderPass) \
+    X(vkCreateImage) X(vkDestroyImage) X(vkGetImageMemoryRequirements) X(vkBindImageMemory) \
+    X(vkCreateImageView) X(vkDestroyImageView) X(vkCreateFramebuffer) X(vkDestroyFramebuffer) \
+    X(vkCmdBeginRenderPass) X(vkCmdEndRenderPass) X(vkCmdSetViewport) X(vkCmdSetScissor) \
+    X(vkCmdBindVertexBuffers) X(vkCmdBindIndexBuffer) X(vkCmdDrawIndexed) X(vkCmdCopyImageToBuffer)
 
 typedef struct frontend_vk_family {
     uint64_t id, last_version; uint32_t public_versions; struct frontend_vk_family *next;
 } frontend_vk_family;
 typedef struct frontend_vk_buffer {
-    uint64_t id, version, length; uint32_t public_ref, readers, writers;
+    uint64_t id, version, length; uint32_t public_ref, readers, writers; int seed_zero,gpu_written;
     VkBuffer gpu; VkDeviceMemory memory; void *mapped; struct frontend_vk_buffer *next;
 } frontend_vk_buffer;
 typedef struct frontend_vk_pipeline {
-    uint64_t id; uint32_t public_ref, references, count;
+    uint64_t id; uint32_t public_ref, references, count; int graphics;VkRenderPass render_pass;
     mag_native_binding_layout bindings[16];
     VkDescriptorSetLayout descriptors; VkPipelineLayout layout; VkPipeline gpu;
     struct frontend_vk_pipeline *next;
@@ -33,7 +38,10 @@ typedef struct frontend_vk_pipeline {
 typedef struct frontend_vk_slot {
     VkCommandPool pool; VkCommandBuffer command; VkFence fence; VkDescriptorPool descriptors;
     mag_native_ticket ticket; uint32_t occupied, count;
-    frontend_vk_buffer *buffers[16]; uint32_t writes[16]; frontend_vk_pipeline *pipeline;
+    frontend_vk_buffer *buffers[64]; uint32_t writes[64]; frontend_vk_pipeline *pipeline;
+    frontend_vk_pipeline *batch_pipelines[32];uint32_t batch_count;
+    VkImage color,depth;VkDeviceMemory color_memory,depth_memory;
+    VkImageView color_view,depth_view;VkFramebuffer framebuffer;
 } frontend_vk_slot;
 typedef struct frontend_vk {
     mag_native_vulkan_owner owner;
@@ -74,9 +82,25 @@ static void pipeline_dispose(frontend_vk *c, frontend_vk_pipeline *p) {
     if (p->gpu) c->vkDestroyPipeline(c->owner.device, p->gpu, NULL);
     if (p->layout) c->vkDestroyPipelineLayout(c->owner.device, p->layout, NULL);
     if (p->descriptors) c->vkDestroyDescriptorSetLayout(c->owner.device, p->descriptors, NULL);
+    if(p->render_pass)c->vkDestroyRenderPass(c->owner.device,p->render_pass,NULL);
     free(p);
 }
+static void batch_attachments_release(frontend_vk *c,frontend_vk_slot *slot){
+    if(slot->framebuffer)c->vkDestroyFramebuffer(c->owner.device,slot->framebuffer,NULL);
+    if(slot->color_view)c->vkDestroyImageView(c->owner.device,slot->color_view,NULL);
+    if(slot->depth_view)c->vkDestroyImageView(c->owner.device,slot->depth_view,NULL);
+    if(slot->color)c->vkDestroyImage(c->owner.device,slot->color,NULL);
+    if(slot->depth)c->vkDestroyImage(c->owner.device,slot->depth,NULL);
+    if(slot->color_memory)c->vkFreeMemory(c->owner.device,slot->color_memory,NULL);
+    if(slot->depth_memory)c->vkFreeMemory(c->owner.device,slot->depth_memory,NULL);
+    slot->framebuffer=VK_NULL_HANDLE;slot->color_view=slot->depth_view=VK_NULL_HANDLE;
+    slot->color=slot->depth=VK_NULL_HANDLE;slot->color_memory=slot->depth_memory=VK_NULL_HANDLE;
+}
+
 static void slot_release(frontend_vk *c, frontend_vk_slot *slot) {
+    batch_attachments_release(c,slot);
+    for(uint32_t i=0;i<slot->batch_count;++i){frontend_vk_pipeline *p=slot->batch_pipelines[i];if(!--p->references&&!p->public_ref)pipeline_dispose(c,p);}
+    slot->batch_count=0;
     for (uint32_t i = 0; i < slot->count; ++i) {
         frontend_vk_buffer *b = slot->buffers[i];
         if (slot->writes[i]) --b->writers; else --b->readers;
@@ -88,7 +112,7 @@ static void slot_release(frontend_vk *c, frontend_vk_slot *slot) {
 }
 static int caps(void *opaque, mag_native_caps_desc *out) {
     frontend_vk *c = opaque;
-    *out = (mag_native_caps_desc){sizeof(*out), 1, c->generation, 1, 0, 2, 16, UINT32_MAX, 0};
+    *out = (mag_native_caps_desc){sizeof(*out), 1, c->generation, 1, 1, 2, 16, UINT32_MAX, 0};
     return MAG_NATIVE_OK;
 }
 static int buffer_create(void *opaque, mag_native_buffer previous,
@@ -105,9 +129,9 @@ static int buffer_create(void *opaque, mag_native_buffer previous,
     } else if (c->next_buffer == UINT64_MAX) return MAG_NATIVE_ALLOCATION_FAILED;
     frontend_vk_buffer *b = calloc(1, sizeof(*b));
     if (!b) return MAG_NATIVE_ALLOCATION_FAILED;
-    b->length = desc->byte_length;
+    b->length = desc->byte_length;b->seed_zero=!desc->initial_bytes;
     VkBufferCreateInfo info = {.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, .size = b->length,
-        .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+        .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
         .sharingMode = VK_SHARING_MODE_EXCLUSIVE};
     if (c->vkCreateBuffer(c->owner.device, &info, NULL, &b->gpu) != VK_SUCCESS) goto fail;
     VkMemoryRequirements requirements; c->vkGetBufferMemoryRequirements(c->owner.device, b->gpu, &requirements);
@@ -246,7 +270,7 @@ static int submit_owned(frontend_vk *c, const mag_native_frame *frame, mag_nativ
     if (!slot) return MAG_NATIVE_BUSY;
     frontend_vk_pipeline *p = pipeline_find(c, frame->pipeline);
     if (!p) return MAG_NATIVE_STALE;
-    if (!frame->bindings || frame->binding_count != p->count) return MAG_NATIVE_INVALID;
+    if (p->graphics || !frame->bindings || frame->binding_count != p->count) return MAG_NATIVE_INVALID;
     for (unsigned i = 0; i < 3; ++i)
         if (!frame->groups[i] || frame->groups[i] > c->owner.properties.limits.maxComputeWorkGroupCount[i]) return MAG_NATIVE_INVALID;
     VkDescriptorBufferInfo buffers[16] = {{0}}; VkWriteDescriptorSet writes[16] = {{0}};
@@ -299,7 +323,7 @@ static int submit_owned(frontend_vk *c, const mag_native_frame *frame, mag_nativ
     slot->count = p->count; slot->pipeline = p; ++p->references; slot->occupied = 1;
     for (uint32_t i = 0; i < p->count; ++i) {
         slot->buffers[i] = records[i]; slot->writes[i] = write_access[i];
-        if (write_access[i]) ++records[i]->writers; else ++records[i]->readers;
+        if (write_access[i]) {++records[i]->writers;records[i]->gpu_written=1;} else ++records[i]->readers;
     }
     slot->ticket = (mag_native_ticket){c->generation, ++c->next_submission};
     VkSubmitInfo submit = {.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO, .commandBufferCount = 1, .pCommandBuffers = &slot->command};
@@ -349,8 +373,10 @@ static int close_context(void *opaque) {
     MagRenderHostOwner host=c->owner.host;free(c);
     host.release(host.userdata,host.lifetime);return MAG_NATIVE_OK;
 }
+
+#include "mag_render_vulkan_batch.inc"
 static const mag_native_ops operations = {caps, buffer_create, buffer_release, buffer_read,
-    pipeline_create, pipeline_release, submit, poll, close_context, NULL, NULL};
+    pipeline_create, pipeline_release, submit, poll, close_context, graphics_create, submit_batch};
 int mag_native_vulkan_create(const MagRenderHostOwner *host,mag_native_device **out) {
     if (!host || !out || host->backend!=MAG_RENDER_HOST_VULKAN) return MAG_NATIVE_INVALID;
     *out=NULL;int status=host->retain(host->userdata,host->lifetime);
@@ -372,8 +398,8 @@ int mag_native_vulkan_create(const MagRenderHostOwner *host,mag_native_device **
         VkCommandPoolCreateInfo pool={.sType=VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,.queueFamilyIndex=host->queue_family};
         VkCommandBufferAllocateInfo command={.sType=VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,.level=VK_COMMAND_BUFFER_LEVEL_PRIMARY,.commandBufferCount=1};
         VkFenceCreateInfo fence={.sType=VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
-        VkDescriptorPoolSize sizes[2]={{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,16},{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,16}};
-        VkDescriptorPoolCreateInfo descriptors={.sType=VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,.maxSets=1,.poolSizeCount=2,.pPoolSizes=sizes};
+        VkDescriptorPoolSize sizes[2]={{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,512},{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,512}};
+        VkDescriptorPoolCreateInfo descriptors={.sType=VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,.maxSets=32,.poolSizeCount=2,.pPoolSizes=sizes};
         VkResult result=c->vkCreateCommandPool(c->owner.device,&pool,NULL,&slot->pool);command.commandPool=slot->pool;
         if(result==VK_SUCCESS) result=c->vkAllocateCommandBuffers(c->owner.device,&command,&slot->command);
         if(result==VK_SUCCESS) result=c->vkCreateFence(c->owner.device,&fence,NULL,&slot->fence);

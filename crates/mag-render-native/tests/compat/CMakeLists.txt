@@ -1,7 +1,15 @@
 cmake_minimum_required(VERSION 3.24)
-project(mag_render_owned_native_regression LANGUAGES C CXX OBJC OBJCXX)
-if(NOT APPLE)
-    message(FATAL_ERROR "Initial extracted execution target is Metal; Vulkan follows")
+project(mag_render_owned_native_regression LANGUAGES C CXX)
+if(APPLE)
+    set(DEFAULT_BACKEND metal)
+else()
+    set(DEFAULT_BACKEND vulkan)
+endif()
+set(MAG_RENDER_NATIVE_BACKEND "${DEFAULT_BACKEND}" CACHE STRING "Explicit platform fixture")
+if(MAG_RENDER_NATIVE_BACKEND STREQUAL "metal" AND APPLE)
+    enable_language(OBJC OBJCXX)
+elseif(NOT (MAG_RENDER_NATIVE_BACKEND STREQUAL "vulkan" AND CMAKE_SYSTEM_NAME STREQUAL "Linux"))
+    message(FATAL_ERROR "Owned native fixture requires macOS Metal or Linux Vulkan")
 endif()
 set(MAG_RENDER_SDK_SOURCE "" CACHE PATH "Explicit original owner provider source only")
 if(NOT EXISTS "${MAG_RENDER_SDK_SOURCE}/libs/video/rsx_native_owner.h")
@@ -15,20 +23,41 @@ file(GLOB_RECURSE RUST CONFIGURE_DEPENDS "${NATIVE_ROOT}/src/*.rs" "${PUBLIC_ROO
 file(GLOB_RECURSE NATIVE CONFIGURE_DEPENDS "${NATIVE_ROOT}/native/*")
 add_custom_command(OUTPUT "${ARCHIVE}"
     COMMAND "${CMAKE_COMMAND}" -E env --unset=MAKEFLAGS --unset=MFLAGS --unset=CARGO_MAKEFLAGS RUSTUP_TOOLCHAIN=1.99.0 "CARGO_TARGET_DIR=${CMAKE_CURRENT_BINARY_DIR}/cargo"
-        "${CARGO}" build --manifest-path "${NATIVE_ROOT}/Cargo.toml" --lib --release --features metal --locked --offline
+        "${CARGO}" build --manifest-path "${NATIVE_ROOT}/Cargo.toml" --lib --release --features "${MAG_RENDER_NATIVE_BACKEND}" --locked --offline
     DEPENDS ${RUST} ${NATIVE} "${NATIVE_ROOT}/Cargo.toml" "${NATIVE_ROOT}/Cargo.lock" "${NATIVE_ROOT}/build.rs" "${NATIVE_ROOT}/CMakeLists.txt"
     WORKING_DIRECTORY "${PUBLIC_ROOT}" VERBATIM)
 add_custom_target(native_rust DEPENDS "${ARCHIVE}")
 set(SDK "${MAG_RENDER_SDK_SOURCE}")
-add_executable(native_regression metal_main.mm draw_main.mm metal_owner.m no_guest.c "${SDK}/libs/video/rsx_texture_layout.c"
+add_executable(native_regression no_guest.c "${SDK}/libs/video/rsx_texture_layout.c"
     "${SDK}/libs/video/rsx_draw_engine.c" "${SDK}/libs/video/rsx_commands.c" "${SDK}/libs/video/rsx_dispatch.c"
     "${SDK}/libs/video/rsx_vertex_fetch.c" "${SDK}/libs/video/rsx_vertex_compact.c" "${SDK}/libs/video/rsx_vp_decompiler.c"
-    "${SDK}/libs/video/rsx_fp_decompiler.c" "${SDK}/libs/video/rsx_shader_msl.cpp"
-    "${SDK}/runtime/diagnostics/critical_trace.c" "${SDK}/runtime/diagnostics/render_ablation.c" "${SDK}/libs/input/pad_macos.m")
+    "${SDK}/libs/video/rsx_fp_decompiler.c"
+    "${SDK}/runtime/diagnostics/critical_trace.c" "${SDK}/runtime/diagnostics/render_ablation.c")
 add_dependencies(native_regression native_rust)
 target_compile_features(native_regression PRIVATE cxx_std_17)
-target_compile_options(native_regression PRIVATE -O1 -g -UNDEBUG "$<$<COMPILE_LANGUAGE:OBJC,OBJCXX>:-fobjc-arc>")
+target_compile_options(native_regression PRIVATE -O1 -g -UNDEBUG)
 target_compile_definitions(native_regression PRIVATE PS3RECOMP_DISABLE_NATIVE_OSK RSX_RING_PROGRESS_OPTIONAL)
 target_include_directories(native_regression PRIVATE "${NATIVE_ROOT}/native" "${SDK}/include" "${SDK}/libs/video")
-target_link_options(native_regression PRIVATE -Wl,-dead_strip)
-target_link_libraries(native_regression PRIVATE "${ARCHIVE}" "-framework Metal" "-framework Cocoa" "-framework QuartzCore" "-framework Security" "-framework SystemConfiguration" iconv resolv)
+target_link_libraries(native_regression PRIVATE "${ARCHIVE}")
+if(MAG_RENDER_NATIVE_BACKEND STREQUAL "metal")
+    target_sources(native_regression PRIVATE metal_main.mm draw_main.mm metal_owner.m
+        "${SDK}/libs/video/rsx_shader_msl.cpp" "${SDK}/libs/input/pad_macos.m")
+    target_compile_options(native_regression PRIVATE "$<$<COMPILE_LANGUAGE:OBJC,OBJCXX>:-fobjc-arc>")
+    target_link_options(native_regression PRIVATE -Wl,-dead_strip)
+    target_link_libraries(native_regression PRIVATE "-framework Metal" "-framework Cocoa" "-framework QuartzCore" "-framework Security" "-framework SystemConfiguration" iconv resolv)
+else()
+    set(MAG_RENDER_SHADER_FIXTURE "" CACHE FILEPATH "Fresh manifest-derived SPIR-V fixture header")
+    if(NOT EXISTS "${MAG_RENDER_SHADER_FIXTURE}")
+        message(FATAL_ERROR "Generate the explicit shader fixture header first")
+    endif()
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(VULKAN REQUIRED vulkan)
+    pkg_check_modules(SDL REQUIRED sdl2)
+    target_sources(native_regression PRIVATE vulkan_main.c vulkan_owner.c "${SDK}/libs/video/rsx_shader_spirv.cpp")
+    target_compile_definitions(native_regression PRIVATE "MAG_RENDER_SHADER_FIXTURE=\"${MAG_RENDER_SHADER_FIXTURE}\"")
+    target_include_directories(native_regression PRIVATE ${VULKAN_INCLUDE_DIRS} ${SDL_INCLUDE_DIRS})
+    target_compile_options(native_regression PRIVATE -ffunction-sections -fdata-sections ${VULKAN_CFLAGS_OTHER} ${SDL_CFLAGS_OTHER})
+    target_link_options(native_regression PRIVATE -Wl,--gc-sections)
+    target_link_libraries(native_regression PRIVATE ${SDL_LIBRARIES} dl pthread m)
+    target_link_directories(native_regression PRIVATE ${SDL_LIBRARY_DIRS})
+endif()

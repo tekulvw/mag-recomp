@@ -35,6 +35,7 @@ def check(args):
         ("copy_transform", "compute", "comp", "cs_6_0"),
         ("compact", "compute", "comp", "cs_6_0"),
         ("scene_prepare", "compute", "comp", "cs_6_0"),
+        ("scene_transform", "compute", "comp", "cs_6_0"),
         ("scene_vertex", "vertex", "vert", "vs_6_0"),
         ("scene_fragment", "fragment", "frag", "ps_6_0"),
     ):

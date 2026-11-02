@@ -55,6 +55,7 @@ fn make_batch(
     let translation = b.upload(leases[1].clone()).map_err(|_| -5)?;
     let scale = b.upload(leases[2].clone()).map_err(|_| -5)?;
     let intermediate = b.allocate(48).map_err(|_| -5)?;
+    let generated_uniform = b.allocate(80).map_err(|_| -5)?;
     let vertices = b.allocate(48).map_err(|_| -5)?;
     let indices = b.allocate(12).map_err(|_| -5)?;
     let full = ByteRange {
@@ -84,6 +85,16 @@ fn make_batch(
                     source: ReadSource::Upload(translation),
                     range: params,
                 },
+                Binding::Read {
+                    slot: 3,
+                    source: ReadSource::Upload(scale),
+                    range: params,
+                },
+                Binding::Write {
+                    slot: 4,
+                    buffer: generated_uniform,
+                    range: params,
+                },
             ],
             [1, 1, 1],
         )
@@ -111,7 +122,7 @@ fn make_batch(
             },
             Binding::Read {
                 slot: 3,
-                source: ReadSource::Upload(scale),
+                source: ReadSource::Produced(b.value(generated_uniform).map_err(|_| -1)?),
                 range: params,
             },
         ],
