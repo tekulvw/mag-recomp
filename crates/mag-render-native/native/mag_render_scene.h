@@ -69,7 +69,8 @@ typedef struct mag_native_scene_graphics_v2_desc {
     /* model0: legacy combined slots. model1: independent bN/tN/sN (0..15).
      * Vulkan set0vertex/set1fragment, bufferN/texture16+N/sampler32+N;
      * Metal indices remain N. D3D model1: uniforms bN, readonly storage
-     * buffers t32+N, textures tN and samplers sN; stage visibility is explicit. */
+     * buffers t32+N, textures tN and samplers sN; register space and visibility
+     * are stage-qualified (space0 vertex, space1 fragment). */
 } mag_native_scene_graphics_v2_desc;
 int mag_native_scene_graphics_create_v2(mag_native_device *,const mag_native_scene_graphics_v2_desc *,mag_native_pipeline *);
 int mag_native_scene_graphics_v2_layout(uint32_t *,uint32_t);

@@ -18,7 +18,85 @@ static mag_native_buffer data(Context &c, uint64_t id, uint64_t length) {
   c.buffers[{id, 1}] = b;
   return {c.generation, id, 1};
 }
+static unsigned serialized;
+static HRESULT WINAPI check_stage_spaces(
+    const D3D12_ROOT_SIGNATURE_DESC *signature, D3D_ROOT_SIGNATURE_VERSION,
+    ID3DBlob **bytes, ID3DBlob **error) {
+  *bytes = nullptr;
+  *error = nullptr;
+  bool seen[2][3] = {};
+  for (UINT i = 0; i < signature->NumParameters; ++i) {
+    const auto &root = signature->pParameters[i];
+    assert(root.ParameterType == D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE);
+    const unsigned stage =
+        root.ShaderVisibility == D3D12_SHADER_VISIBILITY_VERTEX ? 0 : 1;
+    assert(root.ShaderVisibility == (stage ? D3D12_SHADER_VISIBILITY_PIXEL
+                                           : D3D12_SHADER_VISIBILITY_VERTEX));
+    for (UINT j = 0; j < root.DescriptorTable.NumDescriptorRanges; ++j) {
+      const auto &r = root.DescriptorTable.pDescriptorRanges[j];
+      assert(r.RegisterSpace ==
+             stage); // actual canonical HLSL: VS space0, FS space1
+      if (r.RangeType == D3D12_DESCRIPTOR_RANGE_TYPE_CBV) {
+        assert(r.BaseShaderRegister == stage);
+        seen[stage][0] = true;
+      } else if (r.RangeType == D3D12_DESCRIPTOR_RANGE_TYPE_SRV) {
+        assert(r.BaseShaderRegister == 0);
+        seen[stage][1] = true;
+      } else {
+        assert(r.RangeType == D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER &&
+               r.BaseShaderRegister == 0);
+        seen[stage][2] = true;
+      }
+    }
+  }
+  for (const auto &stage : seen)
+    for (bool binding : stage)
+      assert(binding);
+  ++serialized;
+  return E_FAIL; // stop before ANY device/PSO call
+}
+static void actual_pipeline_root_matches_canonical_stages() {
+  Context context;
+  context.serialize = check_stage_spaces;
+  const char source[] = "source-owned HLSL";
+  const char entry[] = "main";
+  mag_native_scene_buffer_layout buffers[] = {
+      {0,
+       0,
+       {0, MAG_NATIVE_READ, 16, 0, MAG_NATIVE_NO_SIZE_INDEX, 4,
+        MAG_NATIVE_UNIFORM}},
+      {1,
+       0,
+       {1, MAG_NATIVE_READ, 16, 0, MAG_NATIVE_NO_SIZE_INDEX, 4,
+        MAG_NATIVE_UNIFORM}}};
+  mag_native_scene_texture_layout textures[] = {
+      {0, 0, 0, MAG_NATIVE_SCENE_RGBA8, 0, 0},
+      {1, 0, 0, MAG_NATIVE_SCENE_RGBA8, 0, 0}};
+  const mag_native_vertex_attribute attribute = {0, MAG_NATIVE_VERTEX_FLOAT4, 0,
+                                                 0};
+  mag_native_scene_graphics_v2_desc desc = {};
+  desc.struct_size = sizeof(desc);
+  desc.abi_version = 2;
+  desc.base.struct_size = sizeof(desc.base);
+  desc.base.abi_version = 1;
+  desc.base.vertex_stride = 16;
+  desc.base.color_format = MAG_NATIVE_SCENE_BGRA8;
+  desc.base.vertex = {source, sizeof(source) - 1, entry, 4, MAG_NATIVE_HLSL};
+  desc.base.fragment = desc.base.vertex;
+  desc.base.buffers = buffers;
+  desc.base.buffer_count = 2;
+  desc.base.textures = textures;
+  desc.base.texture_count = 2;
+  desc.attributes = &attribute;
+  desc.attribute_count = 1;
+  desc.binding_model = 1;
+  mag_native_pipeline result = {};
+  assert(scene_graphics_create_v2(&context, &desc, &result) ==
+         MAG_NATIVE_DEVICE_FAILED);
+  assert(serialized == 1 && result.id == 0);
+}
 int main() {
+  actual_pipeline_root_matches_canonical_stages();
   Context c;
   c.generation = 7;
   auto p = std::make_shared<Pipeline>();

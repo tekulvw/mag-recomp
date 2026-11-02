@@ -50,7 +50,7 @@ static int scene_graphics_layout(Context *c,
         r.BaseShaderRegister =
             b.binding.slot +
             (model && b.binding.binding_kind == MAG_NATIVE_STORAGE ? 32u : 0u);
-        r.RegisterSpace = model ? 0 : stage;
+        r.RegisterSpace = stage;
         r.OffsetInDescriptorsFromTableStart = count;
         ++count;
       }
@@ -62,7 +62,7 @@ static int scene_graphics_layout(Context *c,
         r.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
         r.NumDescriptors = 1;
         r.BaseShaderRegister = t.texture_slot;
-        r.RegisterSpace = model ? 0 : stage;
+        r.RegisterSpace = stage;
         r.OffsetInDescriptorsFromTableStart = count;
         ++count;
         samplers |= 1u << t.sampler_slot;
@@ -99,6 +99,7 @@ static int scene_graphics_layout(Context *c,
             range.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER;
             range.NumDescriptors = 1;
             range.BaseShaderRegister = unit;
+            range.RegisterSpace = stage;
             range.OffsetInDescriptorsFromTableStart = 0;
             auto &root = parameters[parameter_count];
             root.ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
