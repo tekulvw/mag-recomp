@@ -1,6 +1,10 @@
 //! Owned resource snapshots; never interprets guest memory or GPU completion.
 use crate::types::{ResourceId, ResourceVersion};
-use std::sync::{Arc, Weak};
+use std::sync::{
+    Arc, Weak,
+    atomic::{AtomicU64, Ordering},
+};
+static NEXT_NAMESPACE: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone, Copy, Debug)]
 /// Limits cover logical owned snapshot bytes and live/retained versions.
@@ -20,6 +24,7 @@ pub enum ResourceError {
     VersionExhausted,
     AllocationFailed,
     CounterOverflow,
+    NamespaceExhausted,
 }
 #[derive(Debug)]
 pub struct DirtyRange {
@@ -53,8 +58,24 @@ pub struct ResourceStats {
     pub bytes_copied: u64,
     pub patch_bytes_written: u64,
 }
+/// Process-local non-reused resource owner domain; never reconstructed from a slot.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ResourceNamespace(u64);
+impl ResourceNamespace {
+    pub fn get(self) -> u64 {
+        self.0
+    }
+}
+/// Upload/cache identity. Native device/context generation is an additional key.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ResourceCacheKey {
+    pub namespace: ResourceNamespace,
+    pub resource_id: ResourceId,
+    pub content_version: u64,
+}
 #[derive(Debug)]
 struct Snapshot {
+    namespace: ResourceNamespace,
     version: ResourceVersion,
     bytes: Box<[u8]>,
     dirty: Vec<DirtySpan>,
@@ -64,6 +85,15 @@ pub struct ResourceLease {
     snapshot: Arc<Snapshot>,
 }
 impl ResourceLease {
+    /// Include this full key, plus native device/context generation, in every
+    /// shared upload cache. ResourceVersion alone is local to its ResourceStore.
+    pub fn cache_key(&self) -> ResourceCacheKey {
+        ResourceCacheKey {
+            namespace: self.snapshot.namespace,
+            resource_id: self.snapshot.version.id,
+            content_version: self.snapshot.version.content_version,
+        }
+    }
     pub fn version(&self) -> ResourceVersion {
         self.snapshot.version
     }
@@ -84,6 +114,7 @@ struct Slot {
 /// independently retain immutable bytes until their actual work is terminal.
 /// max_resources includes *versions* retained by leases, not just live slots.
 pub struct ResourceStore {
+    namespace: ResourceNamespace,
     limits: ResourceLimits,
     slots: Vec<Slot>,
     retained: Vec<(u32, Weak<Snapshot>)>,
@@ -97,7 +128,13 @@ impl ResourceStore {
         {
             return Err(ResourceError::InvalidLimits);
         }
+        let namespace = ResourceNamespace(
+            NEXT_NAMESPACE
+                .try_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1))
+                .map_err(|_| ResourceError::NamespaceExhausted)?,
+        );
         Ok(Self {
+            namespace,
             limits,
             slots: Vec::new(),
             retained: Vec::new(),
@@ -161,6 +198,7 @@ impl ResourceStore {
         let length = bytes.len();
         // Boxed storage does not retain caller Vec spare capacity.
         let snapshot = Arc::new(Snapshot {
+            namespace: self.namespace,
             version,
             bytes: bytes.into_boxed_slice(),
             dirty: vec![DirtySpan { offset: 0, length }],
@@ -268,6 +306,7 @@ impl ResourceStore {
                 bytes[start..start + range.bytes.len()].copy_from_slice(&range.bytes);
             }
             let snapshot = Arc::new(Snapshot {
+                namespace: current.namespace,
                 version,
                 bytes: bytes.into_boxed_slice(),
                 dirty,

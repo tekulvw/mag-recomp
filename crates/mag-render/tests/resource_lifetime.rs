@@ -309,3 +309,37 @@ fn failed_creation_does_not_consume_generation_or_change_accounting() {
     let next = create(&mut s, &[3, 4]);
     assert_eq!(next.id.generation, 2);
 }
+
+#[test]
+fn cache_namespace_survives_store_drop_and_cannot_alias_later_store() {
+    let old = {
+        let mut s = store(1, 4);
+        let v = create(&mut s, &[1, 2]);
+        s.lease(v).unwrap()
+    };
+    let mut next = store(1, 4);
+    let v = create(&mut next, &[9, 8]);
+    let new = next.lease(v).unwrap();
+    assert_eq!(old.version(), new.version());
+    assert_ne!(old.cache_key(), new.cache_key());
+    assert_eq!(old.bytes(), [1, 2]);
+    assert_eq!(new.bytes(), [9, 8]);
+}
+#[test]
+fn cache_namespace_is_stable_across_updates_and_slot_generations() {
+    let mut s = store(1, 4);
+    let first = create(&mut s, &[1, 2]);
+    let key = s.lease(first).unwrap().cache_key();
+    assert_eq!(key, s.lease(first).unwrap().cache_key());
+    let next = patch(&mut s, first, 0, &[9]).unwrap();
+    let changed = s.lease(next).unwrap().cache_key();
+    assert_eq!(key.namespace, changed.namespace);
+    assert_eq!(key.resource_id, changed.resource_id);
+    assert_ne!(key.content_version, changed.content_version);
+    s.retire(next).unwrap();
+    let reused = create(&mut s, &[7, 8]);
+    let replaced = s.lease(reused).unwrap().cache_key();
+    assert_eq!(key.namespace, replaced.namespace);
+    assert_eq!(key.resource_id.slot, replaced.resource_id.slot);
+    assert_ne!(key.resource_id.generation, replaced.resource_id.generation);
+}
