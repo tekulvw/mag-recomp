@@ -23,7 +23,7 @@ pub struct DrawProbeReport {
 fn resource(store: &mut ResourceStore, bytes: Vec<u8>) -> Result<ResourceVersion, i32> {
     store.apply(ResourceDelta::Create { bytes }).map_err(|_| -5)
 }
-fn parameter_bytes(scale: f32, translate: f32) -> Vec<u8> {
+pub(crate) fn parameter_bytes(scale: f32, translate: f32) -> Vec<u8> {
     let mut words = [0u32; 20];
     for i in 0..4 {
         words[i * 5] = if i == 3 {
@@ -36,18 +36,18 @@ fn parameter_bytes(scale: f32, translate: f32) -> Vec<u8> {
     words[16] = 3;
     words.iter().flat_map(|n| n.to_ne_bytes()).collect()
 }
-fn make_batch(
-    device: &BatchDevice<'_>,
-    pipelines: [u64; 3],
+pub(crate) fn compute_prefix(
+    owner: u64,
+    pipelines: [u64; 2],
     leases: &[ResourceLease],
-) -> Result<PreparedBatch, i32> {
+) -> Result<(BatchBuilder, GpuValue, GpuValue), i32> {
     let mut b = BatchBuilder::new(
-        device.owner_generation(),
+        owner,
         BatchLimits {
             max_commands: 16,
             max_gpu_buffers: 4,
             max_gpu_bytes: 1024 * 1024,
-            max_uploads: 4,
+            max_uploads: 24,
         },
     )
     .map_err(|_| -1)?;
@@ -129,10 +129,28 @@ fn make_batch(
         [1, 1, 1],
     )
     .map_err(|_| -1)?;
+    let v = b.value(vertices).map_err(|_| -1)?;
+    let i = b.value(indices).map_err(|_| -1)?;
+    Ok((b, v, i))
+}
+fn make_batch(
+    device: &BatchDevice<'_>,
+    pipelines: [u64; 3],
+    leases: &[ResourceLease],
+) -> Result<PreparedBatch, i32> {
+    let (mut b, vertices, indices) = compute_prefix(
+        device.owner_generation(),
+        [pipelines[0], pipelines[1]],
+        leases,
+    )?;
+    let full = ByteRange {
+        offset: 0,
+        length: 48,
+    };
     b.draw_indexed(IndexedDraw {
         pipeline: pipelines[2],
-        vertices: b.value(vertices).map_err(|_| -1)?,
-        indices: b.value(indices).map_err(|_| -1)?,
+        vertices,
+        indices,
         vertex_range: full,
         index_range: ByteRange {
             offset: 0,

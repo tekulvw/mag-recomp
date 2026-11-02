@@ -685,3 +685,6 @@ mod abi_tests {
         super::checked_batch_layout().unwrap();
     }
 }
+
+#[path = "scene_device.rs"]
+pub mod scene_device;

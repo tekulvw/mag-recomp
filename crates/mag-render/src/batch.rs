@@ -252,6 +252,45 @@ impl PreparedBatch {
     pub fn buffers(&self) -> &[GpuBufferPlan] {
         &self.buffers
     }
+    /// Validate a graphics-stage read against the already checked compute prefix.
+    /// Scene code cannot fabricate producer epochs or reuse a token from another batch.
+    pub(crate) fn scene_read(
+        &self,
+        source: ReadSource,
+        range: ByteRange,
+    ) -> Result<(), BatchError> {
+        let length = match source {
+            ReadSource::Upload(u) => {
+                if u.batch != self.id
+                    || self
+                        .uploads
+                        .get(u.slot)
+                        .is_none_or(|l| l.cache_key() != u.key)
+                {
+                    return Err(BatchError::WrongBatch);
+                }
+                u.bytes
+            }
+            ReadSource::Produced(v) => {
+                if v.buffer.batch != self.id
+                    || self
+                        .buffers
+                        .get(v.buffer.slot)
+                        .is_none_or(|b| b.byte_length != v.buffer.bytes)
+                    || v.epoch != v.producer as u64 + 1
+                    || self.dispatches.get(v.producer).is_none_or(|d| {
+                        !d.bindings
+                            .iter()
+                            .any(|b| matches!(b, Binding::Write{buffer,..} if *buffer == v.buffer))
+                    })
+                {
+                    return Err(BatchError::WrongBatch);
+                }
+                v.buffer.bytes
+            }
+        };
+        check_range(range, length)
+    }
     pub fn uploads(&self) -> &[ResourceLease] {
         &self.uploads
     }
@@ -564,10 +603,25 @@ impl BatchBuilder {
         Ok([vertex, index])
     }
     pub fn prepare(self, catalog: &impl PipelineCatalog) -> Result<PreparedBatch, BatchError> {
+        self.prepare_inner(catalog, false)
+    }
+    /// A scene may start with a real clear pass and no compute or buffers.
+    /// The scene validator still requires at least one initialized render pass.
+    pub fn prepare_scene_prefix(
+        self,
+        catalog: &impl PipelineCatalog,
+    ) -> Result<PreparedBatch, BatchError> {
+        self.prepare_inner(catalog, true)
+    }
+    fn prepare_inner(
+        self,
+        catalog: &impl PipelineCatalog,
+        allow_empty: bool,
+    ) -> Result<PreparedBatch, BatchError> {
         if catalog.owner_generation() != self.owner {
             return Err(BatchError::WrongOwner);
         }
-        if self.dispatches.is_empty() {
+        if self.dispatches.is_empty() && !allow_empty {
             return Err(BatchError::Empty);
         }
         let mut expected = Vec::new();

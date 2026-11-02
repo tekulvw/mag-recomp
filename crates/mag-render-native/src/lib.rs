@@ -194,3 +194,5 @@ mod tests {
 pub mod batch_device;
 
 mod draw_probe;
+
+mod scene_probe;

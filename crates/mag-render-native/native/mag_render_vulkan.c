@@ -376,7 +376,7 @@ static int close_context(void *opaque) {
 
 #include "mag_render_vulkan_batch.inc"
 static const mag_native_ops operations = {caps, buffer_create, buffer_release, buffer_read,
-    pipeline_create, pipeline_release, submit, poll, close_context, graphics_create, submit_batch};
+    pipeline_create, pipeline_release, submit, poll, close_context, graphics_create, submit_batch, NULL, NULL};
 int mag_native_vulkan_create(const MagRenderHostOwner *host,mag_native_device **out) {
     if (!host || !out || host->backend!=MAG_RENDER_HOST_VULKAN) return MAG_NATIVE_INVALID;
     *out=NULL;int status=host->retain(host->userdata,host->lifetime);

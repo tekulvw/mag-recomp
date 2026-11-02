@@ -11,3 +11,5 @@ pub mod backend;
 pub mod sdk_compute;
 
 pub mod batch;
+
+pub mod scene;

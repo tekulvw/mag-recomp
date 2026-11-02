@@ -1,5 +1,6 @@
 #include "mag_render_native_api.h"
 #include "mag_render_batch.h"
+#include "mag_render_scene.h"
 #include <cstddef>
 #define LAYOUT(t) uint32_t(sizeof(t)), uint32_t(alignof(t))
 #define OFFSET(t,f) uint32_t(offsetof(t,f))
@@ -44,4 +45,22 @@ extern "C" int mag_native_batch_layout(uint32_t *out,uint32_t words){
     if(!out||words!=sizeof(layout)/sizeof(layout[0]))return MAG_NATIVE_INVALID;
     for(uint32_t i=0;i<words;++i) { out[i]=layout[i]; }
     return MAG_NATIVE_OK;
+}
+
+extern "C" int mag_native_scene_layout(uint32_t *out,uint32_t words){
+ const uint32_t layout[]={
+ LAYOUT(mag_native_scene_buffer_layout),OFFSET(mag_native_scene_buffer_layout,binding),
+ LAYOUT(mag_native_scene_texture_layout),OFFSET(mag_native_scene_texture_layout,comparison),
+ LAYOUT(mag_native_scene_graphics_desc),OFFSET(mag_native_scene_graphics_desc,vertex),OFFSET(mag_native_scene_graphics_desc,fragment),OFFSET(mag_native_scene_graphics_desc,vertex_stride),OFFSET(mag_native_scene_graphics_desc,buffers),OFFSET(mag_native_scene_graphics_desc,textures),
+ LAYOUT(mag_native_scene_image),OFFSET(mag_native_scene_image,upload),
+ LAYOUT(mag_native_scene_buffer_binding),OFFSET(mag_native_scene_buffer_binding,binding),
+ LAYOUT(mag_native_scene_texture_binding),OFFSET(mag_native_scene_texture_binding,sampler),
+ LAYOUT(mag_native_scene_draw),OFFSET(mag_native_scene_draw,vertices),OFFSET(mag_native_scene_draw,vertex_offset),OFFSET(mag_native_scene_draw,index_count),OFFSET(mag_native_scene_draw,buffers),OFFSET(mag_native_scene_draw,textures),
+ LAYOUT(mag_native_scene_attachment),OFFSET(mag_native_scene_attachment,clear),
+ LAYOUT(mag_native_scene_pass),OFFSET(mag_native_scene_pass,depth),OFFSET(mag_native_scene_pass,draws),
+ LAYOUT(mag_native_scene),OFFSET(mag_native_scene,resources),OFFSET(mag_native_scene,images),OFFSET(mag_native_scene,dispatches),OFFSET(mag_native_scene,passes),OFFSET(mag_native_scene,output_image),OFFSET(mag_native_scene,diagnostic_readback)
+ };
+ if(!out||words!=sizeof(layout)/sizeof(layout[0]))return MAG_NATIVE_INVALID;
+ for(uint32_t i=0;i<words;++i){out[i]=layout[i];}
+ return MAG_NATIVE_OK;
 }

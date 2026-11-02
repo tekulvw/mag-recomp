@@ -18,6 +18,9 @@
     id<MTLRenderPipelineState> graphics;id<MTLDepthStencilState> depth;
     mag_native_binding_layout bindings[MAG_NATIVE_MAX_BINDINGS];
     uint32_t binding_count, sizes_count;
+    int scene;mag_native_scene_graphics_desc scene_desc;
+    mag_native_scene_buffer_layout scene_buffers[32];
+    mag_native_scene_texture_layout scene_textures[32];
 }
 @end
 @implementation MagRenderPipeline @end
@@ -247,6 +250,7 @@ static int metal_submit(void *opaque,const mag_native_frame *frame,mag_native_ti
     @finally { c->host.end(c->host.userdata,c->host.lifetime); }
 }
 #include "mag_render_metal_batch.inc"
+#include "mag_render_metal_scene.inc"
 static int metal_poll(void *opaque, mag_native_event *events, uint32_t capacity, uint32_t *count) {
     MagRenderMetal *c = context(opaque);
     for (NSUInteger i = 0; i < c->pending.count && *count < capacity;) {
@@ -274,7 +278,7 @@ static int metal_close(void *opaque) {
     host.release(host.userdata,host.lifetime);return MAG_NATIVE_OK;
 }
 static const mag_native_ops metal_ops = {metal_caps, metal_buffer_create, metal_buffer_release,
-    metal_buffer_read, metal_pipeline_create, metal_pipeline_release, metal_submit, metal_poll, metal_close,metal_graphics_create,metal_submit_batch};
+    metal_buffer_read, metal_pipeline_create, metal_pipeline_release, metal_submit, metal_poll, metal_close,metal_graphics_create,metal_submit_batch,metal_scene_graphics_create,metal_submit_scene};
 int mag_native_metal_create(const MagRenderHostOwner *owner,mag_native_device **out) {
     if (!owner || !out || owner->backend!=MAG_RENDER_HOST_METAL) return MAG_NATIVE_INVALID;
     *out=NULL;int status=owner->retain(owner->userdata,owner->lifetime);

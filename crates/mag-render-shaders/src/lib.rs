@@ -61,50 +61,73 @@ fn location_zero(binding: &Option<naga::Binding>) -> bool {
         })
     )
 }
-// Initial draw contract is explicit: one Float32x4 vertex attribute, builtin
-// position output, no varyings/resources, one Float32x4 fragment color output.
+fn float2(module: &naga::Module, ty: Handle<Type>) -> bool {
+    matches!(
+        module.types[ty].inner,
+        TypeInner::Vector {
+            size: naga::VectorSize::Bi,
+            scalar: naga::Scalar {
+                kind: ScalarKind::Float,
+                width: 4
+            }
+        }
+    )
+}
+fn position(binding: &Option<naga::Binding>) -> bool {
+    matches!(
+        binding,
+        Some(naga::Binding::BuiltIn(naga::BuiltIn::Position { .. }))
+    )
+}
+// Bounded scene layout: Float4 position input, optional Float2 UV varying,
+// readonly fixed buffers and separately reflected sampled 2D images/samplers.
 fn graphics_io(module: &naga::Module, stage: Stage) -> Result<(), String> {
     if stage == Stage::Compute {
         return Ok(());
     }
     let entry = &module.entry_points[0];
-    if !module.global_variables.is_empty() {
-        return Err("graphics buffers/resources require a separate binding contract".into());
-    }
-    let result = entry
-        .function
-        .result
-        .as_ref()
-        .ok_or("graphics entry requires an output")?;
-    if !float4(module, result.ty) {
-        return Err("graphics output must be float32x4".into());
-    }
+    let result = entry.function.result.as_ref();
     match stage {
         Stage::Vertex => {
+            let result = result.ok_or("vertex entry requires position output")?;
             if entry.function.arguments.len() != 1 {
                 return Err("vertex input requires exactly one location-zero float32x4".into());
             }
             let input = &entry.function.arguments[0];
-            if !float4(module, input.ty)
-                || !location_zero(&input.binding)
-                || !matches!(
-                    result.binding,
-                    Some(naga::Binding::BuiltIn(naga::BuiltIn::Position { .. }))
-                )
-            {
-                return Err("unsupported vertex input/output layout".into());
+            if !float4(module, input.ty) || !location_zero(&input.binding) {
+                return Err("unsupported vertex input layout".into());
             }
+            if float4(module, result.ty) && position(&result.binding) {
+                return Ok(());
+            }
+            if let TypeInner::Struct { ref members, .. } = module.types[result.ty].inner
+                && members.len() == 2
+                && float4(module, members[0].ty)
+                && position(&members[0].binding)
+                && float2(module, members[1].ty)
+                && location_zero(&members[1].binding)
+            {
+                return Ok(());
+            }
+            Err("vertex output requires position and optional location-zero float32x2 UV".into())
         }
         Stage::Fragment => {
-            if !entry.function.arguments.is_empty() || !location_zero(&result.binding) {
-                return Err(
-                    "fragment contract requires no inputs and one location-zero color".into(),
-                );
+            if result.is_some_and(|r| !float4(module, r.ty) || !location_zero(&r.binding)) {
+                return Err("fragment output requires location-zero float32x4".into());
             }
+            if entry.function.arguments.is_empty() {
+                return Ok(());
+            }
+            if entry.function.arguments.len() == 1
+                && float2(module, entry.function.arguments[0].ty)
+                && location_zero(&entry.function.arguments[0].binding)
+            {
+                return Ok(());
+            }
+            Err("fragment input requires optional location-zero float32x2 UV".into())
         }
         Stage::Compute => unreachable!(),
     }
-    Ok(())
 }
 
 pub struct Compilation {
@@ -239,6 +262,8 @@ pub fn compile_stage(source: &str, stage: Stage) -> Result<Compilation, String> 
         .update(module.to_ctx())
         .map_err(|error| error.to_string())?;
     let mut bindings = Vec::new();
+    let mut images = Vec::new();
+    let mut samplers = Vec::new();
     let mut metal_sizes = Vec::new();
     let mut msl_resources = naga::back::msl::EntryPointResources {
         sizes_buffer: Some(METAL_SIZES_BUFFER),
@@ -260,8 +285,80 @@ pub fn compile_stage(source: &str, stage: Stage) -> Result<Compilation, String> 
             .binding
             .as_ref()
             .ok_or("unsupported global without buffer binding")?;
-        if binding.group != 0 || binding.binding >= 16 {
-            return Err("buffer bindings must use group 0 and slots 0..15".into());
+        let group = if stage == Stage::Fragment { 1 } else { 0 };
+        if binding.group != group || binding.binding >= 16 {
+            return Err("bindings must use their stage group (compute/vertex=0, fragment=1) and slots 0..15".into());
+        }
+        if global.space == AddressSpace::Handle {
+            if stage == Stage::Compute {
+                return Err("compute image/sampler contract is unsupported".into());
+            }
+            let mut target = naga::back::msl::BindTarget::default();
+            match module.types[global.ty].inner {
+                TypeInner::Image {
+                    dim: naga::ImageDimension::D2,
+                    arrayed: false,
+                    class,
+                } => {
+                    let kind = match class {
+                        naga::ImageClass::Sampled {
+                            kind: ScalarKind::Float,
+                            multi: false,
+                        } => "float",
+                        naga::ImageClass::Depth { multi: false } => "depth",
+                        _ => return Err(
+                            "only non-multisampled float/depth sampled 2D textures are supported"
+                                .into(),
+                        ),
+                    };
+                    target.texture = Some(binding.binding as u8);
+                    images.push(json!({"name":global.name,"group":group,"binding":binding.binding,"dimension":"2d","sample_kind":kind,"msl_texture_index":binding.binding,"hlsl_register_class":"t","hlsl_register":binding.binding,"hlsl_space":group,"spirv_descriptor_set":group,"spirv_binding":binding.binding}));
+                }
+                TypeInner::Sampler { comparison } => {
+                    target.sampler = Some(naga::back::msl::BindSamplerTarget::Resource(
+                        binding.binding as u8,
+                    ));
+                    // Naga's HLSL6 writer uses bounded sampler arrays and a per-group
+                    // StructuredBuffer<uint> index indirection, not standalone sN.
+                    hlsl_options.sampler_buffer_binding_map.insert(
+                        naga::back::hlsl::SamplerIndexBufferKey { group },
+                        naga::back::hlsl::BindTarget {
+                            register: 31,
+                            space: group as u8,
+                            ..Default::default()
+                        },
+                    );
+                    hlsl_options.sampler_heap_target.standard_samplers.space = 2;
+                    hlsl_options.sampler_heap_target.comparison_samplers.space = 3;
+
+                    samplers.push(json!({"name":global.name,"group":group,"binding":binding.binding,"comparison":comparison,"msl_sampler_index":binding.binding,"hlsl_sampler_index_entry":binding.binding,"hlsl_sampler_heap_space":if comparison{3}else{2},"spirv_descriptor_set":group,"spirv_binding":binding.binding}));
+                }
+                _ => return Err("unsupported graphics handle resource".into()),
+            }
+            msl_resources.resources.insert(*binding, target);
+            hlsl_options.binding_map.insert(
+                *binding,
+                naga::back::hlsl::BindTarget {
+                    register: binding.binding,
+                    space: group as u8,
+                    ..Default::default()
+                },
+            );
+            spv_options.binding_map.insert(
+                *binding,
+                naga::back::spv::BindingInfo {
+                    descriptor_set: group,
+                    binding: binding.binding,
+                    binding_array_size: None,
+                },
+            );
+            continue;
+        }
+        if stage != Stage::Compute
+            && (has_runtime_array(&module, global.ty)
+                || matches!(global.space,AddressSpace::Storage{access} if access.contains(StorageAccess::STORE)))
+        {
+            return Err("graphics buffers require readonly fixed-size layouts".into());
         }
         let (space, access, register) = match global.space {
             AddressSpace::Uniform => ("uniform", "read", "b"),
@@ -277,8 +374,8 @@ pub fn compile_stage(source: &str, stage: Stage) -> Result<Compilation, String> 
             "address_space": space, "access": access, "layout": buffer_layout,
             "minimum_binding_bytes": sizes[global.ty].size,
             "msl_buffer_index": binding.binding,
-            "hlsl_register_class": register, "hlsl_register": binding.binding, "hlsl_space": 0,
-            "spirv_descriptor_set": 0, "spirv_binding": binding.binding,
+            "hlsl_register_class": register, "hlsl_register": binding.binding, "hlsl_space": group,
+            "spirv_descriptor_set": group, "spirv_binding": binding.binding,
         }));
         if has_runtime_array(&module, global.ty) {
             metal_sizes.push(json!({"binding": binding.binding,
@@ -296,13 +393,14 @@ pub fn compile_stage(source: &str, stage: Stage) -> Result<Compilation, String> 
             *binding,
             naga::back::hlsl::BindTarget {
                 register: binding.binding,
+                space: group as u8,
                 ..Default::default()
             },
         );
         spv_options.binding_map.insert(
             *binding,
             naga::back::spv::BindingInfo {
-                descriptor_set: 0,
+                descriptor_set: group,
                 binding: binding.binding,
                 binding_array_size: None,
             },
@@ -384,7 +482,29 @@ pub fn compile_stage(source: &str, stage: Stage) -> Result<Compilation, String> 
         manifest["position_output"] =
             json!({"builtin":"position","format":"float32x4","hlsl_semantic":"SV_Position"});
     } else if stage == Stage::Fragment {
-        manifest["fragment_outputs"] = json!([{"location":0,"format":"float32x4","hlsl_semantic":"SV_Target","hlsl_semantic_index":0}]);
+        manifest["fragment_outputs"] = if entry.function.result.is_some() {
+            json!([{"location":0,"format":"float32x4","hlsl_semantic":"SV_Target","hlsl_semantic_index":0}])
+        } else {
+            json!([])
+        };
+    }
+    if !images.is_empty() {
+        manifest["images"] = json!(images);
+    }
+    if !samplers.is_empty() {
+        manifest["samplers"] = json!(samplers);
+        manifest["hlsl_sampler_binding"] = json!({"index_buffer":{"register_class":"t","register":31,"space":if stage==Stage::Fragment{1}else{0},"stride_bytes":4,"entries":16},"standard_heap":{"register_class":"s","register":0,"space":2,"count":2048},"comparison_heap":{"register_class":"s","register":0,"space":3,"count":2048}});
+    }
+    let uv = match stage {
+        Stage::Vertex => matches!(
+            module.types[entry.function.result.as_ref().unwrap().ty].inner,
+            TypeInner::Struct { .. }
+        ),
+        Stage::Fragment => !entry.function.arguments.is_empty(),
+        Stage::Compute => false,
+    };
+    if uv {
+        manifest["varyings"] = json!([{"location":0,"format":"float32x2","interpolation":"perspective","sampling":"center","hlsl_semantic":"LOC","hlsl_semantic_index":0}]);
     }
     Ok(Compilation {
         manifest,

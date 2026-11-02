@@ -37,6 +37,9 @@ def check(args):
         ("scene_prepare", "compute", "comp", "cs_6_0"),
         ("scene_transform", "compute", "comp", "cs_6_0"),
         ("scene_vertex", "vertex", "vert", "vs_6_0"),
+        ("scene_lit_vertex", "vertex", "vert", "vs_6_0"),
+        ("scene_lit_fragment", "fragment", "frag", "ps_6_0"),
+        ("scene_cutout_fragment", "fragment", "frag", "ps_6_0"),
         ("scene_fragment", "fragment", "frag", "ps_6_0"),
     ):
         directory = args.output_dir / name

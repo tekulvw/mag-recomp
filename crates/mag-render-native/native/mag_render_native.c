@@ -92,3 +92,14 @@ int mag_native_submit_batch(mag_native_device *device,const mag_native_batch *ba
     if(!device||!VALID(batch)||!out)return MAG_NATIVE_INVALID;
     return device->ops->submit_batch?device->ops->submit_batch(device->context,batch,out):MAG_NATIVE_UNSUPPORTED;
 }
+
+int mag_native_scene_graphics_create(mag_native_device *device,const mag_native_scene_graphics_desc *desc,mag_native_pipeline *out){
+ if(out)memset(out,0,sizeof(*out));
+ if(!device||!desc||desc->struct_size!=sizeof(*desc)||desc->abi_version!=MAG_NATIVE_SCENE_ABI||!out)return MAG_NATIVE_INVALID;
+ return device->ops->scene_graphics_create?device->ops->scene_graphics_create(device->context,desc,out):MAG_NATIVE_UNSUPPORTED;
+}
+int mag_native_submit_scene(mag_native_device *device,const mag_native_scene *scene,mag_native_ticket *out){
+ if(out)memset(out,0,sizeof(*out));
+ if(!device||!scene||scene->struct_size!=sizeof(*scene)||scene->abi_version!=MAG_NATIVE_SCENE_ABI||!out)return MAG_NATIVE_INVALID;
+ return device->ops->submit_scene?device->ops->submit_scene(device->context,scene,out):MAG_NATIVE_UNSUPPORTED;
+}
