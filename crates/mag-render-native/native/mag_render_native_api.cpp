@@ -64,3 +64,9 @@ extern "C" int mag_native_scene_layout(uint32_t *out,uint32_t words){
  for(uint32_t i=0;i<words;++i){out[i]=layout[i];}
  return MAG_NATIVE_OK;
 }
+
+extern "C" int mag_native_image_layout(uint32_t *out,uint32_t words){
+ const uint32_t layout[]={LAYOUT(MagRenderHostImage),OFFSET(MagRenderHostImage,width),OFFSET(MagRenderHostImage,owner_lifetime),OFFSET(MagRenderHostImage,resource_generation),OFFSET(MagRenderHostImage,image),OFFSET(MagRenderHostImage,userdata),OFFSET(MagRenderHostImage,retain),OFFSET(MagRenderHostImage,validate),LAYOUT(mag_native_image),OFFSET(mag_native_image,id)};
+ if(!out||words!=sizeof(layout)/sizeof(layout[0]))return MAG_NATIVE_INVALID;
+ for(uint32_t i=0;i<words;++i){out[i]=layout[i];}return MAG_NATIVE_OK;
+}

@@ -116,8 +116,15 @@ unsafe extern "C" {
         out: *mut Pipeline,
     ) -> i32;
     fn mag_native_submit_scene(context: *mut c_void, scene: *const Scene, out: *mut Ticket) -> i32;
+    fn mag_native_submit_scene_target(
+        context: *mut c_void,
+        scene: *const Scene,
+        target: crate::host_image::NativeImage,
+        out: *mut Ticket,
+    ) -> i32;
 }
 pub struct SceneDevice<'owner> {
+    target: Option<crate::host_image::NativeImage>,
     inner: BatchDevice<'owner>,
     graphics: BTreeMap<u64, scene::GraphicsLayout>,
 }
@@ -125,12 +132,23 @@ impl NativeContext {
     pub fn scene(&mut self, limits: BatchDeviceLimits) -> Result<SceneDevice<'_>, i32> {
         checked_scene_layout()?;
         Ok(SceneDevice {
+            target: None,
             inner: self.batch(limits)?,
             graphics: BTreeMap::new(),
         })
     }
 }
 impl SceneDevice<'_> {
+    pub(crate) fn set_output_target(
+        &mut self,
+        image: crate::host_image::NativeImage,
+    ) -> Result<(), i32> {
+        if image.device_generation != self.inner.generation || image.id == 0 {
+            return Err(-3);
+        }
+        self.target = Some(image);
+        Ok(())
+    }
     /// # Safety
     /// Source, entry, and layout pointers must be valid through this synchronous
     /// native pipeline compilation. The native registry owns copied metadata.
@@ -553,7 +571,13 @@ impl RenderDevice for SceneDevice<'_> {
             diagnostic_readback: readback.map(|r| r.0).unwrap_or_default(),
         };
         let mut native = Ticket::default();
-        let status = unsafe { mag_native_submit_scene(self.inner.api.device, &scene, &mut native) };
+        let status = unsafe {
+            if let Some(target) = self.target {
+                mag_native_submit_scene_target(self.inner.api.device, &scene, target, &mut native)
+            } else {
+                mag_native_submit_scene(self.inner.api.device, &scene, &mut native)
+            }
+        };
         if status < 0 {
             self.inner.release(&buffers);
             return reject(status);

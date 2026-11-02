@@ -121,7 +121,7 @@ static int metal_scene_graphics_create(void *opaque, const mag_native_scene_grap
     *out = (mag_native_pipeline){c->generation, id};
     return MAG_NATIVE_OK;
 }
-static int metal_scene_owned(void *opaque, const mag_native_scene *scene, mag_native_ticket *out) {
+static int metal_scene_owned(void *opaque, const mag_native_scene *scene, mag_native_ticket *out,MagRenderImportedImage *target) {
     MagRenderMetal *c = context(opaque);
     if (c->pending.count >= 2)
         return MAG_NATIVE_BUSY;
@@ -159,7 +159,8 @@ static int metal_scene_owned(void *opaque, const mag_native_scene *scene, mag_na
                                                            mipmapped:NO];
         d.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
         d.storageMode = im->upload.id ? MTLStorageModeShared : MTLStorageModePrivate;
-        id<MTLTexture> texture = [c->device newTextureWithDescriptor:d];
+        id<MTLTexture> texture = target&&i==scene->output_image?target->image:[c->device newTextureWithDescriptor:d];
+        if(target&&i==scene->output_image)[retained addObject:target];
         if (!texture)
             return MAG_NATIVE_ALLOCATION_FAILED;
         if (im->upload.id) {
@@ -338,11 +339,35 @@ static int metal_submit_scene(void *opaque, const mag_native_scene *scene, mag_n
     if (status)
         return status < 0 ? status : MAG_NATIVE_DEVICE_FAILED;
     @try {
-        return metal_scene_owned(opaque, scene, out);
+        return metal_scene_owned(opaque, scene, out,nil);
     } @catch (NSException *e) {
         (void)e;
         return out->submission_id ? MAG_NATIVE_INDETERMINATE : MAG_NATIVE_DEVICE_FAILED;
     } @finally {
         c->host.end(c->host.userdata, c->host.lifetime);
     }
+}
+
+static int metal_image_import(void *opaque,const MagRenderHostImage *host,mag_native_image *out){
+ MagRenderMetal *c=context(opaque);
+ if(host->backend!=MAG_RENDER_HOST_METAL||host->owner_lifetime!=c->host.lifetime)return MAG_NATIVE_STALE;
+ if(c->images.count>=64||c->next_image==UINT64_MAX)return MAG_NATIVE_ALLOCATION_FAILED;
+ int status=host->retain(host->userdata,host->owner_lifetime,host->resource_id,host->resource_generation);if(status)return status<0?status:MAG_NATIVE_DEVICE_FAILED;
+ id<MTLTexture> image=(__bridge id<MTLTexture>)host->image;
+ if(!image||image.device!=c->device||image.width!=host->width||image.height!=host->height||!host->width||!host->height||!(image.usage&MTLTextureUsageRenderTarget)||image.textureType!=MTLTextureType2D||image.sampleCount!=1||host->format!=MAG_NATIVE_SCENE_RGBA8||image.pixelFormat!=MTLPixelFormatRGBA8Unorm){host->release(host->userdata,host->owner_lifetime,host->resource_id,host->resource_generation);return MAG_NATIVE_UNSUPPORTED;}
+ MagRenderImportedImage *record=[MagRenderImportedImage new];record->image=image;record->host=*host;uint64_t id=++c->next_image;c->images[@(id)]=record;*out=(mag_native_image){c->generation,id};return MAG_NATIVE_OK;
+}
+static int metal_image_release(void *opaque,mag_native_image ref){
+ MagRenderMetal *c=context(opaque);if(ref.device_generation!=c->generation||!ref.id||!c->images[@(ref.id)])return MAG_NATIVE_STALE;[c->images removeObjectForKey:@(ref.id)];return MAG_NATIVE_OK;
+}
+static int metal_submit_scene_target(void *opaque,const mag_native_scene *scene,mag_native_image ref,mag_native_ticket *out){
+ MagRenderMetal *c=context(opaque);if(ref.device_generation!=c->generation||!ref.id)return MAG_NATIVE_STALE;
+ MagRenderImportedImage *target=c->images[@(ref.id)];if(!target)return MAG_NATIVE_STALE;
+ int status=c->host.try_begin(c->host.userdata,c->host.lifetime);if(status)return status<0?status:MAG_NATIVE_DEVICE_FAILED;
+ @try{
+  status=target->host.validate(target->host.userdata,target->host.owner_lifetime,target->host.resource_id,target->host.resource_generation);if(status)return status<0?status:MAG_NATIVE_DEVICE_FAILED;
+  if(!scene->images||scene->output_image>=scene->image_count)return MAG_NATIVE_INVALID;
+  const mag_native_scene_image *im=&scene->images[scene->output_image];if(im->format!=target->host.format||im->width!=target->host.width||im->height!=target->host.height||im->upload.id||im->upload.device_generation||im->upload.version)return MAG_NATIVE_INVALID;
+  return metal_scene_owned(opaque,scene,out,target);
+ }@catch(NSException *e){(void)e;return out->submission_id?MAG_NATIVE_INDETERMINATE:MAG_NATIVE_DEVICE_FAILED;}@finally{c->host.end(c->host.userdata,c->host.lifetime);}
 }

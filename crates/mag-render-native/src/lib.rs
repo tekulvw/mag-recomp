@@ -196,3 +196,11 @@ pub mod batch_device;
 mod draw_probe;
 
 mod scene_probe;
+
+pub mod host_image;
+
+/// Version of the frontend-owned native implementation linked into a client.
+#[unsafe(no_mangle)]
+pub extern "C" fn mag_render_native_abi_version() -> u32 {
+    1
+}

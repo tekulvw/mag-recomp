@@ -37,10 +37,10 @@ add_dependencies(native_regression native_rust)
 target_compile_features(native_regression PRIVATE cxx_std_17)
 target_compile_options(native_regression PRIVATE -O1 -g -UNDEBUG)
 target_compile_definitions(native_regression PRIVATE PS3RECOMP_DISABLE_NATIVE_OSK RSX_RING_PROGRESS_OPTIONAL)
-target_include_directories(native_regression PRIVATE "${NATIVE_ROOT}/native" "${SDK}/include" "${SDK}/libs/video")
+target_include_directories(native_regression PRIVATE "${NATIVE_ROOT}/native" "${PUBLIC_ROOT}/src" "${SDK}/include" "${SDK}/libs/video")
 target_link_libraries(native_regression PRIVATE "${ARCHIVE}")
 if(MAG_RENDER_NATIVE_BACKEND STREQUAL "metal")
-    target_sources(native_regression PRIVATE metal_main.mm draw_main.mm scene_main.mm metal_owner.m
+    target_sources(native_regression PRIVATE metal_main.mm draw_main.mm scene_main.mm metal_owner.m "${PUBLIC_ROOT}/src/mag_render_host_bridge.cpp"
         "${SDK}/libs/video/rsx_shader_msl.cpp" "${SDK}/libs/input/pad_macos.m")
     target_compile_options(native_regression PRIVATE "$<$<COMPILE_LANGUAGE:OBJC,OBJCXX>:-fobjc-arc>")
     target_link_options(native_regression PRIVATE -Wl,-dead_strip)

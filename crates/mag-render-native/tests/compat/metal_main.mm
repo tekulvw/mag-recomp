@@ -10,7 +10,10 @@ extern "C" void mag_render_test_owner_signal(void *);
 extern "C" void mag_render_test_owner_close(int);
 int mag_render_draw_main(const char *,bool);
 int mag_render_scene_main(const char *,bool);
+int mag_render_scene_target_main(const char *,bool,bool);
 int main(int argc,char **argv) {
+    if(argc==3&&!std::strcmp(argv[1],"--scene-target"))return mag_render_scene_target_main(argv[2],true,true);
+    if(argc==3&&!std::strcmp(argv[1],"--scene-target-no-readback"))return mag_render_scene_target_main(argv[2],false,true);
     if(argc==3&&!std::strcmp(argv[1],"--scene"))return mag_render_scene_main(argv[2],true);
     if(argc==3&&!std::strcmp(argv[1],"--scene-no-readback"))return mag_render_scene_main(argv[2],false);
     if(argc==3&&!std::strcmp(argv[1],"--draw"))return mag_render_draw_main(argv[2],true);

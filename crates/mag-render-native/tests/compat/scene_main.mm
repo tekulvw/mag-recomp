@@ -6,6 +6,8 @@
 #include <vector>
 extern "C" int mag_render_test_owner_open(MagRenderHostOwner *);
 extern "C" int mag_render_test_owner_gate(void);
+extern "C" int mag_render_test_owner_image(MagRenderHostImage*);
+extern "C" int mag_render_test_owner_image_check(void);
 extern "C" const char *mag_render_test_owner_name(void);
 extern "C" void mag_render_test_owner_signal(void *);
 extern "C" void mag_render_test_owner_close(int);
@@ -16,9 +18,9 @@ struct SceneProbeReport {
     uint64_t retained_before_terminal, retained_after_terminal;
     uint32_t center_rgba, ui_rgba, shadow_rgba, outside_rgba, pass_count, draw_count;
 };
-extern "C" int mag_render_native_scene_probe(const MagRenderHostOwner *, const mag_native_pipeline_desc *,
+extern "C" int mag_render_native_scene_probe_target(const MagRenderHostOwner *, const mag_native_pipeline_desc *,
                                              const mag_native_pipeline_desc *,
-                                             const mag_native_scene_graphics_desc *, uint32_t,
+                                             const mag_native_scene_graphics_desc *, const MagRenderHostImage*,uint32_t,
                                              void (*)(void *), void *, SceneProbeReport *);
 static std::vector<mag_native_scene_buffer_layout> buffers(Shader &shader, uint32_t stage) {
     std::vector<mag_native_scene_buffer_layout> out;
@@ -83,7 +85,7 @@ static void check_rejected_scenes(const MagRenderHostOwner *owner) {
     rejected(); // Explicit attachment format.
     assert(mag_native_close(device) == 0);
 }
-int mag_render_scene_main(const char *directory, bool diagnostic) {
+int mag_render_scene_target_main(const char *directory, bool diagnostic,bool imported) {
     @autoreleasepool {
         NSString *root = [NSString stringWithUTF8String:directory];
         Shader first = {}, second = {}, vertex = {}, fragment = {}, cutout = {};
@@ -150,7 +152,8 @@ int mag_render_scene_main(const char *directory, bool diagnostic) {
         graphics[4].textures = &cutout_texture;
         graphics[4].texture_count = 1;
         MagRenderHostOwner owner = {};
-        if (mag_render_test_owner_open(&owner) || mag_render_test_owner_gate()) {
+        MagRenderHostImage target={};
+        if (mag_render_test_owner_open(&owner) || (imported&&mag_render_test_owner_image(&target)) || mag_render_test_owner_gate()) {
             mag_render_test_owner_close(1);
             return 3;
         }
@@ -160,9 +163,10 @@ int mag_render_scene_main(const char *directory, bool diagnostic) {
         report.abi_version = 1;
         report.struct_size = sizeof(report);
         int status =
-            mag_render_native_scene_probe(&owner, &first.compute, &second.compute, graphics,
+            mag_render_native_scene_probe_target(&owner, &first.compute, &second.compute, graphics,imported?&target:NULL,
                                           diagnostic ? 1 : 0, mag_render_test_owner_signal, NULL, &report);
         mag_render_test_owner_signal(NULL);
+        if(status==0&&imported&&diagnostic)status=mag_render_test_owner_image_check();
         mag_render_test_owner_close(report.pending == 0);
         NSDictionary *result = @{
             @"device" : name,
@@ -180,6 +184,7 @@ int mag_render_scene_main(const char *directory, bool diagnostic) {
             @"draws" : @(report.draw_count),
             @"diagnostic_readback" : @(diagnostic),
             @"physical_presentation" : @NO,
+            @"imported_original_target":@(imported),
             @"native_rejection_cases" : @7
         };
         NSData *encoded = [NSJSONSerialization dataWithJSONObject:result
@@ -192,3 +197,5 @@ int mag_render_scene_main(const char *directory, bool diagnostic) {
                    : 1;
     }
 }
+
+int mag_render_scene_main(const char *directory,bool diagnostic){return mag_render_scene_target_main(directory,diagnostic,false);}

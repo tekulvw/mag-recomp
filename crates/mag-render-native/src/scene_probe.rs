@@ -266,11 +266,12 @@ fn make_scene(
 /// Genuine retained host descriptor and synchronous readable native pipeline
 /// descriptors/report. Signal must release only this fixture's actual queue gate.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn mag_render_native_scene_probe(
+pub unsafe extern "C" fn mag_render_native_scene_probe_target(
     owner: *const HostOwner,
     first: *const PipelineDesc,
     second: *const PipelineDesc,
     graphics: *const SceneGraphicsDesc,
+    image: *const crate::host_image::HostImage,
     diagnostic: u32,
     signal: Option<unsafe extern "C" fn(*mut c_void)>,
     user: *mut c_void,
@@ -291,11 +292,19 @@ pub unsafe extern "C" fn mag_render_native_scene_probe(
     }
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<(), i32> {
         let mut context = unsafe { NativeContext::from_host(&*owner) }?;
+        let target = if image.is_null() {
+            None
+        } else {
+            Some(unsafe { context.import_image(&*image) }?)
+        };
         let mut device = context.scene(BatchDeviceLimits {
             max_bytes: 1024 * 1024,
             max_pipelines: 8,
             diagnostic_readback: diagnostic == 1,
         })?;
+        if let Some(target) = target {
+            device.output_target(target)?;
+        }
         let descriptors = unsafe { std::slice::from_raw_parts(graphics, 5) };
         let mut pipes = [0u64; 7];
         pipes[0] = unsafe { device.compute_pipeline(&*first) }?;
@@ -465,4 +474,32 @@ pub unsafe extern "C" fn mag_render_native_scene_probe(
         (*report).status = status;
     }
     status
+}
+
+/// # Safety
+/// Same synchronous descriptor/owner/signal contract as the target variant.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mag_render_native_scene_probe(
+    owner: *const HostOwner,
+    first: *const PipelineDesc,
+    second: *const PipelineDesc,
+    graphics: *const SceneGraphicsDesc,
+    diagnostic: u32,
+    signal: Option<unsafe extern "C" fn(*mut c_void)>,
+    user: *mut c_void,
+    report: *mut SceneProbeReport,
+) -> i32 {
+    unsafe {
+        mag_render_native_scene_probe_target(
+            owner,
+            first,
+            second,
+            graphics,
+            std::ptr::null(),
+            diagnostic,
+            signal,
+            user,
+            report,
+        )
+    }
 }

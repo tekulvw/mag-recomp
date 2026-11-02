@@ -20,6 +20,9 @@ typedef struct mag_native_ops {
     int (*submit_batch)(void *,const mag_native_batch *,mag_native_ticket *);
     int (*scene_graphics_create)(void *,const mag_native_scene_graphics_desc *,mag_native_pipeline *);
     int (*submit_scene)(void *,const mag_native_scene *,mag_native_ticket *);
+    int (*image_import)(void *,const MagRenderHostImage *,mag_native_image *);
+    int (*image_release)(void *,mag_native_image);
+    int (*submit_scene_target)(void *,const mag_native_scene *,mag_native_image,mag_native_ticket *);
 } mag_native_ops;
 mag_native_device *mag_native_wrap(const mag_native_ops *, void *);
 int mag_native_close(mag_native_device *);

@@ -1,6 +1,7 @@
 #ifndef MAG_RENDER_SCENE_H
 #define MAG_RENDER_SCENE_H
 #include "mag_render_batch.h"
+#include "mag_render_host_image.h"
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -92,6 +93,9 @@ typedef struct mag_native_scene {
 /* Synchronous complete validation + reservation before queue effects. Ordered
  * compute prefix then passes share one native submission/terminal ticket.
  * These methods do not assert that an offscreen image was physically presented. */
+int mag_native_image_import(mag_native_device *,const MagRenderHostImage *,mag_native_image *);
+int mag_native_image_release(mag_native_device *,mag_native_image);
+int mag_native_submit_scene_target(mag_native_device *,const mag_native_scene *,mag_native_image,mag_native_ticket *);
 int mag_native_scene_layout(uint32_t *, uint32_t);
 int mag_native_scene_graphics_create(mag_native_device *, const mag_native_scene_graphics_desc *,
                                      mag_native_pipeline *);

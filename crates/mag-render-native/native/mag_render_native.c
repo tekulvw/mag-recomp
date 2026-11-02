@@ -103,3 +103,17 @@ int mag_native_submit_scene(mag_native_device *device,const mag_native_scene *sc
  if(!device||!scene||scene->struct_size!=sizeof(*scene)||scene->abi_version!=MAG_NATIVE_SCENE_ABI||!out)return MAG_NATIVE_INVALID;
  return device->ops->submit_scene?device->ops->submit_scene(device->context,scene,out):MAG_NATIVE_UNSUPPORTED;
 }
+
+int mag_native_image_import(mag_native_device *device,const MagRenderHostImage *desc,mag_native_image *out){
+ if(out)memset(out,0,sizeof(*out));
+ if(!device||!desc||!out||desc->abi_version!=MAG_RENDER_HOST_IMAGE_ABI||desc->struct_size!=sizeof(*desc)||desc->reserved||desc->reserved1||!desc->owner_lifetime||!desc->resource_id||!desc->resource_generation||!desc->retain||!desc->release||!desc->validate)return MAG_NATIVE_INVALID;
+ return device->ops->image_import?device->ops->image_import(device->context,desc,out):MAG_NATIVE_UNSUPPORTED;
+}
+int mag_native_image_release(mag_native_device *device,mag_native_image ref){
+ if(!device){return MAG_NATIVE_INVALID;}return device->ops->image_release?device->ops->image_release(device->context,ref):MAG_NATIVE_UNSUPPORTED;
+}
+int mag_native_submit_scene_target(mag_native_device *device,const mag_native_scene *scene,mag_native_image ref,mag_native_ticket *out){
+ if(out)memset(out,0,sizeof(*out));
+ if(!device||!scene||!out||scene->struct_size!=sizeof(*scene)||scene->abi_version!=MAG_NATIVE_SCENE_ABI||!ref.device_generation||!ref.id)return MAG_NATIVE_INVALID;
+ return device->ops->submit_scene_target?device->ops->submit_scene_target(device->context,scene,ref,out):MAG_NATIVE_UNSUPPORTED;
+}

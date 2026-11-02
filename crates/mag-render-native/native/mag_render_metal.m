@@ -13,6 +13,13 @@
 }
 @end
 @implementation MagRenderBuffer @end
+@interface MagRenderImportedImage : NSObject {
+@public id<MTLTexture> image;MagRenderHostImage host;
+}
+@end
+@implementation MagRenderImportedImage
+- (void)dealloc { if(host.release)host.release(host.userdata,host.owner_lifetime,host.resource_id,host.resource_generation); }
+@end
 @interface MagRenderPipeline : NSObject {
 @public id<MTLComputePipelineState> gpu; MTLSize threads;
     id<MTLRenderPipelineState> graphics;id<MTLDepthStencilState> depth;
@@ -43,6 +50,7 @@
     NSMutableDictionary<NSNumber *, NSNumber *> *versions;
     NSMutableDictionary<NSNumber *, MagRenderPipeline *> *pipelines;
     NSMutableArray<MagRenderSubmission *> *pending;
+    NSMutableDictionary<NSNumber*,MagRenderImportedImage*> *images;uint64_t next_image;
     uint64_t generation, next_buffer, next_pipeline, next_submission;
     MagRenderHostOwner host;
 }
@@ -272,13 +280,13 @@ static int metal_close(void *opaque) {
     MagRenderMetal *c=context(opaque);
     if (c->pending.count) return MAG_NATIVE_BUSY;
     MagRenderHostOwner host=c->host;
-    [c->buffers removeAllObjects];[c->pipelines removeAllObjects];[c->versions removeAllObjects];
+    [c->buffers removeAllObjects];[c->pipelines removeAllObjects];[c->versions removeAllObjects];[c->images removeAllObjects];
     c->queue=nil;c->device=nil;
     (void)CFBridgingRelease(opaque);
     host.release(host.userdata,host.lifetime);return MAG_NATIVE_OK;
 }
 static const mag_native_ops metal_ops = {metal_caps, metal_buffer_create, metal_buffer_release,
-    metal_buffer_read, metal_pipeline_create, metal_pipeline_release, metal_submit, metal_poll, metal_close,metal_graphics_create,metal_submit_batch,metal_scene_graphics_create,metal_submit_scene};
+    metal_buffer_read, metal_pipeline_create, metal_pipeline_release, metal_submit, metal_poll, metal_close,metal_graphics_create,metal_submit_batch,metal_scene_graphics_create,metal_submit_scene,metal_image_import,metal_image_release,metal_submit_scene_target};
 int mag_native_metal_create(const MagRenderHostOwner *owner,mag_native_device **out) {
     if (!owner || !out || owner->backend!=MAG_RENDER_HOST_METAL) return MAG_NATIVE_INVALID;
     *out=NULL;int status=owner->retain(owner->userdata,owner->lifetime);
@@ -291,7 +299,7 @@ int mag_native_metal_create(const MagRenderHostOwner *owner,mag_native_device **
     c->generation=mag_native_next_generation();
     if (!c->generation) {owner->release(owner->userdata,owner->lifetime);return MAG_NATIVE_ALLOCATION_FAILED;}
     c->buffers=[NSMutableDictionary new];c->versions=[NSMutableDictionary new];
-    c->pipelines=[NSMutableDictionary new];c->pending=[NSMutableArray new];
+    c->pipelines=[NSMutableDictionary new];c->pending=[NSMutableArray new];c->images=[NSMutableDictionary new];
     void *opaque=(__bridge_retained void *)c;
     *out=mag_native_wrap(&metal_ops,opaque);
     if (!*out) {metal_close(opaque);return MAG_NATIVE_ALLOCATION_FAILED;}

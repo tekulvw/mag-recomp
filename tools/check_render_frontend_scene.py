@@ -23,7 +23,7 @@ def sources(sdk):
             if path.is_file() and path.suffix in (".h", ".inc"):
                 result[f"sdk/{path.relative_to(sdk)}"] = digest(path)
     for path in [Path(__file__), *(NATIVE / "native").glob("mag_render_scene*"),
-                 NATIVE / "native/mag_render_metal_scene.inc"]:
+                 NATIVE / "native/mag_render_metal_scene.inc",NATIVE/"native/mag_render_host_image.h",ROOT/"src/mag_render_host_bridge.cpp",ROOT/"src/mag_render_host_bridge.h"]:
         result[f"public/{path.relative_to(ROOT)}"] = digest(path)
     return result
 
@@ -62,12 +62,13 @@ def check(args):
     executable = args.build_dir / "native_regression"
     environment = dict(os.environ, MTL_DEBUG_LAYER="1")
     results = {}
-    for mode in ("scene", "scene-no-readback"):
+    modes=("scene-target","scene-target-no-readback") if args.target else ("scene","scene-no-readback")
+    for mode in modes:
         child = run([executable, "--" + mode, args.shader_root], timeout=20, env=environment)
         receipt = json.loads(child.stdout)
         expected = dict(status=0, submitted=2, completed=2, pending=0,
                         retained_before_terminal=608, retained_after_terminal=0,
-                        passes=6, draws=7, diagnostic_readback=mode == "scene",
+                        passes=6, draws=7, diagnostic_readback=not mode.endswith("no-readback"),imported_original_target=args.target,
                         physical_presentation=False, native_rejection_cases=7)
         if any(receipt.get(k) != v for k, v in expected.items()):
             raise RuntimeError(f"unexpected scene result: {receipt}")
@@ -87,6 +88,7 @@ def check(args):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--target",action="store_true",help="Render into an exact retained original-engine image")
     parser.add_argument("--sdk-source", required=True, type=Path)
     parser.add_argument("--shader-root", required=True, type=Path)
     parser.add_argument("--build-dir", required=True, type=Path)

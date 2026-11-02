@@ -76,3 +76,28 @@ void mag_render_test_owner_close(int drained) {
     native_prior=nil;native_gate=nil;if(!drained)return;
     rsx_metal_backend_shutdown();
 }
+
+#include "mag_render_scene.h"
+#include "mag_render_host_bridge.h"
+static u32 native_scene_target;
+int mag_render_test_owner_image(MagRenderHostImage *out){
+ u32 old=s_engine_backend.color_target_create(NULL,RSX_BE_FMT_R8G8B8A8,64,64,NULL,0);if(!old)return -1;
+ MagRenderHostImage stale={.abi_version=1,.struct_size=sizeof(stale)};
+ assert(mag_render_frontend_borrow_image(borrowed.lifetime,old,&stale)==0);
+ s_engine_backend.color_target_release(NULL,old);
+ MagRenderHostOwner owner;translate(&owner);mag_native_device *probe=NULL;assert(mag_native_create(&owner,&probe)==0);
+ stale.image=(void*)1;mag_native_image rejected={0};assert(mag_native_image_import(probe,&stale,&rejected)==MAG_NATIVE_STALE);assert(!rejected.id&&!rejected.device_generation);assert(mag_native_close(probe)==0);
+ u32 reuse=s_engine_backend.color_target_create(NULL,RSX_BE_FMT_R8G8B8A8,64,64,NULL,0);assert(reuse==old);
+ MagRenderHostImage pinned={.abi_version=1,.struct_size=sizeof(pinned)};assert(mag_render_frontend_borrow_image(borrowed.lifetime,reuse,&pinned)==0);assert(pinned.resource_generation!=stale.resource_generation);
+ assert(pinned.retain(pinned.userdata,pinned.owner_lifetime,pinned.resource_id,pinned.resource_generation)==0);
+ s_engine_backend.color_target_release(NULL,reuse);assert(s_eng_obj[reuse-1]&&s_eng_obj_native_pins[reuse-1]==1);
+ assert(s_engine_backend.submit_and_wait_checked(NULL,0));assert(owner.try_begin(owner.userdata,owner.lifetime)==0);
+ assert(pinned.validate(pinned.userdata,pinned.owner_lifetime,pinned.resource_id,pinned.resource_generation)==MAG_NATIVE_STALE);owner.end(owner.userdata,owner.lifetime);
+ pinned.release(pinned.userdata,pinned.owner_lifetime,pinned.resource_id,pinned.resource_generation);assert(!s_eng_obj[reuse-1]);
+ native_scene_target=s_engine_backend.color_target_create(NULL,RSX_BE_FMT_R8G8B8A8,64,64,NULL,0);if(!native_scene_target)return -1;
+ *out=(MagRenderHostImage){.abi_version=1,.struct_size=sizeof(*out)};int status=mag_render_frontend_borrow_image(borrowed.lifetime,native_scene_target,out);
+ assert(s_engine_backend.submit_and_wait_checked(NULL,0));return status;
+}
+int mag_render_test_owner_image_check(void){
+ uint32_t pixel=0;s_engine_backend.readback(NULL,native_scene_target,32,32,1,1,&pixel,4);return pixel==0xff404000u?0:-1;
+}
