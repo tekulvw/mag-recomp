@@ -306,3 +306,30 @@ fn texture_usage_refuses_unterminated_truncated_or_unadmitted_flow() {
         Err(ProgramError::Unsupported)
     );
 }
+
+#[test]
+fn alpha_reference_uses_source_surface_formats_not_native_format_ids() {
+    for format in [1, 2, 3, 4, 5, 8, 9, 10, 14, 15, 16] {
+        assert_eq!(
+            fragment_alpha_reference(0xabcdef80, format),
+            Ok((128f32 / 255.).to_bits())
+        );
+    }
+    assert_eq!(fragment_alpha_reference(0x3c00, 11), Ok(1f32.to_bits()));
+    assert_eq!(fragment_alpha_reference(0x8000, 11), Ok((-0f32).to_bits()));
+    assert_eq!(
+        fragment_alpha_reference(1, 11),
+        Ok(2f32.powi(-24).to_bits())
+    );
+    for format in [12, 13] {
+        for bits in [0x3f123456, 0xbf800000, 0x80000000] {
+            assert_eq!(fragment_alpha_reference(bits, format), Ok(bits));
+        }
+    }
+    for format in [0, 6, 7, 17, 31, 0x108] {
+        assert_eq!(
+            fragment_alpha_reference(0, format),
+            Err(ProgramError::Invalid)
+        );
+    }
+}

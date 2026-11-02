@@ -103,3 +103,21 @@ return exact row indices; indexed accesses require the full bank. Callers may
 zero physical padding for statically unused unknown rows while keeping those
 rows unknown in persistent material state. This avoids inventing a reset or
 requiring unwritten rows that the program cannot read.
+
+`fragment_texture_units` reports actual sampled units through the isolated ISA
+parser after the same bounded, terminated-stream and flow admission as shader
+translation. Inline literals are skipped. This is read metadata, not shader
+support, resource ownership or native execution.
+
+`fragment_alpha_reference` converts a raw alpha-reference word using an explicit
+source NV4097 surface-color code (low five bits only), not a native image-format
+ID. It accepts known source codes and rejects reserved/unknown codes. Formats11,
+12 and13 interpret the reference as half or float; integer formats, including
+14..16, use the low byte divided by255. This corrects an inherited format-number
+mismatch in the isolated helper; the SDK renderer is unchanged. The source format
+facts and conversion rule are independently corroborated by
+[RPCS3's surface-format enum](https://github.com/RPCS3/rpcs3/blob/master/rpcs3/Emu/RSX/gcm_enums.h)
+and [its alpha-reference accessor](https://github.com/RPCS3/rpcs3/blob/master/rpcs3/Emu/RSX/rsx_methods.h).
+No RPCS3 implementation is copied. Signed zero and half subnormals survive the
+existing pure conversion, and changing alpha-reference values remains uniform
+data rather than a shader-structure change.

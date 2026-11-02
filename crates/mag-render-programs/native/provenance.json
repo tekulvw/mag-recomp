@@ -23,6 +23,7 @@
     "Prefix all exported compiler functions/counter to isolate legacy state",
     "Use standalone integer aliases and original bounded logging helper",
     "Disable environment-controlled shader debugging; production input is explicit",
-    "Clarify an inherited nested comment without changing executable semantics"
+    "Clarify an inherited nested comment without changing executable semantics",
+    "Correct isolated alpha-reference conversion to actual NV4097 source surface formats11/12/13 for float surfaces;14/15/16 remain integer BGR. Original SDK implementation is unchanged."
   ]
 }

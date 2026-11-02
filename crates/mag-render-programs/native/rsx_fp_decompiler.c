@@ -1511,11 +1511,11 @@ static float fp_half_to_float(u16 h)
 
 float mrf_rsx_fp_alpha_ref(u32 raw, u32 surface_color_format)
 {
-    /* NV4097 surface color formats: 14=W16Z16Y16X16,
-     * 15=W32Z32Y32X32, 16=X32. */
-    if (surface_color_format == 14u)
+    /* NV4097 source surface-color formats: 11=W16Z16Y16X16,
+     * 12=W32Z32Y32X32, 13=X32. Codes14..16 are integer BGR formats. */
+    if (surface_color_format == 11u)
         return fp_half_to_float((u16)(raw & 0xFFFFu));
-    if (surface_color_format == 15u || surface_color_format == 16u) {
+    if (surface_color_format == 12u || surface_color_format == 13u) {
         float value;
         memcpy(&value, &raw, sizeof(value));
         return value;

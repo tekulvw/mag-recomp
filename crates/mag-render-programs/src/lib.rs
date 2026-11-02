@@ -221,6 +221,7 @@ pub struct FragmentProgram<'a> {
 }
 unsafe extern "C" {
     fn mrf_rsx_fp_texture_units(code: *const u8, size: u32) -> u32;
+    fn mrf_rsx_fp_alpha_ref(raw: u32, surface_color_format: u32) -> f32;
     fn mrf_rsx_fp_decompile_buffered_shadow_color_expand_vol_ex(
         code: *const u8,
         size: u32,
@@ -343,6 +344,17 @@ pub fn fragment_texture_units(bytes: &[u8]) -> Result<u16, ProgramError> {
     // span. The existing isolated parser only reads that span under our lock.
     let mask = unsafe { mrf_rsx_fp_texture_units(bytes.as_ptr(), stream.end as u32) };
     u16::try_from(mask).map_err(|_| ProgramError::Compiler)
+}
+/// Alpha reference conversion from the source NV4097 surface-color code
+/// (low five bits only), not the native attachment-format enum. The isolated
+/// retained helper is pure and preserves float/half semantics without an SDK
+/// state read. Raw upper format bits and unknown format codes are rejected.
+pub fn fragment_alpha_reference(raw: u32, source_color_format: u32) -> Result<u32, ProgramError> {
+    if !matches!(source_color_format, 1..=5 | 8..=16) {
+        return Err(ProgramError::Invalid);
+    }
+    // SAFETY: pure scalar conversion, no pointers, mutable globals or callbacks.
+    Ok(unsafe { mrf_rsx_fp_alpha_ref(raw, source_color_format) }.to_bits())
 }
 pub fn fragment(program: FragmentProgram<'_>) -> Result<HlslProgram, ProgramError> {
     fragment_with_texcoords(program, [0; 10])
