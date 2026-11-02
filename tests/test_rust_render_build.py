@@ -41,6 +41,8 @@ class RustRenderBuildTests(unittest.TestCase):
             shutil.copy2(ROOT / "rust-toolchain.toml", directory)
             shutil.copytree(ROOT / "crates/mag-render", directory / "crates/mag-render",
                             ignore=shutil.ignore_patterns("target"))
+            shutil.copytree(ROOT / "crates/mag-render-abi", directory / "crates/mag-render-abi",
+                            ignore=shutil.ignore_patterns("target"))
             (directory / "src").mkdir()
             shutil.copy2(ROOT / "src/mag_render_frontend.h", directory / "src")
 
@@ -82,7 +84,7 @@ class RustRenderBuildTests(unittest.TestCase):
             self.assertEqual(set(entries), {
                 "rust-render-sources", "rust-render-manifest", "rust-render-lock",
                 "rust-render-toolchain", "rust-render-build", "rust-render-header",
-                "rust-render-library",
+                "rust-render-library", "rust-render-abi-sources", "rust-render-abi-manifest",
             })
             self.assertTrue(all(Path(value).exists() for value in entries.values()))
             before = extension_record(entries)

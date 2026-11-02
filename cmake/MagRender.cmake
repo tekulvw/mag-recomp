@@ -57,7 +57,8 @@ function(mag_enable_render_frontend target)
         set(_library "${_cargo_output}/release/lib${_library_name}.a")
     endif()
     file(GLOB_RECURSE _rust_sources CONFIGURE_DEPENDS "${_crate}/src/*.rs")
-    set(_extra_dependencies "")
+    file(GLOB_RECURSE _abi_sources CONFIGURE_DEPENDS "${_root}/crates/mag-render-abi/src/*.rs")
+    set(_extra_dependencies ${_abi_sources} "${_root}/crates/mag-render-abi/Cargo.toml")
     if(MAG_RENDER_FRONTEND_NATIVE)
         file(GLOB_RECURSE _native_sources CONFIGURE_DEPENDS "${_crate}/native/*" "${_root}/crates/mag-render/src/*.rs")
         file(GLOB_RECURSE _shader_sources CONFIGURE_DEPENDS "${_root}/crates/mag-render-shaders/src/*.rs")
@@ -65,7 +66,7 @@ function(mag_enable_render_frontend target)
             ${_shader_sources} "${_root}/crates/mag-render-shaders/Cargo.toml"
             "${_root}/shaders/render_frontend/scene_vertex.wgsl"
             "${_root}/shaders/render_frontend/scene_fragment.wgsl"
-            "${_root}/src/mag_render_client.h"
+            "${_root}/src/mag_render_client.h" "${_root}/src/mag_render_scene_packet.h"
             "${_root}/crates/mag-render/Cargo.toml" "${_root}/crates/mag-render/Cargo.lock")
     endif()
     add_custom_command(OUTPUT "${_library}"
@@ -110,12 +111,15 @@ function(mag_enable_render_frontend target)
             "rust-render-host-bridge=${_root}/src/mag_render_host_bridge.cpp"
             "rust-render-host-header=${_root}/src/mag_render_host_bridge.h"
             "rust-render-client-header=${_root}/src/mag_render_client.h"
+            "rust-render-packet-header=${_root}/src/mag_render_scene_packet.h"
             "rust-render-client-shader-generator=${_root}/crates/mag-render-shaders/src"
             "rust-render-client-shader-manifest=${_root}/crates/mag-render-shaders/Cargo.toml"
             "rust-render-client-vertex=${_root}/shaders/render_frontend/scene_vertex.wgsl"
             "rust-render-client-fragment=${_root}/shaders/render_frontend/scene_fragment.wgsl")
     endif()
     set(MAG_RENDER_RECEIPT_EXTRA
+        "rust-render-abi-sources=${_root}/crates/mag-render-abi/src"
+        "rust-render-abi-manifest=${_root}/crates/mag-render-abi/Cargo.toml"
         "rust-render-sources=${_crate}/src"
         "rust-render-manifest=${_crate}/Cargo.toml"
         "rust-render-lock=${_crate}/Cargo.lock"
