@@ -2,3 +2,5 @@
 pub mod accounting;
 pub mod ffi;
 pub mod types;
+
+pub mod resources;
