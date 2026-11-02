@@ -23,6 +23,9 @@ fn native_compiler() {
     if let Some(prefix) = env::var_os("CMAKE_PREFIX_PATH") {
         configure.arg(format!("-DCMAKE_PREFIX_PATH={}", prefix.to_string_lossy()));
     }
+    if let Some(package) = env::var_os("MAG_RENDER_GLSLANG_DIR") {
+        configure.arg(format!("-Dglslang_DIR={}", package.to_string_lossy()));
+    }
     run(&mut configure);
     run(Command::new("cmake").arg("--build").arg(&output).args([
         "--config",
@@ -65,6 +68,7 @@ fn native_compiler() {
         _ => {}
     }
     println!("cargo:rerun-if-env-changed=CMAKE_PREFIX_PATH");
+    println!("cargo:rerun-if-env-changed=MAG_RENDER_GLSLANG_DIR");
     println!("cargo:rerun-if-changed=native/compiler.cpp");
     println!("cargo:rerun-if-changed=native/CMakeLists.txt");
 }

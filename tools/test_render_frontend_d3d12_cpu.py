@@ -22,7 +22,7 @@ FIXTURES = ROOT / "crates/mag-render-native/tests/native"
 def run(command):
     result = subprocess.run([str(arg) for arg in command], capture_output=True, text=True, timeout=120)
     if result.returncode:
-        raise RuntimeError(f"{Path(command[0]).name} failed ({result.returncode}):\n"
+        raise RuntimeError(f"{Path(command[0]).name} failed ({result.returncode}): {list(map(str, command))!r}\n"
                            f"{result.stdout}{result.stderr}")
     return result.stdout.strip()
 
@@ -32,6 +32,9 @@ def check(args):
     compiler = args.compiler or os.environ.get("CXX") or ("clang-cl" if windows else "c++")
     if not shutil.which(compiler):
         raise RuntimeError(f"required C++ compiler is unavailable: {compiler}")
+    c_compiler = compiler if windows else (args.c_compiler or os.environ.get("CC") or "cc")
+    if not shutil.which(c_compiler):
+        raise RuntimeError(f"required C compiler is unavailable: {c_compiler}")
     if windows and (not args.dxc_include or not (args.dxc_include / "dxcapi.h").is_file()):
         raise RuntimeError("Windows fixture requires --dxc-include containing the pinned dxcapi.h")
     args.output_dir.mkdir(parents=True, exist_ok=True)
@@ -81,7 +84,7 @@ def check(args):
                        f"/I{args.dxc_include}", f"/Fo{args.output_dir}{os.sep}",
                        *inputs, f"/Fe{binary}"]
         else:
-            command = [compiler, *( ["-x", "c", "-std=c11"] if c_only else ["-std=c++17"] ), "-Wall", "-Wextra", "-Werror", f"-I{NATIVE}", *inputs, "-o", binary]
+            command = [c_compiler if c_only else compiler, *( ["-x", "c", "-std=c11"] if c_only else ["-std=c++17"] ), "-Wall", "-Wextra", "-Werror", f"-I{NATIVE}", *inputs, "-o", binary]
         if args.vulkan_include and name == "vulkan_scene_extended":
             command.insert(1, f"-I{args.vulkan_include}")
         run(command)
@@ -89,6 +92,7 @@ def check(args):
         sources.update(path for path in inputs if path.suffix != ".obj")
     return {"schema_version": 1, "host": sys.platform, "compiler": compiler,
             "compiler_version": run([compiler, "--version"]),
+            "c_compiler": c_compiler, "c_compiler_version": run([c_compiler, "--version"]),
             "checks": results, "gpu_execution": "pending",
             "source_sha256": {str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest()
                               for path in sorted(sources)}}
@@ -97,6 +101,7 @@ def check(args):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--compiler")
+    parser.add_argument("--c-compiler")
     parser.add_argument("--vulkan-include", type=Path)
     parser.add_argument("--dxc-include", type=Path)
     parser.add_argument("--output-dir", type=Path, required=True)
