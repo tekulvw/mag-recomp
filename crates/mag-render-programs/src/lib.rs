@@ -220,6 +220,7 @@ pub struct FragmentProgram<'a> {
     pub texture_dimensions: [[u32; 2]; 16],
 }
 unsafe extern "C" {
+    fn mrf_rsx_fp_texture_units(code: *const u8, size: u32) -> u32;
     fn mrf_rsx_fp_decompile_buffered_shadow_color_expand_vol_ex(
         code: *const u8,
         size: u32,
@@ -281,6 +282,68 @@ fn texture_coordinate_controls(
 fn fragment_word(bytes: &[u8]) -> u32 {
     u32::from_be_bytes(bytes[..4].try_into().expect("checked complete word")).rotate_left(16)
 }
+struct FragmentStream {
+    end: usize,
+    instructions: u32,
+    constants: u32,
+}
+// One shared source-stream admission for translation and usage reflection.
+// Literal slots are never interpreted as instructions by either caller.
+fn fragment_stream(
+    bytes: &[u8],
+    mut visit: impl FnMut([u32; 4]) -> Result<(), ProgramError>,
+) -> Result<FragmentStream, ProgramError> {
+    if bytes.is_empty() || bytes.len() > OUTPUT_BYTES || !bytes.len().is_multiple_of(16) {
+        return Err(ProgramError::Invalid);
+    }
+    let mut offset = 0;
+    let mut instructions = 0;
+    let mut constants = 0;
+    loop {
+        let slot = bytes
+            .get(offset..offset + 16)
+            .ok_or(ProgramError::Invalid)?;
+        let words = core::array::from_fn::<_, 4, _>(|i| fragment_word(&slot[i * 4..]));
+        // Existing constant collector and branch decoder disagree about encoded
+        // operand fields on flow instructions. Preserve translation's refusal.
+        if words[2] & (1 << 31) != 0 {
+            return Err(ProgramError::Unsupported);
+        }
+        visit(words)?;
+        offset += 16;
+        instructions += 1;
+        if words[1..].iter().any(|word| word & 3 == 2) {
+            constants += 1;
+            offset += 16;
+            if offset > bytes.len() {
+                return Err(ProgramError::Invalid);
+            }
+        }
+        if words[0] & 1 != 0 {
+            break;
+        }
+    }
+    if constants > 2048 {
+        return Err(ProgramError::Capacity);
+    }
+    Ok(FragmentStream {
+        end: offset,
+        instructions,
+        constants,
+    })
+}
+/// Actual sampled-unit mask from the isolated retained ISA parser, after the
+/// same bounded/terminated/flow admission used for translation. This reports
+/// source reads only; it does not certify shader support, texture bindings or
+/// native execution. State is required only for units the program can observe.
+pub fn fragment_texture_units(bytes: &[u8]) -> Result<u16, ProgramError> {
+    let stream = fragment_stream(bytes, |_| Ok(()))?;
+    let _guard = COMPILER.lock().map_err(|_| ProgramError::Compiler)?;
+    // SAFETY: the shared admission bounds the complete owned instruction/literal
+    // span. The existing isolated parser only reads that span under our lock.
+    let mask = unsafe { mrf_rsx_fp_texture_units(bytes.as_ptr(), stream.end as u32) };
+    u16::try_from(mask).map_err(|_| ProgramError::Compiler)
+}
 pub fn fragment(program: FragmentProgram<'_>) -> Result<HlslProgram, ProgramError> {
     fragment_with_texcoords(program, [0; 10])
 }
@@ -311,20 +374,7 @@ pub fn fragment_with_texcoords(
     {
         return Err(ProgramError::Invalid);
     }
-    let mut offset = 0;
-    let mut instructions = 0;
-    let mut constants = 0;
-    loop {
-        let slot = program
-            .bytes
-            .get(offset..offset + 16)
-            .ok_or(ProgramError::Invalid)?;
-        let words = core::array::from_fn::<_, 4, _>(|i| fragment_word(&slot[i * 4..]));
-        // Existing constant collector and branch decoder disagree about encoded
-        // operand fields on flow instructions. Do not admit an incorrect row domain.
-        if words[2] & (1 << 31) != 0 {
-            return Err(ProgramError::Unsupported);
-        }
+    let stream = fragment_stream(program.bytes, |words| {
         let opcode = (words[0] >> 24) & 63;
         let unit = ((words[0] >> 17) & 15) as usize;
         if matches!(opcode, 0x19 | 0x33 | 0x34)
@@ -344,22 +394,9 @@ pub fn fragment_with_texcoords(
                 return Err(ProgramError::Invalid);
             }
         }
-        offset += 16;
-        instructions += 1;
-        if words[1..].iter().any(|w| w & 3 == 2) {
-            constants += 1;
-            offset += 16;
-            if offset > program.bytes.len() {
-                return Err(ProgramError::Invalid);
-            }
-        }
-        if words[0] & 1 != 0 {
-            break;
-        }
-    }
-    if constants > 2048 {
-        return Err(ProgramError::Capacity);
-    }
+        Ok(())
+    })?;
+    let (offset, instructions, constants) = (stream.end, stream.instructions, stream.constants);
     let mut buffer = vec![0; OUTPUT_BYTES];
     let mut actual = 0;
     let _guard = COMPILER.lock().map_err(|_| ProgramError::Compiler)?;

@@ -256,3 +256,53 @@ fn source_texcoord_controls_preserve_centroid_and_2d_read_before_swizzle() {
         ProgramError::Unsupported
     );
 }
+
+#[test]
+fn texture_usage_uses_actual_parser_and_skips_inline_literals() {
+    let bytes = |words: &[[u32; 4]]| -> Vec<u8> {
+        words
+            .iter()
+            .flatten()
+            .flat_map(|w| w.rotate_left(16).to_be_bytes())
+            .collect()
+    };
+    for opcode in [0x17, 0x18, 0x19, 0x2f, 0x31, 0x33, 0x34] {
+        let program = bytes(&[
+            [(opcode << 24) | (3 << 17), 0, 0, 0],
+            [(1 << 24) | (15 << 9) | 1, 2, 0, 0],
+            [(0x17 << 24) | (9 << 17) | 1, 0, 0, 0],
+        ]);
+        assert_eq!(fragment_texture_units(&program), Ok(1 << 3));
+    }
+    assert_eq!(
+        fragment_texture_units(&bytes(&[[(1 << 24) | 1, 0, 0, 0]])),
+        Ok(0)
+    );
+    assert_eq!(
+        fragment_texture_units(&bytes(&[[(0x17 << 24) | (15 << 17) | 1, 0, 0, 0]])),
+        Ok(1 << 15)
+    );
+}
+#[test]
+fn texture_usage_refuses_unterminated_truncated_or_unadmitted_flow() {
+    let bytes = |words: [u32; 4]| {
+        words
+            .into_iter()
+            .flat_map(|w| w.rotate_left(16).to_be_bytes())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(fragment_texture_units(&[]), Err(ProgramError::Invalid));
+    assert_eq!(fragment_texture_units(&[0; 15]), Err(ProgramError::Invalid));
+    assert_eq!(
+        fragment_texture_units(&bytes([0, 0, 0, 0])),
+        Err(ProgramError::Invalid)
+    );
+    assert_eq!(
+        fragment_texture_units(&bytes([1, 2, 0, 0])),
+        Err(ProgramError::Invalid)
+    );
+    assert_eq!(
+        fragment_texture_units(&bytes([1, 0, 1 << 31, 0])),
+        Err(ProgramError::Unsupported)
+    );
+}
