@@ -309,6 +309,8 @@ static int scene_prepare(Context *c, const mag_native_scene *scene,
   int status = mag_native_scene_validate(scene, &registry, &plan.usage);
   if (status)
     return status;
+  plan.buffers.buffers.resize(scene->resource_count);
+  plan.buffers.roles.resize(scene->resource_count);
   plan.buffers.resources = scene->resource_count;
   plan.buffers.typed = true;
   plan.bytes = plan.usage.bytes;
@@ -359,7 +361,7 @@ static int scene_prepare(Context *c, const mag_native_scene *scene,
   if (plan.descriptors > 1000000u)
     return MAG_NATIVE_UNSUPPORTED;
   auto reserve = [&](uint64_t bytes) {
-    if (bytes > MAG_NATIVE_BATCH_MAX_BYTES - plan.bytes)
+    if (bytes > MAG_NATIVE_SCENE_MAX_BYTES - plan.bytes)
       return false;
     plan.bytes += bytes;
     return true;
@@ -530,6 +532,9 @@ static int scene_reserve(Context *c, Slot &slot, const mag_native_scene *scene,
   int status = scene_sampler_heap(c, slot);
   if (status)
     return status;
+  slot.buffers.resize(std::max(scene->resource_count,MaxResources));
+  slot.uploads.resize(std::max(scene->resource_count,MaxResources));
+  slot.writes.resize(std::max(scene->resource_count,MaxResources));
   slot.scene_images.resize(scene->image_count);
   for (uint32_t i = 0; i < scene->image_count; ++i) {
     status = scene_image(c, scene->images[i], slot.scene_images[i]);
@@ -620,7 +625,7 @@ static int scene_execute(Context *c, const mag_native_scene *scene,
     auto *list = slot->list.p;
     ID3D12DescriptorHeap *heaps[] = {slot->descriptors.p, slot->samplers.p};
     list->SetDescriptorHeaps(2, heaps);
-    std::array<D3D12_RESOURCE_STATES, MaxResources> states = {};
+    std::vector<D3D12_RESOURCE_STATES> states(scene->resource_count);
     slot->resources = plan.buffers.resources;
     for (uint32_t i = 0; i < slot->resources; ++i) {
       auto &b = plan.buffers.buffers[i];
@@ -660,8 +665,8 @@ static int scene_execute(Context *c, const mag_native_scene *scene,
     uint32_t descriptor_cursor = 0;
     for (uint32_t n = 0; n < scene->dispatch_count; ++n) {
       const auto &command = plan.compute[n];
-      std::array<D3D12_RESOURCE_STATES, MaxResources> desired = {};
-      std::array<bool, MaxResources> used = {};
+      std::vector<D3D12_RESOURCE_STATES> desired(scene->resource_count);
+      std::vector<uint8_t> used(scene->resource_count);
       for (uint32_t i = 0; i < command.count; ++i) {
         const auto &b = command.bindings[i];
         int r = resource_index(plan.buffers, b.buffer);
@@ -750,8 +755,8 @@ static int scene_execute(Context *c, const mag_native_scene *scene,
         const auto &record = plan.draws[draw_index++];
         const auto &draw = *record.source;
         const auto &p = *record.program;
-        std::array<D3D12_RESOURCE_STATES, MaxResources> desired = {};
-        std::array<bool, MaxResources> used = {};
+        std::vector<D3D12_RESOURCE_STATES> desired(scene->resource_count);
+        std::vector<uint8_t> used(scene->resource_count);
         auto vertices = buffer(c, draw.vertices),
              indices = buffer(c, draw.indices);
         int v = resource_index(plan.buffers, vertices),

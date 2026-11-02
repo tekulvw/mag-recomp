@@ -515,6 +515,8 @@ static int submit_scene_owned(frontend_vk *c, const mag_native_scene *scene, mag
         free(draw_sets);
         return MAG_NATIVE_DEVICE_FAILED;
     }
+    slot->scene_images=calloc(scene->image_count,sizeof(*slot->scene_images));
+    if(!slot->scene_images){free(draw_sets);return MAG_NATIVE_ALLOCATION_FAILED;}
     for (uint32_t i = 0; i < scene->image_count; ++i) {
         const mag_native_scene_image *desc = &scene->images[i];
         frontend_vk_scene_image *im = &slot->scene_images[i];

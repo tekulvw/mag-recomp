@@ -17,7 +17,7 @@ typedef struct mag_native_scene_registry {
     uint64_t uniform_alignment, storage_alignment, max_uniform_bytes, max_storage_bytes;
 } mag_native_scene_registry;
 typedef struct mag_native_scene_usage {
-    uint8_t read[MAG_NATIVE_BATCH_MAX_RESOURCES], write[MAG_NATIVE_BATCH_MAX_RESOURCES];
+    uint8_t read[MAG_NATIVE_SCENE_MAX_RESOURCES], write[MAG_NATIVE_SCENE_MAX_RESOURCES];
     uint64_t bytes;
 } mag_native_scene_usage;
 /* Pure admission checks used by every native encoder; callbacks only inspect

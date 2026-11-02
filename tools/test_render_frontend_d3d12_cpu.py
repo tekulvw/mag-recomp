@@ -46,20 +46,24 @@ def check(args):
         fixtures.append(("draw_preflight", [FIXTURES / "test_d3d12_draw_preflight.cpp",
                                            NATIVE / "mag_render_dxc.cpp",validator]))
         fixtures.append(("scene_preflight", [FIXTURES / "test_d3d12_scene_preflight.cpp",NATIVE / "mag_render_dxc.cpp",validator]))
+    for name in ("vertex_layout", "bgra_scene", "binding_scene", "scene_capacity"):
+        fixtures.append((name, [FIXTURES / f"test_{name}.c", NATIVE / "mag_render_scene_validate.c"]))
     results = {}
     sources = {Path(__file__).resolve(), *(NATIVE / name for name in (
-        "mag_render_d3d12_limits.h", "mag_render_batch.h", "mag_render_native.h", "mag_render_host_owner.h"))}
+        "mag_render_d3d12_limits.h", "mag_render_batch.h", "mag_render_native.h", "mag_render_host_owner.h", "mag_render_scene.h", "mag_render_scene_validate.h", "mag_render_host_image.h", "mag_render_host_frame.h"))}
     if windows:
         sources.update(NATIVE / name for name in ("mag_render_native_internal.h", "mag_render_dxc.h", "mag_render_scene.h", "mag_render_scene_validate.h", "mag_render_scene_validate.c", "mag_render_d3d12_scene.inc", "mag_render_host_image.h", "mag_render_host_frame.h"))
     for name, inputs in fixtures:
         binary = args.output_dir / (name + (".exe" if windows else ""))
+        c_only = all(path.suffix == ".c" for path in inputs)
         if windows:
             # Keep clang-cl temporary object files in this owned build directory.
-            command = [compiler, "/nologo", "/std:c++17", "/EHsc", "/W4", "/WX",
+            command = [compiler, "/nologo", *( ["/std:c17", "/TC"] if c_only else ["/std:c++17", "/EHsc"] ), "/W4", "/WX",
+                       f"/I{NATIVE}",
                        f"/I{args.dxc_include}", f"/Fo{args.output_dir}{os.sep}",
                        *inputs, f"/Fe{binary}"]
         else:
-            command = [compiler, "-std=c++17", "-Wall", "-Wextra", "-Werror", *inputs, "-o", binary]
+            command = [compiler, *( ["-x", "c", "-std=c11"] if c_only else ["-std=c++17"] ), "-Wall", "-Wextra", "-Werror", f"-I{NATIVE}", *inputs, "-o", binary]
         run(command)
         results[name] = {"status": "passed", "output": run([binary])}
         sources.update(path for path in inputs if path.suffix != ".obj")

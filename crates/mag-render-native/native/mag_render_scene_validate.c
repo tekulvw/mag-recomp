@@ -111,7 +111,7 @@ static int read_buffer(const mag_native_scene *s, mag_native_buffer b, uint64_t 
     return MAG_NATIVE_OK;
 }
 static int add_bytes(mag_native_scene_usage *u, uint64_t n) {
-    if (n > MAG_NATIVE_BATCH_MAX_BYTES - u->bytes)
+    if (n > MAG_NATIVE_SCENE_MAX_BYTES - u->bytes)
         return MAG_NATIVE_ALLOCATION_FAILED;
     u->bytes += n;
     return MAG_NATIVE_OK;
@@ -120,14 +120,14 @@ int mag_native_scene_validate(const mag_native_scene *s, const mag_native_scene_
                               mag_native_scene_usage *u) {
     if (!s || !r || !u || !r->buffer || !r->compute || !r->graphics || s->struct_size != sizeof(*s) ||
         s->abi_version != MAG_NATIVE_SCENE_ABI || s->reserved || (s->resource_count && !s->resources) ||
-        s->resource_count > MAG_NATIVE_BATCH_MAX_RESOURCES || !s->images || !s->image_count ||
+        s->resource_count > MAG_NATIVE_SCENE_MAX_RESOURCES || !s->images || !s->image_count ||
         s->image_count > MAG_NATIVE_SCENE_MAX_IMAGES || !s->passes || !s->pass_count ||
         s->pass_count > MAG_NATIVE_SCENE_MAX_PASSES || s->dispatch_count > MAG_NATIVE_BATCH_MAX_COMMANDS ||
         (s->dispatch_count && !s->dispatches))
         return MAG_NATIVE_INVALID;
     memset(u, 0, sizeof(*u));
-    mag_native_scene_buffer_info infos[MAG_NATIVE_BATCH_MAX_RESOURCES];
-    int writers[MAG_NATIVE_BATCH_MAX_RESOURCES];
+    mag_native_scene_buffer_info infos[MAG_NATIVE_SCENE_MAX_RESOURCES];
+    int writers[MAG_NATIVE_SCENE_MAX_RESOURCES];
     memset(writers, -1, sizeof(writers));
     for (uint32_t i = 0; i < s->resource_count; ++i) {
         const mag_native_batch_resource *b = &s->resources[i];
@@ -159,7 +159,7 @@ int mag_native_scene_validate(const mag_native_scene *s, const mag_native_scene_
         if (f->binding_count != p.count || !p.count || p.count > 16)
             return MAG_NATIVE_INVALID;
         uint32_t slots = 0;
-        uint8_t accesses[MAG_NATIVE_BATCH_MAX_RESOURCES] = {0};
+        uint8_t accesses[MAG_NATIVE_SCENE_MAX_RESOURCES] = {0};
         for (unsigned k = 0; k < 3; ++k)
             if (!f->groups[k] || f->groups[k] > 65535)
                 return MAG_NATIVE_INVALID;

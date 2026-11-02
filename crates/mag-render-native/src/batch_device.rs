@@ -125,13 +125,6 @@ impl NativeContext {
     pub fn batch(&mut self, limits: BatchDeviceLimits) -> Result<BatchDevice<'_>, i32> {
         BatchDevice::from_api(self.api()?, limits, None)
     }
-    pub(crate) fn into_batch(
-        mut self,
-        limits: BatchDeviceLimits,
-    ) -> Result<BatchDevice<'static>, i32> {
-        let api = self.api()?;
-        BatchDevice::from_api(api, limits, Some(self))
-    }
 }
 impl<'owner> BatchDevice<'owner> {
     fn from_api(
@@ -139,8 +132,15 @@ impl<'owner> BatchDevice<'owner> {
         limits: BatchDeviceLimits,
         owned_context: Option<NativeContext>,
     ) -> Result<Self, i32> {
-        if limits.max_bytes == 0 || limits.max_bytes > 64 * 1024 * 1024 || limits.max_pipelines == 0
-        {
+        Self::from_api_with_byte_cap(api, limits, owned_context, 64 * 1024 * 1024)
+    }
+    fn from_api_with_byte_cap(
+        api: SdkApi,
+        limits: BatchDeviceLimits,
+        owned_context: Option<NativeContext>,
+        byte_cap: u64,
+    ) -> Result<Self, i32> {
+        if limits.max_bytes == 0 || limits.max_bytes > byte_cap || limits.max_pipelines == 0 {
             return Err(-1);
         }
         checked_batch_layout()?;
@@ -291,12 +291,20 @@ impl BatchDevice<'_> {
         commands: &batch::BatchCommands,
         leases: &[ResourceLease],
     ) -> Result<AllocationSet, i32> {
+        self.prepare_with_resource_cap(commands, leases, 64)
+    }
+    fn prepare_with_resource_cap(
+        &self,
+        commands: &batch::BatchCommands,
+        leases: &[ResourceLease],
+        resource_cap: usize,
+    ) -> Result<AllocationSet, i32> {
         commands.validate_uploads(leases).map_err(|_| -1)?;
         if commands.owner_generation() != self.generation
             || leases.len()
                 + commands.buffers().len()
                 + usize::from(commands.draw().is_some() && self.limits.diagnostic_readback)
-                > 64
+                > resource_cap
             || commands.dispatches().len() + usize::from(commands.draw().is_some()) > 32
         {
             return Err(-1);

@@ -4,6 +4,9 @@ use super::*;
 use mag_render::scene;
 /// Explicit whole-scene budget; over-capacity refuses before GPU effects.
 pub const MAX_SCENE_DRAWS: usize = 16384;
+pub const MAX_SCENE_IMAGES: usize = 1024;
+pub const MAX_SCENE_RESOURCES: usize = 4096;
+pub const MAX_SCENE_BYTES: u64 = 1024 * 1024 * 1024;
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct BufferLayout {
@@ -176,7 +179,7 @@ impl NativeContext {
         Ok(SceneDevice {
             frame: None,
             target: None,
-            inner: self.batch(limits)?,
+            inner: BatchDevice::from_api_with_byte_cap(self.api()?, limits, None, MAX_SCENE_BYTES)?,
             graphics: BTreeMap::new(),
         })
     }
@@ -184,14 +187,19 @@ impl NativeContext {
 impl SceneDevice<'static> {
     /// Own the context directly; no leaked borrow or self-referential Rust value.
     pub fn from_owned_context(
-        context: NativeContext,
+        mut context: NativeContext,
         limits: BatchDeviceLimits,
     ) -> Result<Self, i32> {
         checked_scene_layout()?;
         Ok(Self {
             frame: None,
             target: None,
-            inner: context.into_batch(limits)?,
+            inner: BatchDevice::from_api_with_byte_cap(
+                context.api()?,
+                limits,
+                Some(context),
+                MAX_SCENE_BYTES,
+            )?,
             graphics: BTreeMap::new(),
         })
     }
@@ -371,7 +379,7 @@ impl SceneDevice<'_> {
         commands.validate_uploads(leases).map_err(|_| -1)?;
         if commands.compute().owner_generation() != self.inner.generation
             || commands.compute().draw().is_some()
-            || commands.images().len() > 16
+            || commands.images().len() > MAX_SCENE_IMAGES
             || commands.passes().len() > 16
             || commands
                 .passes()
@@ -419,14 +427,16 @@ impl SceneDevice<'_> {
             || leases.len()
                 + commands.compute().buffers().len()
                 + usize::from(readback_len.is_some())
-                > 64
+                > MAX_SCENE_RESOURCES
         {
             return Err(-5);
         }
         let compute_count = commands.texture_upload_start();
-        let (mut buffers, mut resources, _) = self
-            .inner
-            .prepare(commands.compute(), &leases[..compute_count])?;
+        let (mut buffers, mut resources, _) = self.inner.prepare_with_resource_cap(
+            commands.compute(),
+            &leases[..compute_count],
+            MAX_SCENE_RESOURCES,
+        )?;
         let result = (|| {
             for lease in &leases[compute_count..] {
                 let b = self

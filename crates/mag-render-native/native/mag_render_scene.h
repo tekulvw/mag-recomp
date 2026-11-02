@@ -8,7 +8,9 @@ extern "C" {
 #endif
 /* Additive scene ABI. Batch ABI1 remains independent and supported. */
 #define MAG_NATIVE_SCENE_ABI 1u
-#define MAG_NATIVE_SCENE_MAX_IMAGES 16u
+#define MAG_NATIVE_SCENE_MAX_RESOURCES 4096u
+#define MAG_NATIVE_SCENE_MAX_BYTES (1024ull * 1024ull * 1024ull)
+#define MAG_NATIVE_SCENE_MAX_IMAGES 1024u
 #define MAG_NATIVE_SCENE_MAX_PASSES 16u
 #define MAG_NATIVE_SCENE_MAX_DRAWS 16384u
 #define MAG_NATIVE_SCENE_NONE UINT32_MAX

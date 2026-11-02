@@ -108,9 +108,9 @@ struct Slot {
   uint64_t fence = 0;
   mag_native_ticket ticket = {};
   uint32_t resources = 0, pipelines = 0, attachments = 0;
-  std::array<std::shared_ptr<Buffer>, MaxResources> buffers = {};
-  std::array<std::shared_ptr<Upload>, MaxResources> uploads = {};
-  std::array<bool, MaxResources> writes = {};
+  std::vector<std::shared_ptr<Buffer>> buffers = std::vector<std::shared_ptr<Buffer>>(MaxResources);
+  std::vector<std::shared_ptr<Upload>> uploads = std::vector<std::shared_ptr<Upload>>(MaxResources);
+  std::vector<uint8_t> writes = std::vector<uint8_t>(MaxResources);
   std::array<std::shared_ptr<Pipeline>, MaxCommands> programs = {};
   std::array<Attachment, MaxCommands> targets = {};
 };
@@ -159,8 +159,8 @@ struct Command {
 struct Plan {
   uint32_t resources = 0, commands = 0, draws = 0;
   bool typed = false;
-  std::array<std::shared_ptr<Buffer>, MaxResources> buffers = {};
-  std::array<uint32_t, MaxResources> roles = {};
+  std::vector<std::shared_ptr<Buffer>> buffers = std::vector<std::shared_ptr<Buffer>>(MaxResources);
+  std::vector<uint32_t> roles = std::vector<uint32_t>(MaxResources);
   std::array<bool, MaxResources> written = {};
   std::array<Command, MaxCommands> nodes = {};
 };
@@ -229,7 +229,7 @@ static void clear_slot(Slot &slot) {
   for (auto &t : slot.targets)
     t = Attachment{};
   slot.scene_images.clear();slot.scene_programs.clear();slot.sampler_indices={};slot.scene_readback.reset();
-  slot.writes = {};
+  std::fill(slot.writes.begin(),slot.writes.end(),0);
   slot.resources = slot.pipelines = slot.attachments = 0;
   slot.occupied = false;
   slot.fence = 0;
@@ -687,7 +687,7 @@ static int prepare_batch(Context *c, const mag_native_batch *batch,
       int status = prepare_frame(c, supplied.dispatch, node);
       if (status)
         return status;
-      std::array<bool, MaxResources> writes = {};
+      std::vector<uint8_t> writes = std::vector<uint8_t>(MaxResources);
       for (uint32_t b = 0; b < node.count; ++b) {
         const auto &binding = node.bindings[b];
         int resource = resource_index(plan, binding.buffer);
@@ -875,7 +875,7 @@ static int execute(Context *c, Plan &plan, mag_native_ticket *out) {
     return MAG_NATIVE_BUSY;
   if (c->next_ticket == UINT64_MAX || c->next_fence >= UINT64_MAX - 1)
     return MAG_NATIVE_DEVICE_FAILED;
-  std::array<bool, MaxResources> writes = {};
+  std::vector<uint8_t> writes = std::vector<uint8_t>(MaxResources);
   for (uint32_t n = 0; n < plan.commands; ++n) {
     const auto &command = plan.nodes[n];
     if (command.draw) {

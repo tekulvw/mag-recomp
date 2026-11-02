@@ -43,9 +43,9 @@ typedef struct frontend_vk_slot {
     VkCommandPool pool; VkCommandBuffer command; VkFence fence; VkDescriptorPool descriptors;
     uint32_t descriptor_sets,descriptor_counts[4];
     mag_native_ticket ticket; uint32_t occupied, count;
-    frontend_vk_buffer *buffers[64]; uint32_t writes[64]; frontend_vk_pipeline *pipeline;
+    frontend_vk_buffer *buffers[MAG_NATIVE_SCENE_MAX_RESOURCES]; uint32_t writes[MAG_NATIVE_SCENE_MAX_RESOURCES]; frontend_vk_pipeline *pipeline;
     frontend_vk_pipeline *batch_pipelines[MAG_NATIVE_BATCH_MAX_COMMANDS + MAG_NATIVE_SCENE_MAX_DRAWS];uint32_t batch_count;
-    frontend_vk_scene_image scene_images[16];uint32_t scene_image_count,scene_pass_count;
+    frontend_vk_scene_image *scene_images;uint32_t scene_image_count,scene_pass_count;
     VkFramebuffer scene_framebuffers[16];VkRenderPass scene_renderpasses[16];VkSampler scene_samplers[3];
     VkImage color,depth;VkDeviceMemory color_memory,depth_memory;
     VkImageView color_view,depth_view;VkFramebuffer framebuffer;
@@ -107,7 +107,7 @@ static void batch_attachments_release(frontend_vk *c,frontend_vk_slot *slot){
 
 static void scene_attachments_release(frontend_vk *c,frontend_vk_slot *slot){
  for(uint32_t i=0;i<slot->scene_pass_count;++i){if(slot->scene_framebuffers[i])c->vkDestroyFramebuffer(c->owner.device,slot->scene_framebuffers[i],NULL);if(slot->scene_renderpasses[i])c->vkDestroyRenderPass(c->owner.device,slot->scene_renderpasses[i],NULL);slot->scene_framebuffers[i]=VK_NULL_HANDLE;slot->scene_renderpasses[i]=VK_NULL_HANDLE;}slot->scene_pass_count=0;
- for(uint32_t i=0;i<slot->scene_image_count;++i){frontend_vk_scene_image *im=&slot->scene_images[i];if(im->view)c->vkDestroyImageView(c->owner.device,im->view,NULL);if(im->image)c->vkDestroyImage(c->owner.device,im->image,NULL);if(im->memory)c->vkFreeMemory(c->owner.device,im->memory,NULL);memset(im,0,sizeof(*im));}slot->scene_image_count=0;
+ for(uint32_t i=0;i<slot->scene_image_count;++i){frontend_vk_scene_image *im=&slot->scene_images[i];if(im->view)c->vkDestroyImageView(c->owner.device,im->view,NULL);if(im->image)c->vkDestroyImage(c->owner.device,im->image,NULL);if(im->memory)c->vkFreeMemory(c->owner.device,im->memory,NULL);memset(im,0,sizeof(*im));}slot->scene_image_count=0;free(slot->scene_images);slot->scene_images=NULL;
  for(unsigned i=0;i<3;++i){if(slot->scene_samplers[i])c->vkDestroySampler(c->owner.device,slot->scene_samplers[i],NULL);slot->scene_samplers[i]=VK_NULL_HANDLE;}
 }
 static void slot_release(frontend_vk *c, frontend_vk_slot *slot) {

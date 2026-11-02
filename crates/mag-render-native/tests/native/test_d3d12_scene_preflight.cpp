@@ -95,8 +95,29 @@ static void actual_pipeline_root_matches_canonical_stages() {
          MAG_NATIVE_DEVICE_FAILED);
   assert(serialized == 1 && result.id == 0);
 }
+static void whole_scene_resources_exceed_retained_batch_capacity() {
+  Context c;c.generation=7;
+  std::vector<mag_native_batch_resource> resources;
+  std::vector<mag_native_scene_image> images;
+  images.push_back({MAG_NATIVE_SCENE_RGBA8,1,1,0,{}});
+  for(uint32_t i=0;i<65;++i){
+    auto ref=data(c,100+i,4);
+    resources.push_back({ref,MAG_NATIVE_UPLOAD,0});
+    images.push_back({MAG_NATIVE_SCENE_RGBA8,1,1,0,ref});
+  }
+  mag_native_scene_pass pass={};pass.color={0,MAG_NATIVE_SCENE_CLEAR,MAG_NATIVE_SCENE_STORE,0,{0,0,0,1}};
+  pass.depth.image=MAG_NATIVE_SCENE_NONE;
+  mag_native_scene scene={};scene.struct_size=sizeof(scene);scene.abi_version=1;
+  scene.resources=resources.data();scene.resource_count=static_cast<uint32_t>(resources.size());
+  scene.images=images.data();scene.image_count=static_cast<uint32_t>(images.size());
+  scene.passes=&pass;scene.pass_count=1;scene.output_image=0;
+  ScenePlan plan;assert(scene_prepare(&c,&scene,plan)==MAG_NATIVE_OK);
+  assert(plan.buffers.resources==65 && plan.buffers.buffers.size()==65);
+  assert(plan.buffers.buffers.back()==buffer(&c,resources.back().buffer));
+}
 int main() {
   actual_pipeline_root_matches_canonical_stages();
+  whole_scene_resources_exceed_retained_batch_capacity();
   Context c;
   c.generation = 7;
   auto p = std::make_shared<Pipeline>();
