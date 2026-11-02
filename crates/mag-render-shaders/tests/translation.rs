@@ -8,6 +8,44 @@ fn source(name: &str) -> String {
 }
 
 #[test]
+fn reported_compiler_version_matches_the_locked_dependency() {
+    let package = include_str!("../Cargo.lock")
+        .split("[[package]]")
+        .find(|package| package.lines().any(|line| line == "name = \"naga\""))
+        .expect("Naga must be an exact locked dependency");
+    let version = package
+        .lines()
+        .find_map(|line| {
+            line.strip_prefix("version = \"")
+                .and_then(|value| value.strip_suffix('"'))
+        })
+        .unwrap();
+    let compiled = mag_render_shaders::compile(&source("copy_transform.wgsl")).unwrap();
+    assert_eq!(
+        compiled.manifest["naga_version"], version,
+        "generated artifacts must identify the compiler resolved by Cargo.lock"
+    );
+}
+
+#[test]
+fn translation_keeps_explicit_portable_target_versions() {
+    for name in ["copy_transform.wgsl", "compact.wgsl"] {
+        let compiled = mag_render_shaders::compile(&source(name)).unwrap();
+        assert_eq!(compiled.spirv[1], 0x0001_0300);
+        assert_eq!(compiled.manifest["targets"]["msl"]["version"], "2.0");
+        assert_eq!(
+            compiled.manifest["targets"]["hlsl"]["shader_model"],
+            "cs_6_0"
+        );
+        assert_eq!(
+            compiled.manifest["targets"]["spirv"]["vulkan_environment"],
+            "vulkan1.1"
+        );
+        assert_eq!(compiled.manifest["metal_sizes_buffer"]["buffer_index"], 30);
+    }
+}
+
+#[test]
 fn copy_transform_translates_through_real_compiler() {
     let compiled = mag_render_shaders::compile(&source("copy_transform.wgsl")).unwrap();
     let module = inspect_outputs(&compiled, "copy_transform");

@@ -1,6 +1,6 @@
 # Portable compute shader tooling
 
-This package translates authored WGSL with exact Naga **27.0.3**, locked in `Cargo.lock`.
+This package translates authored WGSL with exact Naga **30.0.1**, locked in `Cargo.lock`.
 It produces MSL 2.0, Shader Model 6.0 HLSL, SPIR-V 1.3 for Vulkan 1.1, and an explicit JSON
 binding/layout manifest. It is independent of the rendering core and does not select a backend,
 create a device, dispatch a kernel, or prove game performance.
@@ -8,8 +8,10 @@ create a device, dispatch a kernel, or prove game performance.
 Naga parses and validates the WGSL IR before translation. The emitted SPIR-V is reparsed and
 validated with Naga before the CLI writes output. Independent compiler results are recorded
 by the Python checker; a translated file alone is not a platform compiler or GPU execution pass.
-The Naga [API documentation](https://docs.rs/naga/27.0.3/naga/) and
-[published source](https://docs.rs/crate/naga/27.0.3/source/) describe the translator.
+The Naga [API documentation](https://docs.rs/naga/30.0.1/naga/) and
+[published source](https://docs.rs/crate/naga/30.0.1/source/) describe the translator.
+The 30.0.1 upgrade retains the same explicit targets, capabilities and binding/layout contract.
+Its broader language features remain outside this tool's supported subset.
 
 ## Commands
 

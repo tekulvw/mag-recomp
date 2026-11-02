@@ -7,6 +7,6 @@ license = "MIT"
 description = "Validated portable compute shader translation and layout manifests"
 
 [dependencies]
-naga = { version = "=27.0.3", features = ["wgsl-in", "msl-out", "hlsl-out", "spv-out", "spv-in"] }
+naga = { version = "=30.0.1", features = ["wgsl-in", "msl-out", "hlsl-out", "spv-out", "spv-in"] }
 serde = { version = "=1.0.228", features = ["derive"] }
 serde_json = "=1.0.149"

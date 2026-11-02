@@ -5,7 +5,7 @@ use naga::{
 };
 use serde_json::{Value, json};
 
-pub const NAGA_VERSION: &str = "27.0.3";
+pub const NAGA_VERSION: &str = "30.0.1";
 pub const METAL_SIZES_BUFFER: u8 = 30;
 
 pub struct Compilation {
