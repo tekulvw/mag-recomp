@@ -1,5 +1,9 @@
 # Contributor and agent rules
 
+## Rust rendering frontend integration
+
+The user approved the portable Rust frontend plan and resumed implementation and bounded testing on November 1, 2026. Use `codex/render-frontend-integration` for this work. The frontend remains opt-in and main keeps proven viable defaults. Run the same portable checks on macOS, Windows and Linux; real GPU/game acceptance remains separate from compile/test CI. The user requests GPT-6.1 Sol implementation and parallel independent work. Dead code may be removed after checking its actual dependencies. Preserve accepted controls and required original rendering/non-render SPU coverage until replacement gates pass. Releases, tags and release-PR merging remain exclusively human actions.
+
 These rules apply to everyone, including coding agents.
 
 ## Never commit game content

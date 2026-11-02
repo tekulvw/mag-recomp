@@ -17,6 +17,7 @@ if(NOT MAG_WORKSPACE STREQUAL CMAKE_CURRENT_SOURCE_DIR AND EXISTS "${MAG_WORKSPA
 endif()
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/MagExtensions.cmake")
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/MagInput.cmake")
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/MagRender.cmake")
 
 # ---------------------------------------------------------------------------
 # Standards
@@ -450,8 +451,10 @@ if(MAG_FIRMWARE_SOURCES)
         "${CMAKE_CURRENT_SOURCE_DIR}/profiles/retail-v1.0-firmware.json")
 endif()
 mag_enable_input(${PROJECT_NAME})
+mag_enable_render_frontend(${PROJECT_NAME})
 mag_apply_extensions(${PROJECT_NAME})
 list(APPEND MAG_RECEIPT_EXTRA ${MAG_INPUT_RECEIPT_EXTRA})
+list(APPEND MAG_RECEIPT_EXTRA ${MAG_RENDER_RECEIPT_EXTRA})
 set(MAG_EXTENSION_RECEIPT_ARGS "")
 foreach(extra IN LISTS MAG_RECEIPT_EXTRA)
     list(APPEND MAG_EXTENSION_RECEIPT_ARGS --receipt-extra "${extra}")

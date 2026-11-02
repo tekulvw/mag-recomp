@@ -1,0 +1,48 @@
+name: Rust rendering frontend
+
+on:
+  push:
+    branches: [main, codex/render-frontend-integration]
+  pull_request:
+  workflow_dispatch:
+
+# Synthetic checks only. This workflow cannot publish releases or installers.
+permissions:
+  contents: read
+
+jobs:
+  native:
+    name: Rust rendering (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    env:
+      MAG_RENDER_REQUIRE_TOOLS: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: MSVC host environment
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+      - name: Build tools
+        run: python -m pip install cmake ninja
+      - name: Pinned Rust toolchain
+        run: rustup toolchain install 1.99.0 --profile minimal --component rustfmt --component clippy
+      - name: Fetch locked Rust dependencies
+        run: cargo fetch --manifest-path crates/mag-render/Cargo.toml --locked
+      - name: Format
+        working-directory: crates/mag-render
+        run: cargo fmt --check
+      - name: Clippy
+        working-directory: crates/mag-render
+        run: cargo clippy --locked --offline --all-targets -- -D warnings
+      - name: Unit and accounting tests
+        working-directory: crates/mag-render
+        run: cargo test --locked --offline
+      - name: Real static library C++ linkage and rebuild
+        run: python -m unittest tests.test_rust_render_build -v

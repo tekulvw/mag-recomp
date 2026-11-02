@@ -201,6 +201,21 @@ off by default.
 
 ## Tests
 
+### Optional Rust rendering frontend
+
+The integration branch includes a non-default portable frontend library. Add
+`-DMAG_RENDER_FRONTEND_RUST=ON` to an existing native CMake configuration to build and link it.
+Install the exact toolchain from `rust-toolchain.toml` and run
+`cargo fetch --manifest-path crates/mag-render/Cargo.toml --locked` first; the CMake build itself
+uses `--locked --offline`. This option adds frontend source/library receipt inputs without
+selecting a rendering path or changing existing rendering defaults. With the option off, no
+frontend Rust tools or dependencies are required. It is independent of `MAG_INPUT_RUST`.
+
+See [the frontend build and verification guide](docs/render-frontend.md) for native platform
+requirements, the synthetic static-library fixture and the remaining game acceptance gates.
+
+### Project checks
+
 ```sh
 export MAG_TEST_SDK="$PWD/local/ps3recomp-runtime" SPU_BATCH_TEST_SDK="$PWD/local/ps3recomp-lifter-5244db9"
 .venv/bin/python -m unittest discover -s tests -t .

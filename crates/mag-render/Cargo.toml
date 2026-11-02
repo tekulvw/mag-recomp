@@ -1,0 +1,21 @@
+[package]
+name = "mag-render"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99"
+license = "MIT"
+description = "Portable render identities and independent removal accounting"
+
+[lib]
+name = "mag_render"
+crate-type = ["rlib", "staticlib"]
+
+[dependencies]
+serde = { version = "=1.0.228", features = ["derive"] }
+serde_json = "=1.0.149"
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[profile.release]
+panic = "unwind"
