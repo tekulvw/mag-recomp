@@ -1,6 +1,7 @@
 #ifndef MAG_RENDER_SCENE_PACKET_H
 #define MAG_RENDER_SCENE_PACKET_H
 #include "mag_render_client.h"
+#include "mag_render_viewport.h"
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -24,8 +25,8 @@ extern "C" {
  * packet/image/resource budgets are queried separately; no truncation.
  * Pipeline entries may deduplicate, but a packet needing more distinct PSOs
  * than MAX_CACHED_PIPELINES is refused as a whole. Worker byte limits are lower
- * configurable retained/copy budgets (current maximum 64MiB), not max_bytes
- * returned by the native aggregate-capacity query. */
+ * configurable retained/copy budgets (legacy diagnostic maximum64MiB; scene-only workers permit native
+ * max_bytes), not max_bytes returned by the native aggregate-capacity query. */
 enum MagRenderPacketStage {
     MAG_RENDER_PACKET_VERTEX = 0,
     MAG_RENDER_PACKET_FRAGMENT = 1,
@@ -194,6 +195,17 @@ typedef struct MagRenderScenePacketDesc {
     const MagRenderHostImage *target;
     const MagRenderHostFrame *frame;
 } MagRenderScenePacketDesc;
+/* Additive V2 supplies one explicit source viewport per pass and one explicit
+ * view dimension (2=2D,4=cube) per base view. Base records remain ABI1-sized.
+ * View remap numbering remains packet ZERO0/ONE1/R2/G3/B4/A5. */
+typedef struct MagRenderScenePacketV2Desc {
+    uint32_t abi_version, struct_size;
+    MagRenderScenePacketDesc base;
+    const mag_native_viewport *viewports;
+    uint32_t viewport_count, reserved;
+    const uint32_t *view_dimensions;
+    uint32_t view_dimension_count, reserved1;
+} MagRenderScenePacketV2Desc;
 /* Uses the SAME persistent worker/session/SceneDevice and genuine ticket path.
  * Negative is definitely uncommitted; caller owns early frame cancellation.
  * Positive indeterminate must not be replayed. Physical present remains separate.
@@ -204,6 +216,14 @@ typedef struct MagRenderScenePacketLimits {
 /* Frontend aggregate budgets, not hardware maxima; workers can configure lower
  * retained byte/draw budgets. Native definitions are the source of truth. */
 int mag_render_scene_packet_limits(MagRenderScenePacketLimits *);
+/* Scene-only actor creation does not compile a diagnostic bootstrap pipeline or
+ * assume RGBA/BGRA target formats. Enabled-device facts require genuine V2 owner. */
+int mag_render_client_worker_create_scene(const MagRenderHostOwner *, uint32_t max_draws, uint64_t max_bytes,
+                                          uint64_t *);
+int mag_render_client_worker_create_scene_v2(const MagRenderHostOwnerV2 *, uint32_t max_draws,
+                                             uint64_t max_bytes, uint64_t *);
+int mag_render_client_worker_submit_scene_v2(uint64_t, const MagRenderScenePacketV2Desc *,
+                                             MagRenderClientReceipt *);
 int mag_render_client_worker_submit_scene(uint64_t worker, const MagRenderScenePacketDesc *,
                                           MagRenderClientReceipt *);
 #ifdef __cplusplus

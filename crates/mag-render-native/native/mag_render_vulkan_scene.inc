@@ -1,9 +1,191 @@
 /* Frontend-owned ordered multipass Vulkan scene on the genuine borrowed queue. */
 #include "mag_render_scene_validate.h"
+#include "mag_render_image_validate.h"
 static VkFormat scene_vk_format(uint32_t format) {
-    return format == MAG_NATIVE_SCENE_D32     ? VK_FORMAT_D32_SFLOAT
-           : format == MAG_NATIVE_SCENE_BGRA8 ? VK_FORMAT_B8G8R8A8_UNORM
-                                              : VK_FORMAT_R8G8B8A8_UNORM;
+    switch(format){
+    case MAG_NATIVE_SCENE_RGBA8:return VK_FORMAT_R8G8B8A8_UNORM;
+    case MAG_NATIVE_SCENE_D32:return VK_FORMAT_D32_SFLOAT;
+    case MAG_NATIVE_SCENE_BGRA8:return VK_FORMAT_B8G8R8A8_UNORM;
+    case MAG_NATIVE_SCENE_R8:return VK_FORMAT_R8_UNORM;
+    case MAG_NATIVE_SCENE_RG8:return VK_FORMAT_R8G8_UNORM;
+    case MAG_NATIVE_SCENE_BC1:return VK_FORMAT_BC1_RGBA_UNORM_BLOCK;
+    case MAG_NATIVE_SCENE_BC2:return VK_FORMAT_BC2_UNORM_BLOCK;
+    case MAG_NATIVE_SCENE_BC3:return VK_FORMAT_BC3_UNORM_BLOCK;
+    case MAG_NATIVE_SCENE_R16:return VK_FORMAT_R16_UNORM;
+    case MAG_NATIVE_SCENE_RG16:return VK_FORMAT_R16G16_UNORM;
+    case MAG_NATIVE_SCENE_RGBA16F:return VK_FORMAT_R16G16B16A16_SFLOAT;
+    case MAG_NATIVE_SCENE_RGBA32F:return VK_FORMAT_R32G32B32A32_SFLOAT;
+    case MAG_NATIVE_SCENE_R32F:return VK_FORMAT_R32_SFLOAT;
+    case MAG_NATIVE_SCENE_RG16F:return VK_FORMAT_R16G16_SFLOAT;
+    default:return VK_FORMAT_UNDEFINED;
+    }
+}
+static mag_native_scene_image_layout scene_image_shape(const mag_native_scene_v3 *v3,uint32_t image){
+    return v3&&v3->image_layout_count?v3->image_layouts[image]:
+        (mag_native_scene_image_layout){2,1,1,1,1,0,NULL,0,0};
+}
+static VkComponentMapping scene_component_mapping(const uint32_t remap[4]){
+    const VkComponentSwizzle values[]={VK_COMPONENT_SWIZZLE_R,VK_COMPONENT_SWIZZLE_G,
+        VK_COMPONENT_SWIZZLE_B,VK_COMPONENT_SWIZZLE_A,VK_COMPONENT_SWIZZLE_ZERO,VK_COMPONENT_SWIZZLE_ONE};
+    return (VkComponentMapping){values[remap[0]],values[remap[1]],values[remap[2]],values[remap[3]]};
+}
+/* The canonical top-left viewport has exactly one Vulkan Y conversion. Empty
+ * scissor still enters the pass to preserve full attachment load/clear/store. */
+static int scene_viewport(const mag_native_scene_v3 *v3,uint32_t pass,uint32_t width,uint32_t height,
+                          VkViewport *viewport,VkRect2D *scissor){
+    if(v3&&v3->viewport_count){
+        const mag_native_viewport *v=&v3->viewports[pass];
+        *viewport=(VkViewport){v->x,v->y+v->height,v->width,-v->height,v->min_depth,v->max_depth};
+        *scissor=(VkRect2D){{(int32_t)v->scissor_x,(int32_t)v->scissor_y},{v->scissor_width,v->scissor_height}};
+    }else{
+        *viewport=(VkViewport){0,(float)height,(float)width,-(float)height,0,1};
+        *scissor=(VkRect2D){{0,0},{width,height}};
+    }
+    return scissor->extent.width&&scissor->extent.height;
+}
+static int scene_viewport_capabilities(frontend_vk *c,const mag_native_scene *scene,const mag_native_scene_v3 *v3){
+    const VkPhysicalDeviceLimits *limits=&c->owner.properties.limits;
+    for(uint32_t i=0;i<scene->pass_count;++i){
+        const mag_native_scene_pass *pass=&scene->passes[i];
+        uint32_t ref=pass->color.image!=MAG_NATIVE_SCENE_NONE?pass->color.image:pass->depth.image;
+        const mag_native_scene_image *image=&scene->images[ref];VkViewport viewport;VkRect2D scissor;
+        scene_viewport(v3,i,image->width,image->height,&viewport,&scissor);
+        if(image->width>limits->maxFramebufferWidth||image->height>limits->maxFramebufferHeight||
+           viewport.width>limits->maxViewportDimensions[0]||-viewport.height>limits->maxViewportDimensions[1]||
+           viewport.x<limits->viewportBoundsRange[0]||viewport.y+viewport.height<limits->viewportBoundsRange[0]||
+           viewport.x+viewport.width>limits->viewportBoundsRange[1]||viewport.y>limits->viewportBoundsRange[1])return MAG_NATIVE_UNSUPPORTED;
+    }
+    return MAG_NATIVE_OK;
+}
+static VkImageUsageFlags scene_image_usage(const mag_native_scene *scene,uint32_t image){
+    VkImageUsageFlags flags=VK_IMAGE_USAGE_SAMPLED_BIT;
+    if(scene->images[image].upload.id)flags|=VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    for(uint32_t i=0;i<scene->pass_count;++i){
+        if(scene->passes[i].color.image==image)flags|=VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+        if(scene->passes[i].depth.image==image)flags|=VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+    }
+    if(scene->diagnostic_readback.id&&scene->output_image==image)flags|=VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+    return flags;
+}
+static int scene_image_create(frontend_vk *c,const mag_native_scene_image *desc,
+                              const mag_native_scene_image_layout *shape,VkImageUsageFlags usage,
+                              frontend_vk_scene_image *im){
+    /* Only genuine enabled-device facts on this retained owner authorize
+     * optional compressed formats. Old ABI1 owners carry zero known facts. */
+    if(desc->format>=MAG_NATIVE_SCENE_BC1&&desc->format<=MAG_NATIVE_SCENE_BC3&&
+       !(c->known_features&c->enabled_features&MAG_RENDER_HOST_FEATURE_BC))return MAG_NATIVE_UNSUPPORTED;
+    PFN_vkGetPhysicalDeviceFormatProperties formats=(PFN_vkGetPhysicalDeviceFormatProperties)
+        c->owner.host.get_instance_proc(c->owner.host.instance,"vkGetPhysicalDeviceFormatProperties");
+    PFN_vkGetPhysicalDeviceImageFormatProperties images=(PFN_vkGetPhysicalDeviceImageFormatProperties)
+        c->owner.host.get_instance_proc(c->owner.host.instance,"vkGetPhysicalDeviceImageFormatProperties");
+    if(!formats||!images)return MAG_NATIVE_UNSUPPORTED;
+    VkFormat format=scene_vk_format(desc->format);if(format==VK_FORMAT_UNDEFINED)return MAG_NATIVE_UNSUPPORTED;
+    VkFormatProperties supported;formats((VkPhysicalDevice)c->owner.host.physical_device,format,&supported);
+    VkFormatFeatureFlags required=VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT;
+    if(usage&VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT)required|=VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT;
+    if(usage&VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT)required|=VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT;
+    if(usage&VK_IMAGE_USAGE_TRANSFER_SRC_BIT)required|=VK_FORMAT_FEATURE_TRANSFER_SRC_BIT;
+    if(usage&VK_IMAGE_USAGE_TRANSFER_DST_BIT)required|=VK_FORMAT_FEATURE_TRANSFER_DST_BIT;
+    if((supported.optimalTilingFeatures&required)!=required)return MAG_NATIVE_UNSUPPORTED;
+    VkImageCreateFlags flags=shape->dimension==4?VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT:0;
+    VkImageFormatProperties properties;
+    if(images((VkPhysicalDevice)c->owner.host.physical_device,format,VK_IMAGE_TYPE_2D,
+              VK_IMAGE_TILING_OPTIMAL,usage,flags,&properties)!=VK_SUCCESS||
+       desc->width>properties.maxExtent.width||desc->height>properties.maxExtent.height||
+       shape->mip_count>properties.maxMipLevels||shape->layers>properties.maxArrayLayers||
+       !(properties.sampleCounts&VK_SAMPLE_COUNT_1_BIT))return MAG_NATIVE_UNSUPPORTED;
+    im->aspect=desc->format==MAG_NATIVE_SCENE_D32?VK_IMAGE_ASPECT_DEPTH_BIT:VK_IMAGE_ASPECT_COLOR_BIT;
+    im->mip_count=shape->mip_count;im->layers=shape->layers;
+    VkImageCreateInfo info={.sType=VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,.flags=flags,.imageType=VK_IMAGE_TYPE_2D,
+        .format=format,.extent={desc->width,desc->height,1},.mipLevels=shape->mip_count,.arrayLayers=shape->layers,
+        .samples=VK_SAMPLE_COUNT_1_BIT,.tiling=VK_IMAGE_TILING_OPTIMAL,.usage=usage,
+        .sharingMode=VK_SHARING_MODE_EXCLUSIVE,.initialLayout=VK_IMAGE_LAYOUT_UNDEFINED};
+    if(c->vkCreateImage(c->owner.device,&info,NULL,&im->image)!=VK_SUCCESS)return MAG_NATIVE_ALLOCATION_FAILED;
+    VkMemoryRequirements requirements;c->vkGetImageMemoryRequirements(c->owner.device,im->image,&requirements);
+    uint32_t type;
+    for(type=0;type<c->owner.memory.memoryTypeCount;++type)
+        if((requirements.memoryTypeBits&(1u<<type))&&
+           (c->owner.memory.memoryTypes[type].propertyFlags&VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT))break;
+    if(type==c->owner.memory.memoryTypeCount)return MAG_NATIVE_UNSUPPORTED;
+    VkMemoryAllocateInfo allocation={.sType=VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,.allocationSize=requirements.size,.memoryTypeIndex=type};
+    if(c->vkAllocateMemory(c->owner.device,&allocation,NULL,&im->memory)!=VK_SUCCESS||
+       c->vkBindImageMemory(c->owner.device,im->image,im->memory,0)!=VK_SUCCESS)return MAG_NATIVE_ALLOCATION_FAILED;
+    VkImageViewCreateInfo view={.sType=VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,.image=im->image,
+        .viewType=shape->dimension==4?VK_IMAGE_VIEW_TYPE_CUBE:VK_IMAGE_VIEW_TYPE_2D,.format=format,
+        .subresourceRange={im->aspect,0,shape->mip_count,0,shape->layers}};
+    return c->vkCreateImageView(c->owner.device,&view,NULL,&im->view)==VK_SUCCESS?MAG_NATIVE_OK:MAG_NATIVE_ALLOCATION_FAILED;
+}
+static int scene_filter_capabilities(frontend_vk *c,const mag_native_scene *scene,const mag_native_scene_v3 *v3,const mag_native_sampler *sampler_table){
+    PFN_vkGetPhysicalDeviceFormatProperties formats=(PFN_vkGetPhysicalDeviceFormatProperties)
+        c->owner.host.get_instance_proc(c->owner.host.instance,"vkGetPhysicalDeviceFormatProperties");
+    if(!formats)return MAG_NATIVE_UNSUPPORTED;
+    uint8_t checked[MAG_NATIVE_SCENE_MAX_IMAGES]={0};
+    for(uint32_t p=0;p<scene->pass_count;++p)for(uint32_t d=0;d<scene->passes[p].draw_count;++d){
+        const mag_native_scene_draw *draw=&scene->passes[p].draws[d];
+        for(uint32_t t=0;t<draw->texture_count;++t){
+            const mag_native_scene_texture_binding *binding=&draw->textures[t];
+            int linear=binding->sampler==MAG_NATIVE_SCENE_LINEAR;
+            if(binding->sampler&MAG_NATIVE_SCENE_SAMPLER_TABLE_BIT){
+                const mag_native_sampler_state *state=NULL;
+                int status=sampler_info(c,sampler_table[MAG_NATIVE_SCENE_SAMPLER_TABLE_INDEX(binding->sampler)],&state);
+                if(status)return status;
+                linear=state->min_filter||state->mag_filter||state->mip_filter==MAG_NATIVE_MIP_LINEAR||state->max_anisotropy>1;
+                if((binding->image&MAG_NATIVE_SCENE_VIEW_TABLE_BIT)&&
+                   (state->wrap_s==MAG_NATIVE_WRAP_BORDER||state->wrap_t==MAG_NATIVE_WRAP_BORDER||state->wrap_r==MAG_NATIVE_WRAP_BORDER)&&
+                   state->border[0]==0&&state->border[1]==0&&state->border[2]==0&&state->border[3]==1){
+                    const mag_native_image_view *view=&v3->views[MAG_NATIVE_SCENE_VIEW_TABLE_INDEX(binding->image)];
+                    // Core1.1 leaves opaque-black border values undefined under
+                    // nonidentity swizzles; an extension/rewritten shader is needed.
+                    for(unsigned channel=0;channel<4;++channel)if(view->remap[channel]!=channel)return MAG_NATIVE_UNSUPPORTED;
+                }
+            }
+            uint32_t image=mag_native_scene_image_index(v3,binding->image);
+            if(linear&&!checked[image]){
+                VkFormatProperties properties;formats((VkPhysicalDevice)c->owner.host.physical_device,scene_vk_format(scene->images[image].format),&properties);
+                if(!(properties.optimalTilingFeatures&VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT))return MAG_NATIVE_UNSUPPORTED;
+                checked[image]=1;
+            }
+        }
+    }
+    return MAG_NATIVE_OK;
+}
+static int scene_views_create(frontend_vk *c,frontend_vk_slot *slot,const mag_native_scene *scene,const mag_native_scene_v3 *v3){
+    if(!v3||!v3->view_count)return MAG_NATIVE_OK;
+    slot->scene_views=calloc(v3->view_count,sizeof(*slot->scene_views));
+    if(!slot->scene_views)return MAG_NATIVE_ALLOCATION_FAILED;
+    slot->scene_view_count=v3->view_count;
+    for(uint32_t i=0;i<v3->view_count;++i){
+        const mag_native_image_view *view=&v3->views[i];
+        const frontend_vk_scene_image *im=&slot->scene_images[view->image];
+        // Core1.1 does not guarantee depth/stencil constant-one swizzles.
+        if(im->aspect==VK_IMAGE_ASPECT_DEPTH_BIT)
+            for(unsigned component=0;component<4;++component)if(view->remap[component]==5)return MAG_NATIVE_UNSUPPORTED;
+        VkImageViewUsageCreateInfo usage={.sType=VK_STRUCTURE_TYPE_IMAGE_VIEW_USAGE_CREATE_INFO,.usage=VK_IMAGE_USAGE_SAMPLED_BIT};
+        VkImageViewCreateInfo info={.sType=VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,.pNext=&usage,.image=im->image,
+            .viewType=view->dimension==4?VK_IMAGE_VIEW_TYPE_CUBE:VK_IMAGE_VIEW_TYPE_2D,
+            .format=scene_vk_format(scene->images[view->image].format),.components=scene_component_mapping(view->remap),
+            .subresourceRange={im->aspect,view->base_mip,view->mip_count,view->base_layer,view->layer_count}};
+        if(c->vkCreateImageView(c->owner.device,&info,NULL,&slot->scene_views[i])!=VK_SUCCESS)return MAG_NATIVE_ALLOCATION_FAILED;
+    }
+    return MAG_NATIVE_OK;
+}
+static VkImageView scene_texture_view(const frontend_vk_slot *slot,uint32_t code){
+    return code&MAG_NATIVE_SCENE_VIEW_TABLE_BIT?slot->scene_views[MAG_NATIVE_SCENE_VIEW_TABLE_INDEX(code)]:slot->scene_images[code].view;
+}
+/* The common validator bounds2D/cube images to8192 and the full mip pyramid
+ * to14 levels, hence at most84 owned packed regions. Vulkan records this array
+ * synchronously; no caller subresource pointer survives the submission call. */
+static uint32_t scene_upload_regions(const mag_native_scene_image *desc,const mag_native_scene_image_layout *shape,
+                                      VkBufferImageCopy copies[84]){
+    uint32_t count=shape->subresource_count;
+    if(!count){copies[0]=(VkBufferImageCopy){.imageSubresource={desc->format==MAG_NATIVE_SCENE_D32?VK_IMAGE_ASPECT_DEPTH_BIT:VK_IMAGE_ASPECT_COLOR_BIT,0,0,1},.imageExtent={desc->width,desc->height,1}};return 1;}
+    for(uint32_t i=0;i<count;++i){
+        const mag_native_image_subresource *sub=&shape->subresources[i];
+        copies[i]=(VkBufferImageCopy){.bufferOffset=sub->offset,
+            .imageSubresource={desc->format==MAG_NATIVE_SCENE_D32?VK_IMAGE_ASPECT_DEPTH_BIT:VK_IMAGE_ASPECT_COLOR_BIT,sub->mip,sub->layer,1},
+            .imageExtent={sub->width,sub->height,sub->depth}};
+    }
+    return count;
 }
 static int scene_renderpass(frontend_vk *c, uint32_t color, uint32_t depth, const mag_native_scene_pass *pass,
                             VkRenderPass *out) {
@@ -63,11 +245,13 @@ static int scene_graphics_create_layout(void *opaque, const mag_native_scene_gra
     if (!format_properties)
         return MAG_NATIVE_UNSUPPORTED;
     VkFormatProperties color_format, depth_format;
-    format_properties((VkPhysicalDevice)c->owner.host.physical_device, scene_vk_format(desc->color_format),
-                      &color_format);
+    memset(&color_format,0,sizeof(color_format));
+    if(desc->color_format)format_properties((VkPhysicalDevice)c->owner.host.physical_device, scene_vk_format(desc->color_format), &color_format);
     format_properties((VkPhysicalDevice)c->owner.host.physical_device, VK_FORMAT_D32_SFLOAT, &depth_format);
-    if (!(color_format.optimalTilingFeatures & VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT) ||
-        !(depth_format.optimalTilingFeatures & VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT))
+    if ((desc->color_format && !(color_format.optimalTilingFeatures & VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT)) ||
+        (desc->color_format && ((state&&state->blend_enabled)||(!state&&desc->blend)) &&
+         !(color_format.optimalTilingFeatures & VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BLEND_BIT)) ||
+        (desc->depth_format && !(depth_format.optimalTilingFeatures & VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT)))
         return MAG_NATIVE_UNSUPPORTED;
     const mag_native_shader_stage *source[2] = {&desc->vertex, &desc->fragment};
     VkShaderModule modules[2] = {0};
@@ -374,7 +558,7 @@ static void scene_image_transition(frontend_vk *c, frontend_vk_slot *slot, uint3
                               .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
                               .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
                               .image = im->image,
-                              .subresourceRange = {im->aspect, 0, 1, 0, 1}};
+                              .subresourceRange = {im->aspect, 0, im->mip_count, 0, im->layers}};
     c->vkCmdPipelineBarrier(slot->command,
                             im->layout == VK_IMAGE_LAYOUT_UNDEFINED ? VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT
                                                                     : VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
@@ -382,7 +566,7 @@ static void scene_image_transition(frontend_vk *c, frontend_vk_slot *slot, uint3
     im->layout = layout;
 }
 static int scene_descriptors(frontend_vk *c, frontend_vk_slot *slot, frontend_vk_pipeline *pipeline,
-                             const mag_native_scene_draw *draw, VkDescriptorSet sets[2]) {
+                             const mag_native_scene_draw *draw, VkDescriptorSet sets[2],const mag_native_scene_v3 *v3) {
     VkDescriptorSetAllocateInfo alloc = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
                                          .descriptorPool = slot->descriptors,
                                          .descriptorSetCount = 2,
@@ -412,8 +596,8 @@ static int scene_descriptors(frontend_vk *c, frontend_vk_slot *slot, frontend_vk
     }
     for (uint32_t j = 0; j < draw->texture_count; ++j) {
         const mag_native_scene_texture_binding *t = &draw->textures[j];
-        frontend_vk_scene_image *im = &slot->scene_images[t->image];
-        images[image_count] = (VkDescriptorImageInfo){VK_NULL_HANDLE, im->view,
+        frontend_vk_scene_image *im = &slot->scene_images[mag_native_scene_image_index(v3,t->image)];
+        images[image_count] = (VkDescriptorImageInfo){VK_NULL_HANDLE, scene_texture_view(slot,t->image),
                                                       im->aspect == VK_IMAGE_ASPECT_DEPTH_BIT
                                                           ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL
                                                           : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
@@ -495,7 +679,7 @@ static int scene_descriptor_capacity(frontend_vk *c, frontend_vk_slot *slot, con
     memcpy(slot->descriptor_counts, counts, sizeof(counts));
     return MAG_NATIVE_OK;
 }
-static int submit_scene_owned(frontend_vk *c, const mag_native_scene *scene, mag_native_ticket *out,const mag_native_sampler *sampler_table,uint32_t sampler_count) {
+static int submit_scene_owned(frontend_vk *c, const mag_native_scene *scene, mag_native_ticket *out,const mag_native_sampler *sampler_table,uint32_t sampler_count,const mag_native_scene_v3 *v3) {
     if (c->failed || c->next_submission == UINT64_MAX)
         return MAG_NATIVE_DEVICE_FAILED;
     frontend_vk_slot *slot = NULL;
@@ -517,9 +701,13 @@ static int submit_scene_owned(frontend_vk *c, const mag_native_scene *scene, mag
                                           limits->maxStorageBufferRange};
     mag_native_scene_usage usage;
     mag_native_scene_registry_v2 registry_v2={&registry,sampler_table,sampler_count,sampler_info};
-    int status = mag_native_scene_validate_v2(scene, &registry_v2, &usage);
+    int status = v3?mag_native_scene_validate_v3(v3,&registry_v2,&usage):mag_native_scene_validate_v2(scene, &registry_v2, &usage);
     if (status)
         return status;
+    status=scene_filter_capabilities(c,scene,v3,sampler_table);
+    if(status)return status;
+    status=scene_viewport_capabilities(c,scene,v3);
+    if(status)return status;
     uint32_t total_draws = 0;
     for (uint32_t i = 0; i < scene->pass_count; ++i)
         total_draws += scene->passes[i].draw_count;
@@ -546,17 +734,11 @@ static int submit_scene_owned(frontend_vk *c, const mag_native_scene *scene, mag
         const mag_native_scene_image *desc = &scene->images[i];
         frontend_vk_scene_image *im = &slot->scene_images[i];
         slot->scene_image_count = i + 1;
-        im->aspect =
-            desc->format != MAG_NATIVE_SCENE_D32 ? VK_IMAGE_ASPECT_COLOR_BIT : VK_IMAGE_ASPECT_DEPTH_BIT;
-        VkImageUsageFlags flags =
-            VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
-            (desc->format != MAG_NATIVE_SCENE_D32 ? VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT
-                                                  : VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT);
-        status = batch_image(c, desc->width, desc->height, scene_vk_format(desc->format), im->aspect, flags,
-                             &im->image, &im->memory, &im->view);
-        if (status)
-            goto fail;
+        mag_native_scene_image_layout shape=scene_image_shape(v3,i);
+        status=scene_image_create(c,desc,&shape,scene_image_usage(scene,i),im);
+        if(status)goto fail;
     }
+    status=scene_views_create(c,slot,scene,v3);if(status)goto fail;
     for (uint32_t i = 0; i < scene->pass_count; ++i) {
         const mag_native_scene_pass *p = &scene->passes[i];
         slot->scene_pass_count = i + 1;
@@ -645,7 +827,7 @@ static int submit_scene_owned(frontend_vk *c, const mag_native_scene *scene, mag
             const mag_native_scene_draw *d = &scene->passes[n].draws[j];
             frontend_vk_pipeline *p = pipeline_find(c, d->pipeline);
             used[used_count++] = p;
-            status = scene_descriptors(c, slot, p, d, draw_sets[draw_count++]);
+            status = scene_descriptors(c, slot, p, d, draw_sets[draw_count++],v3);
             if (status)
                 goto fail;
         }
@@ -670,11 +852,11 @@ static int submit_scene_owned(frontend_vk *c, const mag_native_scene *scene, mag
             const mag_native_scene_image *im = &scene->images[i];
             scene_image_transition(c, slot, i, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                                    VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
-            VkBufferImageCopy copy = {.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
-                                      .imageExtent = {im->width, im->height, 1}};
-            c->vkCmdCopyBufferToImage(slot->command, buffer_find(c, im->upload)->gpu,
-                                      slot->scene_images[i].image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
-                                      &copy);
+            VkBufferImageCopy copies[84];
+            mag_native_scene_image_layout shape=scene_image_shape(v3,i);
+            uint32_t count=scene_upload_regions(im,&shape,copies);
+            c->vkCmdCopyBufferToImage(slot->command,buffer_find(c,im->upload)->gpu,
+                slot->scene_images[i].image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,count,copies);
         }
     for (uint32_t n = 0; n < scene->dispatch_count; ++n) {
         const mag_native_frame *f = &scene->dispatches[n];
@@ -702,7 +884,7 @@ static int submit_scene_owned(frontend_vk *c, const mag_native_scene *scene, mag
         uint8_t sampled[MAG_NATIVE_SCENE_MAX_IMAGES] = {0};
         for (uint32_t j = 0; j < p->draw_count; ++j)
             for (uint32_t k = 0; k < p->draws[j].texture_count; ++k) {
-                uint32_t index = p->draws[j].textures[k].image;
+                uint32_t index = mag_native_scene_image_index(v3,p->draws[j].textures[k].image);
                 if (!sampled[index]) {
                     sampled[index] = 1;
                     frontend_vk_scene_image *im = &slot->scene_images[index];
@@ -740,12 +922,12 @@ static int submit_scene_owned(frontend_vk *c, const mag_native_scene *scene, mag
                                       .clearValueCount = clear_count,
                                       .pClearValues = clear};
         c->vkCmdBeginRenderPass(slot->command, &pass, VK_SUBPASS_CONTENTS_INLINE);
-        // Vulkan1.1 negative viewport height matches Metal's authored top-left image.
-        VkViewport viewport = {0, (float)extent->height, (float)extent->width, -(float)extent->height, 0, 1};
-        VkRect2D scissor = {{0, 0}, {extent->width, extent->height}};
+        VkViewport viewport;VkRect2D scissor;
+        int visible=scene_viewport(v3,n,extent->width,extent->height,&viewport,&scissor);
         c->vkCmdSetViewport(slot->command, 0, 1, &viewport);
         c->vkCmdSetScissor(slot->command, 0, 1, &scissor);
         for (uint32_t j = 0; j < p->draw_count; ++j) {
+            if(!visible){++draw_count;continue;}
             const mag_native_scene_draw *d = &p->draws[j];
             frontend_vk_pipeline *pipeline = pipeline_find(c, d->pipeline);
             c->vkCmdBindPipeline(slot->command, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline->gpu);
@@ -822,7 +1004,7 @@ static int submit_scene(void *opaque, const mag_native_scene *scene, mag_native_
     int status = c->owner.host.try_begin(c->owner.host.userdata, c->owner.host.lifetime);
     if (status)
         return status < 0 ? status : MAG_NATIVE_DEVICE_FAILED;
-    int result = submit_scene_owned(c, scene, out,NULL,0);
+    int result = submit_scene_owned(c, scene, out,NULL,0,NULL);
     c->owner.host.end(c->owner.host.userdata, c->owner.host.lifetime);
     return result;
 }
@@ -831,6 +1013,14 @@ static int submit_scene_v2(void *opaque,const mag_native_scene_v2 *desc,const ma
     if(target||frame)return MAG_NATIVE_UNSUPPORTED;
     frontend_vk *c=opaque;int status=c->owner.host.try_begin(c->owner.host.userdata,c->owner.host.lifetime);
     if(status)return status<0?status:MAG_NATIVE_DEVICE_FAILED;
-    int result=submit_scene_owned(c,desc->scene,out,desc->samplers,desc->sampler_count);
+    int result=submit_scene_owned(c,desc->scene,out,desc->samplers,desc->sampler_count,NULL);
+    c->owner.host.end(c->owner.host.userdata,c->owner.host.lifetime);return result;
+}
+
+static int submit_scene_v3(void *opaque,const mag_native_scene_v3 *desc,const mag_native_image *target,const MagRenderHostFrame *frame,mag_native_ticket *out){
+    if(target||frame)return MAG_NATIVE_UNSUPPORTED;
+    frontend_vk *c=opaque;int status=c->owner.host.try_begin(c->owner.host.userdata,c->owner.host.lifetime);
+    if(status)return status<0?status:MAG_NATIVE_DEVICE_FAILED;
+    int result=submit_scene_owned(c,desc->base.scene,out,desc->base.samplers,desc->base.sampler_count,desc);
     c->owner.host.end(c->owner.host.userdata,c->owner.host.lifetime);return result;
 }

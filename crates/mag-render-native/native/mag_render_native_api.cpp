@@ -1,6 +1,6 @@
 #include "mag_render_native_api.h"
 #include "mag_render_batch.h"
-#include "mag_render_scene.h"
+#include "mag_render_scene_extended.h"
 #include "mag_render_host_frame.h"
 #include <cstddef>
 #define LAYOUT(t) uint32_t(sizeof(t)), uint32_t(alignof(t))
@@ -115,4 +115,21 @@ extern "C" int mag_native_sampler_layout(uint32_t *out,uint32_t words){
  LAYOUT(mag_native_scene_v2),OFFSET(mag_native_scene_v2,scene),OFFSET(mag_native_scene_v2,samplers),OFFSET(mag_native_scene_v2,sampler_count)};
  if(!out||words!=sizeof(expected)/sizeof(expected[0]))return MAG_NATIVE_INVALID;
  for(uint32_t i=0;i<words;++i){out[i]=expected[i];}return MAG_NATIVE_OK;
+}
+
+extern "C" int mag_native_image_format_layout(uint32_t format,uint32_t *out,uint32_t words){
+ mag_native_image_format f;if(!out||words!=6||!mag_native_image_format_info(format,&f))return MAG_NATIVE_INVALID;
+ out[0]=f.block_width;out[1]=f.block_height;out[2]=f.block_bytes;out[3]=f.sample_kind;out[4]=f.color_attachment;out[5]=f.depth_attachment;return MAG_NATIVE_OK;
+}
+extern "C" int mag_native_scene_v3_layout(uint32_t *out,uint32_t words){
+ const uint32_t layout[]={
+ LAYOUT(mag_native_image_subresource),OFFSET(mag_native_image_subresource,mip),OFFSET(mag_native_image_subresource,layer),OFFSET(mag_native_image_subresource,width),OFFSET(mag_native_image_subresource,height),OFFSET(mag_native_image_subresource,depth),OFFSET(mag_native_image_subresource,row_bytes),OFFSET(mag_native_image_subresource,offset),OFFSET(mag_native_image_subresource,length),
+ LAYOUT(mag_native_scene_image_layout),OFFSET(mag_native_scene_image_layout,dimension),OFFSET(mag_native_scene_image_layout,depth),OFFSET(mag_native_scene_image_layout,layers),OFFSET(mag_native_scene_image_layout,mip_count),OFFSET(mag_native_scene_image_layout,samples),OFFSET(mag_native_scene_image_layout,reserved),OFFSET(mag_native_scene_image_layout,subresources),OFFSET(mag_native_scene_image_layout,subresource_count),OFFSET(mag_native_scene_image_layout,reserved1),
+ LAYOUT(mag_native_image_view),OFFSET(mag_native_image_view,image),OFFSET(mag_native_image_view,dimension),OFFSET(mag_native_image_view,base_mip),OFFSET(mag_native_image_view,mip_count),OFFSET(mag_native_image_view,base_layer),OFFSET(mag_native_image_view,layer_count),OFFSET(mag_native_image_view,remap),OFFSET(mag_native_image_view,reserved),
+ LAYOUT(mag_native_viewport),OFFSET(mag_native_viewport,x),OFFSET(mag_native_viewport,y),OFFSET(mag_native_viewport,width),OFFSET(mag_native_viewport,height),OFFSET(mag_native_viewport,min_depth),OFFSET(mag_native_viewport,max_depth),OFFSET(mag_native_viewport,scissor_x),OFFSET(mag_native_viewport,scissor_y),OFFSET(mag_native_viewport,scissor_width),OFFSET(mag_native_viewport,scissor_height),OFFSET(mag_native_viewport,known_fields),OFFSET(mag_native_viewport,reserved),
+ LAYOUT(mag_native_scene_v3),OFFSET(mag_native_scene_v3,struct_size),OFFSET(mag_native_scene_v3,abi_version),OFFSET(mag_native_scene_v3,base),OFFSET(mag_native_scene_v3,image_layouts),OFFSET(mag_native_scene_v3,image_layout_count),OFFSET(mag_native_scene_v3,view_count),OFFSET(mag_native_scene_v3,views),OFFSET(mag_native_scene_v3,viewports),OFFSET(mag_native_scene_v3,viewport_count),OFFSET(mag_native_scene_v3,reserved),
+ };
+ if(!out||words!=sizeof(layout)/sizeof(layout[0]))return MAG_NATIVE_INVALID;
+ for(uint32_t i=0;i<words;++i){out[i]=layout[i];}
+ return MAG_NATIVE_OK;
 }

@@ -31,7 +31,21 @@ pub struct HostOwner {
     pub try_begin: Option<unsafe extern "C" fn(*mut c_void, u64) -> i32>,
     pub end: Option<unsafe extern "C" fn(*mut c_void, u64)>,
 }
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct HostOwnerV2 {
+    pub abi_version: u32,
+    pub struct_size: u32,
+    pub base: HostOwner,
+    pub known_features: u64,
+    pub enabled_features: u64,
+}
+pub const FEATURE_BC: u64 = 1;
+pub const FEATURE_ANISOTROPY: u64 = 2;
+pub const FEATURE_DEPTH_BOUNDS: u64 = 4;
 unsafe extern "C" {
+    fn mag_native_create_v2(owner: *const HostOwnerV2, out: *mut *mut c_void) -> i32;
+    fn mag_native_owner_v2_layout(out: *mut u32, words: u32) -> i32;
     fn mag_native_create(owner: *const HostOwner, out: *mut *mut c_void) -> i32;
     fn mag_native_close(device: *mut c_void) -> i32;
     fn mag_render_native_get_api(device: *mut c_void, api: *mut SdkApi) -> i32;
@@ -57,6 +71,44 @@ impl NativeContext {
         let raw = NonNull::new(raw).ok_or(-6)?;
         Ok(Self {
             raw: Some(raw),
+            _thread: PhantomData,
+        })
+    }
+    /// # Safety
+    /// Same genuine retained owner contract as from_host. Feature facts refer
+    /// to enabled device features captured under this exact owner generation.
+    pub unsafe fn from_host_v2(owner: &HostOwnerV2) -> Result<Self, i32> {
+        use std::mem::{align_of, offset_of};
+        let expected = [
+            size_of::<HostOwnerV2>() as u32,
+            align_of::<HostOwnerV2>() as u32,
+            offset_of!(HostOwnerV2, base) as u32,
+            offset_of!(HostOwnerV2, known_features) as u32,
+            offset_of!(HostOwnerV2, enabled_features) as u32,
+            FEATURE_BC as u32,
+            FEATURE_ANISOTROPY as u32,
+            FEATURE_DEPTH_BOUNDS as u32,
+        ];
+        let mut actual = [0; 8];
+        let status = unsafe { mag_native_owner_v2_layout(actual.as_mut_ptr(), 8) };
+        if status != 0 {
+            return Err(status);
+        }
+        if actual != expected
+            || owner.abi_version != 2
+            || owner.struct_size as usize != size_of::<HostOwnerV2>()
+            || owner.known_features & !7 != 0
+            || owner.enabled_features & !owner.known_features != 0
+        {
+            return Err(-1);
+        }
+        let mut raw = std::ptr::null_mut();
+        let status = unsafe { mag_native_create_v2(owner, &mut raw) };
+        if status != 0 {
+            return Err(status);
+        }
+        Ok(Self {
+            raw: Some(NonNull::new(raw).ok_or(-6)?),
             _thread: PhantomData,
         })
     }
@@ -169,6 +221,40 @@ mod tests {
             try_begin: Some(begin),
             end: Some(end),
         }
+    }
+    #[test]
+    fn unknown_enabled_features_are_rejected_before_native_access() {
+        let host = HostOwnerV2 {
+            abi_version: 2,
+            struct_size: size_of::<HostOwnerV2>() as u32,
+            base: owner(),
+            known_features: 0,
+            enabled_features: FEATURE_BC,
+        };
+        assert!(matches!(
+            unsafe { NativeContext::from_host_v2(&host) },
+            Err(-1)
+        ));
+    }
+    #[test]
+    #[cfg(all(feature = "metal", target_os = "macos"))]
+    fn owner_v2_preserves_retain_before_device_access() {
+        unsafe extern "C" fn reject(_: *mut c_void, _: u64) -> i32 {
+            -3
+        }
+        let mut base = owner();
+        base.retain = Some(reject);
+        let host = HostOwnerV2 {
+            abi_version: 2,
+            struct_size: size_of::<HostOwnerV2>() as u32,
+            base,
+            known_features: 7,
+            enabled_features: 1,
+        };
+        assert!(matches!(
+            unsafe { NativeContext::from_host_v2(&host) },
+            Err(-3)
+        ));
     }
     #[test]
     fn unsupported_or_bad_owner_never_dereferences_native_pointers() {

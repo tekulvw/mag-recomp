@@ -258,8 +258,8 @@ struct Session {
     native_backend: u32,
     packet_cache: scene_packet::PipelineCache,
     backend: RenderBackend<Driver>,
-    pipeline: u64,
-    color_format: ImageFormat,
+    pipeline: Option<u64>,
+    color_format: Option<ImageFormat>,
     max_draws: usize,
     max_bytes: u64,
     pending: BTreeMap<u64, Pending>,
@@ -412,49 +412,87 @@ pub unsafe extern "C" fn mag_render_client_create(
             }
         })?;
         let context = unsafe { NativeContext::from_host(&*owner) }?;
-        let mut device = SceneDevice::from_owned_context(
+        let id = create_session(
             context,
-            BatchDeviceLimits {
-                max_bytes,
-                max_pipelines: 257,
-                diagnostic_readback: false,
-            },
+            unsafe { (*owner).backend },
+            Some(d),
+            max_draws,
+            max_bytes,
         )?;
-        let pipeline = unsafe { device.graphics_pipeline(d) }?;
-        let backend = RenderBackend::new(
-            Driver(RefCell::new(device)),
-            BackendLimits {
-                max_leases_per_submission: crate::batch_device::scene_device::MAX_SCENE_RESOURCES,
-                max_bytes_per_submission: max_bytes as usize,
-            },
-        )
-        .map_err(|_| -5)?;
-        let id = NEXT_SESSION
-            .try_update(Ordering::Relaxed, Ordering::Relaxed, |v| v.checked_add(1))
-            .map_err(|_| -5)?;
-        SESSIONS.with(|s| {
-            s.borrow_mut().insert(
-                id,
-                Session {
-                    native_backend: unsafe { (*owner).backend },
-                    packet_cache: scene_packet::PipelineCache::default(),
-                    backend,
-                    pipeline,
-                    color_format: if d.color_format == 3 {
-                        ImageFormat::Bgra8
-                    } else {
-                        ImageFormat::Rgba8
-                    },
-                    max_draws: max_draws as usize,
-                    max_bytes,
-                    pending: BTreeMap::new(),
-                    ready: VecDeque::new(),
-                },
-            )
-        });
         unsafe { *out = id };
         Ok(())
     })
+}
+pub(crate) fn create_scene_session(
+    context: NativeContext,
+    native_backend: u32,
+    max_draws: u32,
+    max_bytes: u64,
+) -> Result<u64, i32> {
+    if max_draws == 0
+        || max_draws as usize > MAX_DRAWS
+        || max_bytes == 0
+        || max_bytes > crate::batch_device::scene_device::MAX_SCENE_BYTES
+    {
+        return Err(-1);
+    }
+    SESSIONS.with(|s| {
+        if s.borrow().len() >= 2 {
+            Err(-4)
+        } else {
+            Ok(())
+        }
+    })?;
+    create_session(context, native_backend, None, max_draws, max_bytes)
+}
+fn create_session(
+    context: NativeContext,
+    native_backend: u32,
+    graphics: Option<&SceneGraphicsDesc>,
+    max_draws: u32,
+    max_bytes: u64,
+) -> Result<u64, i32> {
+    let mut device = SceneDevice::from_owned_context(
+        context,
+        BatchDeviceLimits {
+            max_bytes,
+            max_pipelines: 257,
+            diagnostic_readback: false,
+        },
+    )?;
+    let pipeline = if let Some(d) = graphics {
+        Some(unsafe { device.graphics_pipeline(d) }?)
+    } else {
+        None
+    };
+    let backend = RenderBackend::new(
+        Driver(RefCell::new(device)),
+        BackendLimits {
+            max_leases_per_submission: crate::batch_device::scene_device::MAX_SCENE_RESOURCES,
+            max_bytes_per_submission: max_bytes as usize,
+        },
+    )
+    .map_err(|_| -5)?;
+    let id = NEXT_SESSION
+        .try_update(Ordering::Relaxed, Ordering::Relaxed, |v| v.checked_add(1))
+        .map_err(|_| -5)?;
+    SESSIONS.with(|s| {
+        s.borrow_mut().insert(
+            id,
+            Session {
+                native_backend,
+                packet_cache: scene_packet::PipelineCache::default(),
+                backend,
+                pipeline,
+                color_format: graphics.and_then(|d| ImageFormat::from_native(d.color_format).ok()),
+                max_draws: max_draws as usize,
+                max_bytes,
+                pending: BTreeMap::new(),
+                ready: VecDeque::new(),
+            },
+        )
+    });
+    Ok(id)
 }
 struct SceneSetup {
     pipeline: u64,
@@ -593,6 +631,8 @@ pub unsafe extern "C" fn mag_render_client_submit(
             if s.pending.len() + s.ready.len() >= 2 {
                 return Err(-4);
             }
+            let pipeline = s.pipeline.ok_or(-2)?;
+            let color_format = s.color_format.ok_or(-2)?;
             let input = unsafe { &*input };
             let mut packed = unsafe { pack(input, s.max_draws, s.max_bytes) }?;
             if input.target.is_null() || input.frame.is_null() {
@@ -606,21 +646,15 @@ pub unsafe extern "C" fn mag_render_client_submit(
             if frame.owner_lifetime != target.owner_lifetime {
                 return Err(-3);
             }
-            if target.format
-                != match s.color_format {
-                    ImageFormat::Rgba8 => 1,
-                    ImageFormat::Bgra8 => 3,
-                    ImageFormat::Depth32 => 2,
-                }
-            {
+            if target.format != color_format.native_id() {
                 return Err(-2);
             }
             let identities: Vec<_> = packed.draws.iter().map(|d| d.identity).collect();
             let scene = prepare(
                 &*s.backend.device().0.borrow(),
                 SceneSetup {
-                    pipeline: s.pipeline,
-                    color_format: s.color_format,
+                    pipeline,
+                    color_format,
                     max_draws: s.max_draws,
                     max_bytes: s.max_bytes,
                     width: target.width,

@@ -17,7 +17,10 @@ static int sampler_create(void *opaque, const mag_native_sampler_desc *desc, mag
     if (status)
         return status;
     /* Physical support does not prove this borrowed device enabled anisotropy. */
-    if (s->max_anisotropy > 1 || fabsf(s->lod_bias) > c->owner.properties.limits.maxSamplerLodBias)
+    if ((s->max_anisotropy > 1 &&
+         (!(c->known_features&c->enabled_features&MAG_RENDER_HOST_FEATURE_ANISOTROPY) ||
+          s->max_anisotropy>c->owner.properties.limits.maxSamplerAnisotropy)) ||
+        fabsf(s->lod_bias) > c->owner.properties.limits.maxSamplerLodBias)
         return MAG_NATIVE_UNSUPPORTED;
     const VkSamplerAddressMode wraps[] = {
         VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE, VK_SAMPLER_ADDRESS_MODE_REPEAT,
@@ -39,7 +42,8 @@ static int sampler_create(void *opaque, const mag_native_sampler_desc *desc, mag
                                 .addressModeV = wraps[s->wrap_t],
                                 .addressModeW = wraps[s->wrap_r],
                                 .mipLodBias = s->lod_bias,
-                                .maxAnisotropy = 1,
+                                .anisotropyEnable = s->max_anisotropy > 1,
+                                .maxAnisotropy = s->max_anisotropy,
                                 .compareEnable = s->comparison_enabled,
                                 .compareOp = compares[s->comparison],
                                 .minLod = s->mip_filter ? s->lod_min : 0,

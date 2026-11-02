@@ -1,6 +1,6 @@
 #ifndef MAG_RENDER_SCENE_VALIDATE_H
 #define MAG_RENDER_SCENE_VALIDATE_H
-#include "mag_render_scene.h"
+#include "mag_render_scene_extended.h"
 typedef struct mag_native_scene_buffer_info {
     uint64_t length;
     uint32_t busy, gpu_written, seed_zero;
@@ -27,6 +27,7 @@ typedef struct mag_native_scene_registry_v2 {
     uint32_t sampler_count;
     int (*sampler)(void *,mag_native_sampler,const mag_native_sampler_state **);
 } mag_native_scene_registry_v2;
+int mag_native_scene_validate_v3(const mag_native_scene_v3 *,const mag_native_scene_registry_v2 *,mag_native_scene_usage *);
 int mag_native_scene_validate_v2(const mag_native_scene *,const mag_native_scene_registry_v2 *,mag_native_scene_usage *);
 /* Pure admission checks used by every native encoder; callbacks only inspect
  * actual generation-qualified native registry entries. No GPU effects. */

@@ -1,9 +1,15 @@
 /* Frontend-owned D3D12 multipass scene; shares the actual Context/Slot fence
  * ownership with compute/batch. No device/queue/window or SDK is created. */
 static DXGI_FORMAT scene_format(uint32_t format) {
-  return format == MAG_NATIVE_SCENE_D32     ? DXGI_FORMAT_D32_FLOAT
-         : format == MAG_NATIVE_SCENE_BGRA8 ? DXGI_FORMAT_B8G8R8A8_UNORM
-                                            : DXGI_FORMAT_R8G8B8A8_UNORM;
+  static const DXGI_FORMAT formats[] = {DXGI_FORMAT_UNKNOWN,
+    DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_D32_FLOAT,
+    DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_R8_UNORM,
+    DXGI_FORMAT_R8G8_UNORM, DXGI_FORMAT_BC1_UNORM,
+    DXGI_FORMAT_BC2_UNORM, DXGI_FORMAT_BC3_UNORM,
+    DXGI_FORMAT_R16_UNORM, DXGI_FORMAT_R16G16_UNORM,
+    DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_R32G32B32A32_FLOAT,
+    DXGI_FORMAT_R32_FLOAT, DXGI_FORMAT_R16G16_FLOAT};
+  return format < sizeof(formats)/sizeof(formats[0]) ? formats[format] : DXGI_FORMAT_UNKNOWN;
 }
 struct SceneBlob {
   mag_render_dxc_blob value = {};
@@ -279,6 +285,7 @@ struct SceneDrawPlan {
   std::array<uint64_t, 2> sampler_indices = {{UINT64_MAX, UINT64_MAX}};
 };
 struct ScenePlan {
+  const mag_native_scene_v3 *extended=nullptr;
   const mag_native_sampler *sampler_table=nullptr;uint32_t sampler_count=0;
   Plan buffers;
   std::array<Command, MaxCommands> compute = {};
@@ -320,7 +327,7 @@ static int scene_graphics_info(void *opaque, mag_native_pipeline ref,
   return MAG_NATIVE_OK;
 }
 static int scene_prepare(Context *c, const mag_native_scene *scene,
-                         ScenePlan &plan,const mag_native_sampler *sampler_table=nullptr,uint32_t sampler_count=0) {
+                         ScenePlan &plan,const mag_native_sampler *sampler_table=nullptr,uint32_t sampler_count=0,const mag_native_scene_v3 *extended=nullptr) {
   if (c->failed)
     return MAG_NATIVE_DEVICE_FAILED;
   mag_native_scene_registry registry = {c,
@@ -333,7 +340,8 @@ static int scene_prepare(Context *c, const mag_native_scene *scene,
                                         UINT32_MAX};
   plan.sampler_table=sampler_table;plan.sampler_count=sampler_count;
   mag_native_scene_registry_v2 registry_v2={&registry,sampler_table,sampler_count,sampler_info};
-  int status = mag_native_scene_validate_v2(scene, &registry_v2, &plan.usage);
+  plan.extended=extended;
+  int status = extended ? mag_native_scene_validate_v3(extended, &registry_v2, &plan.usage) : mag_native_scene_validate_v2(scene, &registry_v2, &plan.usage);
   if (status)
     return status;
   plan.buffers.buffers.resize(scene->resource_count);
@@ -395,16 +403,33 @@ static int scene_prepare(Context *c, const mag_native_scene *scene,
   };
   if (!reserve(uint64_t(plan.sampler_records) * 64))
     return MAG_NATIVE_ALLOCATION_FAILED;
-  for (uint32_t i = 0; i < scene->image_count; ++i)
-    if (scene->images[i].upload.id) {
-      const auto &im = scene->images[i];
-      if (!reserve(padded(uint64_t(im.width) * 4) * im.height))
-        return MAG_NATIVE_ALLOCATION_FAILED;
+  // A Texture2D shader cannot sample a D3D12 Texture2DArray face view.
+  // Refuse this capability before allocating or submitting any scene work.
+  if (extended) for(uint32_t i=0;i<extended->view_count;++i) {
+    const auto &view=extended->views[i];
+    if(view.dimension==2 && extended->image_layout_count &&
+       extended->image_layouts[view.image].layers!=1) return MAG_NATIVE_UNSUPPORTED;
+  }
+  for (uint32_t i = 0; i < scene->image_count; ++i) {
+    const auto &im=scene->images[i];
+    if (!im.upload.id) continue;
+    const auto *layout=extended && extended->image_layout_count ? &extended->image_layouts[i] : nullptr;
+    const uint32_t levels=layout ? layout->subresource_count : 1;
+    uint64_t staging=0;
+    for(uint32_t j=0;j<levels;++j) {
+      const uint32_t w=layout ? layout->subresources[j].width : im.width;
+      const uint32_t h=layout ? layout->subresources[j].height : im.height;
+      uint64_t row=0,rows=0,bytes=0;
+      if(!mag_native_image_level_layout(im.format,w,h,&row,&rows,&bytes)) return MAG_NATIVE_INVALID;
+      staging=(staging+511)&~UINT64_C(511);
+      staging+=padded(row)*rows;
     }
+    if(!reserve(staging)) return MAG_NATIVE_ALLOCATION_FAILED;
+  }
   return MAG_NATIVE_OK;
 }
 static int scene_image(Context *c, const mag_native_scene_image &im,
-                       SceneImage &out) {
+                       const mag_native_scene_image_layout *layout, SceneImage &out) {
   D3D12_HEAP_PROPERTIES heap = {};
   heap.Type = D3D12_HEAP_TYPE_DEFAULT;
   heap.CreationNodeMask = heap.VisibleNodeMask = 1;
@@ -412,21 +437,24 @@ static int scene_image(Context *c, const mag_native_scene_image &im,
   desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
   desc.Width = im.width;
   desc.Height = im.height;
-  desc.DepthOrArraySize = 1;
-  desc.MipLevels = 1;
+  desc.DepthOrArraySize = static_cast<UINT16>(layout ? layout->layers : 1);
+  desc.MipLevels = static_cast<UINT16>(layout ? layout->mip_count : 1);
   desc.SampleDesc.Count = 1;
   const bool depth = im.format == MAG_NATIVE_SCENE_D32;
+  mag_native_image_format info={};
+  if(!mag_native_image_format_info(im.format,&info)) return MAG_NATIVE_INVALID;
   out.format = scene_format(im.format);
   desc.Format = depth ? DXGI_FORMAT_R32_TYPELESS : out.format;
   desc.Flags = depth ? D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL
-                     : D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+                     : info.color_attachment ? D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET : D3D12_RESOURCE_FLAG_NONE;
   D3D12_FEATURE_DATA_FORMAT_SUPPORT support = {
       out.format, D3D12_FORMAT_SUPPORT1_NONE, D3D12_FORMAT_SUPPORT2_NONE};
   HRESULT result = c->device->CheckFeatureSupport(D3D12_FEATURE_FORMAT_SUPPORT,
                                                   &support, sizeof(support));
-  const auto required = depth ? D3D12_FORMAT_SUPPORT1_DEPTH_STENCIL
-                              : D3D12_FORMAT_SUPPORT1_RENDER_TARGET;
-  if (FAILED(result) || (support.Support1 & required) != required)
+  const UINT required = D3D12_FORMAT_SUPPORT1_TEXTURE2D |
+      (depth ? D3D12_FORMAT_SUPPORT1_DEPTH_STENCIL : D3D12_FORMAT_SUPPORT1_SHADER_SAMPLE) |
+      (info.color_attachment ? D3D12_FORMAT_SUPPORT1_RENDER_TARGET : 0);
+  if (FAILED(result) || (UINT(support.Support1) & required) != required)
     return MAG_NATIVE_UNSUPPORTED;
   out.state = im.upload.id ? D3D12_RESOURCE_STATE_COPY_DEST
               : depth      ? D3D12_RESOURCE_STATE_DEPTH_WRITE
@@ -434,17 +462,20 @@ static int scene_image(Context *c, const mag_native_scene_image &im,
   result = c->device->CreateCommittedResource(
       &heap, D3D12_HEAP_FLAG_NONE, &desc, out.state, nullptr,
       __uuidof(ID3D12Resource), reinterpret_cast<void **>(out.gpu.put()));
-  if (FAILED(result))
-    return failure(c, result);
+  if (FAILED(result)) return failure(c, result);
   if (im.upload.id) {
-    out.pitch = padded(uint64_t(im.width) * 4);
-    result = allocation(c, D3D12_HEAP_TYPE_DEFAULT, out.pitch * im.height,
+    const uint32_t count=layout ? layout->subresource_count : 1;
+    out.footprints.resize(count);out.rows.resize(count);out.row_bytes.resize(count);
+    UINT64 total=0;
+    c->device->GetCopyableFootprints(&desc,0,count,0,out.footprints.data(),out.rows.data(),out.row_bytes.data(),&total);
+    if(total==UINT64_MAX || total>MAG_NATIVE_SCENE_MAX_BYTES) return MAG_NATIVE_ALLOCATION_FAILED;
+    result = allocation(c, D3D12_HEAP_TYPE_DEFAULT, total,
                         D3D12_RESOURCE_STATE_COPY_DEST, out.upload);
-    if (FAILED(result))
-      return failure(c, result);
+    if (FAILED(result)) return failure(c, result);
   }
   return MAG_NATIVE_OK;
 }
+
 static int scene_sampler_heap(Context *c, Slot &slot) {
   if (slot.samplers)
     return MAG_NATIVE_OK;
@@ -503,7 +534,7 @@ static uint32_t scene_sampler(const mag_native_scene_draw &draw, uint32_t stage,
   return UINT32_MAX;
 }
 static void scene_descriptors(Context *c, Slot &slot,
-                              const SceneDrawPlan &record) {
+                              const SceneDrawPlan &record, const mag_native_scene_v3 *extended) {
   const auto &draw = *record.source;
   const auto &p = *record.program;
   for (uint32_t stage = 0; stage < 2; ++stage) {
@@ -521,14 +552,27 @@ static void scene_descriptors(Context *c, Slot &slot,
     for (const auto &layout : p.scene_textures)
       if (layout.stage == stage) {
         const auto &t = *scene_texture_binding(draw, layout);
-        const auto &im = slot.scene_images[t.image];
+        const uint32_t image=mag_native_scene_image_index(extended,t.image);
+        const auto &im = slot.scene_images[image];
+        const auto *explicit_view=(t.image & MAG_NATIVE_SCENE_VIEW_TABLE_BIT) ? &extended->views[MAG_NATIVE_SCENE_VIEW_TABLE_INDEX(t.image)] : nullptr;
+        const auto *image_layout=extended && extended->image_layout_count ? &extended->image_layouts[image] : nullptr;
         D3D12_SHADER_RESOURCE_VIEW_DESC view = {};
         view.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
         view.Format = layout.format == MAG_NATIVE_SCENE_D32
                           ? DXGI_FORMAT_R32_FLOAT
                           : scene_format(layout.format);
-        view.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
-        view.Texture2D.MipLevels = 1;
+        if(explicit_view) view.Shader4ComponentMapping=D3D12_ENCODE_SHADER_4_COMPONENT_MAPPING(
+            explicit_view->remap[0],explicit_view->remap[1],explicit_view->remap[2],explicit_view->remap[3]);
+        const uint32_t dimension=explicit_view ? explicit_view->dimension : image_layout ? image_layout->dimension : 2;
+        const uint32_t mip=explicit_view ? explicit_view->base_mip : 0;
+        const uint32_t levels=explicit_view ? explicit_view->mip_count : image_layout ? image_layout->mip_count : 1;
+        if(dimension==4) {
+          view.ViewDimension=D3D12_SRV_DIMENSION_TEXTURECUBE;
+          view.TextureCube.MostDetailedMip=mip;view.TextureCube.MipLevels=levels;
+        } else {
+          view.ViewDimension=D3D12_SRV_DIMENSION_TEXTURE2D;
+          view.Texture2D.MostDetailedMip=mip;view.Texture2D.MipLevels=levels;
+        }
         c->device->CreateShaderResourceView(im.gpu.p, &view,
                                             cpu(c, slot, at++));
       }
@@ -568,12 +612,12 @@ static int scene_reserve(Context *c, Slot &slot, const mag_native_scene *scene,
     auto dest=slot.samplers->GetCPUDescriptorHandleForHeapStart();dest.ptr+=SIZE_T(3+i)*c->sampler_step;
     c->device->CopyDescriptorsSimple(1,dest,payload->cpu,D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER);
   }
-  slot.buffers.resize(std::max(scene->resource_count,MaxResources));
-  slot.uploads.resize(std::max(scene->resource_count,MaxResources));
-  slot.writes.resize(std::max(scene->resource_count,MaxResources));
+  slot.buffers.resize((std::max)(scene->resource_count,MaxResources));
+  slot.uploads.resize((std::max)(scene->resource_count,MaxResources));
+  slot.writes.resize((std::max)(scene->resource_count,MaxResources));
   slot.scene_images.resize(scene->image_count);
   for (uint32_t i = 0; i < scene->image_count; ++i) {
-    status = scene_image(c, scene->images[i], slot.scene_images[i]);
+    status = scene_image(c, scene->images[i], plan.extended && plan.extended->image_layout_count ? &plan.extended->image_layouts[i] : nullptr, slot.scene_images[i]);
     if (status)
       return status;
   }
@@ -615,7 +659,7 @@ static int scene_reserve(Context *c, Slot &slot, const mag_native_scene *scene,
     slot.sampler_indices->Unmap(0, nullptr);
   }
   for (const auto &record : plan.draws)
-    scene_descriptors(c, slot, record);
+    scene_descriptors(c, slot, record,plan.extended);
   // Allocate every retained program reference before Execute; no host heap
   // growth is allowed after queue acceptance becomes indeterminate.
   slot.scene_programs.reserve(plan.draws.size() + scene->dispatch_count);
@@ -681,22 +725,26 @@ static int scene_execute(Context *c, const mag_native_scene *scene,
         transition(list, b->gpu.p, states[source],
                    D3D12_RESOURCE_STATE_COPY_SOURCE);
         states[source] = D3D12_RESOURCE_STATE_COPY_SOURCE;
-        // Copy tight immutable rows into a real D3D footprint, entirely on
-        // the same GPU. No CPU texture readback/reinterpretation is used.
-        const uint64_t row = uint64_t(desc.width) * 4;
-        for (uint32_t y = 0; y < desc.height; ++y)
-          list->CopyBufferRegion(im.upload.p, uint64_t(y) * im.pitch, b->gpu.p,
-                                 uint64_t(y) * row, row);
+        const auto *layout=plan.extended && plan.extended->image_layout_count ? &plan.extended->image_layouts[i] : nullptr;
+        for(uint32_t sub=0;sub<im.footprints.size();++sub) {
+          const auto &footprint=im.footprints[sub];
+          const uint64_t source_offset=layout ? layout->subresources[sub].offset : 0;
+          for(uint32_t y=0;y<im.rows[sub];++y)
+            list->CopyBufferRegion(im.upload.p,footprint.Offset+uint64_t(y)*footprint.Footprint.RowPitch,
+                b->gpu.p,source_offset+uint64_t(y)*im.row_bytes[sub],im.row_bytes[sub]);
+        }
         transition(list, im.upload.p, D3D12_RESOURCE_STATE_COPY_DEST,
                    D3D12_RESOURCE_STATE_COPY_SOURCE);
-        D3D12_TEXTURE_COPY_LOCATION src = {}, dst = {};
-        src.pResource = im.upload.p;
-        src.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
-        src.PlacedFootprint.Footprint = {im.format, desc.width, desc.height, 1,
-                                         static_cast<UINT>(im.pitch)};
-        dst.pResource = im.gpu.p;
-        dst.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
-        list->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
+        for(uint32_t sub=0;sub<im.footprints.size();++sub) {
+          D3D12_TEXTURE_COPY_LOCATION src = {}, dst = {};
+          src.pResource = im.upload.p;
+          src.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+          src.PlacedFootprint=im.footprints[sub];
+          dst.pResource = im.gpu.p;
+          dst.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+          dst.SubresourceIndex=sub;
+          list->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
+        }
       }
     uint32_t descriptor_cursor = 0;
     for (uint32_t n = 0; n < scene->dispatch_count; ++n) {
@@ -743,7 +791,7 @@ static int scene_execute(Context *c, const mag_native_scene *scene,
       const auto &im = scene->images[extent];
       for (uint32_t j = 0; j < pass.draw_count; ++j)
         for (uint32_t k = 0; k < pass.draws[j].texture_count; ++k) {
-          auto &image = slot->scene_images[pass.draws[j].textures[k].image];
+          auto &image = slot->scene_images[mag_native_scene_image_index(plan.extended,pass.draws[j].textures[k].image)];
           const auto desired = static_cast<D3D12_RESOURCE_STATES>(
               D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |
               D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
@@ -780,11 +828,17 @@ static int scene_execute(Context *c, const mag_native_scene *scene,
       if (depth.ptr && pass.depth.load == MAG_NATIVE_SCENE_CLEAR)
         list->ClearDepthStencilView(depth, D3D12_CLEAR_FLAG_DEPTH,
                                     pass.depth.clear[0], 0, 0, nullptr);
-      const D3D12_VIEWPORT viewport = {
+      D3D12_VIEWPORT viewport = {
           0, 0, static_cast<float>(im.width), static_cast<float>(im.height),
           0, 1};
-      const D3D12_RECT scissor = {0, 0, static_cast<LONG>(im.width),
+      D3D12_RECT scissor = {0, 0, static_cast<LONG>(im.width),
                                   static_cast<LONG>(im.height)};
+      if(plan.extended && plan.extended->viewport_count) {
+        const auto &v=plan.extended->viewports[n];
+        viewport={v.x,v.y,v.width,v.height,v.min_depth,v.max_depth};
+        scissor={LONG(v.scissor_x),LONG(v.scissor_y),LONG(v.scissor_x+v.scissor_width),LONG(v.scissor_y+v.scissor_height)};
+        if(!v.scissor_width || !v.scissor_height) {draw_index+=pass.draw_count;continue;}
+      }
       list->RSSetViewports(1, &viewport);
       list->RSSetScissorRects(1, &scissor);
       for (uint32_t j = 0; j < pass.draw_count; ++j) {
@@ -925,11 +979,11 @@ static int scene_execute(Context *c, const mag_native_scene *scene,
     return MAG_NATIVE_ALLOCATION_FAILED;
   }
 }
-static int submit_scene_impl(void *opaque,const mag_native_scene *scene,mag_native_ticket *out,const mag_native_sampler *sampler_table,uint32_t sampler_count) {
+static int submit_scene_impl(void *opaque,const mag_native_scene *scene,mag_native_ticket *out,const mag_native_sampler *sampler_table,uint32_t sampler_count,const mag_native_scene_v3 *extended=nullptr) {
   auto *c = static_cast<Context *>(opaque);
   try {
     ScenePlan plan;
-    int status = scene_prepare(c, scene, plan,sampler_table,sampler_count);
+    int status = scene_prepare(c, scene, plan,sampler_table,sampler_count,extended);
     return status ? status : scene_execute(c, scene, plan, out);
   } catch (const std::bad_alloc &) {
     return MAG_NATIVE_ALLOCATION_FAILED;
@@ -940,4 +994,9 @@ static int submit_scene(void *opaque,const mag_native_scene *scene,mag_native_ti
 static int submit_scene_v2(void *opaque,const mag_native_scene_v2 *desc,const mag_native_image *target,const MagRenderHostFrame *frame,mag_native_ticket *out){
  if(target||frame)return MAG_NATIVE_UNSUPPORTED;
  return submit_scene_impl(opaque,desc->scene,out,desc->samplers,desc->sampler_count);
+}
+
+static int submit_scene_v3(void *opaque,const mag_native_scene_v3 *desc,const mag_native_image *target,const MagRenderHostFrame *frame,mag_native_ticket *out){
+ if(target||frame)return MAG_NATIVE_UNSUPPORTED;
+ return submit_scene_impl(opaque,desc->base.scene,out,desc->base.samplers,desc->base.sampler_count,desc);
 }

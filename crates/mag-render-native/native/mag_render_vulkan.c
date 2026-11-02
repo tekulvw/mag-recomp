@@ -31,7 +31,7 @@ typedef struct frontend_vk_buffer {
     uint64_t id, version, length; uint32_t public_ref, readers, writers; int seed_zero,gpu_written;
     VkBuffer gpu; VkDeviceMemory memory; void *mapped; struct frontend_vk_buffer *next;
 } frontend_vk_buffer;
-typedef struct frontend_vk_scene_image {VkImage image;VkDeviceMemory memory;VkImageView view;VkImageLayout layout;VkImageAspectFlags aspect;} frontend_vk_scene_image;
+typedef struct frontend_vk_scene_image {VkImage image;VkDeviceMemory memory;VkImageView view;VkImageLayout layout;VkImageAspectFlags aspect;uint32_t mip_count,layers;} frontend_vk_scene_image;
 typedef struct frontend_vk_pipeline {
     uint64_t id; uint32_t public_ref, references, count; int graphics;VkRenderPass render_pass;
     mag_native_binding_layout bindings[16];
@@ -47,6 +47,7 @@ typedef struct frontend_vk_slot {
     frontend_vk_buffer *buffers[MAG_NATIVE_SCENE_MAX_RESOURCES]; uint32_t writes[MAG_NATIVE_SCENE_MAX_RESOURCES]; frontend_vk_pipeline *pipeline;
     frontend_vk_pipeline *batch_pipelines[MAG_NATIVE_BATCH_MAX_COMMANDS + MAG_NATIVE_SCENE_MAX_DRAWS];uint32_t batch_count;
     frontend_vk_scene_image *scene_images;uint32_t scene_image_count,scene_pass_count;
+    VkImageView *scene_views;uint32_t scene_view_count;
     VkFramebuffer scene_framebuffers[16];VkRenderPass scene_renderpasses[16];VkSampler scene_samplers[3];
     mag_native_sampler_entry *sampler_entries[MAG_NATIVE_MAX_SAMPLERS];uint32_t sampler_count;
     VkImage color,depth;VkDeviceMemory color_memory,depth_memory;
@@ -56,6 +57,7 @@ typedef struct frontend_vk {
     mag_native_vulkan_owner owner;
     mag_native_sampler_registry samplers;
     uint64_t generation, next_buffer, next_pipeline, next_submission;
+    uint64_t known_features,enabled_features;
     int failed;
     frontend_vk_family *families; frontend_vk_buffer *buffers; frontend_vk_pipeline *pipelines;
     frontend_vk_slot slots[2];
@@ -111,6 +113,8 @@ static void batch_attachments_release(frontend_vk *c,frontend_vk_slot *slot){
 static void scene_attachments_release(frontend_vk *c,frontend_vk_slot *slot){
  for(uint32_t i=0;i<slot->sampler_count;++i){if(slot->sampler_entries[i])mag_native_sampler_registry_unpin(&c->samplers,slot->sampler_entries[i]);slot->sampler_entries[i]=NULL;}slot->sampler_count=0;
  for(uint32_t i=0;i<slot->scene_pass_count;++i){if(slot->scene_framebuffers[i])c->vkDestroyFramebuffer(c->owner.device,slot->scene_framebuffers[i],NULL);if(slot->scene_renderpasses[i])c->vkDestroyRenderPass(c->owner.device,slot->scene_renderpasses[i],NULL);slot->scene_framebuffers[i]=VK_NULL_HANDLE;slot->scene_renderpasses[i]=VK_NULL_HANDLE;}slot->scene_pass_count=0;
+ for(uint32_t i=0;i<slot->scene_view_count;++i)if(slot->scene_views[i])c->vkDestroyImageView(c->owner.device,slot->scene_views[i],NULL);
+ slot->scene_view_count=0;free(slot->scene_views);slot->scene_views=NULL;
  for(uint32_t i=0;i<slot->scene_image_count;++i){frontend_vk_scene_image *im=&slot->scene_images[i];if(im->view)c->vkDestroyImageView(c->owner.device,im->view,NULL);if(im->image)c->vkDestroyImage(c->owner.device,im->image,NULL);if(im->memory)c->vkFreeMemory(c->owner.device,im->memory,NULL);memset(im,0,sizeof(*im));}slot->scene_image_count=0;free(slot->scene_images);slot->scene_images=NULL;
  for(unsigned i=0;i<3;++i){if(slot->scene_samplers[i])c->vkDestroySampler(c->owner.device,slot->scene_samplers[i],NULL);slot->scene_samplers[i]=VK_NULL_HANDLE;}
 }
@@ -396,8 +400,8 @@ static int close_context(void *opaque) {
 #include "mag_render_vulkan_batch.inc"
 #include "mag_render_vulkan_scene.inc"
 static const mag_native_ops operations = {caps, buffer_create, buffer_release, buffer_read,
-    pipeline_create, pipeline_release, submit, poll, close_context, graphics_create, submit_batch, scene_graphics_create, submit_scene, NULL, NULL, NULL, NULL, scene_graphics_create_v2,scene_graphics_create_v3,sampler_create,sampler_release,submit_scene_v2};
-int mag_native_vulkan_create(const MagRenderHostOwner *host,mag_native_device **out) {
+    pipeline_create, pipeline_release, submit, poll, close_context, graphics_create, submit_batch, scene_graphics_create, submit_scene, NULL, NULL, NULL, NULL, scene_graphics_create_v2,scene_graphics_create_v3,sampler_create,sampler_release,submit_scene_v2,submit_scene_v3};
+static int vulkan_create(const MagRenderHostOwner *host,uint64_t known,uint64_t enabled,mag_native_device **out) {
     if (!host || !out || host->backend!=MAG_RENDER_HOST_VULKAN) return MAG_NATIVE_INVALID;
     *out=NULL;int status=host->retain(host->userdata,host->lifetime);
     if (status!=MAG_NATIVE_OK) return status<0?status:MAG_NATIVE_DEVICE_FAILED;
@@ -406,6 +410,7 @@ int mag_native_vulkan_create(const MagRenderHostOwner *host,mag_native_device **
     PFN_vkGetPhysicalDeviceMemoryProperties memory=(PFN_vkGetPhysicalDeviceMemoryProperties)host->get_instance_proc(host->instance,"vkGetPhysicalDeviceMemoryProperties");
     if (!properties || !memory) {host->release(host->userdata,host->lifetime);return MAG_NATIVE_UNSUPPORTED;}
     frontend_vk *c=calloc(1,sizeof(*c));if (!c) {host->release(host->userdata,host->lifetime);return MAG_NATIVE_ALLOCATION_FAILED;}
+    c->known_features=known;c->enabled_features=enabled;
     c->owner.host=*host;c->owner.device=(VkDevice)host->device;c->owner.queue=(VkQueue)host->queue;c->owner.queue_family=host->queue_family;
     properties((VkPhysicalDevice)host->physical_device,&c->owner.properties);memory((VkPhysicalDevice)host->physical_device,&c->owner.memory);
     if (c->owner.properties.apiVersion<VK_API_VERSION_1_1) {close_context(c);return MAG_NATIVE_UNSUPPORTED;}
@@ -430,4 +435,14 @@ int mag_native_vulkan_create(const MagRenderHostOwner *host,mag_native_device **
     }
     *out=mag_native_wrap(&operations,c);if(!*out) {close_context(c);return MAG_NATIVE_ALLOCATION_FAILED;}
     return MAG_NATIVE_OK;
+}
+
+int mag_native_vulkan_create(const MagRenderHostOwner *host,mag_native_device **out){
+    return vulkan_create(host,0,0,out);
+}
+int mag_native_vulkan_create_v2(const MagRenderHostOwnerV2 *host,mag_native_device **out){
+    if(!host||!out||host->abi_version!=2||host->struct_size!=sizeof(*host)||
+       (host->known_features&~MAG_RENDER_HOST_FEATURE_ALL)||
+       (host->enabled_features&~host->known_features))return MAG_NATIVE_INVALID;
+    return vulkan_create(&host->base,host->known_features,host->enabled_features,out);
 }

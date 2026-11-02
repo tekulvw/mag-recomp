@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.24)
 project(mag_render_native LANGUAGES C CXX)
 set(MAG_RENDER_NATIVE_BACKEND "none" CACHE STRING "Frontend-owned native backend")
-add_library(mag_render_native_impl STATIC native/mag_render_native.c native/mag_render_scene_validate.c native/mag_render_raster_validate.c native/mag_render_sampler_validate.c native/mag_render_sampler_registry.c native/mag_render_native_api.cpp native/mag_render_packet_api.cpp)
+add_library(mag_render_native_impl STATIC native/mag_render_native.c native/mag_render_scene_validate.c native/mag_render_image_validate.c native/mag_render_raster_validate.c native/mag_render_sampler_validate.c native/mag_render_sampler_registry.c native/mag_render_native_api.cpp native/mag_render_packet_api.cpp)
 target_include_directories(mag_render_native_impl PUBLIC native)
 target_compile_features(mag_render_native_impl PRIVATE c_std_11 cxx_std_17)
 if(MSVC)

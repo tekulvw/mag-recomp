@@ -42,6 +42,19 @@ typedef struct MagRenderHostOwner {
     int (*try_begin)(void *,uint64_t);
     void (*end)(void *,uint64_t);
 } MagRenderHostOwner;
+/* Optional enabled-device facts are captured with the same owner generation.
+ * Known physical support alone is not an enabled feature. Old ABI1 owners
+ * carry no such facts and keep conservative feature admission. */
+#define MAG_RENDER_HOST_FEATURE_BC UINT64_C(1)
+#define MAG_RENDER_HOST_FEATURE_ANISOTROPY UINT64_C(2)
+#define MAG_RENDER_HOST_FEATURE_DEPTH_BOUNDS UINT64_C(4)
+#define MAG_RENDER_HOST_FEATURE_ALL UINT64_C(7)
+typedef struct MagRenderHostOwnerV2 {
+    uint32_t abi_version,struct_size;
+    MagRenderHostOwner base;
+    uint64_t known_features,enabled_features;
+} MagRenderHostOwnerV2;
+
 #ifdef __cplusplus
 }
 #endif

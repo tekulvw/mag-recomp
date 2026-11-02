@@ -95,7 +95,7 @@ struct Attachment {
   Resource color, depth;
   std::shared_ptr<ImageReadback> readback;
 };
-struct SceneImage {Resource gpu,upload;DXGI_FORMAT format=DXGI_FORMAT_UNKNOWN;uint64_t pitch=0;
+struct SceneImage {Resource gpu,upload;DXGI_FORMAT format=DXGI_FORMAT_UNKNOWN;std::vector<D3D12_PLACED_SUBRESOURCE_FOOTPRINT> footprints;std::vector<UINT> rows;std::vector<UINT64> row_bytes;
     D3D12_RESOURCE_STATES state=D3D12_RESOURCE_STATE_COMMON;};
 struct Slot {
   mag_native_sampler_registry *sampler_registry=nullptr;
@@ -1306,7 +1306,7 @@ static int buffer_read(void *opaque, mag_native_buffer ref, uint64_t offset,
 #include "mag_render_d3d12_sampler.inc"
 #include "mag_render_d3d12_scene.inc"
 static const mag_native_ops operations={caps,buffer_create,buffer_release,buffer_read,pipeline_create,pipeline_release,
- submit,poll,close,graphics_create,submit_batch,scene_graphics_create,submit_scene,nullptr,nullptr,nullptr,nullptr,scene_graphics_create_v2,scene_graphics_create_v3,sampler_create,sampler_release,submit_scene_v2};
+ submit,poll,close,graphics_create,submit_batch,scene_graphics_create,submit_scene,nullptr,nullptr,nullptr,nullptr,scene_graphics_create_v2,scene_graphics_create_v3,sampler_create,sampler_release,submit_scene_v2,submit_scene_v3};
 static int compiler_path(std::string &out) {
   DWORD count = GetEnvironmentVariableW(L"PS3RECOMP_DXC_LIBRARY", nullptr, 0);
   if (!count)

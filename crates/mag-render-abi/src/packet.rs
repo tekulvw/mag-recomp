@@ -483,3 +483,63 @@ pub fn layout() -> Vec<u32> {
         offset_of!(raw::Desc, frame) as u32,
     ]
 }
+
+/// Actual canonical source viewport/scissor, not inferred from target extent.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Viewport {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+    pub min_depth: f32,
+    pub max_depth: f32,
+    pub scissor_x: u32,
+    pub scissor_y: u32,
+    pub scissor_width: u32,
+    pub scissor_height: u32,
+    pub known_fields: u32,
+    pub reserved: u32,
+}
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct DescV2 {
+    pub abi_version: u32,
+    pub struct_size: u32,
+    pub base: Desc,
+    pub viewports: *const Viewport,
+    pub viewport_count: u32,
+    pub reserved: u32,
+    pub view_dimensions: *const u32,
+    pub view_dimension_count: u32,
+    pub reserved1: u32,
+}
+pub fn v2_layout() -> Vec<u32> {
+    vec![
+        size_of::<Viewport>() as u32,
+        align_of::<Viewport>() as u32,
+        offset_of!(Viewport, x) as u32,
+        offset_of!(Viewport, y) as u32,
+        offset_of!(Viewport, width) as u32,
+        offset_of!(Viewport, height) as u32,
+        offset_of!(Viewport, min_depth) as u32,
+        offset_of!(Viewport, max_depth) as u32,
+        offset_of!(Viewport, scissor_x) as u32,
+        offset_of!(Viewport, scissor_y) as u32,
+        offset_of!(Viewport, scissor_width) as u32,
+        offset_of!(Viewport, scissor_height) as u32,
+        offset_of!(Viewport, known_fields) as u32,
+        offset_of!(Viewport, reserved) as u32,
+        size_of::<DescV2>() as u32,
+        align_of::<DescV2>() as u32,
+        offset_of!(DescV2, abi_version) as u32,
+        offset_of!(DescV2, struct_size) as u32,
+        offset_of!(DescV2, base) as u32,
+        offset_of!(DescV2, viewports) as u32,
+        offset_of!(DescV2, viewport_count) as u32,
+        offset_of!(DescV2, reserved) as u32,
+        offset_of!(DescV2, view_dimensions) as u32,
+        offset_of!(DescV2, view_dimension_count) as u32,
+        offset_of!(DescV2, reserved1) as u32,
+    ]
+}

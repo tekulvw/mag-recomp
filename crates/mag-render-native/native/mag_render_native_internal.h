@@ -5,7 +5,7 @@
 #define MAG_RENDER_NATIVE_INTERNAL_H
 #include "mag_render_native.h"
 #include "mag_render_batch.h"
-#include "mag_render_scene.h"
+#include "mag_render_scene_extended.h"
 typedef struct mag_native_ops {
     int (*caps)(void *, mag_native_caps_desc *);
     int (*buffer_create)(void *, mag_native_buffer, const mag_native_buffer_desc *, mag_native_buffer *);
@@ -29,11 +29,13 @@ typedef struct mag_native_ops {
     int (*sampler_create)(void *,const mag_native_sampler_desc *,mag_native_sampler *);
     int (*sampler_release)(void *,mag_native_sampler);
     int (*submit_scene_v2)(void *,const mag_native_scene_v2 *,const mag_native_image *,const MagRenderHostFrame *,mag_native_ticket *);
+    int (*submit_scene_v3)(void *,const mag_native_scene_v3 *,const mag_native_image *,const MagRenderHostFrame *,mag_native_ticket *);
 } mag_native_ops;
 mag_native_device *mag_native_wrap(const mag_native_ops *, void *);
 int mag_native_close(mag_native_device *);
 uint64_t mag_native_next_generation(void);
 int mag_native_metal_create(const MagRenderHostOwner *,mag_native_device **);
 int mag_native_vulkan_create(const MagRenderHostOwner *,mag_native_device **);
+int mag_native_vulkan_create_v2(const MagRenderHostOwnerV2 *,mag_native_device **);
 int mag_native_d3d12_create(const MagRenderHostOwner *,mag_native_device **);
 #endif

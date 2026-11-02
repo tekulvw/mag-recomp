@@ -171,6 +171,8 @@ unsafe extern "C" {
         out: *mut Ticket,
     ) -> i32;
 }
+#[path = "scene_extended.rs"]
+mod scene_extended;
 #[path = "scene_sampler.rs"]
 mod scene_sampler;
 pub struct SceneDevice<'owner> {
@@ -375,11 +377,7 @@ impl SceneDevice<'_> {
         };
         let schema = scene::GraphicsLayout {
             vertex_stride: desc.vertex_stride,
-            color_format: match desc.color_format {
-                1 => Some(scene::ImageFormat::Rgba8),
-                3 => Some(scene::ImageFormat::Bgra8),
-                _ => None,
-            },
+            color_format: scene::ImageFormat::from_native(desc.color_format).ok(),
             fragment_stage: desc.fragment.source_length != 0,
             depth_attachment: desc.depth_format != 0,
             depth: scene::DepthState {
@@ -414,11 +412,8 @@ impl SceneDevice<'_> {
                     stage: stage(t.stage),
                     texture_slot: t.texture_slot,
                     sampler_slot: t.sampler_slot,
-                    format: match t.format {
-                        1 => scene::ImageFormat::Rgba8,
-                        3 => scene::ImageFormat::Bgra8,
-                        _ => scene::ImageFormat::Depth32,
-                    },
+                    format: scene::ImageFormat::from_native(t.format)
+                        .expect("native validated texture format"),
                     comparison: t.comparison != 0,
                 })
                 .collect(),
@@ -475,17 +470,28 @@ impl SceneDevice<'_> {
             bytes = bytes.checked_add(b.byte_length).ok_or(-5)?;
         }
         for im in commands.images() {
-            bytes = bytes
-                .checked_add(u64::from(im.desc.width) * u64::from(im.desc.height) * 4)
-                .ok_or(-5)?;
+            let allocation = if let Some(layout) = &im.layout {
+                let upload = im
+                    .upload
+                    .map(|i| leases[commands.texture_upload_start() + i].bytes().len() as u64);
+                layout.validate(im.desc, upload).map_err(|_| -1)?.0
+            } else {
+                im.desc
+                    .format
+                    .level_layout(im.desc.width, im.desc.height)
+                    .map_err(|_| -1)?
+                    .bytes
+            };
+            bytes = bytes.checked_add(allocation).ok_or(-5)?;
         }
         let readback_len = if let Some(o) = diagnostic {
             let d = commands.images()[o.image.image().index()].desc;
-            let row = u64::from(d.width) * 4;
+            let level = d.format.level_layout(d.width, d.height).map_err(|_| -1)?;
+            let row = level.row_bytes;
             bytes = bytes
-                .checked_add((row + row.div_ceil(256) * 256) * u64::from(d.height))
+                .checked_add((row + row.div_ceil(256) * 256) * level.rows)
                 .ok_or(-5)?;
-            Some(row * u64::from(d.height))
+            Some(level.bytes)
         } else {
             None
         };
@@ -612,10 +618,22 @@ impl RenderDevice for SceneDevice<'_> {
         if self.inner.pending.len() + self.inner.ready.len() >= 2 {
             return reject(-4);
         }
-        let (draw_textures, sampler_table) = match self.samplers.resolve(self.inner.api, commands) {
-            Ok(v) => v,
+        let (mut draw_textures, sampler_table) =
+            match self.samplers.resolve(self.inner.api, commands) {
+                Ok(v) => v,
+                Err(c) => return reject(c),
+            };
+        let extended = match scene_extended::Plan::build(commands) {
+            Ok(p) => p,
             Err(c) => return reject(c),
         };
+        if let Some(plan) = &extended {
+            for (textures, codes) in draw_textures.iter_mut().zip(&plan.texture_codes) {
+                for (texture, code) in textures.iter_mut().zip(codes) {
+                    texture.image = *code
+                }
+            }
+        }
         let (buffers, resources, readback) = match self.allocate_scene(commands, leases) {
             Ok(v) => v,
             Err(c) => return reject(c),
@@ -670,11 +688,7 @@ impl RenderDevice for SceneDevice<'_> {
             .images()
             .iter()
             .map(|im| Image {
-                format: match im.desc.format {
-                    scene::ImageFormat::Rgba8 => 1,
-                    scene::ImageFormat::Bgra8 => 3,
-                    scene::ImageFormat::Depth32 => 2,
-                },
+                format: im.desc.format.native_id(),
                 width: im.desc.width,
                 height: im.desc.height,
                 reserved: 0,
@@ -768,7 +782,16 @@ impl RenderDevice for SceneDevice<'_> {
         };
         let mut native = Ticket::default();
         let status = unsafe {
-            if !sampler_table.is_empty() {
+            if let Some(plan) = &extended {
+                plan.submit(
+                    self.inner.api.device,
+                    &scene,
+                    &sampler_table,
+                    self.target.as_ref(),
+                    self.frame.as_ref(),
+                    &mut native,
+                )
+            } else if !sampler_table.is_empty() {
                 let v2 = scene_sampler::SceneV2 {
                     struct_size: size_of::<scene_sampler::SceneV2>() as u32,
                     abi_version: 2,
@@ -941,6 +964,10 @@ mod abi_tests {
     use super::*;
     unsafe extern "C" {
         fn mag_native_scene_graphics_v2_validate(desc: *const SceneGraphicsV2Desc) -> i32;
+    }
+    #[test]
+    fn image_view_viewport_layout_and_all_format_rows_match_native() {
+        scene_extended::checked_layout().unwrap();
     }
     #[test]
     fn generation_qualified_sampler_table_matches_independent_c_layout() {

@@ -3,11 +3,17 @@
 #include <cstring>
 #if defined(__APPLE__)
 #include "rsx_metal_backend.h"
+#elif !defined(_WIN32)
+#include "rsx_vulkan_backend.h"
+#endif
+#if !defined(_WIN32)
 static_assert(sizeof(MagRenderHostOwner) == sizeof(rsx_native_owner));
 static_assert(alignof(MagRenderHostOwner) == alignof(rsx_native_owner));
 static_assert(offsetof(MagRenderHostOwner, lifetime) == offsetof(rsx_native_owner, lifetime));
 static_assert(offsetof(MagRenderHostOwner, retain) == offsetof(rsx_native_owner, retain));
 static_assert(offsetof(MagRenderHostOwner, try_begin) == offsetof(rsx_native_owner, try_begin));
+#endif
+#if defined(__APPLE__)
 static_assert(sizeof(MagRenderHostImage) == sizeof(rsx_native_image));
 static_assert(alignof(MagRenderHostImage) == alignof(rsx_native_image));
 static_assert(offsetof(MagRenderHostImage, resource_generation) ==
@@ -32,16 +38,38 @@ extern "C" int mag_render_frontend_borrow_owner(MagRenderHostOwner *out) {
         return -1;
     if (mag_render_native_abi_version() != 1)
         return -2;
-#if defined(__APPLE__)
+#if !defined(_WIN32)
     rsx_native_owner owner = {};
     owner.abi_version = 1;
     owner.struct_size = sizeof(owner);
+#if defined(__APPLE__)
     int status = rsx_metal_backend_borrow_owner(&owner);
+#else
+    int status = rsx_vulkan_backend_borrow_owner(&owner);
+#endif
     if (!status)
         std::memcpy(out, &owner, sizeof(owner));
     return status;
 #else
     return -2;
+#endif
+}
+extern "C" int mag_render_frontend_borrow_owner_v2(MagRenderHostOwnerV2 *out) {
+    if(!out || out->abi_version!=2 || out->struct_size!=sizeof(*out))return -1;
+#if !defined(__APPLE__) && !defined(_WIN32) && defined(RSX_NATIVE_OWNER_FEATURE_BC)
+    static_assert(sizeof(MagRenderHostOwnerV2)==sizeof(rsx_native_owner_v2));
+    static_assert(offsetof(MagRenderHostOwnerV2,base)==offsetof(rsx_native_owner_v2,base));
+    static_assert(offsetof(MagRenderHostOwnerV2,known_features)==offsetof(rsx_native_owner_v2,known_features));
+    static_assert(offsetof(MagRenderHostOwnerV2,enabled_features)==offsetof(rsx_native_owner_v2,enabled_features));
+    rsx_native_owner_v2 owner={};owner.abi_version=2;owner.struct_size=sizeof(owner);
+    int status=rsx_vulkan_backend_borrow_owner_v2(&owner);
+    if(!status)std::memcpy(out,&owner,sizeof(owner));
+    return status;
+#else
+    MagRenderHostOwner owner={};owner.abi_version=1;owner.struct_size=sizeof(owner);
+    int status=mag_render_frontend_borrow_owner(&owner);
+    if(!status){out->base=owner;out->known_features=out->enabled_features=0;}
+    return status;
 #endif
 }
 extern "C" int mag_render_frontend_borrow_image(uint64_t life, uint32_t surface, MagRenderHostImage *out) {

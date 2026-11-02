@@ -44,6 +44,19 @@ int mag_native_create(const MagRenderHostOwner *owner,mag_native_device **out) {
         default:return MAG_NATIVE_UNSUPPORTED;
     }
 }
+int mag_native_create_v2(const MagRenderHostOwnerV2 *owner,mag_native_device **out) {
+    if(out)*out=NULL;
+    if(!owner||!out||owner->abi_version!=2||owner->struct_size!=sizeof(*owner)||
+       (owner->known_features&~MAG_RENDER_HOST_FEATURE_ALL)||
+       (owner->enabled_features&~owner->known_features))return MAG_NATIVE_INVALID;
+    const MagRenderHostOwner *base=&owner->base;
+    if(base->abi_version!=1||base->struct_size!=sizeof(*base)||base->reserved||base->reserved1||
+       !base->lifetime||!base->retain||!base->release||!base->try_begin||!base->end)return MAG_NATIVE_INVALID;
+#ifdef MAG_RENDER_NATIVE_VULKAN
+    if(base->backend==MAG_RENDER_HOST_VULKAN)return mag_native_vulkan_create_v2(owner,out);
+#endif
+    return mag_native_create(base,out);
+}
 #define VALID(d) ((d) && (d)->struct_size == sizeof(*(d)) && (d)->abi_version == MAG_NATIVE_ABI_VERSION)
 int mag_native_caps(mag_native_device *device, mag_native_caps_desc *desc) {
     return device && VALID(desc) ? device->ops->caps(device->context, desc) : MAG_NATIVE_INVALID;
@@ -156,4 +169,15 @@ int mag_native_submit_scene_v2(mag_native_device *device,const mag_native_scene_
     ||(desc->sampler_count&&!desc->samplers)||(target&&(!target->device_generation||!target->id))
     ||(frame&&(!target||frame->struct_size!=sizeof(*frame)||frame->abi_version!=1||!frame->owner_lifetime||!frame->reservation||!frame->preflight||!frame->committed||!frame->cancel)))return MAG_NATIVE_INVALID;
  return device->ops->submit_scene_v2?device->ops->submit_scene_v2(device->context,desc,target,frame,out):MAG_NATIVE_UNSUPPORTED;
+}
+
+int mag_native_submit_scene_v3(mag_native_device *device,const mag_native_scene_v3 *desc,const mag_native_image *target,const MagRenderHostFrame *frame,mag_native_ticket *out){
+ if(out)memset(out,0,sizeof(*out));
+ if(!device||!desc||!out||desc->struct_size!=sizeof(*desc)||desc->abi_version!=3||desc->reserved||
+    desc->base.struct_size!=sizeof(desc->base)||desc->base.abi_version!=2||desc->base.reserved||!desc->base.scene||
+    desc->base.scene->struct_size!=sizeof(*desc->base.scene)||desc->base.scene->abi_version!=1||
+    desc->base.sampler_count>MAG_NATIVE_MAX_SAMPLERS||(desc->base.sampler_count&&!desc->base.samplers)||
+    (target&&(!target->device_generation||!target->id))||
+    (frame&&(!target||frame->struct_size!=sizeof(*frame)||frame->abi_version!=1||!frame->owner_lifetime||!frame->reservation||!frame->preflight||!frame->committed||!frame->cancel)))return MAG_NATIVE_INVALID;
+ return device->ops->submit_scene_v3?device->ops->submit_scene_v3(device->context,desc,target,frame,out):MAG_NATIVE_UNSUPPORTED;
 }

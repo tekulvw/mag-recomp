@@ -235,3 +235,53 @@ extern "C" int mag_render_scene_packet_limits(MagRenderScenePacketLimits *out) {
             MAG_NATIVE_SCENE_MAX_DRAWS, MAG_NATIVE_SCENE_MAX_BYTES};
     return 0;
 }
+
+extern "C" int mag_native_packet_v2_layout(uint32_t *out, uint32_t words) {
+    const uint32_t expected[] = {sizeof(mag_native_viewport),
+                                 alignof(mag_native_viewport),
+                                 offsetof(mag_native_viewport, x),
+                                 offsetof(mag_native_viewport, y),
+                                 offsetof(mag_native_viewport, width),
+                                 offsetof(mag_native_viewport, height),
+                                 offsetof(mag_native_viewport, min_depth),
+                                 offsetof(mag_native_viewport, max_depth),
+                                 offsetof(mag_native_viewport, scissor_x),
+                                 offsetof(mag_native_viewport, scissor_y),
+                                 offsetof(mag_native_viewport, scissor_width),
+                                 offsetof(mag_native_viewport, scissor_height),
+                                 offsetof(mag_native_viewport, known_fields),
+                                 offsetof(mag_native_viewport, reserved),
+                                 sizeof(MagRenderScenePacketV2Desc),
+                                 alignof(MagRenderScenePacketV2Desc),
+                                 offsetof(MagRenderScenePacketV2Desc, abi_version),
+                                 offsetof(MagRenderScenePacketV2Desc, struct_size),
+                                 offsetof(MagRenderScenePacketV2Desc, base),
+                                 offsetof(MagRenderScenePacketV2Desc, viewports),
+                                 offsetof(MagRenderScenePacketV2Desc, viewport_count),
+                                 offsetof(MagRenderScenePacketV2Desc, reserved),
+                                 offsetof(MagRenderScenePacketV2Desc, view_dimensions),
+                                 offsetof(MagRenderScenePacketV2Desc, view_dimension_count),
+                                 offsetof(MagRenderScenePacketV2Desc, reserved1)};
+    if (!out || words != sizeof(expected) / sizeof(expected[0]))
+        return -1;
+    for (uint32_t i = 0; i < words; ++i) {
+        out[i] = expected[i];
+    }
+    return 0;
+}
+extern "C" int mag_native_owner_v2_layout(uint32_t *out, uint32_t words) {
+    const uint32_t expected[] = {sizeof(MagRenderHostOwnerV2),
+                                 alignof(MagRenderHostOwnerV2),
+                                 offsetof(MagRenderHostOwnerV2, base),
+                                 offsetof(MagRenderHostOwnerV2, known_features),
+                                 offsetof(MagRenderHostOwnerV2, enabled_features),
+                                 uint32_t(MAG_RENDER_HOST_FEATURE_BC),
+                                 uint32_t(MAG_RENDER_HOST_FEATURE_ANISOTROPY),
+                                 uint32_t(MAG_RENDER_HOST_FEATURE_DEPTH_BOUNDS)};
+    if (!out || words != sizeof(expected) / sizeof(expected[0]))
+        return -1;
+    for (uint32_t i = 0; i < words; ++i) {
+        out[i] = expected[i];
+    }
+    return 0;
+}

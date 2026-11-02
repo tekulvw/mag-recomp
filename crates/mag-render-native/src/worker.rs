@@ -26,7 +26,7 @@ struct DrawCopy {
     index_start: usize,
     index_count: usize,
 }
-struct OwnerPin(HostOwner);
+struct OwnerPin(HostOwner, Option<(u64, u64)>);
 // SAFETY: The unsafe public constructor requires genuine process-lived owner
 // callbacks, callable across host threads and using only the owner's gate.
 // retain succeeds before transfer, pinning all device/queue/proc pointers.
@@ -481,7 +481,7 @@ pub unsafe extern "C" fn mag_render_client_worker_create_for_format(
             if status != 0 {
                 return Err(status);
             }
-            let pin = OwnerPin(host);
+            let pin = OwnerPin(host, None);
             COUNT
                 .try_update(Ordering::AcqRel, Ordering::Acquire, |n| {
                     (n < MAX_WORKERS).then_some(n + 1)
@@ -537,6 +537,131 @@ pub unsafe extern "C" fn mag_render_client_worker_create_for_format(
         },
         -6,
     )
+}
+/// Create a material-scene actor without compiling a diagnostic pipeline or
+/// assuming a target format. The context is still constructed on its actor.
+/// # Safety
+/// Genuine process-lived owner callbacks obey the existing thread-independent,
+/// nonblocking host contract; out points to writable storage.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mag_render_client_worker_create_scene(
+    owner: *const HostOwner,
+    max_draws: u32,
+    max_bytes: u64,
+    out: *mut u64,
+) -> i32 {
+    if out.is_null() {
+        return -1;
+    }
+    unsafe { *out = 0 };
+    ffi(
+        || {
+            let host = *unsafe { checked_ref(owner) }?;
+            start_scene(host, None, max_draws, max_bytes, out)
+        },
+        -6,
+    )
+}
+/// # Safety
+/// Same owner contract; enabled features are actual generation-qualified device
+/// creation facts, never inferred from physical device support.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mag_render_client_worker_create_scene_v2(
+    owner: *const crate::HostOwnerV2,
+    max_draws: u32,
+    max_bytes: u64,
+    out: *mut u64,
+) -> i32 {
+    if out.is_null() {
+        return -1;
+    }
+    unsafe { *out = 0 };
+    ffi(
+        || {
+            let host = *unsafe { checked_ref(owner) }?;
+            if host.abi_version != 2
+                || host.struct_size as usize != size_of::<crate::HostOwnerV2>()
+                || host.known_features & !7 != 0
+                || host.enabled_features & !host.known_features != 0
+            {
+                return Err(-1);
+            }
+            start_scene(
+                host.base,
+                Some((host.known_features, host.enabled_features)),
+                max_draws,
+                max_bytes,
+                out,
+            )
+        },
+        -6,
+    )
+}
+fn start_scene(
+    host: HostOwner,
+    features: Option<(u64, u64)>,
+    max_draws: u32,
+    max_bytes: u64,
+    out: *mut u64,
+) -> Result<i32, i32> {
+    if host.abi_version != 1
+        || host.struct_size as usize != size_of::<HostOwner>()
+        || host.reserved != 0
+        || host.reserved1 != 0
+        || host.lifetime == 0
+        || host.device.is_null()
+        || host.queue.is_null()
+        || host.retain.is_none()
+        || host.release.is_none()
+        || host.try_begin.is_none()
+        || host.end.is_none()
+        || max_draws == 0
+        || max_draws > MAX_DRAWS
+        || max_bytes == 0
+        || max_bytes > crate::batch_device::scene_device::MAX_SCENE_BYTES
+    {
+        return Err(-1);
+    }
+    let status = unsafe { host.retain.unwrap()(host.userdata, host.lifetime) };
+    if status != 0 {
+        return Err(status);
+    }
+    let pin = OwnerPin(host, features);
+    COUNT
+        .try_update(Ordering::AcqRel, Ordering::Acquire, |n| {
+            (n < MAX_WORKERS).then_some(n + 1)
+        })
+        .map_err(|_| -4)?;
+    let reservation = CountReservation;
+    let id = NEXT
+        .try_update(Ordering::AcqRel, Ordering::Acquire, |n| n.checked_add(1))
+        .map_err(|_| -5)?;
+    let worker = Worker::start(
+        move || {
+            let context = if let Some((known_features, enabled_features)) = pin.1 {
+                let owner = crate::HostOwnerV2 {
+                    abi_version: 2,
+                    struct_size: size_of::<crate::HostOwnerV2>() as u32,
+                    base: pin.0,
+                    known_features,
+                    enabled_features,
+                };
+                unsafe { crate::NativeContext::from_host_v2(&owner) }?
+            } else {
+                unsafe { crate::NativeContext::from_host(&pin.0) }?
+            };
+            let session =
+                client::create_scene_session(context, pin.0.backend, max_draws, max_bytes)?;
+            drop(pin);
+            Ok(ClientDriver { session })
+        },
+        max_draws,
+        max_bytes,
+    )?;
+    all().lock().map_err(|_| -6)?.insert(id, Arc::new(worker));
+    unsafe { *out = id };
+    std::mem::forget(reservation);
+    Ok(0)
 }
 /// Copy all source geometry before enqueueing, then await CPU queue-commit ACK.
 /// This never waits for a GPU fence. Negative status is definitely uncommitted;
@@ -632,6 +757,63 @@ pub unsafe extern "C" fn mag_render_client_worker_submit_scene(
             let owned = OwnedScene { packet, target };
             let (status, receipt) =
                 worker.call_serial(|reply| Command::Scene(Box::new(owned), reply), true)?;
+            unsafe {
+                *out = receipt;
+            }
+            Ok(status)
+        },
+        1,
+    );
+    unsafe {
+        (*out).status = status;
+        if status > 0 {
+            (*out).flags |= 3;
+        }
+    }
+    status
+}
+/// Submit complete owned source view/image/viewport state through the same actor.
+/// # Safety
+/// All V2/base ranges are valid synchronously and target/frame obey the retained
+/// genuine-provider contract of worker_submit_scene. No GPU wait is performed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mag_render_client_worker_submit_scene_v2(
+    id: u64,
+    input: *const client::scene_packet::raw::DescV2,
+    out: *mut client::Receipt,
+) -> i32 {
+    if out.is_null() {
+        return -1;
+    }
+    unsafe {
+        *out = client::Receipt {
+            abi_version: 1,
+            struct_size: size_of::<client::Receipt>() as u32,
+            flags: 1,
+            ..client::Receipt::default()
+        }
+    };
+    let status = ffi(
+        || {
+            let worker = get(id)?;
+            let _serial = worker.serial.try_lock().map_err(|_| -4)?;
+            let input = unsafe { checked_ref(input) }?;
+            let packet = unsafe {
+                client::scene_packet::ScenePacket::copy_v2(
+                    input,
+                    worker.max_draws as usize,
+                    worker.max_bytes,
+                )
+            }?;
+            let target = unsafe { TargetPin::copy(input.base.target, input.base.frame) }?;
+            unsafe {
+                (*out).source = packet.source;
+                (*out).intended_items = packet.intended;
+            }
+            let (status, receipt) = worker.call_serial(
+                |reply| Command::Scene(Box::new(OwnedScene { packet, target }), reply),
+                true,
+            )?;
             unsafe {
                 *out = receipt;
             }
@@ -782,6 +964,19 @@ mod tests {
         let result = test(&mut input, &mut vertices, &pins);
         assert_eq!(pins.load(Ordering::SeqCst), 0);
         result
+    }
+    #[test]
+    fn scene_only_owner_v2_rejects_unproven_enabled_features_before_pinning() {
+        let mut host: crate::HostOwnerV2 = unsafe { std::mem::zeroed() };
+        host.abi_version = 2;
+        host.struct_size = size_of::<crate::HostOwnerV2>() as u32;
+        host.enabled_features = 1;
+        let mut id = 99;
+        assert_eq!(
+            unsafe { mag_render_client_worker_create_scene_v2(&host, 32, 1024, &mut id) },
+            -1
+        );
+        assert_eq!(id, 0);
     }
     #[test]
     fn copied_scene_survives_source_mutation_and_releases_exact_target_pin() {

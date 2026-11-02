@@ -18,6 +18,21 @@ pub use mag_render_abi::packet as raw;
 unsafe extern "C" {
     fn mag_native_packet_layout(out: *mut u32, words: u32) -> i32;
 }
+unsafe extern "C" {
+    fn mag_native_packet_v2_layout(out: *mut u32, words: u32) -> i32;
+}
+fn checked_v2_layout() -> Result<(), i32> {
+    let expected = raw::v2_layout();
+    let mut actual = vec![0; expected.len()];
+    let status = unsafe { mag_native_packet_v2_layout(actual.as_mut_ptr(), actual.len() as u32) };
+    if status != 0 {
+        return Err(status);
+    }
+    if actual != expected {
+        return Err(-1);
+    }
+    Ok(())
+}
 fn checked_layout() -> Result<(), i32> {
     let expected = raw::layout();
     let mut actual = vec![0; expected.len()];
@@ -42,6 +57,10 @@ mod tests {
     use super::*;
     fn state() -> raw::RasterState {
         unsafe { std::mem::zeroed() }
+    }
+    #[test]
+    fn independent_packet_v2_layout_matches() {
+        checked_v2_layout().unwrap();
     }
     #[test]
     fn actual_alpha_factor_is_preserved_by_explicit_native_state() {
@@ -169,6 +188,7 @@ pub struct Pipeline {
 }
 #[derive(Clone)]
 pub struct ImagePayload {
+    pub layout: Option<ImageLayout>,
     pub desc: ImageDesc,
     pub bytes: Option<Vec<u8>>,
 }
@@ -201,6 +221,8 @@ pub struct ScenePacket {
     pub buffers: Vec<Vec<u8>>,
     pub images: Vec<ImagePayload>,
     pub views: Vec<raw::ImageView>,
+    pub view_dimensions: Vec<Dimension>,
+    pub viewports: Option<Vec<Viewport>>,
     pub samplers: Vec<raw::Sampler>,
     pub passes: Vec<PacketPass>,
     pub items: Vec<raw::Item>,
@@ -216,12 +238,7 @@ fn bytes(k: &mut Vec<u8>, v: &[u8]) {
     k.extend(v)
 }
 fn format(f: u32) -> Result<ImageFormat, i32> {
-    match f {
-        1 => Ok(ImageFormat::Rgba8),
-        2 => Ok(ImageFormat::Depth32),
-        3 => Ok(ImageFormat::Bgra8),
-        _ => Err(-2),
-    }
+    ImageFormat::from_native(f).map_err(|_| -2)
 }
 fn stage(s: u32) -> Result<Stage, i32> {
     match s {
@@ -252,6 +269,65 @@ impl ScenePacket {
     /// Every declared synchronous range is valid and aligned. All bytes are copied;
     /// the host image and frame are pinned separately by worker admission.
     pub unsafe fn copy(d: &raw::Desc, max_draws: usize, max_bytes: u64) -> Result<Self, i32> {
+        unsafe { Self::copy_impl(d, max_draws, max_bytes, None, None) }
+    }
+    /// # Safety
+    /// Same synchronous range contract as copy; V2 tables are complete and valid.
+    pub unsafe fn copy_v2(d: &raw::DescV2, max_draws: usize, max_bytes: u64) -> Result<Self, i32> {
+        checked_v2_layout()?;
+        if d.abi_version != 2
+            || d.struct_size as usize != size_of::<raw::DescV2>()
+            || d.reserved != 0
+            || d.reserved1 != 0
+            || d.viewport_count != d.base.pass_count
+            || d.viewport_count > 16
+            || d.view_dimension_count != d.base.view_count
+            || d.view_dimension_count > 4096
+        {
+            return Err(-1);
+        }
+        let mut dimensions = Vec::new();
+        for d in unsafe { slice(d.view_dimensions, d.view_dimension_count as usize) }? {
+            dimensions.push(match d {
+                2 => Dimension::D2,
+                4 => Dimension::Cube,
+                _ => return Err(-2),
+            })
+        }
+        let viewports = unsafe { slice(d.viewports, d.viewport_count as usize) }?
+            .iter()
+            .map(|v| Viewport {
+                x: v.x,
+                y: v.y,
+                width: v.width,
+                height: v.height,
+                min_depth: v.min_depth,
+                max_depth: v.max_depth,
+                scissor_x: v.scissor_x,
+                scissor_y: v.scissor_y,
+                scissor_width: v.scissor_width,
+                scissor_height: v.scissor_height,
+                known_fields: v.known_fields,
+                reserved: v.reserved,
+            })
+            .collect();
+        unsafe {
+            Self::copy_impl(
+                &d.base,
+                max_draws,
+                max_bytes,
+                Some(dimensions),
+                Some(viewports),
+            )
+        }
+    }
+    unsafe fn copy_impl(
+        d: &raw::Desc,
+        max_draws: usize,
+        max_bytes: u64,
+        dimensions: Option<Vec<Dimension>>,
+        viewports: Option<Vec<Viewport>>,
+    ) -> Result<Self, i32> {
         checked_layout()?;
         let cap = limits()?;
         if d.buffer_count as u64 + d.image_count as u64 > cap.max_resources
@@ -284,8 +360,12 @@ impl ScenePacket {
         if d.dispatch_count != 0 {
             return Err(-2);
         }
+        let extra = dimensions.as_ref().map_or(0, |d| d.len() as u64 * 4)
+            + viewports
+                .as_ref()
+                .map_or(0, |v| v.len() as u64 * size_of::<Viewport>() as u64);
         let mut budget = Budget {
-            remaining: max_bytes,
+            remaining: max_bytes.checked_sub(extra).ok_or(-5)?,
         };
         let mut programs = Vec::new();
         for p in unsafe { slice(d.programs, d.program_count as usize) }? {
@@ -373,49 +453,91 @@ impl ScenePacket {
         }
         let mut images = Vec::new();
         for i in unsafe { slice(d.images, d.image_count as usize) }? {
-            let f = format(i.format)?;
-            if i.reserved != 0 || i.width == 0 || i.height == 0 {
+            let desc = ImageDesc {
+                width: i.width,
+                height: i.height,
+                format: format(i.format)?,
+            };
+            if i.reserved != 0
+                || i.width == 0
+                || i.height == 0
+                || i.width > 8192
+                || i.height > 8192
+                || i.mip_count > 14
+                || i.layers > 6
+            {
                 return Err(-1);
             }
-            if i.dimension != 2
-                || i.depth != 1
-                || i.layers != 1
-                || i.mip_count != 1
-                || i.samples != 1
-            {
-                return Err(-2);
+            let dimension = match i.dimension {
+                2 => Dimension::D2,
+                4 => Dimension::Cube,
+                _ => return Err(-2),
+            };
+            let mut layout = ImageLayout {
+                dimension,
+                depth: i.depth,
+                layers: i.layers,
+                mip_count: i.mip_count,
+                samples: i.samples,
+                subresources: vec![],
+            };
+            if i.subresource_count > 84 {
+                return Err(-1);
             }
-            let payload = match unsafe { slice(i.subresources, i.subresource_count as usize) }? {
-                [] => None,
-                [s] => {
-                    let row = i.width.checked_mul(4).ok_or(-5)?;
-                    if f == ImageFormat::Depth32
-                        || s.mip != 0
-                        || s.layer != 0
-                        || s.width != i.width
-                        || s.height != i.height
-                        || s.depth != 1
-                        || s.row_bytes != row
-                        || s.length != u64::from(row) * u64::from(i.height)
-                    {
-                        return Err(-2);
+            let source = unsafe { slice(i.subresources, i.subresource_count as usize) }?;
+            let bytes = if source.is_empty() {
+                layout.validate(desc, None).map_err(|_| -1)?;
+                None
+            } else {
+                if source.len() != i.layers as usize * i.mip_count as usize {
+                    return Err(-1);
+                }
+                let mut packed = Vec::new();
+                for s in source {
+                    let level = desc
+                        .format
+                        .level_layout(s.width, s.height)
+                        .map_err(|_| -1)?;
+                    if s.row_bytes as u64 != level.row_bytes || s.length != level.bytes {
+                        return Err(-1);
                     }
-                    Some(unsafe {
+                    let aligned = packed.len().checked_add(15).ok_or(-5)? & !15;
+                    let padding = aligned - packed.len();
+                    budget.take(padding as u64)?;
+                    packed
+                        .try_reserve_exact(padding + usize::try_from(s.length).map_err(|_| -5)?)
+                        .map_err(|_| -5)?;
+                    packed.resize(aligned, 0);
+                    let data = unsafe {
                         budget.copy(
                             s.bytes.cast::<u8>(),
                             usize::try_from(s.length).map_err(|_| -5)?,
                         )
-                    }?)
+                    }?;
+                    layout.subresources.push(Subresource {
+                        mip: s.mip,
+                        layer: s.layer,
+                        width: s.width,
+                        height: s.height,
+                        depth: s.depth,
+                        row_bytes: s.row_bytes,
+                        offset: aligned as u64,
+                        length: s.length,
+                    });
+                    packed.extend(data);
                 }
-                _ => return Err(-2),
+                let padded = packed.len().checked_add(15).ok_or(-5)? & !15;
+                budget.take((padded - packed.len()) as u64)?;
+                packed.resize(padded, 0);
+                layout
+                    .validate(desc, Some(packed.len() as u64))
+                    .map_err(|_| -1)?;
+                Some(packed)
             };
             images.push(ImagePayload {
-                desc: ImageDesc {
-                    width: i.width,
-                    height: i.height,
-                    format: f,
-                },
-                bytes: payload,
+                desc,
+                layout: Some(layout),
+                bytes,
             });
         }
         let views = unsafe { budget.copy(d.views, d.view_count as usize) }?;
@@ -461,6 +583,8 @@ impl ScenePacket {
             pipelines,
             buffers,
             images,
+            view_dimensions: dimensions.unwrap_or_else(|| vec![Dimension::D2; views.len()]),
+            viewports,
             views,
             samplers,
             passes,
@@ -482,6 +606,23 @@ fn sampler(state: &raw::Sampler) -> Result<Sampler, i32> {
     Ok(Sampler::Explicit(*state))
 }
 impl ScenePacket {
+    fn view_desc(&self, index: usize) -> Result<ViewDesc, i32> {
+        let v = self.views.get(index).ok_or(-1)?;
+        let dimension = *self.view_dimensions.get(index).ok_or(-1)?;
+        let mapping = [4, 5, 0, 1, 2, 3];
+        let mut remap = [0; 4];
+        for (dest, source) in remap.iter_mut().zip(v.remap) {
+            *dest = *mapping.get(source as usize).ok_or(-1)?;
+        }
+        Ok(ViewDesc {
+            dimension,
+            base_mip: v.base_mip,
+            mip_count: v.mip_count,
+            base_layer: v.base_layer,
+            layer_count: v.layer_count,
+            remap,
+        })
+    }
     fn range(&self, u: raw::BufferUse) -> Result<ByteRange, i32> {
         let b = self.buffers.get(u.buffer as usize).ok_or(-1)?;
         if u.reserved != 0
@@ -525,7 +666,11 @@ impl ScenePacket {
                 if t.slot >= 16 || !slots.insert(t.slot) || t.reserved != 0 {
                     return Err(-1);
                 }
-                if t.dimension != 2 || t.sample_kind > 3 || t.arrayed != 0 || t.multisampled != 0 {
+                if !matches!(t.dimension, 2 | 4)
+                    || t.sample_kind > 3
+                    || t.arrayed != 0
+                    || t.multisampled != 0
+                {
                     return Err(-2);
                 }
             }
@@ -553,7 +698,7 @@ impl ScenePacket {
             if vp.stage != 0
                 || fp.is_some_and(|f| f.stage != 1)
                 || p.binding_model > 1
-                || p.color > 3
+                || (p.color != 0 && !format(p.color)?.info().color_attachment)
                 || p.depth != 0 && p.depth != 2
                 || p.color == 2
                 || p.color != 0 && fp.is_none()
@@ -636,17 +781,36 @@ impl ScenePacket {
                 }
             }
         }
-        for v in &self.views {
+        if self.view_dimensions.len() != self.views.len() {
+            return Err(-1);
+        }
+        for (index, v) in self.views.iter().enumerate() {
             if v.reserved != 0 || v.image as usize >= self.images.len() {
                 return Err(-1);
             }
-            if v.base_mip != 0
-                || v.mip_count != 1
-                || v.base_layer != 0
-                || v.layer_count != 1
-                || v.remap != [2, 3, 4, 5]
-            {
-                return Err(-2);
+            let image = &self.images[v.image as usize];
+            let shape = image.layout.clone().unwrap_or_default();
+            self.view_desc(index)?.validate(&shape).map_err(|_| -1)?;
+        }
+        for image in &self.images {
+            if let Some(layout) = &image.layout {
+                layout
+                    .validate(image.desc, image.bytes.as_ref().map(|b| b.len() as u64))
+                    .map_err(|_| -1)?;
+            }
+        }
+        if let Some(viewports) = &self.viewports {
+            if viewports.len() != self.passes.len() {
+                return Err(-1);
+            }
+            for (pass, viewport) in self.passes.iter().zip(viewports) {
+                let image = if pass.color.image != u32::MAX {
+                    pass.color.image
+                } else {
+                    pass.depth.image
+                };
+                let desc = self.images.get(image as usize).ok_or(-1)?.desc;
+                viewport.validate(desc.width, desc.height).map_err(|_| -1)?;
             }
         }
         for s in &self.samplers {
@@ -759,6 +923,19 @@ impl ScenePacket {
                         })
                         .ok_or(-1)?;
                     let image = &self.images[self.views[t.view as usize].image as usize];
+                    let program = if t.stage == 0 {
+                        &self.programs[pipeline.vertex as usize]
+                    } else {
+                        self.programs.get(pipeline.fragment as usize).ok_or(-1)?
+                    };
+                    let reflected = program
+                        .textures
+                        .iter()
+                        .find(|r| r.slot == t.texture_slot)
+                        .ok_or(-1)?;
+                    if reflected.dimension != self.view_dimensions[t.view as usize].native_id() {
+                        return Err(-2);
+                    }
                     if image.desc.format != format(required.format)?
                         || sampler(&self.samplers[t.sampler as usize])?.comparison()
                             != (required.comparison != 0)
@@ -839,17 +1016,23 @@ impl ScenePacket {
         .map_err(|_| -1)?;
         let mut images = Vec::new();
         for image in &self.images {
-            let i = if let Some(b) = &image.bytes {
-                scene
-                    .texture(image.desc, lease(b)?)
+            let i = match (&image.layout, &image.bytes) {
+                (Some(layout), Some(bytes)) => scene
+                    .texture_with_layout(image.desc, layout.clone(), lease(bytes)?)
                     .map_err(|_| -1)?
-                    .image()
-            } else {
-                scene.image(image.desc).map_err(|_| -1)?
+                    .image(),
+                (Some(layout), None) => scene
+                    .image_with_layout(image.desc, layout.clone())
+                    .map_err(|_| -1)?,
+                (None, Some(bytes)) => scene
+                    .texture(image.desc, lease(bytes)?)
+                    .map_err(|_| -1)?
+                    .image(),
+                (None, None) => scene.image(image.desc).map_err(|_| -1)?,
             };
             images.push(i)
         }
-        for pass in &self.passes {
+        for (pass_index, pass) in self.passes.iter().enumerate() {
             let color = if pass.color.image == u32::MAX {
                 None
             } else {
@@ -906,7 +1089,12 @@ impl ScenePacket {
                         stage: stage(t.stage)?,
                         texture_slot: t.texture_slot,
                         sampler_slot: t.sampler_slot,
-                        image: scene.current(images[view.image as usize]).map_err(|_| -1)?,
+                        image: scene
+                            .view(
+                                scene.current(images[view.image as usize]).map_err(|_| -1)?,
+                                self.view_desc(t.view as usize)?,
+                            )
+                            .map_err(|_| -1)?,
                         sampler: sampler(&self.samplers[t.sampler as usize])?,
                     })
                 }
@@ -921,13 +1109,18 @@ impl ScenePacket {
                     textures,
                 });
             }
-            scene
-                .render_pass(RenderPass {
-                    color,
-                    depth,
-                    draws,
-                })
-                .map_err(|_| -1)?;
+            let pass = RenderPass {
+                color,
+                depth,
+                draws,
+            };
+            if let Some(viewports) = &self.viewports {
+                scene
+                    .render_pass_with_viewport(pass, viewports[pass_index])
+                    .map_err(|_| -1)?;
+            } else {
+                scene.render_pass(pass).map_err(|_| -1)?;
+            }
         }
         scene
             .output(
@@ -1448,6 +1641,7 @@ pub(crate) mod packet_tests {
             ],
             images: vec![
                 ImagePayload {
+                    layout: None,
                     desc: ImageDesc {
                         width: 2,
                         height: 2,
@@ -1456,6 +1650,7 @@ pub(crate) mod packet_tests {
                     bytes: None,
                 },
                 ImagePayload {
+                    layout: None,
                     desc: ImageDesc {
                         width: 1,
                         height: 1,
@@ -1464,6 +1659,8 @@ pub(crate) mod packet_tests {
                     bytes: Some(vec![127, 20, 30, 255]),
                 },
             ],
+            view_dimensions: vec![Dimension::D2],
+            viewports: None,
             views: vec![raw::ImageView {
                 image: 1,
                 base_mip: 0,
@@ -1540,13 +1737,17 @@ pub(crate) mod packet_tests {
                 },
                 blend: Blend::Opaque,
                 buffers,
-                textures: vec![mag_render::scene::TextureLayout {
-                    stage: Stage::Fragment,
-                    texture_slot: 0,
-                    sampler_slot: 0,
-                    format: ImageFormat::Rgba8,
-                    comparison: false,
-                }],
+                textures: p
+                    .textures
+                    .iter()
+                    .map(|t| mag_render::scene::TextureLayout {
+                        stage: stage(t.stage).unwrap(),
+                        texture_slot: t.texture_slot,
+                        sampler_slot: t.sampler_slot,
+                        format: format(t.format).unwrap(),
+                        comparison: t.comparison != 0,
+                    })
+                    .collect(),
             })
         }
     }
@@ -1759,38 +1960,66 @@ pub(crate) mod packet_tests {
                 length: b.len() as u64,
             })
             .collect();
-        let subs: Vec<_> = packet
+        let subs: Vec<Vec<_>> = packet
             .images
             .iter()
-            .map(|i| {
-                i.bytes.as_ref().map(|b| raw::Subresource {
-                    mip: 0,
-                    layer: 0,
-                    width: i.desc.width,
-                    height: i.desc.height,
-                    depth: 1,
-                    row_bytes: i.desc.width * 4,
-                    bytes: b.as_ptr().cast(),
-                    length: b.len() as u64,
-                })
+            .map(|image| {
+                let Some(bytes) = &image.bytes else {
+                    return vec![];
+                };
+                if let Some(layout) = &image.layout {
+                    layout
+                        .subresources
+                        .iter()
+                        .map(|s| raw::Subresource {
+                            mip: s.mip,
+                            layer: s.layer,
+                            width: s.width,
+                            height: s.height,
+                            depth: s.depth,
+                            row_bytes: s.row_bytes,
+                            bytes: bytes[s.offset as usize..].as_ptr().cast(),
+                            length: s.length,
+                        })
+                        .collect()
+                } else {
+                    let level = image
+                        .desc
+                        .format
+                        .level_layout(image.desc.width, image.desc.height)
+                        .unwrap();
+                    vec![raw::Subresource {
+                        mip: 0,
+                        layer: 0,
+                        width: image.desc.width,
+                        height: image.desc.height,
+                        depth: 1,
+                        row_bytes: level.row_bytes as u32,
+                        bytes: bytes.as_ptr().cast(),
+                        length: level.bytes,
+                    }]
+                }
             })
             .collect();
         let images: Vec<_> = packet
             .images
             .iter()
             .zip(&subs)
-            .map(|(i, s)| raw::Image {
-                format: 1,
-                dimension: 2,
-                width: i.desc.width,
-                height: i.desc.height,
-                depth: 1,
-                layers: 1,
-                mip_count: 1,
-                samples: 1,
-                subresources: s.as_ref().map_or(std::ptr::null(), |s| s),
-                subresource_count: u32::from(s.is_some()),
-                reserved: 0,
+            .map(|(image, subs)| {
+                let layout = image.layout.clone().unwrap_or_default();
+                raw::Image {
+                    format: image.desc.format.native_id(),
+                    dimension: layout.dimension.native_id(),
+                    width: image.desc.width,
+                    height: image.desc.height,
+                    depth: layout.depth,
+                    layers: layout.layers,
+                    mip_count: layout.mip_count,
+                    samples: layout.samples,
+                    subresources: subs.as_ptr(),
+                    subresource_count: subs.len() as u32,
+                    reserved: 0,
+                }
             })
             .collect();
         let draws: Vec<Vec<_>> = packet
@@ -1857,7 +2086,119 @@ pub(crate) mod packet_tests {
             target: std::ptr::null(),
             frame: std::ptr::null(),
         };
-        unsafe { ScenePacket::copy(&desc, 32, 1 << 20) }.unwrap()
+        if let Some(viewports) = &packet.viewports {
+            let viewports: Vec<_> = viewports
+                .iter()
+                .map(|v| raw::Viewport {
+                    x: v.x,
+                    y: v.y,
+                    width: v.width,
+                    height: v.height,
+                    min_depth: v.min_depth,
+                    max_depth: v.max_depth,
+                    scissor_x: v.scissor_x,
+                    scissor_y: v.scissor_y,
+                    scissor_width: v.scissor_width,
+                    scissor_height: v.scissor_height,
+                    known_fields: v.known_fields,
+                    reserved: v.reserved,
+                })
+                .collect();
+            let dims: Vec<_> = packet
+                .view_dimensions
+                .iter()
+                .map(|d| d.native_id())
+                .collect();
+            let desc = raw::DescV2 {
+                abi_version: 2,
+                struct_size: size_of::<raw::DescV2>() as u32,
+                base: desc,
+                viewports: viewports.as_ptr(),
+                viewport_count: viewports.len() as u32,
+                reserved: 0,
+                view_dimensions: dims.as_ptr(),
+                view_dimension_count: dims.len() as u32,
+                reserved1: 0,
+            };
+            unsafe { ScenePacket::copy_v2(&desc, 32, 1 << 20) }.unwrap()
+        } else {
+            unsafe { ScenePacket::copy(&desc, 32, 1 << 20) }.unwrap()
+        }
+    }
+    #[test]
+    fn v2_copies_complete_bc_cube_mips_explicit_view_remap_and_fractional_viewport() {
+        let mut packet = fixture();
+        let mut layout = ImageLayout {
+            dimension: Dimension::Cube,
+            layers: 6,
+            mip_count: 3,
+            ..ImageLayout::default()
+        };
+        for layer in 0..6 {
+            for mip in 0..3 {
+                layout.subresources.push(Subresource {
+                    mip,
+                    layer,
+                    width: 4 >> mip,
+                    height: 4 >> mip,
+                    depth: 1,
+                    row_bytes: 8,
+                    offset: u64::from(layer * 3 + mip) * 16,
+                    length: 8,
+                })
+            }
+        }
+        packet.images[1] = ImagePayload {
+            desc: ImageDesc {
+                width: 4,
+                height: 4,
+                format: ImageFormat::Bc1,
+            },
+            layout: Some(layout),
+            bytes: Some(vec![7; 288]),
+        };
+        packet.pipelines[0].textures[0].format = 6;
+        packet.programs[1].textures[0].dimension = 4;
+        packet.views[0].mip_count = 3;
+        packet.views[0].layer_count = 6;
+        packet.views[0].remap = [2, 3, 4, 1];
+        packet.view_dimensions[0] = Dimension::Cube;
+        packet.viewports = Some(vec![Viewport {
+            x: 0.125,
+            y: 0.25,
+            width: 2.,
+            height: 2.,
+            min_depth: 0.,
+            max_depth: 1.,
+            scissor_x: 0,
+            scissor_y: 0,
+            scissor_width: 2,
+            scissor_height: 2,
+            known_fields: 7,
+            reserved: 0,
+        }]);
+        let copied = copy_view(&packet);
+        assert_eq!(copied.images[1].bytes.as_ref().unwrap().len(), 288);
+        let prepared = copied
+            .prepare(&Catalog(&copied), &[1], 32, 1 << 20)
+            .unwrap();
+        let (commands, _) = prepared.into_submission();
+        let view = commands.passes()[0].draws[0].textures[0]
+            .image
+            .view()
+            .unwrap();
+        assert_eq!(view.remap, [0, 1, 2, 5]);
+        assert_eq!(view.dimension, Dimension::Cube);
+        assert_eq!(commands.viewports()[0].unwrap().x, 0.125);
+        assert_eq!(
+            commands.images()[1]
+                .layout
+                .as_ref()
+                .unwrap()
+                .subresources
+                .len(),
+            18
+        );
     }
     #[test]
     fn synchronous_transport_owns_shader_uniform_geometry_and_texels() {
@@ -1870,7 +2211,15 @@ pub(crate) mod packet_tests {
         assert_ne!(copy.programs[0].source, packet.programs[0].source);
         assert_eq!(copy.buffers[0], vec![0; 72]);
         assert_eq!(copy.buffers[2], vec![1; 16]);
-        assert_eq!(copy.images[1].bytes, Some(vec![127, 20, 30, 255]));
+        assert_eq!(
+            &copy.images[1].bytes.as_ref().unwrap()[..4],
+            &[127, 20, 30, 255]
+        );
+        assert!(
+            copy.images[1].bytes.as_ref().unwrap()[4..]
+                .iter()
+                .all(|b| *b == 0)
+        );
         copy.prepare(&Catalog(&copy), &[1], 32, 1 << 20).unwrap();
     }
 }

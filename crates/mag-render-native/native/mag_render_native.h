@@ -19,6 +19,7 @@ extern "C" {
 typedef struct mag_native_device mag_native_device;
 /* New context owns native resources but borrows exactly the supplied owner. */
 int mag_native_create(const MagRenderHostOwner *,mag_native_device **);
+int mag_native_create_v2(const MagRenderHostOwnerV2 *,mag_native_device **);
 /* BUSY preserves context/owner; no implicit GPU wait or fabricated retirement. */
 int mag_native_close(mag_native_device *);
 enum mag_native_status {

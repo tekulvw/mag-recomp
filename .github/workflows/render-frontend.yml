@@ -188,7 +188,7 @@ jobs:
         run: cargo clippy --manifest-path crates/mag-render-abi/Cargo.toml --locked --offline -- -D warnings
       - name: D3D12 portable allocation and view preflight
         if: runner.os != 'Windows'
-        run: python tools/test_render_frontend_d3d12_cpu.py --output-dir build/native-d3d12-cpu
+        run: python tools/test_render_frontend_d3d12_cpu.py --output-dir build/native-d3d12-cpu ${{ runner.os == 'Linux' && '--vulkan-include /usr/include' || '' }}
       - name: Portable native ABI build and tests
         run: cargo test --manifest-path crates/mag-render-native/Cargo.toml --locked --offline
       - name: Selected native backend compile and contract tests

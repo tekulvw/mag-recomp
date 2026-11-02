@@ -25,10 +25,24 @@ pub struct SceneLimits {
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ImageFormat {
+    R8,
+    Rg8,
+    Bc1,
+    Bc2,
+    Bc3,
+    R16Unorm,
+    Rg16Unorm,
+    Rgba16Float,
+    Rgba32Float,
+    R32Float,
+    Rg16Float,
     Rgba8,
     Bgra8,
     Depth32,
 }
+#[path = "scene_image.rs"]
+pub mod image;
+pub use image::{Dimension, ImageLayout, Subresource, ViewDesc, Viewport};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ImageDesc {
     pub width: u32,
@@ -44,6 +58,7 @@ pub struct Image {
 pub struct ImageValue {
     image: Image,
     epoch: u64,
+    view: Option<ViewDesc>,
 }
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Load<T> {
@@ -179,6 +194,7 @@ pub struct SceneOutput {
 
 #[derive(Clone, Debug)]
 pub struct ImagePlan {
+    pub layout: Option<ImageLayout>,
     pub desc: ImageDesc,
     pub upload: Option<usize>,
 }
@@ -193,6 +209,7 @@ pub struct SceneBuilder {
     images: Vec<ImageState>,
     textures: Vec<ResourceLease>,
     passes: Vec<RenderPass>,
+    viewports: Vec<Option<Viewport>>,
     bytes: u64,
     draws: usize,
     output: Option<SceneOutput>,
@@ -202,6 +219,7 @@ pub struct PreparedScene {
     images: Vec<ImagePlan>,
     textures: Vec<ResourceLease>,
     passes: Vec<RenderPass>,
+    viewports: Vec<Option<Viewport>>,
     output: Option<SceneOutput>,
 }
 impl Image {
@@ -212,6 +230,9 @@ impl Image {
 impl ImageValue {
     pub fn image(self) -> Image {
         self.image
+    }
+    pub fn view(self) -> Option<ViewDesc> {
+        self.view
     }
     pub fn epoch(self) -> u64 {
         self.epoch
@@ -248,6 +269,7 @@ impl SceneBuilder {
             images: vec![],
             textures: vec![],
             passes: vec![],
+            viewports: vec![],
             bytes,
             draws: 0,
             output: None,
@@ -273,26 +295,41 @@ impl SceneBuilder {
         if desc.width == 0 || desc.height == 0 || desc.width > 8192 || desc.height > 8192 {
             return Err(SceneError::InvalidPass);
         }
-        u64::from(desc.width)
-            .checked_mul(u64::from(desc.height))
-            .and_then(|n| n.checked_mul(4))
-            .ok_or(SceneError::Capacity)
+        Ok(desc.format.level_layout(desc.width, desc.height)?.bytes)
     }
     fn add_image(
         &mut self,
         desc: ImageDesc,
         upload: Option<ResourceLease>,
     ) -> Result<Image, SceneError> {
-        let size = Self::image_bytes(desc)?;
-        if let Some(ref lease) = upload
-            && (desc.format == ImageFormat::Depth32 || lease.bytes().len() as u64 != size)
-        {
-            return Err(SceneError::InvalidBindings);
-        }
+        self.add_image_layout(desc, None, upload)
+    }
+    fn add_image_layout(
+        &mut self,
+        desc: ImageDesc,
+        layout: Option<ImageLayout>,
+        upload: Option<ResourceLease>,
+    ) -> Result<Image, SceneError> {
+        let size = if let Some(layout) = &layout {
+            layout
+                .validate(desc, upload.as_ref().map(|l| l.bytes().len() as u64))?
+                .0
+        } else {
+            let size = Self::image_bytes(desc)?;
+            if let Some(lease) = &upload {
+                if desc.format == ImageFormat::Depth32 || lease.bytes().len() as u64 != size {
+                    return Err(SceneError::InvalidBindings);
+                }
+            } else if !desc.format.info().color_attachment && !desc.format.info().depth_attachment {
+                return Err(SceneError::InvalidPass);
+            }
+            size
+        };
+        let upload_bytes = upload.as_ref().map_or(0, |l| l.bytes().len() as u64);
         let bytes = self
             .bytes
             .checked_add(size)
-            .and_then(|n| n.checked_add(if upload.is_some() { size } else { 0 }))
+            .and_then(|n| n.checked_add(upload_bytes))
             .ok_or(SceneError::Capacity)?;
         if self.images.len() >= self.limits.max_images || bytes > self.limits.max_bytes {
             return Err(SceneError::Capacity);
@@ -317,6 +354,7 @@ impl SceneBuilder {
         });
         self.images.push(ImageState {
             plan: ImagePlan {
+                layout,
                 desc,
                 upload: index,
             },
@@ -337,6 +375,53 @@ impl SceneBuilder {
         let i = self.add_image(desc, Some(lease))?;
         self.current(i)
     }
+    pub fn image_with_layout(
+        &mut self,
+        desc: ImageDesc,
+        layout: ImageLayout,
+    ) -> Result<Image, SceneError> {
+        self.add_image_layout(desc, Some(layout), None)
+    }
+    pub fn texture_with_layout(
+        &mut self,
+        desc: ImageDesc,
+        layout: ImageLayout,
+        lease: ResourceLease,
+    ) -> Result<ImageValue, SceneError> {
+        let image = self.add_image_layout(desc, Some(layout), Some(lease))?;
+        self.current(image)
+    }
+    pub fn view(&self, value: ImageValue, desc: ViewDesc) -> Result<ImageValue, SceneError> {
+        self.valid(value)?;
+        let state = self.state(value.image)?;
+        desc.validate(
+            state
+                .plan
+                .layout
+                .as_ref()
+                .unwrap_or(&ImageLayout::default()),
+        )?;
+        Ok(ImageValue {
+            view: Some(desc),
+            ..value
+        })
+    }
+    pub fn render_pass_with_viewport(
+        &mut self,
+        pass: RenderPass,
+        viewport: Viewport,
+    ) -> Result<Vec<ImageValue>, SceneError> {
+        let image = pass
+            .color
+            .map(|a| a.image)
+            .or_else(|| pass.depth.map(|a| a.image))
+            .ok_or(SceneError::InvalidPass)?;
+        let desc = self.state(image)?.plan.desc;
+        viewport.validate(desc.width, desc.height)?;
+        let result = self.render_pass(pass)?;
+        *self.viewports.last_mut().ok_or(SceneError::InvalidPass)? = Some(viewport);
+        Ok(result)
+    }
     pub fn current(&self, image: Image) -> Result<ImageValue, SceneError> {
         let s = self.state(image)?;
         if !s.initialized {
@@ -345,6 +430,7 @@ impl SceneBuilder {
         Ok(ImageValue {
             image,
             epoch: s.epoch,
+            view: None,
         })
     }
     fn attachment<T>(
@@ -354,10 +440,16 @@ impl SceneBuilder {
         format: ImageFormat,
     ) -> Result<ImageDesc, SceneError> {
         let s = self.state(image)?;
+        if s.plan.layout.as_ref().is_some_and(|l| !l.attachment()) {
+            return Err(SceneError::InvalidPass);
+        }
         if s.plan.desc.format != format {
             return Err(SceneError::InvalidPass);
         }
         if let Load::Load(v) = load {
+            if v.view.is_some() {
+                return Err(SceneError::InvalidPass);
+            }
             if v.image != image {
                 return Err(SceneError::WrongScene);
             }
@@ -372,15 +464,15 @@ impl SceneBuilder {
         let mut extent = None;
         let mut attached = vec![];
         if let Some(c) = pass.color {
+            let format = self.state(c.image)?.plan.desc.format;
             if let Load::Clear(color) = c.load
                 && color
                     .iter()
-                    .any(|c| !c.is_finite() || !(0.0..=1.0).contains(c))
+                    .any(|c| !c.is_finite() || !format.floating_color() && !(0.0..=1.0).contains(c))
             {
                 return Err(SceneError::InvalidPass);
             }
-            let format = self.state(c.image)?.plan.desc.format;
-            if format == ImageFormat::Depth32 {
+            if !format.info().color_attachment {
                 return Err(SceneError::InvalidPass);
             }
             extent = Some(self.attachment(c.image, &c.load, format)?);
@@ -456,6 +548,9 @@ impl SceneBuilder {
         self.passes
             .try_reserve(1)
             .map_err(|_| SceneError::Capacity)?;
+        self.viewports
+            .try_reserve(1)
+            .map_err(|_| SceneError::Capacity)?;
         let mut values = Vec::new();
         values
             .try_reserve_exact(attached.len())
@@ -470,6 +565,7 @@ impl SceneBuilder {
                 values.push(ImageValue {
                     image: *i,
                     epoch: self.state(*i)?.epoch + 1,
+                    view: None,
                 })
             }
         }
@@ -480,6 +576,7 @@ impl SceneBuilder {
         }
         self.draws = draws;
         self.passes.push(pass);
+        self.viewports.push(None);
         Ok(values)
     }
     pub fn output(
@@ -489,7 +586,10 @@ impl SceneBuilder {
     ) -> Result<(), SceneError> {
         self.valid(value)?;
         let s = self.state(value.image)?;
-        if s.plan.desc.format == ImageFormat::Depth32 {
+        if value.view.is_some()
+            || !s.plan.desc.format.info().color_attachment
+            || s.plan.layout.as_ref().is_some_and(|l| !l.attachment())
+        {
             return Err(SceneError::InvalidPass);
         }
         let extra = if diagnostic_readback {
@@ -513,6 +613,10 @@ impl SceneBuilder {
     pub fn prepare(self, catalog: &impl SceneCatalog) -> Result<PreparedScene, SceneError> {
         if catalog.owner_generation() != self.base.owner_generation() {
             return Err(SceneError::Batch(BatchError::WrongOwner));
+        }
+        if self.viewports.iter().any(Option::is_some) && self.viewports.iter().any(Option::is_none)
+        {
+            return Err(SceneError::InvalidPass);
         }
         if self.passes.is_empty() {
             return Err(SceneError::Empty);
@@ -590,11 +694,15 @@ impl SceneBuilder {
             images: self.images.into_iter().map(|s| s.plan).collect(),
             textures: self.textures,
             passes: self.passes,
+            viewports: self.viewports,
             output: self.output,
         })
     }
 }
 impl PreparedScene {
+    pub fn viewports(&self) -> &[Option<Viewport>] {
+        &self.viewports
+    }
     pub fn compute(&self) -> &PreparedBatch {
         &self.base
     }
@@ -620,6 +728,7 @@ impl PreparedScene {
                 base,
                 images: self.images,
                 passes: self.passes,
+                viewports: self.viewports,
                 output: self.output,
                 texture_start,
                 texture_keys,
@@ -632,11 +741,15 @@ pub struct SceneCommands {
     base: BatchCommands,
     images: Vec<ImagePlan>,
     passes: Vec<RenderPass>,
+    viewports: Vec<Option<Viewport>>,
     output: Option<SceneOutput>,
     texture_start: usize,
     texture_keys: Vec<crate::resources::ResourceCacheKey>,
 }
 impl SceneCommands {
+    pub fn viewports(&self) -> &[Option<Viewport>] {
+        &self.viewports
+    }
     pub fn compute(&self) -> &BatchCommands {
         &self.base
     }
