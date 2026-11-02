@@ -107,6 +107,7 @@ void mag_controls_validate_profile(const ControlsProfile& profile) {
         }
     }
 }
+void mag_controls_set_shared_native_actions(std::span<const ActionId> ids){auto& s=state();std::lock_guard lock(s.mutex);check(mag_input_shared_native_actions(s.handle,ids.data(),uint32_t(ids.size())));}
 void mag_controls_configure(const ControlsProfile& profile){
     mag_controls_validate_profile(profile);auto& s=state();std::lock_guard lock(s.mutex);
     std::vector<MagInputBinding> bindings;
@@ -140,10 +141,11 @@ const HostInputFrame& attach(State& s,InputFrameKey k,const InputInterpretation&
     MagInputFrame raw{};check(mag_input_seal(s.handle,key(k),s.sample_time,k.process_session,uint32_t(interpretation.context),&raw));s.generation=raw.generation;
     const bool neutral=interpretation.controller_neutral.value_or(s.sample->capture.stick_neutral);
     const bool fresh=s.last_neutral&&!neutral;s.last_neutral=neutral;
-    MagInputPolicy resolved{};check(mag_input_policy(s.handle,uint32_t(s.profile.mode),uint32_t(s.capture.focused&&s.capture.supported_context)|(uint32_t(s.capture.controller_connected)<<1)|(uint32_t(neutral)<<2)|(uint32_t(fresh)<<3),&resolved));
+    const bool gameplay=interpretation.context!=InputContext::Menu && interpretation.context!=InputContext::Settings && interpretation.context!=InputContext::Rebinding;
+    MagInputPolicy resolved{};check(mag_input_policy(s.handle,uint32_t(s.profile.mode),uint32_t(gameplay&&s.capture.focused&&s.capture.supported_context)|(uint32_t(s.capture.controller_connected)<<1)|(uint32_t(neutral)<<2)|(uint32_t(fresh)<<3),&resolved));
     HostInputFrame result;result.key=k;result.context=interpretation.context;result.capture_generation=raw.generation;result.policy=policy(resolved);
-    if(result.policy.mode!=InputMode::Controller){result.mouse_dx=raw.dx;result.mouse_dy=raw.dy;if(raw.dx!=0||raw.dy!=0)result.policy.look_owner=LookOwner::Mouse;}
-    if(result.policy.mode!=InputMode::KBM && result.policy.stick_rearmed)result.controller_axes=s.sample->controller_axes;
+    if(gameplay && result.policy.mode!=InputMode::Controller){result.mouse_dx=raw.dx;result.mouse_dy=raw.dy;if(raw.dx!=0||raw.dy!=0)result.policy.look_owner=LookOwner::Mouse;}
+    if(gameplay && result.policy.mode!=InputMode::KBM && result.policy.stick_rearmed)result.controller_axes=s.sample->controller_axes;
     std::set<ActionId> actions;for(auto binding:s.profile.bindings)actions.insert(binding.action);
     for(auto action:actions){MagInputOffer value{};const int status=mag_input_offer(s.handle,key(k),action,&value);if(status!=3)check(status);result.values.push_back({action,status==0&&value.down?1.0:0.0});}
     s.frame=std::move(result);return *s.frame;

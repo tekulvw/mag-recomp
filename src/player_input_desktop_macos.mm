@@ -10,7 +10,7 @@
 #include <set>
 using namespace mag;
 namespace {
-std::atomic<bool> requested{},rawMouse{};
+std::atomic<bool> requested{},rawMouse{},mouseEnabled{true};
 uint64_t now() {return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();}
 void mainQueue(void (^block)(void)) {if(NSThread.isMainThread)block();else dispatch_async(dispatch_get_main_queue(),block);}
 }
@@ -207,7 +207,7 @@ void mainQueue(void (^block)(void)) {if(NSThread.isMainThread)block();else dispa
         }
     }
     self.ready=ready;
-    self.relative=ready && rawMouse.load(std::memory_order_acquire);
+    self.relative=ready && rawMouse.load(std::memory_order_acquire) && mouseEnabled.load(std::memory_order_acquire);
     gate.publish(ready,self.relative);
     mag_controls_set_window_capture(ready,self.relative);
     if(!self.installed) {for(auto control:held)mag_controls_push_event({control,false,now()});held.clear();mouseHeld.clear();
@@ -225,6 +225,10 @@ extern "C" void mag_input_desktop_attach_window(void* window) {
 }
 extern "C" void mag_input_desktop_set_enabled(int enabled) {
     bool prior=requested.exchange(enabled!=0,std::memory_order_acq_rel);
+    if(prior!=bool(enabled))mag_input_desktop_refresh();
+}
+extern "C" void mag_input_desktop_set_mouse_enabled(int enabled) {
+    const bool prior=mouseEnabled.exchange(enabled!=0,std::memory_order_acq_rel);
     if(prior!=bool(enabled))mag_input_desktop_refresh();
 }
 extern "C" void mag_input_desktop_refresh(void) {mainQueue(^{[desktop refresh];});}

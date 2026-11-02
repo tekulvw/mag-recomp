@@ -22,12 +22,13 @@ NSError* error(const std::exception& e){return [NSError errorWithDomain:@"MAGCon
     std::vector<ActionDescriptor> _actions;
     NSStackView *_root,*_rows,*_mouseRow;
     NSSegmentedControl *_device;
-    NSPopUpButton *_mode;
+    NSPopUpButton *_mode,*_context;
     NSSlider *_sensitivity;
     NSButton *_invert;
-    NSTextField *_hint,*_assist,*_gain;
+    NSTextField *_hint,*_assist,*_gain,*_contextLabel;
     bool _dirty,_loaded,_capturing,_captureController,_recovery;
     ActionId _captureAction;
+    uint32_t _captureContexts;
     unsigned _captureSlot;
     uint64_t _epoch;
     NSTimeInterval _captureDeadline;
@@ -43,13 +44,14 @@ NSError* error(const std::exception& e){return [NSError errorWithDomain:@"MAGCon
     _root=column();self.view=_root;_restorers=[NSMutableArray new];
     _device=[NSSegmentedControl segmentedControlWithLabels:@[@"Keyboard & Mouse",@"Controller"] trackingMode:NSSegmentSwitchTrackingSelectOne target:self action:@selector(deviceChanged:)];
     _device.identifier=@"controls_device";_device.selectedSegment=0;addFullWidth(_root,_device);
-    auto modeRow=line();[modeRow addArrangedSubview:text(@"Input mode")];_mode=[NSPopUpButton new];[_mode addItemsWithTitles:@[@"Automatic",@"Keyboard & Mouse",@"Controller"]];_mode.identifier=@"controls_mode";_mode.target=self;_mode.action=@selector(preferencesChanged:);[modeRow addArrangedSubview:_mode];addFullWidth(_root,modeRow);
+    auto modeRow=line();[modeRow addArrangedSubview:text(@"Input mode")];_mode=[NSPopUpButton new];[_mode addItemsWithTitles:@[@"Automatic",@"Keyboard & Mouse",@"Controller"]];_mode.identifier=@"controls_mode";_mode.target=self;_mode.action=@selector(preferencesChanged:);[modeRow addArrangedSubview:_mode];_contextLabel=text(@"Bindings");[modeRow addArrangedSubview:_contextLabel];
+    _context=[NSPopUpButton new];[_context addItemsWithTitles:@[@"On foot",@"Menus"]];_context.identifier=@"controls_context";_context.target=self;_context.action=@selector(deviceChanged:);[modeRow addArrangedSubview:_context];addFullWidth(_root,modeRow);
     _assist=text(@"Aim assist: Disabled for keyboard/mouse",true);addFullWidth(_root,_assist);
     _mouseRow=line();[_mouseRow addArrangedSubview:text(@"Mouse sensitivity")];
     _sensitivity=[NSSlider sliderWithValue:1 minValue:.1 maxValue:5 target:self action:@selector(preferencesChanged:)];_sensitivity.identifier=@"mouse_sensitivity";[_sensitivity.widthAnchor constraintEqualToConstant:155].active=YES;[_mouseRow addArrangedSubview:_sensitivity];
     _gain=text(@"1.00×");[_gain.widthAnchor constraintEqualToConstant:48].active=YES;[_mouseRow addArrangedSubview:_gain];
     _invert=[NSButton checkboxWithTitle:@"Invert Y" target:self action:@selector(preferencesChanged:)];_invert.identifier=@"mouse_invert_y";[_mouseRow addArrangedSubview:_invert];addFullWidth(_root,_mouseRow);
-    auto headings=line();auto actionLabel=text(@"On-foot action");[actionLabel.widthAnchor constraintEqualToConstant:160].active=YES;[headings addArrangedSubview:actionLabel];
+    auto headings=line();auto actionLabel=text(@"Action");[actionLabel.widthAnchor constraintEqualToConstant:160].active=YES;[headings addArrangedSubview:actionLabel];
     for(NSString* name in @[@"Primary",@"Secondary"]){auto label=text(name,true);[label.widthAnchor constraintEqualToConstant:176].active=YES;[headings addArrangedSubview:label];}addFullWidth(_root,headings);
     _rows=[MAGControlsRows new];_rows.orientation=NSUserInterfaceLayoutOrientationVertical;_rows.alignment=NSLayoutAttributeLeading;_rows.spacing=5;_rows.translatesAutoresizingMaskIntoConstraints=NO;
     auto scroll=[NSScrollView new];scroll.hasVerticalScroller=YES;scroll.drawsBackground=NO;scroll.documentView=_rows;scroll.borderType=NSBezelBorder;
@@ -77,6 +79,8 @@ NSError* error(const std::exception& e){return [NSError errorWithDomain:@"MAGCon
     catch(const std::exception& e){if(outError)*outError=error(e);return NO;}
 }
 - (void)fill {
+    const bool menus=std::any_of(_actions.begin(),_actions.end(),[](const auto& a){return (a.contexts&16)!=0;});
+    _context.hidden=!menus;_contextLabel.hidden=!menus;if(!menus)[_context selectItemAtIndex:0];
     [_mode selectItemAtIndex:_draft.mode==InputMode::Auto?0:_draft.mode==InputMode::KBM?1:2];
     _sensitivity.doubleValue=_draft.mouse.radians_per_count/.001;_invert.state=_draft.mouse.invert_y?NSControlStateValueOn:NSControlStateValueOff;
     _gain.stringValue=[NSString stringWithFormat:@"%.2f×",_draft.mouse.radians_per_count/.001];[self rebuildRows];
@@ -90,15 +94,17 @@ NSError* error(const std::exception& e){return [NSError errorWithDomain:@"MAGCon
 - (void)deviceChanged:(id)sender {[self cancelBindingCapture];[self rebuildRows];}
 - (void)rebuildRows {
     for(NSView* v in _rows.arrangedSubviews.copy){[_rows removeArrangedSubview:v];[v removeFromSuperview];}
-    const bool controller=_device.selectedSegment==1;_mouseRow.hidden=controller;
+    const bool controller=_device.selectedSegment==1;const uint32_t selectedContext=_context.indexOfSelectedItem==1?16u:1u;_mouseRow.hidden=controller || selectedContext==16;
     _assist.stringValue=controller?@"Aim assist follows input mode. Automatic keeps it disabled once KBM gameplay is detected.":@"Aim assist: Disabled for keyboard/mouse";
     for(NSView* v in _root.arrangedSubviews)if([v.identifier isEqual:@"controls_reset"])((NSButton*)v).title=controller?@"Reset Controller":@"Reset Keyboard & Mouse";
-    for(size_t index=0;index<_actions.size();++index){const auto& a=_actions[index];if(!(a.sources&(controller?4:3)))continue;
+    std::string previousGroup;
+    for(size_t index=0;index<_actions.size();++index){const auto& a=_actions[index];if(!(a.sources&(controller?4:3)) || !(a.contexts&selectedContext))continue;
+        if(a.group!=previousGroup){previousGroup=a.group;if(!a.group.empty()){auto heading=text(ns(a.group),true);heading.identifier=@"controls_action_group";addFullWidth(_rows,heading);}}
         auto row=line();auto name=text(ns(a.label));[name.widthAnchor constraintEqualToConstant:160].active=YES;[row addArrangedSubview:name];
-        std::vector<ControlBinding> bindings;for(auto b:_draft.bindings)if(b.action==a.id && (b.contexts&1) && (b.control.source==InputSource::Controller)==controller)bindings.push_back(b);
+        std::vector<ControlBinding> bindings;for(auto b:_draft.bindings)if(b.action==a.id && (b.contexts&selectedContext) && (b.control.source==InputSource::Controller)==controller)bindings.push_back(b);
         for(unsigned slot=0;slot<2;++slot){
             auto bind=[NSButton buttonWithTitle:slot<bindings.size()?ns(mag_controls_settings_control_name(bindings[slot].control)):@"Unbound" target:self action:@selector(beginBinding:)];
-            bind.enabled=_loaded;bind.tag=NSInteger(index*2+slot);bind.identifier=[NSString stringWithFormat:@"binding_%u_%u",a.id,slot];bind.toolTip=@"Press to assign a key or button";[bind.widthAnchor constraintEqualToConstant:142].active=YES;[row addArrangedSubview:bind];
+            bind.enabled=_loaded;bind.tag=NSInteger(index*2+slot);bind.identifier=[NSString stringWithFormat:@"binding_%u_%u",a.id,slot];bind.toolTip=selectedContext==16?@"Assign this menu binding; on-foot bindings are preserved":@"Assign this on-foot binding; menu bindings are preserved";[bind.widthAnchor constraintEqualToConstant:142].active=YES;[row addArrangedSubview:bind];
             auto clear=[NSButton buttonWithTitle:@"×" target:self action:@selector(clearBinding:)];clear.tag=bind.tag;clear.identifier=[NSString stringWithFormat:@"clear_binding_%u_%u",a.id,slot];clear.toolTip=@"Clear binding";clear.accessibilityLabel=[NSString stringWithFormat:@"Clear %@ %@",ns(a.label),slot?@"secondary":@"primary"];clear.enabled=_loaded && slot<bindings.size();[clear.widthAnchor constraintEqualToConstant:26].active=YES;[row addArrangedSubview:clear];
         }
         addFullWidth(_rows,row);
@@ -107,7 +113,7 @@ NSError* error(const std::exception& e){return [NSError errorWithDomain:@"MAGCon
 }
 - (void)clearBinding:(NSButton*)sender {
     [self cancelBindingCapture];const auto& a=_actions.at(size_t(sender.tag)/2);
-    try{mag_controls_settings_edit(_draft,{{_device.selectedSegment==1?InputSource::Controller:InputSource::Keyboard,0},a.id},unsigned(sender.tag%2),true);_dirty=true;[self rebuildRows];[self notify];}
+    try{mag_controls_settings_edit(_draft,{{_device.selectedSegment==1?InputSource::Controller:InputSource::Keyboard,0},a.id,_context.indexOfSelectedItem==1?16u:1u},unsigned(sender.tag%2),true);_dirty=true;[self rebuildRows];[self notify];}
     catch(const std::exception& e){_hint.stringValue=ns(e.what());}
 }
 - (void)resetDevice:(id)sender {
@@ -127,13 +133,13 @@ NSError* error(const std::exception& e){return [NSError errorWithDomain:@"MAGCon
     if((control.source==InputSource::Controller)!=_captureController)return;
     const auto action=_captureAction;const auto slot=_captureSlot;[self cancelBindingCapture];
     try{
-        auto conflict=mag_controls_settings_edit(_draft,{control,action},slot);
-        if(conflict){auto other=std::find_if(_actions.begin(),_actions.end(),[&](const auto& a){return a.id==conflict;});auto alert=[NSAlert new];alert.messageText=@"Replace existing binding?";alert.informativeText=[NSString stringWithFormat:@"%@ is assigned to %@. Replace it for this on-foot action?",ns(mag_controls_settings_control_name(control)),other==_actions.end()?@"another action":ns(other->label)];[alert addButtonWithTitle:@"Replace"];[alert addButtonWithTitle:@"Cancel"];if([alert runModal]!=NSAlertFirstButtonReturn)return;mag_controls_settings_edit(_draft,{control,action},slot,false,true);}
+        auto conflict=mag_controls_settings_edit(_draft,{control,action,_captureContexts},slot);
+        if(conflict){auto other=std::find_if(_actions.begin(),_actions.end(),[&](const auto& a){return a.id==conflict;});auto alert=[NSAlert new];alert.messageText=@"Replace existing binding?";alert.informativeText=[NSString stringWithFormat:@"%@ is assigned to %@. Replace its conflicting bindings for this action?",ns(mag_controls_settings_control_name(control)),other==_actions.end()?@"another action":ns(other->label)];[alert addButtonWithTitle:@"Replace"];[alert addButtonWithTitle:@"Cancel"];if([alert runModal]!=NSAlertFirstButtonReturn)return;mag_controls_settings_edit(_draft,{control,action,_captureContexts},slot,false,true);}
         _dirty=true;_hint.stringValue=@"Binding changed. Apply controls to save.";[self rebuildRows];[self notify];
     }catch(const std::exception& e){_hint.stringValue=ns(e.what());}
 }
 - (void)beginBinding:(NSButton*)sender {
-    [self cancelBindingCapture];_captureAction=_actions.at(size_t(sender.tag)/2).id;_captureSlot=unsigned(sender.tag%2);_captureController=_device.selectedSegment==1;_capturing=true;_captureDeadline=NSProcessInfo.processInfo.systemUptime+15;const auto epoch=++_epoch;
+    [self cancelBindingCapture];_captureAction=_actions.at(size_t(sender.tag)/2).id;_captureSlot=unsigned(sender.tag%2);_captureContexts=_context.indexOfSelectedItem==1?16u:1u;_captureController=_device.selectedSegment==1;_capturing=true;_captureDeadline=NSProcessInfo.processInfo.systemUptime+15;const auto epoch=++_epoch;
     _hint.stringValue=_captureController?@"Release held controls, then press a controller button. Escape cancels.":@"Press a key or mouse button. Escape cancels. Command shortcuts stay with macOS.";
     __weak MAGControlsSettingsController* weakSelf=self;
     // Cancel immediately when ownership changes. A timer alone can miss a
@@ -156,9 +162,9 @@ NSError* error(const std::exception& e){return [NSError errorWithDomain:@"MAGCon
 - (void)controllerTick:(NSTimer*)timer {if(NSProcessInfo.processInfo.systemUptime>=_captureDeadline){[self cancelBindingCapture];_hint.stringValue=@"No binding received. Choose a binding to try again.";return;}if(!self.view.window.isKeyWindow || !NSApp.isActive){[self cancelBindingCapture];return;}[self pollController:NO];}
 - (void)pollController:(BOOL)initial {
     for(GCController* controller in GCController.controllers){auto pad=controller.extendedGamepad;if(!pad)continue;
-        NSArray* buttons=@[pad.buttonA,pad.buttonB,pad.buttonX,pad.buttonY,pad.leftThumbstickButton?:NSNull.null,pad.rightThumbstickButton?:NSNull.null,pad.leftShoulder,pad.rightShoulder,pad.leftTrigger,pad.rightTrigger];
-        const uint32_t codes[]={0,1,2,3,7,8,9,10,32,33};
-        for(NSUInteger i=0;i<buttons.count;++i){if(buttons[i]==NSNull.null)continue;GCControllerButtonInput* b=buttons[i];auto key=[NSValue valueWithNonretainedObject:b];NSNumber* old=_controllerHeld[key];const bool before=old.boolValue;const bool down=i>=8?(before?b.value>.45:b.value>=.55):b.isPressed;_controllerHeld[key]=@(down);if(!initial && old && down && !before){[self acceptControl:{InputSource::Controller,codes[i]}];return;}}
+        NSArray* buttons=@[pad.buttonA,pad.buttonB,pad.buttonX,pad.buttonY,pad.leftThumbstickButton?:NSNull.null,pad.rightThumbstickButton?:NSNull.null,pad.leftShoulder,pad.rightShoulder,pad.buttonOptions?:NSNull.null,pad.buttonMenu,pad.dpad.up,pad.dpad.down,pad.dpad.left,pad.dpad.right,pad.leftTrigger,pad.rightTrigger];
+        const uint32_t codes[]={0,1,2,3,7,8,9,10,4,6,11,12,13,14,32,33};
+        for(NSUInteger i=0;i<buttons.count;++i){if(buttons[i]==NSNull.null)continue;GCControllerButtonInput* b=buttons[i];auto key=[NSValue valueWithNonretainedObject:b];NSNumber* old=_controllerHeld[key];const bool before=old.boolValue;const bool down=codes[i]>=32?(before?b.value>.45:b.value>=.55):b.isPressed;_controllerHeld[key]=@(down);if(!initial && old && down && !before){[self acceptControl:{InputSource::Controller,codes[i]}];return;}}
     }
 }
 - (void)cancelBindingCapture {

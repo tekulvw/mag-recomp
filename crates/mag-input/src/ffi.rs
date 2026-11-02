@@ -4,7 +4,7 @@ use crate::engine::{
     Behavior, Binding, Capture, Context, ContextKey, Control, Engine, Event, FrameKey, Source,
 };
 use crate::policy::{Mode, Policy};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::{Mutex, OnceLock};
 
@@ -58,7 +58,8 @@ struct Runtime {
     now_ns: u64,
     capture_flags: u32,
     recognition_generation: u64,
-    recognizers: BTreeMap<(u64, u64), (crate::gesture::Recognizer, u8)>,
+    shared_native_actions: BTreeSet<u32>,
+    recognizers: BTreeMap<(u64, u64), (crate::gesture::Recognizer, u8, u32)>,
 }
 #[derive(Default)]
 struct Registry {
@@ -201,6 +202,7 @@ pub unsafe extern "C" fn mag_input_create(
             now_ns: 0,
             capture_flags: 0,
             recognition_generation: 1,
+            shared_native_actions: BTreeSet::new(),
             recognizers: BTreeMap::new(),
         },
     );
@@ -255,8 +257,10 @@ pub unsafe extern "C" fn mag_input_capture(handle: u64, flags: u32, output: *mut
         if lost & 3 != 0 {
             runtime.recognizers.clear()
         } else {
-            runtime.recognizers.retain(|_, (_, sources)| {
-                !((lost & 4 != 0 && *sources & 2 != 0) || (lost & 8 != 0 && *sources & 4 != 0))
+            let menu = runtime.engine.menu_context();
+            runtime.recognizers.retain(|_, (_, sources, _)| {
+                !((!menu && lost & 4 != 0 && *sources & 2 != 0)
+                    || (lost & 8 != 0 && *sources & 4 != 0))
             })
         }
         runtime.capture_flags = flags;
@@ -328,19 +332,28 @@ pub unsafe extern "C" fn mag_input_seal(
         return INVALID;
     }
     operate(handle, |runtime| {
+        let next = ContextKey {
+            owner,
+            context: context(tag)?,
+        };
+        let native_shared = runtime.recognition_generation == runtime.engine.generation()
+            && runtime.engine.same_owner_context_change(next);
+        let shared = if runtime.recognition_generation == runtime.engine.generation() {
+            runtime.engine.shared_context_actions(next)
+        } else {
+            Default::default()
+        };
         let frame = runtime
             .engine
-            .seal(
-                key(record)?,
-                now_ns,
-                ContextKey {
-                    owner,
-                    context: context(tag)?,
-                },
-            )
+            .seal(key(record)?, now_ns, next)
             .map_err(|_| ENGINE_ERROR)?;
         if runtime.recognition_generation != frame.generation {
-            runtime.recognizers.clear();
+            runtime.recognizers.retain(|_, (_, sources, action)| {
+                shared.contains(action)
+                    || (native_shared
+                        && *sources == 4
+                        && runtime.shared_native_actions.contains(action))
+            });
             runtime.recognition_generation = frame.generation;
         }
         runtime.now_ns = frame.time_ns;
@@ -426,7 +439,7 @@ pub unsafe extern "C" fn mag_input_reset(handle: u64, tag: u32, output: *mut u64
         } else {
             runtime
                 .recognizers
-                .retain(|_, (_, sources)| *sources & (1 << tag) == 0)
+                .retain(|_, (_, sources, _)| *sources & (1 << tag) == 0)
         }
         runtime.recognition_generation = runtime.engine.generation();
         unsafe { output.write(runtime.engine.generation()) };
@@ -575,8 +588,15 @@ pub unsafe extern "C" fn mag_input_recognize(
         {
             return Err(CAPACITY);
         }
-        let (recognizer, sources) = runtime.recognizers.entry((consumer, control)).or_default();
-        *sources = offer.map_or(*sources, |offer| offer.source_mask);
+        let (recognizer, sources, recognized_action) =
+            runtime.recognizers.entry((consumer, control)).or_default();
+        if *recognized_action != 0 && *recognized_action != action {
+            return Err(INVALID);
+        }
+        *recognized_action = action;
+        *sources = offer.map_or(if value > 0.0 { 4 } else { *sources }, |offer| {
+            offer.source_mask
+        });
         let output_value = recognizer
             .update(
                 record.sequence,
@@ -720,4 +740,31 @@ pub unsafe extern "C" fn mag_input_edit_binding(
         }
     }
     OK
+}
+
+/// Identify native-controller button recognizers allowed across same-owner
+/// context changes. Host pulse continuity still requires shared physical bindings.
+/// # Safety
+/// IDs must hold count readable u32s; null is valid only for count zero.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mag_input_shared_native_actions(
+    handle: u64,
+    ids: *const u32,
+    count: u32,
+) -> i32 {
+    if count > 1024 || (count != 0 && ids.is_null()) {
+        return INVALID;
+    }
+    let ids = if count == 0 {
+        &[]
+    } else {
+        unsafe { std::slice::from_raw_parts(ids, count as usize) }
+    };
+    if ids.contains(&0) {
+        return INVALID;
+    }
+    operate(handle, |runtime| {
+        runtime.shared_native_actions = ids.iter().copied().collect();
+        Ok(())
+    })
 }

@@ -79,6 +79,10 @@ impl Engine {
         })
     }
 
+    pub(crate) fn menu_context(&self) -> bool {
+        self.context.is_some_and(|c| c.context == Context::Menu)
+    }
+
     pub fn generation(&self) -> u64 {
         self.generation
     }
@@ -188,7 +192,14 @@ impl Engine {
             self.cancel_all()?;
         } else {
             if self.capture.mouse_captured && !capture.mouse_captured {
-                self.cancel_source(Source::Mouse, None)?;
+                if self.menu_context() {
+                    self.mouse = MouseMotion::default();
+                    if let Some((_, _, motion)) = &mut self.sampled {
+                        *motion = MouseMotion::default();
+                    }
+                } else {
+                    self.cancel_source(Source::Mouse, None)?;
+                }
             }
             if self.capture.controller_connected && !capture.controller_connected {
                 self.cancel_source(Source::Controller, None)?;
@@ -269,6 +280,7 @@ impl Engine {
                 contributors.insert(Contributor {
                     source: binding.control.source.bit(),
                     device: control.device,
+                    code: control.control.code,
                 });
             }
         }
@@ -342,6 +354,102 @@ impl Engine {
         Ok(())
     }
 
+    pub(crate) fn same_owner_context_change(&self, next: ContextKey) -> bool {
+        self.context
+            .is_some_and(|old| old.owner == next.owner && old != next)
+    }
+
+    fn shared_context_controls(&self, next: ContextKey) -> BTreeMap<u32, BTreeSet<Control>> {
+        let Some(old) = self.context else {
+            return BTreeMap::new();
+        };
+        if old.owner != next.owner || old == next {
+            return BTreeMap::new();
+        }
+        let mut shared: BTreeMap<u32, BTreeSet<Control>> = BTreeMap::new();
+        for before in self
+            .bindings
+            .iter()
+            .filter(|b| b.contexts & old.context.bit() != 0)
+        {
+            if self.bindings.iter().any(|after| {
+                after.contexts & next.context.bit() != 0
+                    && before.action == after.action
+                    && before.control == after.control
+                    && before.behavior == after.behavior
+            }) {
+                shared
+                    .entry(before.action)
+                    .or_default()
+                    .insert(before.control);
+            }
+        }
+        shared
+    }
+
+    fn contributor_allowed(
+        shared: &BTreeMap<u32, BTreeSet<Control>>,
+        action: u32,
+        contributor: &Contributor,
+    ) -> bool {
+        shared.get(&action).is_some_and(|controls| {
+            controls.iter().any(|control| {
+                control.source.bit() == contributor.source && control.code == contributor.code
+            })
+        })
+    }
+
+    /// Preserve recognizers only when their exact offered physical pulse survives.
+    pub(crate) fn shared_context_actions(&self, next: ContextKey) -> BTreeSet<u32> {
+        let shared = self.shared_context_controls(next);
+        shared
+            .keys()
+            .copied()
+            .filter(|action| {
+                self.delivery.current_offer_retained(*action, |c| {
+                    Self::contributor_allowed(&shared, *action, c)
+                })
+            })
+            .collect()
+    }
+
+    fn change_context(&mut self, next: ContextKey, key: FrameKey) -> Result<(), Error> {
+        let shared = self.shared_context_controls(next);
+        if shared.is_empty() {
+            self.cancel_all()?;
+            self.sampled = Some((key, Vec::new(), MouseMotion::default()));
+            return Ok(());
+        }
+        let generation = self.next_generation()?;
+        let controls: BTreeSet<_> = shared
+            .values()
+            .flat_map(|controls| controls.iter().copied())
+            .collect();
+        self.blocked.extend(
+            self.physical
+                .iter()
+                .filter(|c| !controls.contains(&c.control))
+                .copied(),
+        );
+        self.accepted.retain(|c| controls.contains(&c.control));
+        self.toggled.retain(|c| controls.contains(&c.control));
+        self.pending.retain(|e| controls.contains(&e.control));
+        if let Some((_, events, motion)) = &mut self.sampled {
+            events.retain(|e| controls.contains(&e.control));
+            *motion = MouseMotion::default();
+        }
+        self.logical.retain(|action, contributors| {
+            contributors.retain(|c| Self::contributor_allowed(&shared, *action, c));
+            !contributors.is_empty()
+        });
+        self.delivery
+            .retain_contributors(|action, c| Self::contributor_allowed(&shared, action, c));
+        self.mouse = MouseMotion::default();
+        self.frame = None;
+        self.generation = generation;
+        Ok(())
+    }
+
     pub fn seal(
         &mut self,
         key: FrameKey,
@@ -367,10 +475,7 @@ impl Engine {
             return Err(Error::InvalidFrame);
         }
         if self.context.is_some_and(|old| old != context) {
-            self.cancel_all()?;
-            // The new context still gets its simulation opportunity, with no
-            // input inherited from the previous owner or context.
-            self.sampled = Some((key, Vec::new(), MouseMotion::default()));
+            self.change_context(context, key)?;
         }
         self.context = Some(context);
         self.sample(key)?;
@@ -410,8 +515,14 @@ impl Engine {
             generation: self.generation,
             context,
             actions,
-            mouse: motion,
-            look_allowed: self.capture.active() && self.capture.mouse_captured,
+            mouse: if context.context == Context::Menu {
+                MouseMotion::default()
+            } else {
+                motion
+            },
+            look_allowed: self.capture.active()
+                && self.capture.mouse_captured
+                && context.context != Context::Menu,
         };
         self.last_sequence = key.sequence;
         self.last_time = Some(now_ns);

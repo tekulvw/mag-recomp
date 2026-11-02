@@ -20,6 +20,7 @@ int32_t mag_input_edit_binding(const MagInputBinding*,uint32_t,MagInputBinding r
 uint32_t mag_input_abi_version(void);
 int32_t mag_input_create(uint64_t session,const MagInputBinding*,uint32_t count,uint64_t* handle);
 int32_t mag_input_destroy(uint64_t handle);
+int32_t mag_input_shared_native_actions(uint64_t,const uint32_t*,uint32_t count);
 int32_t mag_input_configure(uint64_t,const MagInputBinding*,uint32_t);
 /* capture bits: focus=1,supported=2,mouse=4,controller=8; source: keyboard0,mouse1,controller2. */
 int32_t mag_input_capture(uint64_t,uint32_t flags,uint64_t* generation);

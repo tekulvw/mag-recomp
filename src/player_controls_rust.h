@@ -1,6 +1,8 @@
 #pragma once
 #include "player_controls.h"
+#include <span>
 namespace mag {
+void mag_controls_set_shared_native_actions(std::span<const ActionId>);
 // Portable semantics only; the private adapter translates native event/cache words.
 enum class ControlPhase : uint32_t { Idle, ReleasedTap, Down, SecondDown, Pressed, SecondPressed, Blocked, Refocus };
 enum ControlEvent : uint32_t {
