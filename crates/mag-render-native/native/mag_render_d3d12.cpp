@@ -2,6 +2,7 @@
  * never creates a renderer device, window, swapchain or replacement queue. */
 extern "C" {
 #include "mag_render_native_internal.h"
+#include "mag_render_scene_validate.h"
 }
 #include "mag_render_d3d12_limits.h"
 #include "mag_render_dxc.h"
@@ -19,6 +20,7 @@ extern "C" {
 #include <objbase.h>
 #include <string>
 #include <utility>
+#include <vector>
 #include <windows.h>
 
 namespace {
@@ -71,7 +73,14 @@ struct Buffer {
 };
 struct Pipeline {
   uint64_t id = 0;
-  bool graphics = false;
+  bool graphics = false,scene=false;
+  uint32_t scene_model=0;
+  mag_native_scene_graphics_desc scene_desc={};
+  std::vector<mag_native_scene_buffer_layout> scene_buffers;
+  std::vector<mag_native_scene_texture_layout> scene_textures;
+  std::array<uint32_t,2> scene_resource_count={},scene_resource_root={},scene_sampler_mask={},scene_sampler_index={};
+  std::array<std::array<uint32_t,16>,2> scene_sampler_root={};
+  uint32_t scene_heap_root=UINT32_MAX;
   Ref<ID3D12RootSignature> root;
   Ref<ID3D12PipelineState> gpu;
   uint32_t count = 0;
@@ -84,10 +93,17 @@ struct Attachment {
   Resource color, depth;
   std::shared_ptr<ImageReadback> readback;
 };
+struct SceneImage {Resource gpu,upload;DXGI_FORMAT format=DXGI_FORMAT_UNKNOWN;uint64_t pitch=0;
+    D3D12_RESOURCE_STATES state=D3D12_RESOURCE_STATE_COMMON;};
 struct Slot {
   Ref<ID3D12CommandAllocator> allocator;
   Ref<ID3D12GraphicsCommandList> list;
-  Ref<ID3D12DescriptorHeap> descriptors, rtv, dsv;
+  Ref<ID3D12DescriptorHeap> descriptors, rtv, dsv,samplers;
+  uint32_t descriptor_capacity=HeapDescriptors;
+  std::vector<SceneImage> scene_images;
+  std::vector<std::shared_ptr<Pipeline>> scene_programs;
+  Resource sampler_indices;
+  std::shared_ptr<ImageReadback> scene_readback;
   bool occupied = false;
   uint64_t fence = 0;
   mag_native_ticket ticket = {};
@@ -124,7 +140,7 @@ struct Context {
   std::map<uint64_t, std::shared_ptr<Pipeline>> pipelines;
   std::array<Slot, 2> slots;
   Read read;
-  UINT descriptor_step = 0, rtv_step = 0, dsv_step = 0;
+  UINT descriptor_step = 0, rtv_step = 0, dsv_step = 0,sampler_step=0;
 };
 struct Bound {
   std::shared_ptr<Buffer> buffer;
@@ -212,6 +228,7 @@ static void clear_slot(Slot &slot) {
     p.reset();
   for (auto &t : slot.targets)
     t = Attachment{};
+  slot.scene_images.clear();slot.scene_programs.clear();slot.sampler_indices={};slot.scene_readback.reset();
   slot.writes = {};
   slot.resources = slot.pipelines = slot.attachments = 0;
   slot.occupied = false;
@@ -1277,22 +1294,9 @@ static int buffer_read(void *opaque, mag_native_buffer ref, uint64_t offset,
   clear_read(c);
   return MAG_NATIVE_OK;
 }
-static const mag_native_ops operations = {caps,
-                                          buffer_create,
-                                          buffer_release,
-                                          buffer_read,
-                                          pipeline_create,
-                                          pipeline_release,
-                                          submit,
-                                          poll,
-                                          close,
-                                          graphics_create,
-                                          submit_batch,
-                                          nullptr,
-                                          nullptr,
-                                          nullptr,
-                                          nullptr,
-                                          nullptr , nullptr, nullptr};
+#include "mag_render_d3d12_scene.inc"
+static const mag_native_ops operations={caps,buffer_create,buffer_release,buffer_read,pipeline_create,pipeline_release,
+ submit,poll,close,graphics_create,submit_batch,scene_graphics_create,submit_scene,nullptr,nullptr,nullptr,nullptr,scene_graphics_create_v2};
 static int compiler_path(std::string &out) {
   DWORD count = GetEnvironmentVariableW(L"PS3RECOMP_DXC_LIBRARY", nullptr, 0);
   if (!count)
@@ -1409,6 +1413,7 @@ extern "C" int mag_native_d3d12_create(const MagRenderHostOwner *owner,
       destroy(c);
       return status;
     }
+    c->sampler_step=c->device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER);
     c->descriptor_step = c->device->GetDescriptorHandleIncrementSize(
         D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
     c->rtv_step = c->device->GetDescriptorHandleIncrementSize(

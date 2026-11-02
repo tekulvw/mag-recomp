@@ -37,15 +37,20 @@ def check(args):
     args.output_dir.mkdir(parents=True, exist_ok=True)
     fixtures = [("limits", [FIXTURES / "test_d3d12_limits.cpp"])]
     if windows:
+        # Compile the real shared C admission separately, rather than apply a
+        # C++ language flag to C input in the strict clang-cl build.
+        validator = args.output_dir / "scene_validate.obj"
+        run([compiler,"/nologo","/std:c17","/W4","/WX","/c",NATIVE / "mag_render_scene_validate.c",f"/Fo{validator}"])
         fixtures.append(("owner_contract", [FIXTURES / "test_d3d12_owner_contract.cpp",
-                                           NATIVE / "mag_render_d3d12.cpp", NATIVE / "mag_render_dxc.cpp"]))
+                                           NATIVE / "mag_render_d3d12.cpp", NATIVE / "mag_render_dxc.cpp",validator]))
         fixtures.append(("draw_preflight", [FIXTURES / "test_d3d12_draw_preflight.cpp",
-                                           NATIVE / "mag_render_dxc.cpp"]))
+                                           NATIVE / "mag_render_dxc.cpp",validator]))
+        fixtures.append(("scene_preflight", [FIXTURES / "test_d3d12_scene_preflight.cpp",NATIVE / "mag_render_dxc.cpp",validator]))
     results = {}
     sources = {Path(__file__).resolve(), *(NATIVE / name for name in (
         "mag_render_d3d12_limits.h", "mag_render_batch.h", "mag_render_native.h", "mag_render_host_owner.h"))}
     if windows:
-        sources.update(NATIVE / name for name in ("mag_render_native_internal.h", "mag_render_dxc.h"))
+        sources.update(NATIVE / name for name in ("mag_render_native_internal.h", "mag_render_dxc.h", "mag_render_scene.h", "mag_render_scene_validate.h", "mag_render_scene_validate.c", "mag_render_d3d12_scene.inc", "mag_render_host_image.h", "mag_render_host_frame.h"))
     for name, inputs in fixtures:
         binary = args.output_dir / (name + (".exe" if windows else ""))
         if windows:
@@ -57,7 +62,7 @@ def check(args):
             command = [compiler, "-std=c++17", "-Wall", "-Wextra", "-Werror", *inputs, "-o", binary]
         run(command)
         results[name] = {"status": "passed", "output": run([binary])}
-        sources.update(inputs)
+        sources.update(path for path in inputs if path.suffix != ".obj")
     return {"schema_version": 1, "host": sys.platform, "compiler": compiler,
             "compiler_version": run([compiler, "--version"]),
             "checks": results, "gpu_execution": "pending",
