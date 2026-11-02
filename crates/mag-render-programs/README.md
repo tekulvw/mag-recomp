@@ -31,13 +31,13 @@ does not invent them. FP b1 contains at least one physical inline-constant slot
 plus the alpha/window-position tail, even for zero logical inline constants.
 
 Fragment texture/sampler arrays are normalized into explicit tN/sN declarations
-for each ISA unit. Vertex textures use logical t0..3/s0..3. The next native
-lowering must use binding model1: per-stage independent buffer/texture/sampler
+for each ISA unit. Vertex textures use logical t0..3/s0..3. The optional native
+lowering uses binding model1: per-stage independent buffer/texture/sampler
 namespaces, Vulkan stage sets0/1 with bN/t16+N/s32+N; Metal logical indices remain
 unchanged. D3D uniforms are bN (future storage buffers use t32+N), textures tN and
 samplers sN. This HLSL layer alone is not a native pipeline or material-parity
 claim. Complete program/draw controls, texture ownership, actual resources and
-native target lowering remain required.
+native submission remain required.
 
 Bounded checks:
 
@@ -51,3 +51,32 @@ The last check requires glslangValidator and spirv-val and compiles real emitted
 array/current-attribute vertex programs and a textured alpha-tested fragment
 program. It uses temporary synthetic files and no GPU. It does not establish
 pixel correctness, game rendering, original-work removal or performance.
+
+The default-off `native-compiler` feature compiles owned HLSL in-process through
+glslang, validates the imported SPIR-V with Naga30.0.1, then emits native Metal
+source and Vulkan SPIR-V. Original HLSL with explicit stage spaces is retained
+for the D3D compiler. No subprocess compiler is used by this runtime path.
+CMake discovers the installed glslang package and exports its actual transitive
+link dependencies. `CMAKE_PREFIX_PATH` can select an isolated installation;
+cross-compilation is refused until an explicit target toolchain is supported.
+CI builds glslang16.6.0 and its exact upstream SPIRV-Tools/Header pins on all
+three platforms. This feature adds compiler libraries, not an SDK dependency.
+
+Varyings receive the same explicit locations in both stages, regardless of
+which declarations an optimizer removes. Resource reflection enforces the
+emitter's exact uniform extent and model1 stage/resource namespaces. Shader
+import and export preserve canonical D3D clip coordinates: the existing native
+Vulkan scene's negative-height viewport supplies the single Y flip. Adding
+another shader Y flip would be incorrect. The native D3D/Metal viewport
+contracts remain unchanged.
+
+```
+cargo test --manifest-path crates/mag-render-programs/Cargo.toml --features native-compiler --locked --offline
+cargo test --manifest-path crates/mag-render-programs/Cargo.toml --features native-compiler --locked --offline --test native_compile -- --ignored
+```
+
+The in-process tests cover actual vertex and textured fragment translation,
+resource reflection, uniform sizes, rejected invalid input, and coordinate
+conversion. The ignored check independently validates generated Vulkan output
+with spirv-val. Metal source emission is not Metal platform compilation or
+pixel acceptance; the latter still requires the actual rendering integration.

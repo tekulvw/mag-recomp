@@ -374,3 +374,6 @@ pub fn fragment(program: FragmentProgram<'_>) -> Result<HlslProgram, ProgramErro
         constant_buffer_bytes: (actual.max(1) + 1) * 16,
     })
 }
+
+#[cfg(feature = "native-compiler")]
+pub mod native_compile;
