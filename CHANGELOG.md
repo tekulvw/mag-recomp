@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.4.0](https://github.com/tekulvw/mag-recomp/compare/v0.3.0...v0.4.0) (2026-11-02)
+
+
+### Features
+
+* add keyboard mouse and controller binding settings ([#19](https://github.com/tekulvw/mag-recomp/issues/19)) ([1b13665](https://github.com/tekulvw/mag-recomp/commit/1b136651ade047961e8d5bc7358336c61cef2c87))
+* add portable Rust input engine and macOS capture ([#16](https://github.com/tekulvw/mag-recomp/issues/16)) ([421c220](https://github.com/tekulvw/mag-recomp/commit/421c220739a78d38a8a3558ba8a9a0882e198fbe))
+* support shared native button bindings across menu contexts ([#20](https://github.com/tekulvw/mag-recomp/issues/20)) ([66e9204](https://github.com/tekulvw/mag-recomp/commit/66e92041392a2776ab23b5770b5979cfa39b0ecf))
+
 ## [0.3.0](https://github.com/tekulvw/mag-recomp/compare/v0.2.0...v0.3.0) (2026-11-01)
 
 
