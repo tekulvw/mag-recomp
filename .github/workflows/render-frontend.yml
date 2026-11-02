@@ -2,9 +2,15 @@ name: Rust rendering frontend
 
 on:
   push:
-    branches: [main, codex/render-frontend-integration]
+    branches: [main]
   pull_request:
   workflow_dispatch:
+
+# The integration branch has a draft PR: run it once via pull_request, not
+# once per push plus once per PR update. Cancel superseded source checks.
+concurrency:
+  group: render-frontend-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
 
 # Synthetic checks only. This workflow cannot publish releases or installers.
 permissions:
