@@ -215,3 +215,158 @@ fn unchanged_upload_identity_is_shared_and_empty_batch_cannot_pass() {
         Err(BatchError::Empty)
     ));
 }
+
+#[test]
+fn draw_consumes_produced_vertex_and_index_values_and_counts_attachment_bytes() {
+    struct Graphics(Catalog);
+    impl PipelineCatalog for Graphics {
+        fn owner_generation(&self) -> u64 {
+            self.0.owner_generation()
+        }
+        fn bindings(&self, id: u64) -> Option<&[BindingRequirement]> {
+            self.0.bindings(id)
+        }
+        fn graphics(&self, id: u64) -> Option<GraphicsRequirement> {
+            if id == 9 {
+                Some(GraphicsRequirement { vertex_stride: 16 })
+            } else {
+                None
+            }
+        }
+    }
+    let mut b = BatchBuilder::new(
+        1,
+        BatchLimits {
+            max_commands: 16,
+            max_gpu_buffers: 4,
+            max_gpu_bytes: 1024,
+            max_uploads: 4,
+        },
+    )
+    .unwrap();
+    let input = b.upload(cpu()).unwrap();
+    let vertices = b.allocate(32).unwrap();
+    let indices = b.allocate(32).unwrap();
+    let v = b
+        .dispatch(7, command(ReadSource::Upload(input), vertices), [1, 1, 1])
+        .unwrap()[0];
+    let i = b
+        .dispatch(7, command(ReadSource::Upload(input), indices), [1, 1, 1])
+        .unwrap()[0];
+    b.draw_indexed(IndexedDraw {
+        pipeline: 9,
+        vertices: v,
+        indices: i,
+        vertex_range: range(),
+        index_range: ByteRange {
+            offset: 0,
+            length: 12,
+        },
+        index_count: 3,
+        target: DrawTarget {
+            width: 8,
+            height: 8,
+            clear_color: [0.0; 4],
+            clear_depth: 1.0,
+        },
+    })
+    .unwrap();
+    let after = b.allocate(16).unwrap();
+    assert_eq!(
+        b.dispatch(7, command(ReadSource::Upload(input), after), [1, 1, 1]),
+        Err(BatchError::InvalidOrder)
+    );
+    let p = b.prepare(&Graphics(Catalog::new(1))).unwrap();
+    assert_eq!(p.draw().unwrap().index_count, 3);
+    assert_eq!(
+        p.dependencies().iter().map(|d| d.usage).collect::<Vec<_>>(),
+        vec![DependencyUsage::VertexRead, DependencyUsage::IndexRead]
+    );
+    let (commands, leases) = p.into_submission();
+    assert_eq!(commands.draw().unwrap().pipeline, 9);
+    assert_eq!(leases.len(), 1);
+}
+
+#[test]
+fn draw_validation_rejects_ranges_aliases_nonfinite_clear_and_capacity_atomically() {
+    let mut b = BatchBuilder::new(
+        1,
+        BatchLimits {
+            max_commands: 8,
+            max_gpu_buffers: 4,
+            max_gpu_bytes: 128,
+            max_uploads: 4,
+        },
+    )
+    .unwrap();
+    let upload = b.upload(cpu()).unwrap();
+    let a = b.allocate(32).unwrap();
+    let z = b.allocate(32).unwrap();
+    let v = b
+        .dispatch(7, command(ReadSource::Upload(upload), a), [1, 1, 1])
+        .unwrap()[0];
+    let i = b
+        .dispatch(7, command(ReadSource::Upload(upload), z), [1, 1, 1])
+        .unwrap()[0];
+    let mut draw = IndexedDraw {
+        pipeline: 9,
+        vertices: v,
+        indices: i,
+        vertex_range: range(),
+        index_range: ByteRange {
+            offset: 0,
+            length: 12,
+        },
+        index_count: 3,
+        target: DrawTarget {
+            width: 8,
+            height: 8,
+            clear_color: [0.0; 4],
+            clear_depth: 1.0,
+        },
+    };
+    assert_eq!(b.draw_indexed(draw), Err(BatchError::Capacity));
+    draw.target.width = 1;
+    draw.target.height = 1;
+    draw.target.clear_depth = f32::NAN;
+    assert_eq!(b.draw_indexed(draw), Err(BatchError::InvalidRange));
+    draw.target.clear_depth = 1.0;
+    draw.indices = v;
+    assert_eq!(b.draw_indexed(draw), Err(BatchError::Alias));
+    draw.indices = i;
+    draw.index_range.offset = u64::MAX;
+    assert_eq!(b.draw_indexed(draw), Err(BatchError::InvalidRange));
+    draw.index_range.offset = 0;
+    draw.index_count = 9;
+    assert_eq!(b.draw_indexed(draw), Err(BatchError::InvalidRange));
+    draw.index_count = 3;
+    b.draw_indexed(draw).unwrap();
+    // Failed admissions inserted no dependencies and did not seal the builder.
+    assert!(matches!(
+        b.prepare(&Catalog::new(1)),
+        Err(BatchError::UnknownPipeline)
+    ));
+}
+
+#[test]
+fn moved_uploads_are_authenticated_by_namespace_and_content_identity() {
+    let mut b = builder();
+    let original = cpu();
+    let upload = b.upload(original.clone()).unwrap();
+    let buffer = b.allocate(32).unwrap();
+    b.dispatch(7, command(ReadSource::Upload(upload), buffer), [1, 1, 1])
+        .unwrap();
+    let (commands, leases) = b.prepare(&Catalog::new(1)).unwrap().into_submission();
+    assert!(commands.validate_uploads(&leases).is_ok());
+    // Different stores deliberately collide in slot/generation/content version.
+    let other = cpu();
+    assert_eq!(other.version(), original.version());
+    assert_eq!(
+        commands.validate_uploads(&[other]),
+        Err(BatchError::InvalidBindings)
+    );
+    assert_eq!(
+        commands.validate_uploads(&[]),
+        Err(BatchError::InvalidBindings)
+    );
+}
