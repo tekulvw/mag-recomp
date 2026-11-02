@@ -5,7 +5,7 @@ add_library(mag_render_native_impl STATIC native/mag_render_native.c native/mag_
 target_include_directories(mag_render_native_impl PUBLIC native)
 target_compile_features(mag_render_native_impl PRIVATE c_std_11 cxx_std_17)
 if(MSVC)
-    target_compile_options(mag_render_native_impl PRIVATE /W4 /WX)
+    target_compile_options(mag_render_native_impl PRIVATE /W4 /WX "$<$<COMPILE_LANGUAGE:CXX>:/EHsc>")
 else()
     target_compile_options(mag_render_native_impl PRIVATE -Wall -Wextra -Werror)
 endif()
@@ -25,7 +25,17 @@ elseif(MAG_RENDER_NATIVE_BACKEND STREQUAL "vulkan")
     target_include_directories(mag_render_native_impl PRIVATE ${VULKAN_HEADERS_INCLUDE_DIRS})
     target_compile_options(mag_render_native_impl PRIVATE ${VULKAN_HEADERS_CFLAGS_OTHER})
 elseif(MAG_RENDER_NATIVE_BACKEND STREQUAL "d3d12")
-    message(FATAL_ERROR "D3D12 adapter is pending its owned implementation")
+    if(NOT WIN32)
+        message(FATAL_ERROR "D3D12 requires Windows")
+    endif()
+    # The DXC library itself is loaded from an explicit absolute runtime path.
+    # Only the pinned compiler API header is a build dependency; no dxcompiler
+    # or d3d12 import library/device discovery is added to the frontend.
+    find_path(MAG_RENDER_DXC_INCLUDE_DIR NAMES dxcapi.h
+        HINTS ENV MAG_RENDER_DXC_INCLUDE_DIR REQUIRED)
+    target_sources(mag_render_native_impl PRIVATE native/mag_render_d3d12.cpp native/mag_render_dxc.cpp)
+    target_compile_definitions(mag_render_native_impl PRIVATE MAG_RENDER_NATIVE_D3D12)
+    target_include_directories(mag_render_native_impl PRIVATE ${MAG_RENDER_DXC_INCLUDE_DIR})
 elseif(NOT MAG_RENDER_NATIVE_BACKEND STREQUAL "none")
     message(FATAL_ERROR "Unknown native backend")
 endif()

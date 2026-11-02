@@ -32,7 +32,8 @@ fn main() {
     }
     let build = output.join("build");
     let libraries = output.join("libraries");
-    run(Command::new("cmake")
+    let mut configure = Command::new("cmake");
+    configure
         .arg("-S")
         .arg(&root)
         .arg("-B")
@@ -46,7 +47,16 @@ fn main() {
             "-DCMAKE_ARCHIVE_OUTPUT_DIRECTORY_RELEASE={}",
             libraries.display()
         ))
-        .arg("-DCMAKE_BUILD_TYPE=Release"));
+        .arg("-DCMAKE_BUILD_TYPE=Release");
+    if backend == "d3d12"
+        && let Some(include) = env::var_os("MAG_RENDER_DXC_INCLUDE_DIR")
+    {
+        configure.arg(format!(
+            "-DMAG_RENDER_DXC_INCLUDE_DIR={}",
+            PathBuf::from(include).display()
+        ));
+    }
+    run(&mut configure);
     run(Command::new("cmake").arg("--build").arg(&build).args([
         "--config",
         "Release",
@@ -64,7 +74,10 @@ fn main() {
     } else if os == "linux" {
         println!("cargo:rustc-link-lib=stdc++");
         println!("cargo:rustc-link-lib=m");
+    } else if os == "windows" && env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("gnu") {
+        println!("cargo:rustc-link-lib=stdc++");
     }
+    println!("cargo:rerun-if-env-changed=MAG_RENDER_DXC_INCLUDE_DIR");
     println!("cargo:rerun-if-changed=native");
     println!("cargo:rerun-if-changed=CMakeLists.txt");
 }
