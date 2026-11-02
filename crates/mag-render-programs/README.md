@@ -80,3 +80,26 @@ resource reflection, uniform sizes, rejected invalid input, and coordinate
 conversion. The ignored check independently validates generated Vulkan output
 with spirv-val. Metal source emission is not Metal platform compilation or
 pixel acceptance; the latter still requires the actual rendering integration.
+
+Source texture-coordinate controls are supported through
+`fragment_with_texcoords`: bit0 supplies the source 2-D z/w behavior before
+swizzle/modifiers; bit4 requests centroid interpolation. Other control bits
+are rejected. With perspective correction, the resulting w is explicitly1.
+The coordinate rule is independently authored from the source register facts
+and the hardware observations documented in [RPCS3's fragment input handling](https://github.com/RPCS3/rpcs3/blob/master/rpcs3/Emu/RSX/Program/FragmentProgramDecompiler.cpp); no RPCS3 code is copied.
+
+All native outputs use reciprocal clipW at fragment SV_Position.w, including
+D3D HLSL, following [Microsoft's GLSL porting reference](https://learn.microsoft.com/en-us/windows/uwp/gaming/port-the-glsl).
+This explicitly supersedes the retained emitter's stale FXC comment. Naga30.0.1
+currently overwrites explicit SPIR-V Centroid when applying its default
+Perspective/Center interpolation (`front/interpolator.rs`). The importer bridge
+restores sampling from actual SPIR-V decorations before IR validation. A
+regression verifies emitted Metal centroid interpolation and independently
+validates the controlled fragment's emitted Vulkan module.
+
+`vertex_constant_reads` reflects conservative constant reads from the actual
+controlled emitter body, excluding the uniform declaration. Static accesses
+return exact row indices; indexed accesses require the full bank. Callers may
+zero physical padding for statically unused unknown rows while keeping those
+rows unknown in persistent material state. This avoids inventing a reset or
+requiring unwritten rows that the program cannot read.

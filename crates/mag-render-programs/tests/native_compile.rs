@@ -103,6 +103,10 @@ fn generated_vulkan_module_passes_independent_validator() {
         time::{SystemTime, UNIX_EPOCH},
     };
     let programs = [
+        (
+            "controlled",
+            lower(&controlled_fragment_program(), Stage::Fragment).unwrap(),
+        ),
         ("vertex", lower(&vertex_program(), Stage::Vertex).unwrap()),
         (
             "fragment",
@@ -140,4 +144,44 @@ fn generated_vulkan_module_passes_independent_validator() {
         );
     }
     fs::remove_dir_all(root).unwrap();
+}
+
+fn controlled_fragment_program() -> HlslProgram {
+    let words: [u32; 4] = [
+        (1 << 24) | (15 << 9) | (4 << 13) | 1,
+        1 | 0x1c800 | (7 << 18),
+        0x1c800,
+        0x1c800 | (1 << 31),
+    ];
+    let bytes: Vec<_> = words
+        .iter()
+        .flat_map(|w| w.rotate_left(16).to_be_bytes())
+        .collect();
+    let mut controls = [0; 10];
+    controls[0] = 0x11;
+    fragment_with_texcoords(
+        FragmentProgram {
+            bytes: &bytes,
+            shader_control: 0x40,
+            cube_mask: 0,
+            volume_mask: 0,
+            shadow: [ShadowTexture::default(); 16],
+            gamma: [0; 16],
+            expand: [0; 16],
+            alpha_function: None,
+            srgb_output: false,
+            sample_grid: [1, 1],
+            unnormalized_mask: 0,
+            texture_dimensions: [[1, 1]; 16],
+        },
+        controls,
+    )
+    .unwrap()
+}
+#[test]
+fn centroid_and_2d_controls_lower_to_actual_native_programs() {
+    let p = lower(&controlled_fragment_program(), Stage::Fragment).unwrap();
+    assert!(p.msl.contains("centroid_perspective"), "{}", p.msl);
+    assert!(p.hlsl.contains("centroid float4 tc0"));
+    assert!(p.hlsl.starts_with("#define RSX_FRAGCOORD_W_IS_RCP 1\n"));
 }

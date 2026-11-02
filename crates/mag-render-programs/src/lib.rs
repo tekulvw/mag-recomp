@@ -161,6 +161,42 @@ pub fn vertex(program: VertexProgram<'_>) -> Result<HlslProgram, ProgramError> {
         constant_buffer_bytes: (514 + if current != 0 { 16 } else { 0 }) * 16,
     })
 }
+/// Conservative reads of the actual controlled emitter's VP constant bank.
+/// Indexed addressing requires all rows; static reads need only listed rows.
+#[derive(Debug, PartialEq, Eq)]
+pub struct VertexConstantReads {
+    pub rows: Vec<u16>,
+    pub indexed: bool,
+}
+pub fn vertex_constant_reads(program: &HlslProgram) -> Result<VertexConstantReads, ProgramError> {
+    let start = program
+        .source
+        .find("VSOutput main(")
+        .ok_or(ProgramError::Invalid)?;
+    let mut body = &program.source[start..];
+    let mut rows = std::collections::BTreeSet::new();
+    let mut indexed = false;
+    while let Some(at) = body.find("vp_c[") {
+        body = &body[at + 5..];
+        if body.starts_with('(') {
+            indexed = true;
+        } else {
+            let end = body.find(']').ok_or(ProgramError::Compiler)?;
+            let row = body[..end]
+                .parse::<u16>()
+                .map_err(|_| ProgramError::Compiler)?;
+            if row >= 512 {
+                return Err(ProgramError::Compiler);
+            }
+            rows.insert(row);
+        }
+    }
+    Ok(VertexConstantReads {
+        rows: rows.into_iter().collect(),
+        indexed,
+    })
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ShadowTexture {
@@ -208,10 +244,55 @@ unsafe extern "C" {
         cube: u32,
     ) -> i32;
 }
+fn texture_coordinate_controls(
+    mut source: String,
+    controls: [u32; 10],
+) -> Result<String, ProgramError> {
+    let mut initializers = String::new();
+    for (unit, control) in controls.into_iter().enumerate() {
+        if control & 0x10 != 0 {
+            let declaration = format!("float4 tc{unit}:TEXCOORD{unit}");
+            source = source.replace(&declaration, &format!("centroid {declaration}"));
+        }
+        let input = format!("input.tc{unit}");
+        if control & 1 != 0 && source.contains(&input) {
+            // Apply source z/w before swizzle, abs and negate. Perspective
+            // correction has an exact resulting w=1, avoiding rcp(w)*w error.
+            source = source.replace(
+                &format!("({input} * _rsx_inv_w(input.position))"),
+                &format!("float4({input}.xy * _rsx_inv_w(input.position), 0.0, 1.0)"),
+            );
+            source = source.replace(&input, &format!("mrf_tc{unit}"));
+            initializers.push_str(&format!(
+                "    float4 mrf_tc{unit} = float4({input}.xy, 0.0, mrf_clip_w(input.position));\n"
+            ));
+        }
+    }
+    if !initializers.is_empty() {
+        let main = source
+            .find("main(PSInput input)")
+            .ok_or(ProgramError::Compiler)?;
+        let at = main + source[main..].find('{').ok_or(ProgramError::Compiler)? + 1;
+        source.insert_str(at, &format!("\n{initializers}"));
+        source.insert_str(0, "#ifdef RSX_FRAGCOORD_W_IS_RCP\n#define mrf_clip_w(p) (1.0 / (p).w)\n#else\n#define mrf_clip_w(p) ((p).w)\n#endif\n");
+    }
+    Ok(source)
+}
 fn fragment_word(bytes: &[u8]) -> u32 {
     u32::from_be_bytes(bytes[..4].try_into().expect("checked complete word")).rotate_left(16)
 }
 pub fn fragment(program: FragmentProgram<'_>) -> Result<HlslProgram, ProgramError> {
+    fragment_with_texcoords(program, [0; 10])
+}
+/// Source TEX_COORD_CONTROL: bit0 supplies 2-D z/w, bit4 selects centroid.
+/// Remaining bits are unsupported. The source caller supplies all ten values.
+pub fn fragment_with_texcoords(
+    program: FragmentProgram<'_>,
+    controls: [u32; 10],
+) -> Result<HlslProgram, ProgramError> {
+    if controls.iter().any(|control| control & !0x11 != 0) {
+        return Err(ProgramError::Unsupported);
+    }
     if program.bytes.is_empty()
         || program.bytes.len() > 1024 * 1024
         || !program.bytes.len().is_multiple_of(16)
@@ -303,7 +384,12 @@ pub fn fragment(program: FragmentProgram<'_>) -> Result<HlslProgram, ProgramErro
         return Err(ProgramError::Compiler);
     }
     // Inspect unsupported emitter paths before any shader can be admitted.
-    output(&buffer)?;
+    let source = texture_coordinate_controls(output(&buffer)?, controls)?;
+    if source.len() >= buffer.len() {
+        return Err(ProgramError::Capacity);
+    }
+    buffer[..source.len()].copy_from_slice(source.as_bytes());
+    buffer[source.len()] = 0;
     // SAFETY: every helper receives this same bounded, NUL-terminated output;
     // inputs have been validated against each helper's supported domain above.
     unsafe {

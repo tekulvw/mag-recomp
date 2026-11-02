@@ -91,6 +91,12 @@ fn canonical_source(source: &str, stage: Stage) -> Result<String, String> {
             fields = fields.replace(&before, &after);
         }
     }
+    for location in 0..16 {
+        fields = fields.replace(
+            &format!("centroid [[vk::location({location})]] float4"),
+            &format!("[[vk::location({location})]] centroid float4"),
+        );
+    }
     let mut result = format!("{}{}{}", &source[..start], fields, &source[end..]);
     for class in ['b', 't', 's'] {
         for slot in 0..16 {
@@ -123,6 +129,61 @@ fn collect_locations(
     } else if let TypeInner::Struct { members, .. } = &module.types[ty].inner {
         for member in members {
             collect_locations(module, member.ty, &member.binding, locations)?;
+        }
+    }
+    Ok(())
+}
+// Naga30.0.1's SPIR-V importer applies default Perspective/Center together
+// when interpolation is absent, replacing an explicit Centroid decoration.
+// Preserve the actual SPIR-V sampling contract before validating/writing IR.
+fn restore_centroid(words: &[u32], module: &mut naga::Module) -> Result<(), String> {
+    if module.entry_points[0].stage != naga::ShaderStage::Fragment {
+        return Ok(());
+    }
+    let mut locations = std::collections::BTreeMap::new();
+    let mut centroid = std::collections::BTreeSet::new();
+    let mut cursor = 5;
+    while cursor < words.len() {
+        let count = (words[cursor] >> 16) as usize;
+        let instruction = words
+            .get(cursor..cursor.checked_add(count).ok_or("SPIR-V extent")?)
+            .ok_or("SPIR-V extent")?;
+        if count == 0 {
+            return Err("SPIR-V empty instruction".into());
+        }
+        if instruction[0] & 65535 == 71 && count >= 3 {
+            // OpDecorate
+            match instruction[2] {
+                16 => {
+                    centroid.insert(instruction[1]);
+                } // Centroid
+                30 if count == 4 => {
+                    locations.insert(instruction[1], instruction[3]);
+                } // Location
+                _ => {}
+            }
+        }
+        cursor += count;
+    }
+    for id in centroid {
+        let location = locations
+            .get(&id)
+            .ok_or("centroid requires explicit location")?;
+        let mut found = false;
+        for argument in &mut module.entry_points[0].function.arguments {
+            if let Some(Binding::Location {
+                location: actual,
+                sampling,
+                ..
+            }) = &mut argument.binding
+                && actual == location
+            {
+                *sampling = Some(naga::Sampling::Centroid);
+                found = true;
+            }
+        }
+        if !found {
+            return Err("unmapped centroid input".into());
         }
     }
     Ok(())
@@ -169,7 +230,7 @@ pub fn lower(program: &HlslProgram, stage: Stage) -> Result<NativeProgram, Strin
         adjust_coordinate_space: false,
         ..Default::default()
     };
-    let module = naga::front::spv::parse_u8_slice(&bytes, &options)
+    let mut module = naga::front::spv::parse_u8_slice(&bytes, &options)
         .map_err(|e| format!("SPIR-V import: {e}"))?;
     if module.entry_points.len() != 1
         || module.entry_points[0].stage != stage.naga()
@@ -177,6 +238,7 @@ pub fn lower(program: &HlslProgram, stage: Stage) -> Result<NativeProgram, Strin
     {
         return Err("unexpected entry points or specialization constants".into());
     }
+    restore_centroid(&words, &mut module)?;
     let info = naga::valid::Validator::new(
         naga::valid::ValidationFlags::all(),
         naga::valid::Capabilities::empty(),
@@ -299,7 +361,16 @@ pub fn lower(program: &HlslProgram, stage: Stage) -> Result<NativeProgram, Strin
         stage,
         msl,
         msl_entry,
-        hlsl: remove_locations(&source),
+        // D3D pixel SV_Position.w is reciprocal clip W too. The retained
+        // emitter's old FXC comment is not the native frontend contract.
+        hlsl: if stage == Stage::Fragment {
+            format!(
+                "#define RSX_FRAGCOORD_W_IS_RCP 1\n{}",
+                remove_locations(&source)
+            )
+        } else {
+            remove_locations(&source)
+        },
         hlsl_entry: "main".into(),
         spirv_entry: entry.name.clone(),
         spirv,
