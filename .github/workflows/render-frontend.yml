@@ -46,3 +46,29 @@ jobs:
         run: cargo test --locked --offline
       - name: Real static library C++ linkage and rebuild
         run: python -m unittest tests.test_rust_render_build -v
+      - name: Fetch locked shader translator dependencies
+        run: cargo fetch --manifest-path crates/mag-render-shaders/Cargo.toml --locked
+      - name: Shader translator format
+        run: cargo fmt --manifest-path crates/mag-render-shaders/Cargo.toml --check
+      - name: Shader translator Clippy
+        run: cargo clippy --manifest-path crates/mag-render-shaders/Cargo.toml --all-targets --locked --offline -- -D warnings
+      - name: Shader translator tests and output reflection
+        run: cargo test --manifest-path crates/mag-render-shaders/Cargo.toml --locked --offline
+      - name: Build shader compiler CLI
+        run: cargo build --manifest-path crates/mag-render-shaders/Cargo.toml --locked --offline
+      - name: Independent shader validators
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends spirv-tools glslang-tools
+      - name: Validate emitted SPIR-V and HLSL with independent compilers
+        if: runner.os == 'Linux'
+        run: python crates/mag-render-shaders/tests/test_generated_validation.py -v
+      - name: Generate portable shader artifacts and validation report
+        run: python tools/check_render_frontend_shaders.py --output-dir build/shader-translation
+      - name: Retain synthetic shader artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: render-frontend-shaders-${{ runner.os }}
+          path: build/shader-translation
+          if-no-files-found: error
