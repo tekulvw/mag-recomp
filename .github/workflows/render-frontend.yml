@@ -216,28 +216,40 @@ jobs:
           arch: x64
       - name: Build tools
         run: python -m pip install cmake ninja
+      - name: Reuse pinned compiler libraries
+        id: program-compiler-cache
+        uses: actions/cache@v4
+        with:
+          path: build/program-compiler-install
+          key: render-program-compiler-v1-${{ runner.os }}-${{ runner.arch }}-e1b562a8bed273a02f30b59b66a5d499793cede5
       # glslang 16.6.0 and its exact known_good.json SPIRV-Tools/Header pins.
       # Build libraries only: no graphics device, client or release publication.
       - uses: actions/checkout@v4
+        if: steps.program-compiler-cache.outputs.cache-hit != 'true'
         with:
           repository: KhronosGroup/glslang
           ref: e1b562a8bed273a02f30b59b66a5d499793cede5
           path: build/program-compiler-source
       - uses: actions/checkout@v4
+        if: steps.program-compiler-cache.outputs.cache-hit != 'true'
         with:
           repository: KhronosGroup/SPIRV-Tools
           ref: ef96ed763b43b59b33b31b362f09a02b729fa1c9
           path: build/program-compiler-source/External/spirv-tools
       - uses: actions/checkout@v4
+        if: steps.program-compiler-cache.outputs.cache-hit != 'true'
         with:
           repository: KhronosGroup/SPIRV-Headers
           ref: 496543121ce6419f23d6fa5d7194ba66c36212d2
           path: build/program-compiler-source/External/spirv-tools/external/spirv-headers
       - name: Configure pinned compiler libraries
+        if: steps.program-compiler-cache.outputs.cache-hit != 'true'
         run: cmake -S build/program-compiler-source -B build/program-compiler-build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/build/program-compiler-install -DBUILD_SHARED_LIBS=OFF -DENABLE_PCH=OFF -DGLSLANG_TESTS=OFF -DENABLE_GLSLANG_BINARIES=OFF -DSPIRV_SKIP_TESTS=ON -DSPIRV_SKIP_EXECUTABLES=ON
       - name: Build pinned compiler libraries
+        if: steps.program-compiler-cache.outputs.cache-hit != 'true'
         run: cmake --build build/program-compiler-build --config Release --parallel 4
       - name: Install compiler into owned build directory
+        if: steps.program-compiler-cache.outputs.cache-hit != 'true'
         run: cmake --install build/program-compiler-build --config Release
       - name: Pinned Rust toolchain
         run: rustup toolchain install 1.99.0 --profile minimal --component rustfmt --component clippy
