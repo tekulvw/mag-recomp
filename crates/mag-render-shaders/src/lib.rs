@@ -1,4 +1,4 @@
-//! Deliberately bounded compute translation. Translation is not GPU execution.
+//! Bounded portable shader translation. Translation is not GPU execution.
 
 use naga::{
     AddressSpace, ArraySize, Handle, ScalarKind, ShaderStage, StorageAccess, Type, TypeInner,
@@ -7,6 +7,105 @@ use serde_json::{Value, json};
 
 pub const NAGA_VERSION: &str = "30.0.1";
 pub const METAL_SIZES_BUFFER: u8 = 30;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Stage {
+    Compute,
+    Vertex,
+    Fragment,
+}
+impl Stage {
+    fn naga(self) -> ShaderStage {
+        match self {
+            Self::Compute => ShaderStage::Compute,
+            Self::Vertex => ShaderStage::Vertex,
+            Self::Fragment => ShaderStage::Fragment,
+        }
+    }
+    fn label(self) -> &'static str {
+        match self {
+            Self::Compute => "compute",
+            Self::Vertex => "vertex",
+            Self::Fragment => "fragment",
+        }
+    }
+    fn hlsl(self) -> &'static str {
+        match self {
+            Self::Compute => "cs_6_0",
+            Self::Vertex => "vs_6_0",
+            Self::Fragment => "ps_6_0",
+        }
+    }
+}
+
+fn float4(module: &naga::Module, ty: Handle<Type>) -> bool {
+    matches!(
+        module.types[ty].inner,
+        TypeInner::Vector {
+            size: naga::VectorSize::Quad,
+            scalar: naga::Scalar {
+                kind: ScalarKind::Float,
+                width: 4
+            }
+        }
+    )
+}
+fn location_zero(binding: &Option<naga::Binding>) -> bool {
+    matches!(
+        binding,
+        Some(naga::Binding::Location {
+            location: 0,
+            blend_src: None,
+            per_primitive: false,
+            ..
+        })
+    )
+}
+// Initial draw contract is explicit: one Float32x4 vertex attribute, builtin
+// position output, no varyings/resources, one Float32x4 fragment color output.
+fn graphics_io(module: &naga::Module, stage: Stage) -> Result<(), String> {
+    if stage == Stage::Compute {
+        return Ok(());
+    }
+    let entry = &module.entry_points[0];
+    if !module.global_variables.is_empty() {
+        return Err("graphics buffers/resources require a separate binding contract".into());
+    }
+    let result = entry
+        .function
+        .result
+        .as_ref()
+        .ok_or("graphics entry requires an output")?;
+    if !float4(module, result.ty) {
+        return Err("graphics output must be float32x4".into());
+    }
+    match stage {
+        Stage::Vertex => {
+            if entry.function.arguments.len() != 1 {
+                return Err("vertex input requires exactly one location-zero float32x4".into());
+            }
+            let input = &entry.function.arguments[0];
+            if !float4(module, input.ty)
+                || !location_zero(&input.binding)
+                || !matches!(
+                    result.binding,
+                    Some(naga::Binding::BuiltIn(naga::BuiltIn::Position { .. }))
+                )
+            {
+                return Err("unsupported vertex input/output layout".into());
+            }
+        }
+        Stage::Fragment => {
+            if !entry.function.arguments.is_empty() || !location_zero(&result.binding) {
+                return Err(
+                    "fragment contract requires no inputs and one location-zero color".into(),
+                );
+            }
+        }
+        Stage::Compute => unreachable!(),
+    }
+    Ok(())
+}
 
 pub struct Compilation {
     pub manifest: Value,
@@ -100,6 +199,12 @@ fn has_runtime_array(module: &naga::Module, ty: Handle<Type>) -> bool {
 /// Compile one compute entry point with explicit group-zero buffer bindings.
 /// All writers use complete binding maps; missing mappings are errors.
 pub fn compile(source: &str) -> Result<Compilation, String> {
+    compile_stage(source, Stage::Compute)
+}
+
+/// Compile one explicitly selected stage. Graphics IO is deliberately limited
+/// to the authored offscreen scene; compute bindings retain their prior API.
+pub fn compile_stage(source: &str, stage: Stage) -> Result<Compilation, String> {
     let module =
         naga::front::wgsl::parse_str(source).map_err(|error| error.emit_to_string(source))?;
     let info = naga::valid::Validator::new(
@@ -108,19 +213,24 @@ pub fn compile(source: &str) -> Result<Compilation, String> {
     )
     .validate(&module)
     .map_err(|error| error.emit_to_string(source))?;
-    if module.entry_points.len() != 1 || module.entry_points[0].stage != ShaderStage::Compute {
-        return Err("expected exactly one compute entry point".into());
+    if module.entry_points.len() != 1 || module.entry_points[0].stage != stage.naga() {
+        return Err(format!(
+            "expected exactly one {} entry point",
+            stage.label()
+        ));
     }
+    graphics_io(&module, stage)?;
     if !module.overrides.is_empty() {
         return Err("shader overrides require an explicit specialization contract".into());
     }
     let entry = &module.entry_points[0];
-    if entry.workgroup_size.contains(&0)
-        || entry
-            .workgroup_size
-            .iter()
-            .try_fold(1u32, |size, value| size.checked_mul(*value))
-            .is_none_or(|size| size > 256)
+    if stage == Stage::Compute
+        && (entry.workgroup_size.contains(&0)
+            || entry
+                .workgroup_size
+                .iter()
+                .try_fold(1u32, |size, value| size.checked_mul(*value))
+                .is_none_or(|size| size > 256))
     {
         return Err("workgroup exceeds the portable 256-invocation contract".into());
     }
@@ -198,7 +308,7 @@ pub fn compile(source: &str) -> Result<Compilation, String> {
             },
         );
     }
-    if bindings.is_empty() {
+    if stage == Stage::Compute && bindings.is_empty() {
         return Err("compute shader has no supported buffer bindings".into());
     }
     let mut msl_options = naga::back::msl::Options {
@@ -238,7 +348,7 @@ pub fn compile(source: &str) -> Result<Compilation, String> {
         &info,
         &spv_options,
         Some(&naga::back::spv::PipelineOptions {
-            shader_stage: ShaderStage::Compute,
+            shader_stage: stage.naga(),
             entry_point: entry.name.clone(),
         }),
     )
@@ -252,14 +362,14 @@ pub fn compile(source: &str) -> Result<Compilation, String> {
     )
     .validate(&regenerated)
     .map_err(|error| format!("generated SPIR-V validation: {error}"))?;
-    let manifest = json!({
+    let mut manifest = json!({
         "schema_version": 1, "naga_version": NAGA_VERSION, "translation_only": true,
         "validation": {"input_ir": "naga", "generated_spirv_ir": "naga_reparse",
             "metal_platform_compiler": "pending", "hlsl_platform_compiler": "pending",
             "spirv_tools": "pending", "gpu_execution": "pending"},
-        "stage": "compute", "entry_point": entry.name, "workgroup_size": entry.workgroup_size,
+        "stage": stage.label(), "entry_point": entry.name, "workgroup_size": if stage == Stage::Compute { json!(entry.workgroup_size) } else { Value::Null },
         "targets": {"msl": {"version": "2.0", "entry_point": msl_entry},
-            "hlsl": {"shader_model": "cs_6_0", "entry_point": hlsl_entry},
+            "hlsl": {"shader_model": stage.hlsl(), "entry_point": hlsl_entry},
             "spirv": {"version": "1.3", "vulkan_environment": "vulkan1.1", "entry_point": entry.name}},
         "buffers": bindings,
         "metal_sizes_buffer": if metal_sizes.is_empty() { Value::Null } else { json!({
@@ -267,6 +377,15 @@ pub fn compile(source: &str) -> Result<Compilation, String> {
             "value_unit": "bound_buffer_bytes", "entries": metal_sizes,
         }) },
     });
+    if stage == Stage::Vertex {
+        manifest["vertex_stride_bytes"] = json!(16);
+        manifest["vertex_inputs"] = json!([{"location":0,"format":"float32x4","offset_bytes":0,"size_bytes":16,
+            "hlsl_semantic":"LOC","hlsl_semantic_index":0,"msl_attribute":0}]);
+        manifest["position_output"] =
+            json!({"builtin":"position","format":"float32x4","hlsl_semantic":"SV_Position"});
+    } else if stage == Stage::Fragment {
+        manifest["fragment_outputs"] = json!([{"location":0,"format":"float32x4","hlsl_semantic":"SV_Target","hlsl_semantic_index":0}]);
+    }
     Ok(Compilation {
         manifest,
         msl,

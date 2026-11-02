@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Translate synthetic compute fixtures and validate outputs with actual tools.
+"""Translate synthetic compute/graphics fixtures with actual compiler checks.
 
 Compiler validation is reported independently from GPU/backend execution.
 """
@@ -31,13 +31,20 @@ def check(args):
     for name, executable in (("spirv_val", args.spirv_val), ("glslang", args.glslang), ("dxc", args.dxc)):
         if executable:
             report["tool_versions"][name] = run([executable, "--version"])
-    for name in ("copy_transform", "compact"):
+    for name, stage, glslang_stage, target in (
+        ("copy_transform", "compute", "comp", "cs_6_0"),
+        ("compact", "compute", "comp", "cs_6_0"),
+        ("scene_vertex", "vertex", "vert", "vs_6_0"),
+        ("scene_fragment", "fragment", "frag", "ps_6_0"),
+    ):
         directory = args.output_dir / name
         run([args.shader_tool, "--source", ROOT / f"shaders/render_frontend/{name}.wgsl",
-             "--out-dir", directory])
+             "--out-dir", directory, "--stage", stage])
         manifest = json.loads((directory / "manifest.json").read_text())
         if manifest["schema_version"] != 1 or not manifest["translation_only"]:
             raise RuntimeError("unexpected translation manifest contract")
+        if manifest["stage"] != stage or manifest["targets"]["hlsl"]["shader_model"] != target:
+            raise RuntimeError("unexpected typed shader stage/target")
         statuses = {"naga_ir": "passed", "spirv_val": "pending", "hlsl_glslang": "pending",
                     "hlsl_dxc": "pending", "metal_compiler": "pending", "gpu_execution": "pending"}
         if args.spirv_val:
@@ -45,14 +52,14 @@ def check(args):
             statuses["spirv_val"] = "passed"
         if args.glslang:
             generated_spv = directory / "from-hlsl.spv"
-            run([args.glslang, "-D", "-V", "--target-env", "vulkan1.1", "-S", "comp",
+            run([args.glslang, "-D", "-V", "--target-env", "vulkan1.1", "-S", glslang_stage,
                  "-e", manifest["targets"]["hlsl"]["entry_point"], "-o", generated_spv,
                  directory / "shader.hlsl"])
             if args.spirv_val:
                 run([args.spirv_val, "--target-env", "vulkan1.1", generated_spv])
             statuses["hlsl_glslang"] = "passed"
         if args.dxc:
-            run([args.dxc, "-T", "cs_6_0", "-E", manifest["targets"]["hlsl"]["entry_point"],
+            run([args.dxc, "-T", target, "-E", manifest["targets"]["hlsl"]["entry_point"],
                  "-Fo", directory / "shader.dxil", directory / "shader.hlsl"])
             statuses["hlsl_dxc"] = "passed"
         report["shaders"][name] = statuses

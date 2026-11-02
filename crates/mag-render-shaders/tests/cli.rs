@@ -116,6 +116,9 @@ fn cli_rejects_missing_unknown_and_duplicate_arguments() {
         vec!["--unknown"],
         vec!["--source"],
         vec!["--source", "a", "--source", "b", "--out-dir", "out"],
+        vec!["--stage"],
+        vec!["--stage", "geometry"],
+        vec!["--stage", "vertex", "--stage", "vertex"],
     ] {
         let output = Command::new(env!("CARGO_BIN_EXE_mag-render-shaders"))
             .args(args)
@@ -123,4 +126,30 @@ fn cli_rejects_missing_unknown_and_duplicate_arguments() {
             .unwrap();
         assert!(!output.status.success());
     }
+}
+
+#[test]
+fn cli_requires_explicit_matching_graphics_stage() {
+    let temporary = Temporary::new();
+    let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../shaders/render_frontend/scene_vertex.wgsl");
+    let output = temporary.0.join("vertex");
+    assert!(!cli(&source, &output).status.success());
+    assert!(!output.exists());
+    let result = Command::new(env!("CARGO_BIN_EXE_mag-render-shaders"))
+        .args(["--stage", "vertex", "--source"])
+        .arg(source)
+        .arg("--out-dir")
+        .arg(&output)
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(output.join("manifest.json")).unwrap()).unwrap();
+    assert_eq!(manifest["stage"], "vertex");
+    assert_eq!(manifest["targets"]["hlsl"]["shader_model"], "vs_6_0");
 }
