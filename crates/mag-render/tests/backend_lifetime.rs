@@ -538,3 +538,26 @@ fn two_store_slot_version_collisions_preserve_distinct_upload_bytes() {
     assert_eq!(script.uploads[&key_a], [1, 2, 3, 4]);
     assert_eq!(script.uploads[&key_b], [9, 8, 7, 6]);
 }
+
+#[test]
+fn diagnostic_submission_retains_leases_without_fabricating_world_or_camera() {
+    let (mut store, v, mut backend, control) = fixture();
+    let ticket = backend
+        .submit_diagnostic(23, 7, vec![store.lease(v).unwrap()])
+        .unwrap();
+    let state = backend.state(ticket).unwrap();
+    assert!(state.diagnostic);
+    assert_eq!(state.frame.source_publication, 23);
+    assert_eq!(state.frame.frame_id.0, 0);
+    assert_eq!(state.frame.world_update_id.0, 0);
+    assert_eq!(state.frame.camera_publication, 0);
+    assert_eq!(
+        backend.submit(state.frame, 7, vec![store.lease(v).unwrap()]),
+        Err(BackendError::InvalidFrame)
+    );
+    store.retire(v).unwrap();
+    assert_eq!(store.stats().resident_bytes, 4);
+    terminal(&control, ticket);
+    backend.poll().unwrap();
+    assert_eq!(store.stats().resident_bytes, 0);
+}

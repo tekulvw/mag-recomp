@@ -118,6 +118,8 @@ pub enum BackendError {
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TicketState {
+    /// Diagnostic source submissions have no certified world/camera/frame identity.
+    pub diagnostic: bool,
     pub frame: FrameIdentity,
     pub source_outputs_ready: bool,
     pub gpu_terminal: Option<TerminalStatus>,
@@ -192,6 +194,46 @@ impl<D: RenderDevice> RenderBackend<D> {
         commands: D::Commands,
         leases: Vec<ResourceLease>,
     ) -> Result<SubmissionTicket, BackendError> {
+        if frame.frame_id.0 == 0
+            || frame.world_update_id.0 == 0
+            || frame.source_publication == 0
+            || frame.camera_publication == 0
+        {
+            return Err(BackendError::InvalidFrame);
+        }
+        self.submit_inner(frame, false, commands, leases)
+    }
+    /// Diagnostic source rendering only: absent world, camera and display-frame
+    /// identities stay zero. This cannot qualify a replacement or FPS run.
+    /// Resource ownership and actual terminal requirements are unchanged.
+    pub fn submit_diagnostic(
+        &mut self,
+        source_publication: u64,
+        commands: D::Commands,
+        leases: Vec<ResourceLease>,
+    ) -> Result<SubmissionTicket, BackendError> {
+        if source_publication == 0 {
+            return Err(BackendError::InvalidFrame);
+        }
+        self.submit_inner(
+            FrameIdentity {
+                frame_id: crate::types::FrameId(0),
+                world_update_id: crate::types::WorldUpdateId(0),
+                source_publication,
+                camera_publication: 0,
+            },
+            true,
+            commands,
+            leases,
+        )
+    }
+    fn submit_inner(
+        &mut self,
+        frame: FrameIdentity,
+        diagnostic: bool,
+        commands: D::Commands,
+        leases: Vec<ResourceLease>,
+    ) -> Result<SubmissionTicket, BackendError> {
         if self.closed {
             return Err(BackendError::Closed);
         }
@@ -200,13 +242,6 @@ impl<D: RenderDevice> RenderBackend<D> {
         }
         if self.pending.len() >= MAX_PENDING {
             return Err(BackendError::PendingLimit);
-        }
-        if frame.frame_id.0 == 0
-            || frame.world_update_id.0 == 0
-            || frame.source_publication == 0
-            || frame.camera_publication == 0
-        {
-            return Err(BackendError::InvalidFrame);
         }
         let bytes = leases
             .iter()
@@ -231,6 +266,7 @@ impl<D: RenderDevice> RenderBackend<D> {
             record: Record {
                 ticket,
                 state: TicketState {
+                    diagnostic,
                     frame,
                     source_outputs_ready: false,
                     gpu_terminal: None,
