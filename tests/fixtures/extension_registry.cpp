@@ -4,7 +4,8 @@
 #include <cstdio>
 #include <cstring>
 
-static int starts, polls, enters, exits;
+static int starts, polls, enters, exits, prepares;
+static void on_prepare(const char* elf){assert(std::strcmp(elf,"fixture.elf")==0);++prepares;}
 static uint64_t seen_scratch;
 static void on_start(const char* elf) { assert(std::strcmp(elf, "fixture.elf") == 0); starts++; }
 static void on_poll(void) { polls++; }
@@ -17,10 +18,10 @@ static void on_exit(void*, uint32_t function, const uint64_t[3], int completed, 
 
 int main() {
     const MagExtensionCallbacks* none = mag_extension();
-    assert(none && !none->start && !none->frame_poll && !none->trace_enter && !none->payload_select);
+    assert(none && !none->start && !none->frame_poll && !none->trace_enter && !none->payload_select && !none->prepare);
 
     MagExtensionCallbacks a = {};
-    a.start = on_start; a.trace_enter = on_enter; a.trace_exit = on_exit;
+    a.prepare = on_prepare; a.start = on_start; a.trace_enter = on_enter; a.trace_exit = on_exit;
     assert(mag_extension_register(&a) == 0);
 
     MagExtensionCallbacks double_registration = {};
@@ -33,6 +34,7 @@ int main() {
     assert(mag_extension_register(&b) == 0);
 
     const MagExtensionCallbacks* x = mag_extension();
+    x->prepare("fixture.elf");assert(prepares==1 && starts==0);
     x->start("fixture.elf"); x->frame_poll();
     uint64_t args[3] = {0, 0, 7}, scratch[8] = {};
     x->trace_enter(nullptr, 0x1234, args, scratch);

@@ -57,6 +57,7 @@ struct ControlBinding {
 };
 struct ControlsProfile {
     InputMode mode=InputMode::Auto;
+    bool controller_remap=false; // Complete digital override, including unbound actions.
     MouseLookSettings mouse;
     ControllerLookSettings controller;
     std::vector<ControlBinding> bindings;

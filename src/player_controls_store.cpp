@@ -118,7 +118,7 @@ Json payload(const ControlsProfile& p) {
     Json bindings; bindings.kind=Json::Array;
     for(const auto& b:p.bindings) bindings.array.push_back(object({{"source",text(b.control.source==InputSource::Keyboard ? "keyboard" : b.control.source==InputSource::Mouse ? "mouse" : "controller")},
         {"code",number(b.control.code)},{"action",number(b.action)},{"contexts",number(b.contexts)},{"behavior",text(b.behavior==BindingBehavior::Hold ? "hold" : "toggle")}}));
-    return object({{"schema_version",number(1)},{"mode",text(p.mode==InputMode::Auto ? "auto" : p.mode==InputMode::KBM ? "kbm" : "controller")},
+    return object({{"schema_version",number(2)},{"controller_remap",boolean(p.controller_remap)},{"mode",text(p.mode==InputMode::Auto ? "auto" : p.mode==InputMode::KBM ? "kbm" : "controller")},
         {"mouse",object({{"radians_per_count",number(m.radians_per_count)},{"x_gain",number(m.x_gain)},{"y_gain",number(m.y_gain)},
                         {"hip_gain",number(m.hip_gain)},{"ads_gain",number(m.ads_gain)},{"scoped_gain",number(m.scoped_gain)},{"invert_y",boolean(m.invert_y)}})},
         {"controller",object({{"response",text(c.response==ControllerResponse::Native ? "native" : "linear")},
@@ -128,8 +128,11 @@ Json payload(const ControlsProfile& p) {
 }
 ControlsProfile decode(const std::string& bytes) {
     Parser parser{bytes}; const auto root=parser.parse(); parser.space(); if(parser.at!=bytes.size()) invalid();
-    fields(root,{"schema_version","mode","mouse","controller","bindings"}); if(integer(get(root,"schema_version"))!=1) invalid();
-    ControlsProfile p; const auto& mode=str(get(root,"mode"));
+    const auto schema=integer(get(root,"schema_version"));
+    if(schema==1) fields(root,{"schema_version","mode","mouse","controller","bindings"});
+    else if(schema==2) fields(root,{"schema_version","mode","mouse","controller","bindings","controller_remap"});
+    else invalid();
+    ControlsProfile p; if(schema==2)p.controller_remap=flag(get(root,"controller_remap")); const auto& mode=str(get(root,"mode"));
     if(mode=="auto") p.mode=InputMode::Auto; else if(mode=="controller") p.mode=InputMode::Controller; else if(mode=="kbm") p.mode=InputMode::KBM; else invalid();
     const auto& m=get(root,"mouse"); fields(m,{"radians_per_count","x_gain","y_gain","hip_gain","ads_gain","scoped_gain","invert_y"});
     p.mouse={num(get(m,"radians_per_count")),num(get(m,"x_gain")),num(get(m,"y_gain")),num(get(m,"hip_gain")),num(get(m,"ads_gain")),num(get(m,"scoped_gain")),flag(get(m,"invert_y"))};

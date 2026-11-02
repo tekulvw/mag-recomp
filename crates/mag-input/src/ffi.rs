@@ -656,3 +656,68 @@ pub unsafe extern "C" fn mag_input_policy_reduce(
     unsafe { output.write(policy_record(policy)) };
     OK
 }
+
+/// Edit a copied draft. Conflict status7 returns the conflicting action ID.
+/// No buffers are changed on failure except output_count/conflict.
+/// # Safety
+/// Input records must be readable; output must hold capacity records and both
+/// result pointers must be writable. Buffers must not overlap.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mag_input_edit_binding(
+    input: *const BindingRecord,
+    count: u32,
+    request: BindingRecord,
+    slot: u32,
+    flags: u32,
+    output: *mut BindingRecord,
+    capacity: u32,
+    output_count: *mut u32,
+    conflict: *mut u32,
+) -> i32 {
+    if output_count.is_null()
+        || conflict.is_null()
+        || flags & !3 != 0
+        || capacity > 1024
+        || (capacity != 0 && output.is_null())
+    {
+        return INVALID;
+    }
+    let original = match unsafe { bindings(input, count) } {
+        Ok(b) => b,
+        Err(e) => return e,
+    };
+    let request = match unsafe { bindings(&request, 1) } {
+        Ok(b) => b[0],
+        Err(e) => return e,
+    };
+    let result = match crate::editor::edit(&original, request, slot, flags & 1 != 0, flags & 2 != 0)
+    {
+        Ok(b) => b,
+        Err(crate::editor::EditError::Invalid) => return INVALID,
+        Err(crate::editor::EditError::Conflict(action)) => {
+            unsafe {
+                conflict.write(action);
+            }
+            return 7;
+        }
+    };
+    unsafe {
+        output_count.write(result.len() as u32);
+        conflict.write(0);
+    }
+    if result.len() > capacity as usize {
+        return CAPACITY;
+    }
+    for (i, b) in result.iter().enumerate() {
+        unsafe {
+            output.add(i).write(BindingRecord {
+                source: b.control.source as u32,
+                code: b.control.code,
+                action: b.action,
+                contexts: b.contexts,
+                behavior: b.behavior as u32,
+            });
+        }
+    }
+    OK
+}

@@ -18,14 +18,17 @@ int main(int argc,char** argv) {
     write_player_preferences_file(old,original);
     const auto defaults=mag_controls_load_profile(path,catalog);
     check(defaults.mode==InputMode::Auto && defaults.bindings.empty(),"missing controls return defaults without changing old settings");
-    ControlsProfile profile; profile.mode=InputMode::KBM; profile.mouse.ads_gain=.4; profile.mouse.scoped_gain=.2;
+    ControlsProfile profile; profile.controller_remap=true; profile.mode=InputMode::KBM; profile.mouse.ads_gain=.4; profile.mouse.scoped_gain=.2;
     profile.mouse.invert_y=true; profile.controller.response=ControllerResponse::Linear; profile.controller.inner_x=.15; profile.controller.outer_x=.1;
     profile.bindings={{{InputSource::Keyboard,26},1,1,BindingBehavior::Toggle},{{InputSource::Controller,0},2,1}};
     check(mag_controls_save_profile(path,profile,catalog),"profile save succeeds");
     const auto loaded=mag_controls_load_profile(path,catalog); const auto good=read(path);
-    check(loaded.mode==profile.mode && loaded.mouse.ads_gain==.4 && loaded.mouse.invert_y && loaded.controller.inner_x==.15 &&
+    check(loaded.controller_remap && loaded.mode==profile.mode && loaded.mouse.ads_gain==.4 && loaded.mouse.invert_y && loaded.controller.inner_x==.15 &&
           loaded.bindings.size()==2 && loaded.bindings[0].behavior==BindingBehavior::Toggle && loaded.bindings[1].control.source==InputSource::Controller,"independent controller and KBM preferences round trip");
     check(read(old)==original,"controls save preserves existing settings bytes");
+    auto legacy=good;auto schemaAt=legacy.find("\"schema_version\":2");legacy.replace(schemaAt,18,"\"schema_version\":1");
+    auto remapAt=legacy.find("\"controller_remap\":true,");check(remapAt!=std::string::npos,"schema2 field present");legacy.erase(remapAt,24);
+    write(path,legacy);check(!mag_controls_load_profile(path,catalog).controller_remap,"schema1 keeps original native controller ownership");write(path,good);
     auto invalid=profile; invalid.bindings[0].action=99;
     check(!mag_controls_save_profile(path,invalid,catalog) && read(path)==good,"unknown action rejects before replacing previous profile");
     invalid=profile; invalid.mouse.radians_per_count=std::numeric_limits<double>::quiet_NaN();
@@ -46,13 +49,13 @@ int main(int argc,char** argv) {
         data.replace(found,before.size(),after); return data;
     };
     const std::vector<std::string> malformed={
-        changed("\"schema_version\":1","\"schema_version\":2"),
-        changed("\"schema_version\":1","\"schema_version\":1.00000000000000001"),
-        changed("\"schema_version\":1","\"schema_version\":1e0"),
+        changed("\"schema_version\":2","\"schema_version\":3"),
+        changed("\"schema_version\":2","\"schema_version\":1.00000000000000001"),
+        changed("\"schema_version\":2","\"schema_version\":1e0"),
         changed("\"contexts\":1","\"contexts\":1.00000000000000001"),
         changed("\"action\":1","\"action\":1.00000000000000001"),
-        changed("\"schema_version\":1","\"schema_version\":01"),
-        changed("\"schema_version\":1","\"schema_version\":1e999"),
+        changed("\"schema_version\":2","\"schema_version\":01"),
+        changed("\"schema_version\":2","\"schema_version\":1e999"),
         changed("\"mode\":\"kbm\"","\"mode\":true"),
         changed("\"mode\":\"kbm\"","\"mode\":\"kbm\",\"mode\":\"auto\""),
         changed("\"contexts\":1","\"contexts\":1.5"),

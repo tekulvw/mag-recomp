@@ -183,3 +183,84 @@ fn resealing_an_existing_frame_cannot_change_its_recognition_time() {
         assert_eq!(mag_input_destroy(handle), 0);
     }
 }
+
+#[test]
+fn binding_editor_boundary_keeps_output_unchanged_on_conflict_and_capacity_failure() {
+    unsafe {
+        let original = BindingRecord {
+            source: 0,
+            code: 26,
+            action: 1,
+            contexts: 1,
+            behavior: 0,
+        };
+        let request = BindingRecord {
+            action: 2,
+            ..original
+        };
+        let mut output = original;
+        let mut count = 0;
+        let mut conflict = 0;
+        assert_eq!(
+            mag_input_edit_binding(
+                &original,
+                1,
+                request,
+                0,
+                0,
+                &mut output,
+                1,
+                &mut count,
+                &mut conflict
+            ),
+            7
+        );
+        assert_eq!(conflict, 1);
+        assert_eq!(output.action, 1);
+        assert_eq!(
+            mag_input_edit_binding(
+                &original,
+                1,
+                request,
+                0,
+                2,
+                &mut output,
+                0,
+                &mut count,
+                &mut conflict
+            ),
+            CAPACITY
+        );
+        assert_eq!(count, 1);
+        assert_eq!(output.action, 1);
+        assert_eq!(
+            mag_input_edit_binding(
+                &original,
+                1,
+                request,
+                0,
+                2,
+                &mut output,
+                1,
+                &mut count,
+                &mut conflict
+            ),
+            OK
+        );
+        assert_eq!(output.action, 2);
+        assert_eq!(
+            mag_input_edit_binding(
+                std::ptr::null(),
+                1,
+                request,
+                0,
+                0,
+                &mut output,
+                1,
+                &mut count,
+                &mut conflict
+            ),
+            INVALID
+        );
+    }
+}

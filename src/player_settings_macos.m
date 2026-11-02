@@ -52,7 +52,10 @@ static NSStackView *row(NSString *title,NSString *hint,NSView *control) {
 
 @implementation MAGSettingsController {
     NSString *_path;
-    NSStackView *_root,*_ports,*_confirmation;
+    NSStackView *_root,*_general,*_ports,*_confirmation;
+    NSSegmentedControl *_section;
+    NSView *_controlsHost;
+    id<MAGControlsSettingsPane> _controlsPane;
     NSTextField *_server,*_tcp,*_udp,*_errorLabel,*_status,*_countdown;
     NSPopUpButton *_mode,*_resolution,*_rendering,*_aa;
     NSButton *_applyButton,*_cancelButton,*_playButton,*_advancedButton;
@@ -88,7 +91,11 @@ static NSStackView *row(NSString *title,NSString *hint,NSView *control) {
         [_root.leadingAnchor constraintEqualToAnchor:window.contentView.leadingAnchor constant:24],
         [_root.trailingAnchor constraintEqualToAnchor:window.contentView.trailingAnchor constant:-24],
         [_root.topAnchor constraintEqualToAnchor:window.contentView.topAnchor constant:22]]];
-    NSTextField *heading=label(@"Connection",14,NO);heading.font=[NSFont boldSystemFontOfSize:14];add(_root,heading);
+    _section=[NSSegmentedControl segmentedControlWithLabels:@[@"General",@"Controls"] trackingMode:NSSegmentSwitchTrackingSelectOne target:self action:@selector(sectionChanged:)];
+    _section.selectedSegment=0;_section.hidden=YES;_section.identifier=@"settings_section";add(_root,_section);
+    _general=stack(NSUserInterfaceLayoutOrientationVertical,9);add(_root,_general);
+    _controlsHost=[NSView new];_controlsHost.hidden=YES;add(_root,_controlsHost);
+    NSTextField *heading=label(@"Connection",14,NO);heading.font=[NSFont boldSystemFontOfSize:14];add(_general,heading);
     _server=[NSTextField textFieldWithString:@""];_server.placeholderString=@"Use game default";_server.identifier=@"server_address";_server.delegate=self;
     NSStackView *connection=stack(NSUserInterfaceLayoutOrientationVertical,5);
     add(connection,row(@"Game server",@"Hostname or IPv4 address",_server));add(connection,separator());
@@ -104,11 +111,11 @@ static NSStackView *row(NSString *title,NSString *hint,NSView *control) {
         add(column,label(pair[0],11,YES));add(column,pair[1]);[_ports addArrangedSubview:column];
     }
     [_tcp.widthAnchor constraintEqualToAnchor:_udp.widthAnchor].active=YES;
-    add(connection,_ports);_ports.hidden=YES;add(_root,group(connection));
-    add(_root,label(@"Community servers use no PSN ticket. Blank keeps game settings. Changes apply next launch.",11,YES));
-    _errorLabel=label(@"",12,NO);_errorLabel.textColor=NSColor.systemRedColor;_errorLabel.identifier=@"settings_error";add(_root,_errorLabel);_errorLabel.hidden=YES;
-    NSView *gap=[NSView new];[gap.heightAnchor constraintEqualToConstant:6].active=YES;add(_root,gap);
-    heading=label(@"Graphics",14,NO);heading.font=[NSFont boldSystemFontOfSize:14];add(_root,heading);
+    add(connection,_ports);_ports.hidden=YES;add(_general,group(connection));
+    add(_general,label(@"Community servers use no PSN ticket. Blank keeps game settings. Changes apply next launch.",11,YES));
+    _errorLabel=label(@"",12,NO);_errorLabel.textColor=NSColor.systemRedColor;_errorLabel.identifier=@"settings_error";_errorLabel.hidden=YES;
+    NSView *gap=[NSView new];[gap.heightAnchor constraintEqualToConstant:6].active=YES;add(_general,gap);
+    heading=label(@"Graphics",14,NO);heading.font=[NSFont boldSystemFontOfSize:14];add(_general,heading);
     _mode=[NSPopUpButton new];[_mode addItemsWithTitles:@[@"Windowed",@"Borderless fullscreen"]];_mode.identifier=@"display_mode";
     _resolution=[NSPopUpButton new];[_resolution addItemsWithTitles:@[@"1280 × 720",@"1920 × 1080",@"2560 × 1440",@"3840 × 2160"]];_resolution.identifier=@"output_resolution";
     _rendering=[NSPopUpButton new];[_rendering addItemsWithTitles:@[@"Native (100%)",@"1080p (150%)",@"1440p (200%)",@"2160p (300%)"]];_rendering.identifier=@"render_scale";
@@ -118,8 +125,9 @@ static NSStackView *row(NSString *title,NSString *hint,NSView *control) {
     add(graphics,row(@"Display mode",@"",_mode));add(graphics,separator());
     add(graphics,row(@"Output resolution",@"Fullscreen uses the desktop size",_resolution));add(graphics,separator());
     add(graphics,row(@"Rendering resolution",@"Applies on the next launch",_rendering));add(graphics,separator());
-    add(graphics,row(@"Anti-aliasing",@"Applies on the next launch",_aa));add(_root,group(graphics));
-    add(_root,label(@"Rendering percentages scale the game's 720p-height targets. Output resolution sets the window size.",11,YES));
+    add(graphics,row(@"Anti-aliasing",@"Applies on the next launch",_aa));add(_general,group(graphics));
+    add(_general,label(@"Rendering percentages scale the game's 720p-height targets. Output resolution sets the window size.",11,YES));
+    add(_root,_errorLabel);
     _confirmation=stack(NSUserInterfaceLayoutOrientationVertical,7);_confirmation.identifier=@"display_confirmation";
     add(_confirmation,label(@"Keep these display settings?",13,NO));_countdown=label(@"",11,YES);add(_confirmation,_countdown);
     NSStackView *confirmationActions=stack(NSUserInterfaceLayoutOrientationHorizontal,8);
@@ -135,12 +143,22 @@ static NSStackView *row(NSString *title,NSString *hint,NSView *control) {
     _applyButton.keyEquivalent=@"\r";
     _playButton=[NSButton buttonWithTitle:@"Play MAG" target:self action:@selector(play:)];_playButton.keyEquivalent=@"\r";_playButton.hidden=YES;_playButton.enabled=!_recovery;_playButton.identifier=@"play";
     for(NSButton *button in @[_cancelButton,_applyButton,_playButton])[footer addArrangedSubview:button];
-    add(_root,footer);_fields=@[_server,_tcp,_udp,_mode,_resolution,_rendering,_aa];
+    add(_root,footer);_fields=@[_server,_tcp,_udp,_mode,_resolution,_rendering,_aa,_section];
     [self fill:settings];[self changed:nil];
     if(error)[self showError:error.localizedDescription];
     [self fit];[window center];return self;
 }
 
+- (void)setControlsPane:(id<MAGControlsSettingsPane>)pane view:(NSView *)view {
+    _controlsPane=pane;_section.hidden=NO;view.translatesAutoresizingMaskIntoConstraints=NO;
+    [_controlsHost addSubview:view];
+    [NSLayoutConstraint activateConstraints:@[[view.leadingAnchor constraintEqualToAnchor:_controlsHost.leadingAnchor],[view.trailingAnchor constraintEqualToAnchor:_controlsHost.trailingAnchor],[view.topAnchor constraintEqualToAnchor:_controlsHost.topAnchor],[view.bottomAnchor constraintEqualToAnchor:_controlsHost.bottomAnchor]]];
+    __weak MAGSettingsController *weakSelf=self;pane.controlsChanged=^{[weakSelf changed:nil];};[self fit];
+}
+- (void)sectionChanged:(id)sender {
+    [_controlsPane cancelBindingCapture];_general.hidden=_section.selectedSegment==1;_controlsHost.hidden=!_general.hidden;
+    _applyButton.title=_general.hidden?@"Apply controls":@"Apply";_errorLabel.hidden=YES;[self changed:nil];[self fit];
+}
 - (void)dealloc {[_timer invalidate];if(_resizeObserver)[NSNotificationCenter.defaultCenter removeObserver:_resizeObserver];}
 - (void)fit { [self.window.contentView layoutSubtreeIfNeeded];[self.window setContentSize:NSMakeSize(620,_root.fittingSize.height+44)]; }
 - (void)showError:(NSString *)message { _errorLabel.stringValue=message;_errorLabel.hidden=NO;[self fit]; }
@@ -175,7 +193,7 @@ static NSStackView *row(NSString *title,NSString *hint,NSView *control) {
 - (void)controlTextDidChange:(NSNotification *)note {[self changed:nil];}
 - (void)changed:(id)sender {
     if(_pending)return;
-    NSDictionary *draft=[self draft:NULL];BOOL dirty=_needsSave||![draft isEqual:self.settings];
+    NSDictionary *draft=[self draft:NULL];BOOL dirty=_section.selectedSegment==1?[_controlsPane controlsDirty]:(_needsSave||![draft isEqual:self.settings]);
     _applyButton.enabled=dirty;_resolution.enabled=_mode.indexOfSelectedItem==0;
     _status.stringValue=dirty?@"Unsaved changes":@"No unsaved changes";
 }
@@ -183,7 +201,7 @@ static NSStackView *row(NSString *title,NSString *hint,NSView *control) {
     _ports.hidden=!_ports.hidden;_advancedButton.title=_ports.hidden?@"▸ Advanced connection settings":@"▾ Advanced connection settings";[self fit];
 }
 - (void)setEditing:(BOOL)editing {_editing=editing;if(self.editingChanged)self.editingChanged(editing);}
-- (void)showSettings:(id)sender {[self changed:nil];self.editing=YES;[self.window makeKeyAndOrderFront:nil];[NSApp activateIgnoringOtherApps:YES];}
+- (void)showSettings:(id)sender {if(!self.editing)[_controlsPane reloadControls];[self changed:nil];self.editing=YES;[self.window makeKeyAndOrderFront:nil];[NSApp activateIgnoringOtherApps:YES];}
 - (BOOL)runSetup {
     _startup=YES;_playButton.hidden=NO;_applyButton.keyEquivalent=@"";[self fit];[self showSettings:nil];
     NSModalResponse result=[NSApp runModalForWindow:self.window];[self.window orderOut:nil];self.editing=NO;_startup=NO;_playButton.hidden=YES;
@@ -194,11 +212,13 @@ static NSStackView *row(NSString *title,NSString *hint,NSView *control) {
     if(_recovery){[self showError:@"Review these defaults and click Apply to replace the damaged settings file."];return;}
     NSError *error=nil;NSDictionary *draft=[self draft:&error];
     if(!draft){[self showError:error.localizedDescription];return;}
-    if(_needsSave||![draft isEqual:self.settings]){[self apply:nil];if(_pending||_needsSave||![draft isEqual:self.settings])return;}
+    if([_controlsPane controlsDirty]){NSError *controlsError=nil;if(![_controlsPane applyControls:&controlsError]){[self showError:controlsError.localizedDescription];return;}}
+    if(_needsSave||![draft isEqual:self.settings]){_section.selectedSegment=0;[self sectionChanged:nil];[self apply:nil];if(_pending||_needsSave||![draft isEqual:self.settings])return;}
     [NSApp stopModalWithCode:NSModalResponseOK];
 }
 - (BOOL)windowShouldClose:(NSWindow *)sender {[self cancel:nil];return NO;}
 - (void)cancel:(id)sender {
+    [_controlsPane cancelBindingCapture];[_controlsPane discardControls];
     if(_pending)[self revertDisplay:nil];[self fill:self.settings];[self changed:nil];_errorLabel.hidden=YES;
     if(_startup)[NSApp stopModalWithCode:NSModalResponseCancel];
     else{[self.window orderOut:nil];self.editing=NO;if(_gameWindow)[_gameWindow makeKeyAndOrderFront:nil];}
@@ -277,6 +297,11 @@ static NSStackView *row(NSString *title,NSString *hint,NSView *control) {
 }
 - (void)apply:(id)sender {
     if(_pending)return;
+    if(_section.selectedSegment==1){
+        NSError *error=nil;[_controlsPane cancelBindingCapture];
+        if(![_controlsPane applyControls:&error]){[self showError:error.localizedDescription];return;}
+        _errorLabel.hidden=YES;[self changed:nil];return;
+    }
     NSError *error=nil;NSDictionary *draft=[self draft:&error];
     if(!draft){[self showError:error.localizedDescription];return;}
     BOOL displayChanged=![draft[@"display_mode"] isEqual:self.settings[@"display_mode"]]||

@@ -111,7 +111,7 @@ void mag_controls_configure(const ControlsProfile& profile){
     mag_controls_validate_profile(profile);auto& s=state();std::lock_guard lock(s.mutex);
     std::vector<MagInputBinding> bindings;
     InputPolicy permission;permission.mode=profile.mode;
-    for(auto b:profile.bindings)if(mag_controls_gameplay_source_allowed(permission,b.control.source))bindings.push_back({uint32_t(b.control.source),b.control.code,b.action,b.contexts,uint32_t(b.behavior)});
+    for(auto b:profile.bindings)if((b.control.source!=InputSource::Controller || profile.controller_remap) && mag_controls_gameplay_source_allowed(permission,b.control.source))bindings.push_back({uint32_t(b.control.source),b.control.code,b.action,b.contexts,uint32_t(b.behavior)});
     check(mag_input_configure(s.handle,bindings.data(),uint32_t(bindings.size())));
     s.profile=profile;s.frame.reset();s.sample.reset();s.diagnostics.clear();s.sync_capture();
     MagInputPolicy ignored{};check(mag_input_policy(s.handle,uint32_t(profile.mode),uint32_t(s.capture.controller_connected)<<1|4,&ignored));
