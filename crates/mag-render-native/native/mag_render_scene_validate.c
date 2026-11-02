@@ -116,8 +116,8 @@ static int add_bytes(mag_native_scene_usage *u, uint64_t n) {
     u->bytes += n;
     return MAG_NATIVE_OK;
 }
-int mag_native_scene_validate(const mag_native_scene *s, const mag_native_scene_registry *r,
-                              mag_native_scene_usage *u) {
+static int scene_validate(const mag_native_scene *s, const mag_native_scene_registry *r,
+                              mag_native_scene_usage *u,const mag_native_scene_registry_v2 *v2) {
     if (!s || !r || !u || !r->buffer || !r->compute || !r->graphics || s->struct_size != sizeof(*s) ||
         s->abi_version != MAG_NATIVE_SCENE_ABI || s->reserved || (s->resource_count && !s->resources) ||
         s->resource_count > MAG_NATIVE_SCENE_MAX_RESOURCES || !s->images || !s->image_count ||
@@ -293,7 +293,7 @@ int mag_native_scene_validate(const mag_native_scene *s, const mag_native_scene_
                 const mag_native_scene_texture_binding *t = &d->textures[j];
                 const mag_native_scene_texture_layout *layout = NULL;
                 if (t->stage > 1 || t->reserved || t->texture_slot >= 16 || t->sampler_slot >= 16 ||
-                    t->sampler > 2 || t->image >= s->image_count || !initialized[t->image] ||
+                    t->image >= s->image_count || !initialized[t->image] ||
                     t->image == p->color.image || t->image == p->depth.image ||
                     (textures[t->stage] & (1u << t->texture_slot)))
                     return MAG_NATIVE_INVALID;
@@ -302,8 +302,18 @@ int mag_native_scene_validate(const mag_native_scene *s, const mag_native_scene_
                     if (g->textures[k].stage == t->stage && g->textures[k].texture_slot == t->texture_slot &&
                         g->textures[k].sampler_slot == t->sampler_slot)
                         layout = &g->textures[k];
+                int comparison=t->sampler==MAG_NATIVE_SCENE_COMPARE_LEQUAL;
+                if(t->sampler&MAG_NATIVE_SCENE_SAMPLER_TABLE_BIT){
+                    uint32_t index=MAG_NATIVE_SCENE_SAMPLER_TABLE_INDEX(t->sampler);
+                    if(!v2||index>=v2->sampler_count)return MAG_NATIVE_INVALID;
+                    const mag_native_sampler_state *state=NULL;
+                    int sampler_status=v2->sampler(r->context,v2->samplers[index],&state);
+                    if(sampler_status)return sampler_status;
+                    if(!state)return MAG_NATIVE_INVALID;
+                    comparison=state->comparison_enabled;u->samplers[index]=1;
+                }else if(t->sampler>2)return MAG_NATIVE_INVALID;
                 if (!layout || layout->format != s->images[t->image].format ||
-                    !!layout->comparison != (t->sampler == MAG_NATIVE_SCENE_COMPARE_LEQUAL))
+                    !!layout->comparison != !!comparison)
                     return MAG_NATIVE_INVALID;
                 uint32_t bit = 1u << t->sampler_slot;
                 if ((samplers[t->stage] & bit) && sampler_kinds[t->stage][t->sampler_slot] != t->sampler)
@@ -350,4 +360,17 @@ void mag_native_scene_graphics_v3_schema(const mag_native_scene_graphics_v3_desc
  out->depth_compare=!d->raster.depth_enabled||!out->depth_format?0:d->raster.depth_compare==1?1:d->raster.depth_compare==3?2:3;
  out->depth_write=d->raster.depth_enabled&&out->depth_format?d->raster.depth_write:0;
  out->blend=out->color_format&&d->raster.blend_enabled?1:0;
+}
+
+int mag_native_scene_validate(const mag_native_scene *scene,const mag_native_scene_registry *registry,mag_native_scene_usage *usage){
+    return scene_validate(scene,registry,usage,NULL);
+}
+int mag_native_scene_validate_v2(const mag_native_scene *scene,const mag_native_scene_registry_v2 *v2,mag_native_scene_usage *usage){
+    if(!v2||!v2->base||v2->sampler_count>MAG_NATIVE_MAX_SAMPLERS||(v2->sampler_count&&(!v2->samplers||!v2->sampler)))return MAG_NATIVE_INVALID;
+    for(uint32_t i=0;i<v2->sampler_count;++i){
+        const mag_native_sampler_state *state=NULL;int status=v2->sampler(v2->base->context,v2->samplers[i],&state);
+        if(status)return status;
+        if(!state)return MAG_NATIVE_INVALID;
+    }
+    return scene_validate(scene,v2->base,usage,v2);
 }

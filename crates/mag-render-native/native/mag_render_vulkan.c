@@ -3,8 +3,9 @@
  * Frontend-owned implementation; no SDK runtime/header dependency. */
 #include "mag_render_vulkan.h"
 #include "mag_render_native_internal.h"
-#include <stdlib.h>
+#include "mag_render_sampler_registry.h"
 #include <math.h>
+#include <stdlib.h>
 #include <string.h>
 
 #define FRONTEND_VK_FUNCTIONS(X) \
@@ -47,11 +48,13 @@ typedef struct frontend_vk_slot {
     frontend_vk_pipeline *batch_pipelines[MAG_NATIVE_BATCH_MAX_COMMANDS + MAG_NATIVE_SCENE_MAX_DRAWS];uint32_t batch_count;
     frontend_vk_scene_image *scene_images;uint32_t scene_image_count,scene_pass_count;
     VkFramebuffer scene_framebuffers[16];VkRenderPass scene_renderpasses[16];VkSampler scene_samplers[3];
+    mag_native_sampler_entry *sampler_entries[MAG_NATIVE_MAX_SAMPLERS];uint32_t sampler_count;
     VkImage color,depth;VkDeviceMemory color_memory,depth_memory;
     VkImageView color_view,depth_view;VkFramebuffer framebuffer;
 } frontend_vk_slot;
 typedef struct frontend_vk {
     mag_native_vulkan_owner owner;
+    mag_native_sampler_registry samplers;
     uint64_t generation, next_buffer, next_pipeline, next_submission;
     int failed;
     frontend_vk_family *families; frontend_vk_buffer *buffers; frontend_vk_pipeline *pipelines;
@@ -106,6 +109,7 @@ static void batch_attachments_release(frontend_vk *c,frontend_vk_slot *slot){
 }
 
 static void scene_attachments_release(frontend_vk *c,frontend_vk_slot *slot){
+ for(uint32_t i=0;i<slot->sampler_count;++i){if(slot->sampler_entries[i])mag_native_sampler_registry_unpin(&c->samplers,slot->sampler_entries[i]);slot->sampler_entries[i]=NULL;}slot->sampler_count=0;
  for(uint32_t i=0;i<slot->scene_pass_count;++i){if(slot->scene_framebuffers[i])c->vkDestroyFramebuffer(c->owner.device,slot->scene_framebuffers[i],NULL);if(slot->scene_renderpasses[i])c->vkDestroyRenderPass(c->owner.device,slot->scene_renderpasses[i],NULL);slot->scene_framebuffers[i]=VK_NULL_HANDLE;slot->scene_renderpasses[i]=VK_NULL_HANDLE;}slot->scene_pass_count=0;
  for(uint32_t i=0;i<slot->scene_image_count;++i){frontend_vk_scene_image *im=&slot->scene_images[i];if(im->view)c->vkDestroyImageView(c->owner.device,im->view,NULL);if(im->image)c->vkDestroyImage(c->owner.device,im->image,NULL);if(im->memory)c->vkFreeMemory(c->owner.device,im->memory,NULL);memset(im,0,sizeof(*im));}slot->scene_image_count=0;free(slot->scene_images);slot->scene_images=NULL;
  for(unsigned i=0;i<3;++i){if(slot->scene_samplers[i])c->vkDestroySampler(c->owner.device,slot->scene_samplers[i],NULL);slot->scene_samplers[i]=VK_NULL_HANDLE;}
@@ -380,6 +384,7 @@ static int close_context(void *opaque) {
         if (slot->pool) c->vkDestroyCommandPool(c->owner.device, slot->pool, NULL);
         if (slot->fence) c->vkDestroyFence(c->owner.device, slot->fence, NULL);
     }
+    int sampler_status=mag_native_sampler_registry_close(&c->samplers);if(sampler_status)return sampler_status;
     while (c->buffers) buffer_dispose(c, c->buffers);
     while (c->pipelines) pipeline_dispose(c, c->pipelines);
     while (c->families) { frontend_vk_family *old = c->families; c->families = old->next; free(old); }
@@ -387,10 +392,11 @@ static int close_context(void *opaque) {
     host.release(host.userdata,host.lifetime);return MAG_NATIVE_OK;
 }
 
+#include "mag_render_vulkan_sampler.inc"
 #include "mag_render_vulkan_batch.inc"
 #include "mag_render_vulkan_scene.inc"
 static const mag_native_ops operations = {caps, buffer_create, buffer_release, buffer_read,
-    pipeline_create, pipeline_release, submit, poll, close_context, graphics_create, submit_batch, scene_graphics_create, submit_scene, NULL, NULL, NULL, NULL, scene_graphics_create_v2,scene_graphics_create_v3};
+    pipeline_create, pipeline_release, submit, poll, close_context, graphics_create, submit_batch, scene_graphics_create, submit_scene, NULL, NULL, NULL, NULL, scene_graphics_create_v2,scene_graphics_create_v3,sampler_create,sampler_release,submit_scene_v2};
 int mag_native_vulkan_create(const MagRenderHostOwner *host,mag_native_device **out) {
     if (!host || !out || host->backend!=MAG_RENDER_HOST_VULKAN) return MAG_NATIVE_INVALID;
     *out=NULL;int status=host->retain(host->userdata,host->lifetime);
@@ -407,6 +413,7 @@ int mag_native_vulkan_create(const MagRenderHostOwner *host,mag_native_device **
     FRONTEND_VK_FUNCTIONS(LOAD)
 #undef LOAD
     c->generation=mag_native_next_generation();if(!c->generation) {close_context(c);return MAG_NATIVE_ALLOCATION_FAILED;}
+    mag_native_sampler_registry_init(&c->samplers,c->generation,c,sampler_payload_destroy);
     for (unsigned i=0;i<2;++i) {
         frontend_vk_slot *slot=&c->slots[i];
         VkCommandPoolCreateInfo pool={.sType=VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,.queueFamilyIndex=host->queue_family};

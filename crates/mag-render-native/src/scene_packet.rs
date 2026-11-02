@@ -471,34 +471,15 @@ impl ScenePacket {
         Ok(packet)
     }
 }
-fn sampler(s: &raw::Sampler) -> Result<Sampler, i32> {
-    if s.known_fields != 63
-        || s.min_filter != s.mag_filter
-        || s.mip_filter != 0
-        || s.wrap_s != 0
-        || s.wrap_t != 0
-        || s.wrap_r != 0
-        || s.lod_min != 0.0
-        || s.lod_max != 0.0
-        || s.lod_bias != 0.0
-        || s.max_anisotropy != 1.0
-    {
-        return Err(-2);
+unsafe extern "C" {
+    fn mag_native_sampler_state_validate(state: *const raw::Sampler) -> i32;
+}
+fn sampler(state: &raw::Sampler) -> Result<Sampler, i32> {
+    let status = unsafe { mag_native_sampler_state_validate(state) };
+    if status != 0 {
+        return Err(status);
     }
-    if s.comparison_enabled == 1 {
-        if s.comparison != 3 || s.min_filter != 1 {
-            return Err(-2);
-        }
-        Ok(Sampler::CompareLessEqual)
-    } else if s.comparison_enabled == 0 {
-        match s.min_filter {
-            0 => Ok(Sampler::NearestClamp),
-            1 => Ok(Sampler::LinearClamp),
-            _ => Err(-2),
-        }
-    } else {
-        Err(-2)
-    }
+    Ok(Sampler::Explicit(*state))
 }
 impl ScenePacket {
     fn range(&self, u: raw::BufferUse) -> Result<ByteRange, i32> {
@@ -779,8 +760,7 @@ impl ScenePacket {
                         .ok_or(-1)?;
                     let image = &self.images[self.views[t.view as usize].image as usize];
                     if image.desc.format != format(required.format)?
-                        || (sampler(&self.samplers[t.sampler as usize])?
-                            == Sampler::CompareLessEqual)
+                        || sampler(&self.samplers[t.sampler as usize])?.comparison()
                             != (required.comparison != 0)
                     {
                         return Err(-2);
@@ -1597,6 +1577,28 @@ pub(crate) mod packet_tests {
         assert_eq!(commands.passes()[0].draws[0].textures.len(), 1);
         assert_eq!(leases.len(), 5);
         assert!(!commands.output().unwrap().diagnostic_readback);
+    }
+    #[test]
+    fn explicit_repeat_mip_sampler_survives_scene_preparation_and_reflection_checks() {
+        let mut packet = fixture();
+        packet.samplers[0].wrap_s = 1;
+        packet.samplers[0].wrap_t = 2;
+        packet.samplers[0].mip_filter = 2;
+        packet.samplers[0].lod_max = 13.0;
+        packet.validate(32, 1 << 20).unwrap();
+        let scene = packet
+            .prepare(&Catalog(&packet), &[1], 32, 1 << 20)
+            .unwrap();
+        let (commands, _) = scene.into_submission();
+        let Sampler::Explicit(state) = commands.passes()[0].draws[0].textures[0].sampler else {
+            panic!("state was normalized to a preset")
+        };
+        assert_eq!(
+            (state.wrap_s, state.wrap_t, state.mip_filter, state.lod_max),
+            (1, 2, 2, 13.0)
+        );
+        packet.samplers[0].comparison_enabled = 1;
+        assert_eq!(packet.validate(32, 1 << 20), Err(-2));
     }
     #[test]
     fn pipeline_cache_ignores_uniform_values_but_not_shader_or_reflection() {

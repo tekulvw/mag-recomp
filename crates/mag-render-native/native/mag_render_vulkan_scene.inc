@@ -426,7 +426,7 @@ static int scene_descriptors(frontend_vk *c, frontend_vk_slot *slot, frontend_vk
                                    .pImageInfo = &images[image_count++]};
         if (!(samplers[t->stage] & (1u << t->sampler_slot))) {
             samplers[t->stage] |= 1u << t->sampler_slot;
-            images[image_count] = (VkDescriptorImageInfo){slot->scene_samplers[t->sampler], VK_NULL_HANDLE,
+            images[image_count] = (VkDescriptorImageInfo){(t->sampler&MAG_NATIVE_SCENE_SAMPLER_TABLE_BIT)?((frontend_vk_sampler_payload*)slot->sampler_entries[MAG_NATIVE_SCENE_SAMPLER_TABLE_INDEX(t->sampler)]->payload)->gpu:slot->scene_samplers[t->sampler], VK_NULL_HANDLE,
                                                           VK_IMAGE_LAYOUT_UNDEFINED};
             writes[count++] = (VkWriteDescriptorSet){
                 .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
@@ -495,7 +495,7 @@ static int scene_descriptor_capacity(frontend_vk *c, frontend_vk_slot *slot, con
     memcpy(slot->descriptor_counts, counts, sizeof(counts));
     return MAG_NATIVE_OK;
 }
-static int submit_scene_owned(frontend_vk *c, const mag_native_scene *scene, mag_native_ticket *out) {
+static int submit_scene_owned(frontend_vk *c, const mag_native_scene *scene, mag_native_ticket *out,const mag_native_sampler *sampler_table,uint32_t sampler_count) {
     if (c->failed || c->next_submission == UINT64_MAX)
         return MAG_NATIVE_DEVICE_FAILED;
     frontend_vk_slot *slot = NULL;
@@ -516,7 +516,8 @@ static int submit_scene_owned(frontend_vk *c, const mag_native_scene *scene, mag
                                           limits->maxUniformBufferRange,
                                           limits->maxStorageBufferRange};
     mag_native_scene_usage usage;
-    int status = mag_native_scene_validate(scene, &registry, &usage);
+    mag_native_scene_registry_v2 registry_v2={&registry,sampler_table,sampler_count,sampler_info};
+    int status = mag_native_scene_validate_v2(scene, &registry_v2, &usage);
     if (status)
         return status;
     uint32_t total_draws = 0;
@@ -603,6 +604,10 @@ static int submit_scene_owned(frontend_vk *c, const mag_native_scene *scene, mag
             status = MAG_NATIVE_ALLOCATION_FAILED;
             goto fail;
         }
+    }
+    slot->sampler_count=sampler_count;
+    for(uint32_t i=0;i<sampler_count;++i)if(usage.samplers[i]){
+        status=mag_native_sampler_registry_pin(&c->samplers,sampler_table[i],&slot->sampler_entries[i]);if(status)goto fail;
     }
     VkDescriptorSet compute_sets[MAG_NATIVE_BATCH_MAX_COMMANDS];
     for (uint32_t n = 0; n < scene->dispatch_count; ++n) {
@@ -694,12 +699,12 @@ static int submit_scene_owned(frontend_vk *c, const mag_native_scene *scene, mag
         const mag_native_scene_pass *p = &scene->passes[n];
         // Each sampled image is transitioned before entering the render pass; an
         // active attachment alias was already rejected by the shared validator.
-        uint32_t sampled = 0;
+        uint8_t sampled[MAG_NATIVE_SCENE_MAX_IMAGES] = {0};
         for (uint32_t j = 0; j < p->draw_count; ++j)
             for (uint32_t k = 0; k < p->draws[j].texture_count; ++k) {
                 uint32_t index = p->draws[j].textures[k].image;
-                if (!(sampled & (1u << index))) {
-                    sampled |= 1u << index;
+                if (!sampled[index]) {
+                    sampled[index] = 1;
                     frontend_vk_scene_image *im = &slot->scene_images[index];
                     scene_image_transition(c, slot, index,
                                            im->aspect == VK_IMAGE_ASPECT_DEPTH_BIT
@@ -817,7 +822,15 @@ static int submit_scene(void *opaque, const mag_native_scene *scene, mag_native_
     int status = c->owner.host.try_begin(c->owner.host.userdata, c->owner.host.lifetime);
     if (status)
         return status < 0 ? status : MAG_NATIVE_DEVICE_FAILED;
-    int result = submit_scene_owned(c, scene, out);
+    int result = submit_scene_owned(c, scene, out,NULL,0);
     c->owner.host.end(c->owner.host.userdata, c->owner.host.lifetime);
     return result;
+}
+
+static int submit_scene_v2(void *opaque,const mag_native_scene_v2 *desc,const mag_native_image *target,const MagRenderHostFrame *frame,mag_native_ticket *out){
+    if(target||frame)return MAG_NATIVE_UNSUPPORTED;
+    frontend_vk *c=opaque;int status=c->owner.host.try_begin(c->owner.host.userdata,c->owner.host.lifetime);
+    if(status)return status<0?status:MAG_NATIVE_DEVICE_FAILED;
+    int result=submit_scene_owned(c,desc->scene,out,desc->samplers,desc->sampler_count);
+    c->owner.host.end(c->owner.host.userdata,c->owner.host.lifetime);return result;
 }

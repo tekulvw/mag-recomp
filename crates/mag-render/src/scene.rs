@@ -103,11 +103,21 @@ pub struct GraphicsBuffer {
     pub source: ReadSource,
     pub range: ByteRange,
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Sampler {
+    Explicit(mag_render_abi::packet::Sampler),
     NearestClamp,
     LinearClamp,
     CompareLessEqual,
+}
+impl Sampler {
+    pub fn comparison(self) -> bool {
+        match self {
+            Self::Explicit(s) => s.comparison_enabled != 0,
+            Self::CompareLessEqual => true,
+            _ => false,
+        }
+    }
 }
 #[derive(Clone, Copy, Debug)]
 pub struct SampledImage {
@@ -429,7 +439,7 @@ impl SceneBuilder {
                 if attached.iter().any(|(i, _)| *i == t.image.image) {
                     return Err(SceneError::Alias);
                 }
-                if t.sampler == Sampler::CompareLessEqual
+                if t.sampler.comparison()
                     && self.state(t.image.image)?.plan.desc.format != ImageFormat::Depth32
                 {
                     return Err(SceneError::InvalidBindings);
@@ -568,7 +578,7 @@ impl SceneBuilder {
                         })
                         .ok_or(SceneError::InvalidBindings)?;
                     if self.state(t.image.image)?.plan.desc.format != r.format
-                        || r.comparison != (t.sampler == Sampler::CompareLessEqual)
+                        || r.comparison != (t.sampler.comparison())
                     {
                         return Err(SceneError::InvalidBindings);
                     }

@@ -107,3 +107,12 @@ extern "C" int mag_native_scene_graphics_v3_layout(uint32_t *out,uint32_t words)
  if(!out||words!=sizeof(expected)/sizeof(expected[0]))return MAG_NATIVE_INVALID;
  for(uint32_t i=0;i<words;++i){out[i]=expected[i];}return MAG_NATIVE_OK;
 }
+
+extern "C" int mag_native_sampler_layout(uint32_t *out,uint32_t words){
+ const uint32_t expected[]={LAYOUT(mag_native_sampler),OFFSET(mag_native_sampler,id),
+ LAYOUT(mag_native_sampler_state),OFFSET(mag_native_sampler_state,lod_min),OFFSET(mag_native_sampler_state,border),
+ LAYOUT(mag_native_sampler_desc),OFFSET(mag_native_sampler_desc,state),
+ LAYOUT(mag_native_scene_v2),OFFSET(mag_native_scene_v2,scene),OFFSET(mag_native_scene_v2,samplers),OFFSET(mag_native_scene_v2,sampler_count)};
+ if(!out||words!=sizeof(expected)/sizeof(expected[0]))return MAG_NATIVE_INVALID;
+ for(uint32_t i=0;i<words;++i){out[i]=expected[i];}return MAG_NATIVE_OK;
+}

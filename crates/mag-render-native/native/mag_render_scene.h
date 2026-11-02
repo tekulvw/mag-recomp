@@ -2,6 +2,7 @@
 #define MAG_RENDER_SCENE_H
 #include "mag_render_batch.h"
 #include "mag_render_raster.h"
+#include "mag_render_sampler.h"
 #include "mag_render_host_image.h"
 #include "mag_render_host_frame.h"
 #ifdef __cplusplus
@@ -131,6 +132,20 @@ typedef struct mag_native_scene {
     uint32_t output_image, reserved;
     mag_native_buffer diagnostic_readback; /* zero=no copy; otherwise tight bytes in output format (RGBA/BGRA) */
 } mag_native_scene;
+/* Shallow V2 submission envelope. Old texture.sampler values0..2 remain the
+ * exact presets. High-bit codes index this full generation-qualified table;
+ * they are never interpreted as bare registry IDs. All table handles are
+ * validated before any queue effects, including otherwise unused entries. */
+#define MAG_NATIVE_SCENE_SAMPLER_TABLE_BIT 0x80000000u
+#define MAG_NATIVE_SCENE_SAMPLER_TABLE_INDEX(code) ((code)&0x7fffffffu)
+typedef struct mag_native_scene_v2 {
+    uint32_t struct_size,abi_version;
+    const mag_native_scene *scene;
+    const mag_native_sampler *samplers;
+    uint32_t sampler_count,reserved;
+} mag_native_scene_v2;
+/* target==NULL for offscreen; frame requires a genuine nonnull target. */
+int mag_native_submit_scene_v2(mag_native_device *,const mag_native_scene_v2 *,const mag_native_image *target,const MagRenderHostFrame *frame,mag_native_ticket *);
 /* Synchronous complete validation + reservation before queue effects. Ordered
  * compute prefix then passes share one native submission/terminal ticket.
  * These methods do not assert that an offscreen image was physically presented. */

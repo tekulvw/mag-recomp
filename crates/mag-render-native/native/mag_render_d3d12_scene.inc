@@ -279,6 +279,7 @@ struct SceneDrawPlan {
   std::array<uint64_t, 2> sampler_indices = {{UINT64_MAX, UINT64_MAX}};
 };
 struct ScenePlan {
+  const mag_native_sampler *sampler_table=nullptr;uint32_t sampler_count=0;
   Plan buffers;
   std::array<Command, MaxCommands> compute = {};
   std::vector<SceneDrawPlan> draws;
@@ -319,7 +320,7 @@ static int scene_graphics_info(void *opaque, mag_native_pipeline ref,
   return MAG_NATIVE_OK;
 }
 static int scene_prepare(Context *c, const mag_native_scene *scene,
-                         ScenePlan &plan) {
+                         ScenePlan &plan,const mag_native_sampler *sampler_table=nullptr,uint32_t sampler_count=0) {
   if (c->failed)
     return MAG_NATIVE_DEVICE_FAILED;
   mag_native_scene_registry registry = {c,
@@ -330,7 +331,9 @@ static int scene_prepare(Context *c, const mag_native_scene *scene,
                                         16,
                                         65536,
                                         UINT32_MAX};
-  int status = mag_native_scene_validate(scene, &registry, &plan.usage);
+  plan.sampler_table=sampler_table;plan.sampler_count=sampler_count;
+  mag_native_scene_registry_v2 registry_v2={&registry,sampler_table,sampler_count,sampler_info};
+  int status = mag_native_scene_validate_v2(scene, &registry_v2, &plan.usage);
   if (status)
     return status;
   plan.buffers.buffers.resize(scene->resource_count);
@@ -496,7 +499,7 @@ static uint32_t scene_sampler(const mag_native_scene_draw &draw, uint32_t stage,
   for (uint32_t i = 0; i < draw.texture_count; ++i)
     if (draw.textures[i].stage == stage &&
         draw.textures[i].sampler_slot == unit)
-      return draw.textures[i].sampler;
+      return (draw.textures[i].sampler&MAG_NATIVE_SCENE_SAMPLER_TABLE_BIT)?3+MAG_NATIVE_SCENE_SAMPLER_TABLE_INDEX(draw.textures[i].sampler):draw.textures[i].sampler;
   return UINT32_MAX;
 }
 static void scene_descriptors(Context *c, Slot &slot,
@@ -556,6 +559,15 @@ static int scene_reserve(Context *c, Slot &slot, const mag_native_scene *scene,
   int status = scene_sampler_heap(c, slot);
   if (status)
     return status;
+  slot.sampler_registry=&c->samplers;
+  slot.sampler_entries.reserve(plan.sampler_count);
+  for(uint32_t i=0;i<plan.sampler_count;++i)if(plan.usage.samplers[i]){
+    mag_native_sampler_entry *entry=nullptr;status=mag_native_sampler_registry_pin(&c->samplers,plan.sampler_table[i],&entry);if(status)return status;
+    slot.sampler_entries.push_back(entry);
+    auto *payload=static_cast<NativeSamplerPayload*>(entry->payload);
+    auto dest=slot.samplers->GetCPUDescriptorHandleForHeapStart();dest.ptr+=SIZE_T(3+i)*c->sampler_step;
+    c->device->CopyDescriptorsSimple(1,dest,payload->cpu,D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER);
+  }
   slot.buffers.resize(std::max(scene->resource_count,MaxResources));
   slot.uploads.resize(std::max(scene->resource_count,MaxResources));
   slot.writes.resize(std::max(scene->resource_count,MaxResources));
@@ -913,14 +925,19 @@ static int scene_execute(Context *c, const mag_native_scene *scene,
     return MAG_NATIVE_ALLOCATION_FAILED;
   }
 }
-static int submit_scene(void *opaque, const mag_native_scene *scene,
-                        mag_native_ticket *out) {
+static int submit_scene_impl(void *opaque,const mag_native_scene *scene,mag_native_ticket *out,const mag_native_sampler *sampler_table,uint32_t sampler_count) {
   auto *c = static_cast<Context *>(opaque);
   try {
     ScenePlan plan;
-    int status = scene_prepare(c, scene, plan);
+    int status = scene_prepare(c, scene, plan,sampler_table,sampler_count);
     return status ? status : scene_execute(c, scene, plan, out);
   } catch (const std::bad_alloc &) {
     return MAG_NATIVE_ALLOCATION_FAILED;
   }
+}
+
+static int submit_scene(void *opaque,const mag_native_scene *scene,mag_native_ticket *out){return submit_scene_impl(opaque,scene,out,nullptr,0);}
+static int submit_scene_v2(void *opaque,const mag_native_scene_v2 *desc,const mag_native_image *target,const MagRenderHostFrame *frame,mag_native_ticket *out){
+ if(target||frame)return MAG_NATIVE_UNSUPPORTED;
+ return submit_scene_impl(opaque,desc->scene,out,desc->samplers,desc->sampler_count);
 }

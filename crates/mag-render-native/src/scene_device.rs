@@ -171,7 +171,10 @@ unsafe extern "C" {
         out: *mut Ticket,
     ) -> i32;
 }
+#[path = "scene_sampler.rs"]
+mod scene_sampler;
 pub struct SceneDevice<'owner> {
+    samplers: scene_sampler::Cache,
     frame: Option<crate::host_frame::HostFrame>,
     target: Option<crate::host_image::NativeImage>,
     inner: BatchDevice<'owner>,
@@ -181,6 +184,7 @@ impl NativeContext {
     pub fn scene(&mut self, limits: BatchDeviceLimits) -> Result<SceneDevice<'_>, i32> {
         checked_scene_layout()?;
         Ok(SceneDevice {
+            samplers: scene_sampler::Cache::default(),
             frame: None,
             target: None,
             inner: BatchDevice::from_api_with_byte_cap(self.api()?, limits, None, MAX_SCENE_BYTES)?,
@@ -196,6 +200,7 @@ impl SceneDevice<'static> {
     ) -> Result<Self, i32> {
         checked_scene_layout()?;
         Ok(Self {
+            samplers: scene_sampler::Cache::default(),
             frame: None,
             target: None,
             inner: BatchDevice::from_api_with_byte_cap(
@@ -532,6 +537,11 @@ impl SceneDevice<'_> {
         }
     }
 }
+impl Drop for SceneDevice<'_> {
+    fn drop(&mut self) {
+        self.samplers.release_all(self.inner.api);
+    }
+}
 fn stage(value: u32) -> scene::Stage {
     if value == 0 {
         scene::Stage::Vertex
@@ -602,6 +612,10 @@ impl RenderDevice for SceneDevice<'_> {
         if self.inner.pending.len() + self.inner.ready.len() >= 2 {
             return reject(-4);
         }
+        let (draw_textures, sampler_table) = match self.samplers.resolve(self.inner.api, commands) {
+            Ok(v) => v,
+            Err(c) => return reject(c),
+        };
         let (buffers, resources, readback) = match self.allocate_scene(commands, leases) {
             Ok(v) => v,
             Err(c) => return reject(c),
@@ -691,24 +705,6 @@ impl RenderDevice for SceneDevice<'_> {
                     .collect()
             })
             .collect();
-        let draw_textures: Vec<Vec<TextureBinding>> = commands
-            .passes()
-            .iter()
-            .flat_map(|p| &p.draws)
-            .map(|d| {
-                d.textures
-                    .iter()
-                    .map(|t| TextureBinding {
-                        stage: t.stage as u32,
-                        texture_slot: t.texture_slot,
-                        sampler_slot: t.sampler_slot,
-                        image: t.image.image().index() as u32,
-                        sampler: t.sampler as u32,
-                        reserved: 0,
-                    })
-                    .collect()
-            })
-            .collect();
         let draws: Vec<SceneDraw> = commands
             .passes()
             .iter()
@@ -772,7 +768,23 @@ impl RenderDevice for SceneDevice<'_> {
         };
         let mut native = Ticket::default();
         let status = unsafe {
-            if let (Some(target), Some(frame)) = (self.target, self.frame.as_ref()) {
+            if !sampler_table.is_empty() {
+                let v2 = scene_sampler::SceneV2 {
+                    struct_size: size_of::<scene_sampler::SceneV2>() as u32,
+                    abi_version: 2,
+                    scene: &scene,
+                    samplers: sampler_table.as_ptr(),
+                    sampler_count: sampler_table.len() as u32,
+                    reserved: 0,
+                };
+                scene_sampler::mag_native_submit_scene_v2(
+                    self.inner.api.device,
+                    &v2,
+                    self.target.as_ref().map_or(std::ptr::null(), |t| t),
+                    self.frame.as_ref().map_or(std::ptr::null(), |f| f),
+                    &mut native,
+                )
+            } else if let (Some(target), Some(frame)) = (self.target, self.frame.as_ref()) {
                 mag_native_submit_scene_frame(
                     self.inner.api.device,
                     &scene,
@@ -929,6 +941,10 @@ mod abi_tests {
     use super::*;
     unsafe extern "C" {
         fn mag_native_scene_graphics_v2_validate(desc: *const SceneGraphicsV2Desc) -> i32;
+    }
+    #[test]
+    fn generation_qualified_sampler_table_matches_independent_c_layout() {
+        scene_sampler::checked_layout().unwrap();
     }
     #[test]
     fn explicit_raster_descriptor_matches_independent_c_layout() {

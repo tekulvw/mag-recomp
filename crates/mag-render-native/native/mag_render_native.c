@@ -138,3 +138,22 @@ int mag_native_scene_graphics_create_v3(mag_native_device *device,const mag_nati
  int status=mag_native_scene_graphics_v3_validate(desc);if(status)return status;
  return device->ops->scene_graphics_create_v3?device->ops->scene_graphics_create_v3(device->context,desc,out):MAG_NATIVE_UNSUPPORTED;
 }
+
+int mag_native_sampler_create(mag_native_device *device,const mag_native_sampler_desc *desc,mag_native_sampler *out){
+ if(out)memset(out,0,sizeof(*out));
+ if(!device||!desc||!out||desc->struct_size!=sizeof(*desc)||desc->abi_version!=MAG_NATIVE_SAMPLER_ABI)return MAG_NATIVE_INVALID;
+ int status=mag_native_sampler_state_validate(&desc->state);if(status)return status;
+ return device->ops->sampler_create?device->ops->sampler_create(device->context,desc,out):MAG_NATIVE_UNSUPPORTED;
+}
+int mag_native_sampler_release(mag_native_device *device,mag_native_sampler sampler){
+ if(!device||!sampler.device_generation||!sampler.id)return MAG_NATIVE_INVALID;
+ return device->ops->sampler_release?device->ops->sampler_release(device->context,sampler):MAG_NATIVE_UNSUPPORTED;
+}
+int mag_native_submit_scene_v2(mag_native_device *device,const mag_native_scene_v2 *desc,const mag_native_image *target,const MagRenderHostFrame *frame,mag_native_ticket *out){
+ if(out)memset(out,0,sizeof(*out));
+ if(!device||!desc||!out||desc->struct_size!=sizeof(*desc)||desc->abi_version!=2||desc->reserved||!desc->scene
+    ||desc->scene->struct_size!=sizeof(*desc->scene)||desc->scene->abi_version!=1||desc->sampler_count>MAG_NATIVE_MAX_SAMPLERS
+    ||(desc->sampler_count&&!desc->samplers)||(target&&(!target->device_generation||!target->id))
+    ||(frame&&(!target||frame->struct_size!=sizeof(*frame)||frame->abi_version!=1||!frame->owner_lifetime||!frame->reservation||!frame->preflight||!frame->committed||!frame->cancel)))return MAG_NATIVE_INVALID;
+ return device->ops->submit_scene_v2?device->ops->submit_scene_v2(device->context,desc,target,frame,out):MAG_NATIVE_UNSUPPORTED;
+}

@@ -145,7 +145,7 @@ pub struct ImageView {
     pub reserved: u32,
 }
 #[repr(C)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Sampler {
     pub known_fields: u64,
     pub min_filter: u32,
