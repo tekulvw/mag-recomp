@@ -1306,7 +1306,7 @@ static int buffer_read(void *opaque, mag_native_buffer ref, uint64_t offset,
 #include "mag_render_d3d12_sampler.inc"
 #include "mag_render_d3d12_scene.inc"
 static const mag_native_ops operations={caps,buffer_create,buffer_release,buffer_read,pipeline_create,pipeline_release,
- submit,poll,close,graphics_create,submit_batch,scene_graphics_create,submit_scene,nullptr,nullptr,nullptr,nullptr,scene_graphics_create_v2,scene_graphics_create_v3,sampler_create,sampler_release,submit_scene_v2,submit_scene_v3};
+ submit,poll,close,graphics_create,submit_batch,scene_graphics_create,submit_scene,nullptr,nullptr,nullptr,nullptr,scene_graphics_create_v2,scene_graphics_create_v3,sampler_create,sampler_release,submit_scene_v2,submit_scene_v3,submit_scene_v4};
 static int compiler_path(std::string &out) {
   DWORD count = GetEnvironmentVariableW(L"PS3RECOMP_DXC_LIBRARY", nullptr, 0);
   if (!count)

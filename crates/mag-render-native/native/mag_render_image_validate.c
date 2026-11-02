@@ -12,6 +12,7 @@ int mag_native_image_layout_validate(const mag_native_scene_image *im,const mag_
     if(l->mip_count>max_mips)return MAG_NATIVE_INVALID;
     int uploaded=has_upload(im->upload);
     if(uploaded&&(!im->upload.device_generation||!im->upload.id||!im->upload.version))return MAG_NATIVE_INVALID;
+    if(uploaded&&mag_native_image_has_stencil(im->format))return MAG_NATIVE_UNSUPPORTED;
     uint32_t count=l->layers*l->mip_count;
     if(uploaded?(l->subresource_count!=count||!l->subresources):l->subresource_count!=0)return MAG_NATIVE_INVALID;
     if(!uploaded&&(l->dimension!=2||l->mip_count!=1||(!f.color_attachment&&!f.depth_attachment)))return MAG_NATIVE_UNSUPPORTED;

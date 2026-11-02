@@ -181,6 +181,7 @@ pub struct SceneDevice<'owner> {
     target: Option<crate::host_image::NativeImage>,
     inner: BatchDevice<'owner>,
     graphics: BTreeMap<u64, scene::GraphicsLayout>,
+    rasters: BTreeMap<u64, mag_render_abi::packet::RasterState>,
 }
 impl NativeContext {
     pub fn scene(&mut self, limits: BatchDeviceLimits) -> Result<SceneDevice<'_>, i32> {
@@ -191,6 +192,7 @@ impl NativeContext {
             target: None,
             inner: BatchDevice::from_api_with_byte_cap(self.api()?, limits, None, MAX_SCENE_BYTES)?,
             graphics: BTreeMap::new(),
+            rasters: BTreeMap::new(),
         })
     }
 }
@@ -212,6 +214,7 @@ impl SceneDevice<'static> {
                 MAX_SCENE_BYTES,
             )?,
             graphics: BTreeMap::new(),
+            rasters: BTreeMap::new(),
         })
     }
 }
@@ -231,6 +234,7 @@ impl SceneDevice<'_> {
         }
         self.inner.pipelines.remove(&id);
         self.graphics.remove(&id);
+        self.rasters.remove(&id);
         Ok(())
     }
     /// # Safety
@@ -358,6 +362,7 @@ impl SceneDevice<'_> {
         } else {
             scene::Blend::Opaque
         };
+        self.rasters.insert(id, desc.raster);
         Ok(id)
     }
     unsafe fn register_graphics(
@@ -570,6 +575,7 @@ fn attachment<T>(
     let (load, values) = match load {
         scene::Load::Clear(v) => (0, clear(v)),
         scene::Load::Load(_) => (1, [0.; 4]),
+        scene::Load::Discard => (2, [0.; 4]),
     };
     Attachment {
         image: image.index() as u32,
@@ -597,6 +603,9 @@ impl PipelineCatalog for SceneDevice<'_> {
     }
 }
 impl scene::SceneCatalog for SceneDevice<'_> {
+    fn scene_raster(&self, id: u64) -> Option<mag_render_abi::packet::RasterState> {
+        self.rasters.get(&id).copied()
+    }
     fn scene_graphics(&self, id: u64) -> Option<scene::GraphicsLayout> {
         self.graphics.get(&id).cloned()
     }

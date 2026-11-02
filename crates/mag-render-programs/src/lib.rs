@@ -221,6 +221,7 @@ pub struct FragmentProgram<'a> {
 }
 unsafe extern "C" {
     fn mrf_rsx_fp_texture_units(code: *const u8, size: u32) -> u32;
+    fn mrf_rsx_fp_opcode_name(opcode: u32) -> *const c_char;
     fn mrf_rsx_fp_alpha_ref(raw: u32, surface_color_format: u32) -> f32;
     fn mrf_rsx_fp_decompile_buffered_shadow_color_expand_vol_ex(
         code: *const u8,
@@ -344,6 +345,33 @@ pub fn fragment_texture_units(bytes: &[u8]) -> Result<u16, ProgramError> {
     // span. The existing isolated parser only reads that span under our lock.
     let mask = unsafe { mrf_rsx_fp_texture_units(bytes.as_ptr(), stream.end as u32) };
     u16::try_from(mask).map_err(|_| ProgramError::Compiler)
+}
+/// Conservatively reflect source KIL instructions through the same admitted
+/// instruction/literal stream as translation. Predicated KIL is may-discard;
+/// constant literals and bytes after PROGRAM_END are not executable slots.
+/// Unknown retained opcode metadata and unadmitted flow fail closed. This says
+/// nothing about injected alpha/texture tests, shader validity, vertex coverage
+/// or a native whole-attachment write; those remain separate obligations.
+pub fn fragment_may_discard(bytes: &[u8]) -> Result<bool, ProgramError> {
+    let mut discard = false;
+    fragment_stream(bytes, |words| {
+        // Same opcode field used by translation; the retained parser supplies
+        // the operation identity instead of another authored opcode table.
+        // SAFETY: this pure switch returns process-lived static C strings for
+        // every u32. It reads/writes no shared compiler state.
+        let name = unsafe { mrf_rsx_fp_opcode_name((words[0] >> 24) & 63) };
+        if name.is_null() {
+            return Err(ProgramError::Compiler);
+        }
+        // SAFETY: the isolated helper's result is a static NUL-terminated name.
+        let name = unsafe { CStr::from_ptr(name) }.to_bytes();
+        if name == b"?" {
+            return Err(ProgramError::Unsupported);
+        }
+        discard |= name == b"KIL";
+        Ok(())
+    })?;
+    Ok(discard)
 }
 /// Alpha reference conversion from the source NV4097 surface-color code
 /// (low five bits only), not the native attachment-format enum. The isolated

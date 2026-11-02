@@ -39,10 +39,15 @@ pub enum ImageFormat {
     Rgba8,
     Bgra8,
     Depth32,
+    Depth24Stencil8,
+    Depth32Stencil8,
 }
 #[path = "scene_image.rs"]
 pub mod image;
 pub use image::{Dimension, ImageLayout, Subresource, ViewDesc, Viewport};
+#[path = "scene_stencil.rs"]
+pub mod stencil;
+pub use stencil::{StencilLoad, StencilOps};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ImageDesc {
     pub width: u32,
@@ -63,6 +68,8 @@ pub struct ImageValue {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Load<T> {
     Clear(T),
+    /// Contents are unknown; storing alone does not establish an image epoch.
+    Discard,
     Load(ImageValue),
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -167,6 +174,9 @@ pub struct GraphicsLayout {
     pub textures: Vec<TextureLayout>,
 }
 pub trait SceneCatalog: PipelineCatalog {
+    fn scene_raster(&self, _pipeline: u64) -> Option<mag_render_abi::packet::RasterState> {
+        None
+    }
     fn scene_graphics(&self, pipeline: u64) -> Option<GraphicsLayout>;
 }
 #[derive(Clone, Debug)]
@@ -210,6 +220,7 @@ pub struct SceneBuilder {
     textures: Vec<ResourceLease>,
     passes: Vec<RenderPass>,
     viewports: Vec<Option<Viewport>>,
+    stencils: Vec<Option<StencilOps>>,
     bytes: u64,
     draws: usize,
     output: Option<SceneOutput>,
@@ -220,6 +231,7 @@ pub struct PreparedScene {
     textures: Vec<ResourceLease>,
     passes: Vec<RenderPass>,
     viewports: Vec<Option<Viewport>>,
+    stencils: Vec<Option<StencilOps>>,
     output: Option<SceneOutput>,
 }
 impl Image {
@@ -270,6 +282,7 @@ impl SceneBuilder {
             textures: vec![],
             passes: vec![],
             viewports: vec![],
+            stencils: vec![],
             bytes,
             draws: 0,
             output: None,
@@ -317,7 +330,7 @@ impl SceneBuilder {
         } else {
             let size = Self::image_bytes(desc)?;
             if let Some(lease) = &upload {
-                if desc.format == ImageFormat::Depth32 || lease.bytes().len() as u64 != size {
+                if desc.format.info().depth_attachment || lease.bytes().len() as u64 != size {
                     return Err(SceneError::InvalidBindings);
                 }
             } else if !desc.format.info().color_attachment && !desc.format.info().depth_attachment {
@@ -411,16 +424,39 @@ impl SceneBuilder {
         pass: RenderPass,
         viewport: Viewport,
     ) -> Result<Vec<ImageValue>, SceneError> {
-        let image = pass
-            .color
-            .map(|a| a.image)
-            .or_else(|| pass.depth.map(|a| a.image))
-            .ok_or(SceneError::InvalidPass)?;
-        let desc = self.state(image)?.plan.desc;
-        viewport.validate(desc.width, desc.height)?;
-        let result = self.render_pass(pass)?;
-        *self.viewports.last_mut().ok_or(SceneError::InvalidPass)? = Some(viewport);
-        Ok(result)
+        self.render_pass_with_aspects(pass, Some(viewport), None)
+    }
+    /// Independent stencil plane operations. A full-write assertion must be
+    /// source-qualified; preparation also checks necessary raster/coverage facts.
+    pub fn render_pass_with_aspects(
+        &mut self,
+        pass: RenderPass,
+        viewport: Option<Viewport>,
+        stencil: Option<StencilOps>,
+    ) -> Result<Vec<ImageValue>, SceneError> {
+        if let Some(viewport) = viewport {
+            let image = pass
+                .color
+                .map(|a| a.image)
+                .or_else(|| pass.depth.map(|a| a.image))
+                .ok_or(SceneError::InvalidPass)?;
+            let desc = self.state(image)?.plan.desc;
+            viewport.validate(desc.width, desc.height)?;
+        }
+        let combined = pass
+            .depth
+            .map(|d| {
+                self.state(d.image)
+                    .map(|s| s.plan.desc.format.has_stencil())
+            })
+            .transpose()?
+            .unwrap_or(false);
+        if combined != stencil.is_some()
+            || stencil.is_some_and(|s| Some(s.image) != pass.depth.map(|d| d.image))
+        {
+            return Err(SceneError::InvalidPass);
+        }
+        self.render_pass_impl(pass, viewport, stencil)
     }
     pub fn current(&self, image: Image) -> Result<ImageValue, SceneError> {
         let s = self.state(image)?;
@@ -458,6 +494,14 @@ impl SceneBuilder {
         Ok(s.plan.desc)
     }
     pub fn render_pass(&mut self, pass: RenderPass) -> Result<Vec<ImageValue>, SceneError> {
+        self.render_pass_with_aspects(pass, None, None)
+    }
+    fn render_pass_impl(
+        &mut self,
+        pass: RenderPass,
+        viewport: Option<Viewport>,
+        stencil: Option<StencilOps>,
+    ) -> Result<Vec<ImageValue>, SceneError> {
         if pass.color.is_none() && pass.depth.is_none() {
             return Err(SceneError::InvalidPass);
         }
@@ -476,7 +520,7 @@ impl SceneBuilder {
                 return Err(SceneError::InvalidPass);
             }
             extent = Some(self.attachment(c.image, &c.load, format)?);
-            attached.push((c.image, c.store));
+            attached.push((c.image, c.store, !matches!(c.load, Load::Discard)));
         }
         if let Some(d) = pass.depth {
             if let Load::Clear(depth) = d.load
@@ -484,11 +528,15 @@ impl SceneBuilder {
             {
                 return Err(SceneError::InvalidPass);
             }
-            let desc = self.attachment(d.image, &d.load, ImageFormat::Depth32)?;
+            let format = self.state(d.image)?.plan.desc.format;
+            if !format.info().depth_attachment {
+                return Err(SceneError::InvalidPass);
+            }
+            let desc = self.attachment(d.image, &d.load, format)?;
             if extent.is_some_and(|c| c.width != desc.width || c.height != desc.height) {
                 return Err(SceneError::InvalidPass);
             }
-            attached.push((d.image, d.store));
+            attached.push((d.image, d.store, !matches!(d.load, Load::Discard)));
         }
         for draw in &pass.draws {
             if draw.index_count == 0
@@ -528,11 +576,17 @@ impl SceneBuilder {
                     return Err(SceneError::InvalidBindings);
                 }
                 self.valid(t.image)?;
-                if attached.iter().any(|(i, _)| *i == t.image.image) {
+                if attached.iter().any(|(i, _, _)| *i == t.image.image) {
                     return Err(SceneError::Alias);
                 }
                 if t.sampler.comparison()
-                    && self.state(t.image.image)?.plan.desc.format != ImageFormat::Depth32
+                    && !self
+                        .state(t.image.image)?
+                        .plan
+                        .desc
+                        .format
+                        .info()
+                        .depth_attachment
                 {
                     return Err(SceneError::InvalidBindings);
                 }
@@ -551,17 +605,20 @@ impl SceneBuilder {
         self.viewports
             .try_reserve(1)
             .map_err(|_| SceneError::Capacity)?;
+        self.stencils
+            .try_reserve(1)
+            .map_err(|_| SceneError::Capacity)?;
         let mut values = Vec::new();
         values
             .try_reserve_exact(attached.len())
             .map_err(|_| SceneError::Capacity)?;
         // All validation and allocation occurs before attachment epochs change.
-        for (i, store) in &attached {
+        for (i, store, known) in &attached {
             self.state(*i)?
                 .epoch
                 .checked_add(1)
                 .ok_or(SceneError::Capacity)?;
-            if *store == Store::Store {
+            if *store == Store::Store && *known {
                 values.push(ImageValue {
                     image: *i,
                     epoch: self.state(*i)?.epoch + 1,
@@ -569,14 +626,15 @@ impl SceneBuilder {
                 })
             }
         }
-        for (i, store) in attached {
+        for (i, store, known) in attached {
             let s = &mut self.images[i.index];
             s.epoch += 1;
-            s.initialized = store == Store::Store;
+            s.initialized = store == Store::Store && known;
         }
         self.draws = draws;
         self.passes.push(pass);
-        self.viewports.push(None);
+        self.viewports.push(viewport);
+        self.stencils.push(stencil);
         Ok(values)
     }
     pub fn output(
@@ -624,6 +682,7 @@ impl SceneBuilder {
         if let Some(out) = self.output {
             self.valid(out.image)?;
         }
+        stencil::validate(&self, catalog)?;
         for pass in &self.passes {
             let color_format = match pass.color {
                 Some(c) => Some(self.state(c.image)?.plan.desc.format),
@@ -695,11 +754,15 @@ impl SceneBuilder {
             textures: self.textures,
             passes: self.passes,
             viewports: self.viewports,
+            stencils: self.stencils,
             output: self.output,
         })
     }
 }
 impl PreparedScene {
+    pub fn stencils(&self) -> &[Option<StencilOps>] {
+        &self.stencils
+    }
     pub fn viewports(&self) -> &[Option<Viewport>] {
         &self.viewports
     }
@@ -729,6 +792,7 @@ impl PreparedScene {
                 images: self.images,
                 passes: self.passes,
                 viewports: self.viewports,
+                stencils: self.stencils,
                 output: self.output,
                 texture_start,
                 texture_keys,
@@ -742,11 +806,15 @@ pub struct SceneCommands {
     images: Vec<ImagePlan>,
     passes: Vec<RenderPass>,
     viewports: Vec<Option<Viewport>>,
+    stencils: Vec<Option<StencilOps>>,
     output: Option<SceneOutput>,
     texture_start: usize,
     texture_keys: Vec<crate::resources::ResourceCacheKey>,
 }
 impl SceneCommands {
+    pub fn stencils(&self) -> &[Option<StencilOps>] {
+        &self.stencils
+    }
     pub fn viewports(&self) -> &[Option<Viewport>] {
         &self.viewports
     }

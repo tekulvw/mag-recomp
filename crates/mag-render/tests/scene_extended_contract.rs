@@ -217,3 +217,149 @@ fn hdr_clear_preserves_finite_outside_unorm_range() {
     });
     assert!(result.is_ok());
 }
+
+#[test]
+fn stencil_clear_does_not_initialize_discarded_depth_and_stencil_discard_cannot_load() {
+    let mut s = builder(4096);
+    let im = s
+        .image(ImageDesc {
+            width: 4,
+            height: 4,
+            format: ImageFormat::Depth24Stencil8,
+        })
+        .unwrap();
+    let pass = RenderPass {
+        color: None,
+        depth: Some(DepthAttachment {
+            image: im,
+            load: Load::Discard,
+            store: Store::Store,
+        }),
+        draws: vec![],
+    };
+    assert!(s.render_pass(pass.clone()).is_err());
+    let stencil = StencilOps {
+        image: im,
+        load: StencilLoad::Clear(0x81),
+        store: Store::Store,
+        source_full_write: false,
+    };
+    assert!(
+        s.render_pass_with_aspects(pass.clone(), None, Some(stencil))
+            .unwrap()
+            .is_empty()
+    );
+    assert!(matches!(s.current(im), Err(SceneError::Uninitialized)));
+    let stencil = StencilOps {
+        load: StencilLoad::Load,
+        ..stencil
+    };
+    s.render_pass_with_aspects(pass.clone(), None, Some(stencil))
+        .unwrap();
+    s.prepare(&Catalog).unwrap();
+    let mut s = builder(4096);
+    let im = s
+        .image(ImageDesc {
+            width: 4,
+            height: 4,
+            format: ImageFormat::Depth32Stencil8,
+        })
+        .unwrap();
+    let pass = RenderPass {
+        color: None,
+        depth: Some(DepthAttachment {
+            image: im,
+            load: Load::Clear(1.),
+            store: Store::Store,
+        }),
+        draws: vec![],
+    };
+    s.render_pass_with_aspects(
+        pass.clone(),
+        None,
+        Some(StencilOps {
+            image: im,
+            load: StencilLoad::Discard,
+            store: Store::Store,
+            source_full_write: false,
+        }),
+    )
+    .unwrap();
+    s.render_pass_with_aspects(
+        pass,
+        None,
+        Some(StencilOps {
+            image: im,
+            load: StencilLoad::Load,
+            store: Store::Store,
+            source_full_write: false,
+        }),
+    )
+    .unwrap();
+    assert!(matches!(
+        s.prepare(&Catalog),
+        Err(SceneError::Uninitialized)
+    ));
+}
+#[test]
+fn source_qualification_cannot_turn_empty_pass_into_stencil_initialization() {
+    let mut s = builder(4096);
+    let im = s
+        .image(ImageDesc {
+            width: 4,
+            height: 4,
+            format: ImageFormat::Depth24Stencil8,
+        })
+        .unwrap();
+    let mut v = viewport();
+    v.x = 0.;
+    v.y = 0.;
+    s.render_pass_with_aspects(
+        RenderPass {
+            color: None,
+            depth: Some(DepthAttachment {
+                image: im,
+                load: Load::Clear(1.),
+                store: Store::Store,
+            }),
+            draws: vec![],
+        },
+        Some(v),
+        Some(StencilOps {
+            image: im,
+            load: StencilLoad::Discard,
+            store: Store::Store,
+            source_full_write: true,
+        }),
+    )
+    .unwrap();
+    assert!(matches!(s.prepare(&Catalog), Err(SceneError::InvalidPass)));
+}
+#[test]
+fn combined_format_bytes_are_charged_but_uploaded_planes_are_explicitly_unsupported() {
+    assert_eq!(
+        ImageFormat::Depth24Stencil8
+            .level_layout(4, 4)
+            .unwrap()
+            .bytes,
+        64
+    );
+    assert_eq!(
+        ImageFormat::Depth32Stencil8
+            .level_layout(4, 4)
+            .unwrap()
+            .bytes,
+        128
+    );
+    let mut s = builder(4096);
+    let desc = ImageDesc {
+        width: 4,
+        height: 4,
+        format: ImageFormat::Depth32Stencil8,
+    };
+    assert!(
+        s.texture_with_layout(desc, ImageLayout::default(), lease(vec![0; 128]))
+            .is_err()
+    );
+    assert!(s.texture(desc, lease(vec![0; 128])).is_err());
+}

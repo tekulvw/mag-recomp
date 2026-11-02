@@ -181,3 +181,13 @@ int mag_native_submit_scene_v3(mag_native_device *device,const mag_native_scene_
     (frame&&(!target||frame->struct_size!=sizeof(*frame)||frame->abi_version!=1||!frame->owner_lifetime||!frame->reservation||!frame->preflight||!frame->committed||!frame->cancel)))return MAG_NATIVE_INVALID;
  return device->ops->submit_scene_v3?device->ops->submit_scene_v3(device->context,desc,target,frame,out):MAG_NATIVE_UNSUPPORTED;
 }
+
+int mag_native_submit_scene_v4(mag_native_device *device,const mag_native_scene_v4 *desc,const mag_native_image *target,const MagRenderHostFrame *frame,mag_native_ticket *out){
+ if(out)memset(out,0,sizeof(*out));
+ if(!device||!desc||!out||desc->struct_size!=sizeof(*desc)||desc->abi_version!=4||desc->reserved||desc->base.struct_size!=sizeof(desc->base)||desc->base.abi_version!=3||desc->base.reserved||
+ desc->base.base.struct_size!=sizeof(desc->base.base)||desc->base.base.abi_version!=2||desc->base.base.reserved||!desc->base.base.scene||
+ desc->base.base.scene->struct_size!=sizeof(*desc->base.base.scene)||desc->base.base.scene->abi_version!=1||
+ desc->base.base.sampler_count>MAG_NATIVE_MAX_SAMPLERS||(desc->base.base.sampler_count&&!desc->base.base.samplers)||desc->stencil_count!=desc->base.base.scene->pass_count||!desc->stencils
+ ||(target&&(!target->device_generation||!target->id))||(frame&&(!target||frame->abi_version!=1||frame->struct_size!=sizeof(*frame)||!frame->owner_lifetime||!frame->reservation||!frame->preflight||!frame->committed||!frame->cancel)))return MAG_NATIVE_INVALID;
+ return device->ops->submit_scene_v4?device->ops->submit_scene_v4(device->context,desc,target,frame,out):MAG_NATIVE_UNSUPPORTED;
+}

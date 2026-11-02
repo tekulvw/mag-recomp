@@ -285,3 +285,11 @@ extern "C" int mag_native_owner_v2_layout(uint32_t *out, uint32_t words) {
     }
     return 0;
 }
+
+extern "C" int mag_native_packet_v3_layout(uint32_t *out,uint32_t words){
+ const uint32_t expected[]={sizeof(MagRenderPacketStencilAttachment),alignof(MagRenderPacketStencilAttachment),offsetof(MagRenderPacketStencilAttachment,image),offsetof(MagRenderPacketStencilAttachment,load),offsetof(MagRenderPacketStencilAttachment,store),offsetof(MagRenderPacketStencilAttachment,clear_value),offsetof(MagRenderPacketStencilAttachment,flags),offsetof(MagRenderPacketStencilAttachment,reserved),
+ sizeof(MagRenderScenePacketV3Desc),alignof(MagRenderScenePacketV3Desc),offsetof(MagRenderScenePacketV3Desc,abi_version),offsetof(MagRenderScenePacketV3Desc,struct_size),offsetof(MagRenderScenePacketV3Desc,base),offsetof(MagRenderScenePacketV3Desc,stencils),offsetof(MagRenderScenePacketV3Desc,stencil_count),offsetof(MagRenderScenePacketV3Desc,reserved)};
+ if(!out||words!=sizeof(expected)/sizeof(expected[0]))return -1;
+ for(uint32_t i=0;i<words;++i){out[i]=expected[i];}
+ return 0;
+}

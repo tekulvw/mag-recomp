@@ -110,7 +110,7 @@ typedef struct mag_native_scene_draw {
 /* Load reads the immediately preceding stored contents of this same image.
  * Clear initializes all pixels even when no primitive covers them. Discard
  * invalidates all future reads/loads until a later clear. */
-enum mag_native_scene_load { MAG_NATIVE_SCENE_CLEAR = 0, MAG_NATIVE_SCENE_LOAD = 1 };
+enum mag_native_scene_load { MAG_NATIVE_SCENE_CLEAR = 0, MAG_NATIVE_SCENE_LOAD = 1, MAG_NATIVE_SCENE_DISCARD_LOAD = 2 };
 enum mag_native_scene_store { MAG_NATIVE_SCENE_STORE = 0, MAG_NATIVE_SCENE_DISCARD = 1 };
 typedef struct mag_native_scene_attachment {
     uint32_t image, load, store, reserved;

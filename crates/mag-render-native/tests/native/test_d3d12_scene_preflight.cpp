@@ -115,7 +115,17 @@ static void whole_scene_resources_exceed_retained_batch_capacity() {
   assert(plan.buffers.resources==65 && plan.buffers.buffers.size()==65);
   assert(plan.buffers.buffers.back()==buffer(&c,resources.back().buffer));
 }
+static void asymmetric_stencil_is_refused_before_any_COM_call(){
+ Context c;mag_native_scene_graphics_desc desc={};mag_native_raster_state state={};
+ state.stencil_enabled=1;state.front_stencil.reference=0x81;state.back_stencil.reference=0x80;mag_native_pipeline out={};
+ assert(scene_graphics_layout(&c,&desc,nullptr,0,1,&state,&out)==MAG_NATIVE_UNSUPPORTED);
+ state.back_stencil.reference=0x81;state.front_stencil.read_mask=255;
+ assert(scene_graphics_layout(&c,&desc,nullptr,0,1,&state,&out)==MAG_NATIVE_UNSUPPORTED);
+ state.back_stencil.read_mask=255;state.front_stencil.write_mask=255;
+ assert(scene_graphics_layout(&c,&desc,nullptr,0,1,&state,&out)==MAG_NATIVE_UNSUPPORTED);
+}
 int main() {
+  asymmetric_stencil_is_refused_before_any_COM_call();
   actual_pipeline_root_matches_canonical_stages();
   whole_scene_resources_exceed_retained_batch_capacity();
   Context c;

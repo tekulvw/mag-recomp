@@ -7,7 +7,8 @@ enum mag_native_extended_scene_format {
     MAG_NATIVE_SCENE_BC1=6, MAG_NATIVE_SCENE_BC2=7, MAG_NATIVE_SCENE_BC3=8,
     MAG_NATIVE_SCENE_R16=9, MAG_NATIVE_SCENE_RG16=10,
     MAG_NATIVE_SCENE_RGBA16F=11, MAG_NATIVE_SCENE_RGBA32F=12,
-    MAG_NATIVE_SCENE_R32F=13, MAG_NATIVE_SCENE_RG16F=14
+    MAG_NATIVE_SCENE_R32F=13, MAG_NATIVE_SCENE_RG16F=14,
+    MAG_NATIVE_SCENE_D24S8=15,MAG_NATIVE_SCENE_D32S8=16
 };
 typedef struct mag_native_image_format {
     uint32_t block_width, block_height, block_bytes;
@@ -17,7 +18,8 @@ static inline int mag_native_image_format_info(uint32_t id, mag_native_image_for
     mag_native_image_format f={1,1,0,0,0,0};
     switch(id){
     case 1:case 3:f.block_bytes=4;f.color_attachment=1;break;
-    case 2:f.block_bytes=4;f.sample_kind=3;f.depth_attachment=1;break;
+    case 2:case MAG_NATIVE_SCENE_D24S8:f.block_bytes=4;f.sample_kind=3;f.depth_attachment=1;break;
+    case MAG_NATIVE_SCENE_D32S8:f.block_bytes=8;f.sample_kind=3;f.depth_attachment=1;break;
     case MAG_NATIVE_SCENE_R8:f.block_bytes=1;f.color_attachment=1;break;
     case MAG_NATIVE_SCENE_RG8:case MAG_NATIVE_SCENE_R16:f.block_bytes=2;f.color_attachment=1;break;
     case MAG_NATIVE_SCENE_RG16:case MAG_NATIVE_SCENE_R32F:case MAG_NATIVE_SCENE_RG16F:f.block_bytes=4;f.color_attachment=1;break;
@@ -30,6 +32,7 @@ static inline int mag_native_image_format_info(uint32_t id, mag_native_image_for
     if(!out)return 0;
     *out=f;return 1;
 }
+static inline int mag_native_image_has_stencil(uint32_t format){return format==MAG_NATIVE_SCENE_D24S8||format==MAG_NATIVE_SCENE_D32S8;}
 /* Tight canonical payload math, including one full block for a sub4 mip.
  * No multiplication, ceil or caller-owned output wraps on malformed extents. */
 static inline int mag_native_image_level_layout(uint32_t format,uint32_t width,uint32_t height,

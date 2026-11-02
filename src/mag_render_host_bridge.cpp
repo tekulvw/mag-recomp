@@ -3,7 +3,9 @@
 #include <cstring>
 #if defined(__APPLE__)
 #include "rsx_metal_backend.h"
-#elif !defined(_WIN32)
+#elif defined(_WIN32)
+#include "rsx_live_draw_owner.h"
+#else
 #include "rsx_vulkan_backend.h"
 #endif
 #if !defined(_WIN32)
@@ -51,7 +53,28 @@ extern "C" int mag_render_frontend_borrow_owner(MagRenderHostOwner *out) {
         std::memcpy(out, &owner, sizeof(owner));
     return status;
 #else
-    return -2;
+    rsx_live_draw_owner owner = {};
+    owner.abi_version = RSX_LIVE_DRAW_OWNER_ABI;
+    owner.struct_size = sizeof(owner);
+    const int status = rsx_live_draw_borrow_owner(&owner);
+    if (!status) {
+        // The Windows provider has its own ABI and field order. Copy named
+        // metadata only; retention still precedes every native dereference.
+        MagRenderHostOwner result = {};
+        result.abi_version = MAG_RENDER_HOST_OWNER_ABI;
+        result.struct_size = sizeof(result);
+        result.backend = MAG_RENDER_HOST_D3D12;
+        result.lifetime = owner.lifetime;
+        result.device = owner.device;
+        result.queue = owner.queue;
+        result.userdata = owner.userdata;
+        result.retain = owner.retain;
+        result.release = owner.release;
+        result.try_begin = owner.try_begin;
+        result.end = owner.end;
+        *out = result;
+    }
+    return status;
 #endif
 }
 extern "C" int mag_render_frontend_borrow_owner_v2(MagRenderHostOwnerV2 *out) {
@@ -155,16 +178,18 @@ extern "C" int mag_render_frontend_native_boundary(uint64_t *ticket) {
 extern "C" int mag_render_frontend_shutdown_requested(uint64_t lifetime) {
 #if defined(__APPLE__)
     return rsx_metal_backend_owner_shutdown_requested(lifetime);
+#elif defined(_WIN32)
+    return rsx_live_draw_owner_shutdown_requested(lifetime);
 #else
-    (void)lifetime;
-    return -2;
+    return rsx_vulkan_backend_owner_shutdown_requested(lifetime);
 #endif
 }
 extern "C" int mag_render_frontend_retry_shutdown(uint64_t lifetime) {
 #if defined(__APPLE__)
     return rsx_metal_backend_owner_retry_shutdown(lifetime);
+#elif defined(_WIN32)
+    return rsx_live_draw_owner_retry_shutdown(lifetime);
 #else
-    (void)lifetime;
-    return -2;
+    return rsx_vulkan_backend_owner_retry_shutdown(lifetime);
 #endif
 }

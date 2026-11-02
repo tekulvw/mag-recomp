@@ -12,6 +12,7 @@ use crate::{
     },
     host_frame::HostFrame,
 };
+use mag_render::scene;
 use mag_render::sdk_compute::BindingLayout;
 pub use mag_render_abi::Attachment;
 pub use mag_render_abi::packet as raw;
@@ -223,6 +224,7 @@ pub struct ScenePacket {
     pub views: Vec<raw::ImageView>,
     pub view_dimensions: Vec<Dimension>,
     pub viewports: Option<Vec<Viewport>>,
+    pub stencils: Option<Vec<raw::StencilAttachment>>,
     pub samplers: Vec<raw::Sampler>,
     pub passes: Vec<PacketPass>,
     pub items: Vec<raw::Item>,
@@ -269,11 +271,35 @@ impl ScenePacket {
     /// Every declared synchronous range is valid and aligned. All bytes are copied;
     /// the host image and frame are pinned separately by worker admission.
     pub unsafe fn copy(d: &raw::Desc, max_draws: usize, max_bytes: u64) -> Result<Self, i32> {
-        unsafe { Self::copy_impl(d, max_draws, max_bytes, None, None) }
+        unsafe { Self::copy_impl(d, max_draws, max_bytes, None, None, None) }
     }
     /// # Safety
     /// Same synchronous range contract as copy; V2 tables are complete and valid.
     pub unsafe fn copy_v2(d: &raw::DescV2, max_draws: usize, max_bytes: u64) -> Result<Self, i32> {
+        unsafe { Self::copy_v2_impl(d, max_draws, max_bytes, None) }
+    }
+    /// # Safety
+    /// All V3/V2 ranges remain readable through the synchronous copy. Source
+    /// full-write flags require concrete producer coverage qualification.
+    pub unsafe fn copy_v3(d: &raw::DescV3, max_draws: usize, max_bytes: u64) -> Result<Self, i32> {
+        checked_v3_layout()?;
+        if d.abi_version != 3
+            || d.struct_size as usize != size_of::<raw::DescV3>()
+            || d.reserved != 0
+            || d.stencil_count != d.base.base.pass_count
+            || d.stencil_count > 16
+        {
+            return Err(-1);
+        }
+        let stencils = unsafe { slice(d.stencils, d.stencil_count as usize) }?.to_vec();
+        unsafe { Self::copy_v2_impl(&d.base, max_draws, max_bytes, Some(stencils)) }
+    }
+    unsafe fn copy_v2_impl(
+        d: &raw::DescV2,
+        max_draws: usize,
+        max_bytes: u64,
+        stencils: Option<Vec<raw::StencilAttachment>>,
+    ) -> Result<Self, i32> {
         checked_v2_layout()?;
         if d.abi_version != 2
             || d.struct_size as usize != size_of::<raw::DescV2>()
@@ -318,6 +344,7 @@ impl ScenePacket {
                 max_bytes,
                 Some(dimensions),
                 Some(viewports),
+                stencils,
             )
         }
     }
@@ -327,6 +354,7 @@ impl ScenePacket {
         max_bytes: u64,
         dimensions: Option<Vec<Dimension>>,
         viewports: Option<Vec<Viewport>>,
+        stencils: Option<Vec<raw::StencilAttachment>>,
     ) -> Result<Self, i32> {
         checked_layout()?;
         let cap = limits()?;
@@ -360,7 +388,9 @@ impl ScenePacket {
         if d.dispatch_count != 0 {
             return Err(-2);
         }
-        let extra = dimensions.as_ref().map_or(0, |d| d.len() as u64 * 4)
+        let extra = stencils.as_ref().map_or(0, |s| {
+            s.len() as u64 * size_of::<raw::StencilAttachment>() as u64
+        }) + dimensions.as_ref().map_or(0, |d| d.len() as u64 * 4)
             + viewports
                 .as_ref()
                 .map_or(0, |v| v.len() as u64 * size_of::<Viewport>() as u64);
@@ -585,6 +615,7 @@ impl ScenePacket {
             images,
             view_dimensions: dimensions.unwrap_or_else(|| vec![Dimension::D2; views.len()]),
             viewports,
+            stencils,
             views,
             samplers,
             passes,
@@ -699,7 +730,8 @@ impl ScenePacket {
                 || fp.is_some_and(|f| f.stage != 1)
                 || p.binding_model > 1
                 || (p.color != 0 && !format(p.color)?.info().color_attachment)
-                || p.depth != 0 && p.depth != 2
+                || p.depth != 0 && !format(p.depth)?.info().depth_attachment
+                || p.state.stencil_enabled != 0 && !format(p.depth)?.has_stencil()
                 || p.color == 2
                 || p.color != 0 && fp.is_none()
                 || p.stride == 0
@@ -758,7 +790,7 @@ impl ScenePacket {
                     .iter()
                     .find(|r| r.slot == t.sampler_slot)
                     .ok_or(-1)?;
-                if reflected.sample_kind != if t.format == 2 { 3 } else { 0 }
+                if reflected.sample_kind != format(t.format)?.info().sample_kind
                     || reflected_sampler.comparison != t.comparison
                 {
                     return Err(-2);
@@ -828,6 +860,33 @@ impl ScenePacket {
                 return Err(-2);
             }
         }
+        if let Some(stencils) = &self.stencils {
+            if stencils.len() != self.passes.len() {
+                return Err(-1);
+            }
+            for (pass, s) in self.passes.iter().zip(stencils) {
+                let combined = pass.depth.image != u32::MAX
+                    && self
+                        .images
+                        .get(pass.depth.image as usize)
+                        .ok_or(-1)?
+                        .desc
+                        .format
+                        .has_stencil();
+                if s.reserved != 0
+                    || s.flags & !1 != 0
+                    || s.load > 2
+                    || s.store > 1
+                    || s.clear_value > 255
+                    || (combined && (s.image != pass.depth.image))
+                    || (!combined && (s.image != u32::MAX || s.flags != 0))
+                {
+                    return Err(-1);
+                }
+            }
+        } else if self.images.iter().any(|i| i.desc.format.has_stencil()) {
+            return Err(-2);
+        }
         let mut draws = 0usize;
         let mut seen = BTreeSet::new();
         for (pass, p) in self.passes.iter().enumerate() {
@@ -836,7 +895,7 @@ impl ScenePacket {
             }
             for a in [p.color, p.depth] {
                 if a.reserved != 0
-                    || a.load > 1
+                    || a.load > if self.stencils.is_some() { 2 } else { 1 }
                     || a.store > 1
                     || a.image != u32::MAX && a.image as usize >= self.images.len()
                     || a.clear.iter().any(|x| !x.is_finite())
@@ -1040,7 +1099,9 @@ impl ScenePacket {
                 let i = images[a.image as usize];
                 Some(ColorAttachment {
                     image: i,
-                    load: if a.load == 0 {
+                    load: if a.load == 2 {
+                        Load::Discard
+                    } else if a.load == 0 {
                         Load::Clear(a.clear)
                     } else {
                         Load::Load(scene.current(i).map_err(|_| -1)?)
@@ -1059,7 +1120,9 @@ impl ScenePacket {
                 let i = images[a.image as usize];
                 Some(DepthAttachment {
                     image: i,
-                    load: if a.load == 0 {
+                    load: if a.load == 2 {
+                        Load::Discard
+                    } else if a.load == 0 {
                         Load::Clear(a.clear[0])
                     } else {
                         Load::Load(scene.current(i).map_err(|_| -1)?)
@@ -1114,13 +1177,32 @@ impl ScenePacket {
                 depth,
                 draws,
             };
-            if let Some(viewports) = &self.viewports {
-                scene
-                    .render_pass_with_viewport(pass, viewports[pass_index])
-                    .map_err(|_| -1)?;
-            } else {
-                scene.render_pass(pass).map_err(|_| -1)?;
-            }
+            let stencil = self
+                .stencils
+                .as_ref()
+                .and_then(|s| s.get(pass_index))
+                .filter(|s| s.image != u32::MAX)
+                .map(|s| scene::StencilOps {
+                    image: images[s.image as usize],
+                    load: match s.load {
+                        0 => scene::StencilLoad::Clear(s.clear_value as u8),
+                        1 => scene::StencilLoad::Load,
+                        _ => scene::StencilLoad::Discard,
+                    },
+                    store: if s.store == 0 {
+                        scene::Store::Store
+                    } else {
+                        scene::Store::Discard
+                    },
+                    source_full_write: s.flags & 1 != 0,
+                });
+            scene
+                .render_pass_with_aspects(
+                    pass,
+                    self.viewports.as_ref().map(|v| v[pass_index]),
+                    stencil,
+                )
+                .map_err(|_| -1)?;
         }
         scene
             .output(
@@ -1233,6 +1315,22 @@ impl PipelineCache {
                 s.color_write_mask,
             ],
         );
+        words(&mut key, &[s.stencil_enabled]);
+        for f in [s.front_stencil, s.back_stencil] {
+            words(
+                &mut key,
+                &[
+                    f.compare,
+                    f.fail,
+                    f.depth_fail,
+                    f.pass,
+                    f.reference,
+                    f.read_mask,
+                    f.write_mask,
+                    f.reserved,
+                ],
+            );
+        }
         for f in s.blend_constant {
             key.extend(f.to_bits().to_le_bytes());
         }
@@ -1661,6 +1759,7 @@ pub(crate) mod packet_tests {
             ],
             view_dimensions: vec![Dimension::D2],
             viewports: None,
+            stencils: None,
             views: vec![raw::ImageView {
                 image: 1,
                 base_mip: 0,
@@ -1708,6 +1807,12 @@ pub(crate) mod packet_tests {
         }
     }
     impl SceneCatalog for Catalog<'_> {
+        fn scene_raster(&self, id: u64) -> Option<raw::RasterState> {
+            self.0
+                .pipelines
+                .get(id.checked_sub(1)? as usize)
+                .map(|p| p.state)
+        }
         fn scene_graphics(&self, id: u64) -> Option<GraphicsLayout> {
             let p = self.0.pipelines.get(id.checked_sub(1)? as usize)?;
             let mut buffers = Vec::new();
@@ -1730,7 +1835,7 @@ pub(crate) mod packet_tests {
                 vertex_stride: p.stride,
                 color_format: Some(ImageFormat::Rgba8),
                 fragment_stage: true,
-                depth_attachment: false,
+                depth_attachment: p.depth != 0,
                 depth: DepthState {
                     compare: DepthCompare::Disabled,
                     write: false,
@@ -1843,9 +1948,9 @@ pub(crate) mod packet_tests {
     fn unsupported_or_ambiguous_raster_state_never_becomes_a_preset() {
         let packet = fixture();
         let mut s = packet.pipelines[0].state;
-        s.stencil_enabled = 1;
+        s.depth_bounds_enabled = 1;
         assert_eq!(raster(&s), Err(-2));
-        s.stencil_enabled = 0;
+        s.depth_bounds_enabled = 0;
         s.bias_enabled = 1;
         assert_eq!(raster(&s), Err(-2));
         s.bias_enabled = 0;
@@ -2120,7 +2225,19 @@ pub(crate) mod packet_tests {
                 view_dimension_count: dims.len() as u32,
                 reserved1: 0,
             };
-            unsafe { ScenePacket::copy_v2(&desc, 32, 1 << 20) }.unwrap()
+            if let Some(stencils) = &packet.stencils {
+                let v3 = raw::DescV3 {
+                    abi_version: 3,
+                    struct_size: size_of::<raw::DescV3>() as u32,
+                    base: desc,
+                    stencils: stencils.as_ptr(),
+                    stencil_count: stencils.len() as u32,
+                    reserved: 0,
+                };
+                unsafe { ScenePacket::copy_v3(&v3, 32, 1 << 20) }.unwrap()
+            } else {
+                unsafe { ScenePacket::copy_v2(&desc, 32, 1 << 20) }.unwrap()
+            }
         } else {
             unsafe { ScenePacket::copy(&desc, 32, 1 << 20) }.unwrap()
         }
@@ -2222,4 +2339,111 @@ pub(crate) mod packet_tests {
         );
         copy.prepare(&Catalog(&copy), &[1], 32, 1 << 20).unwrap();
     }
+
+    #[test]
+    fn stencil_reference_masks_and_ops_have_distinct_cached_pipeline_ids() {
+        let mut packet = fixture();
+        let mut cache = PipelineCache::default();
+        let mut compiler = Compiler::default();
+        packet.pipelines[0].depth = 15;
+        packet.pipelines[0].state.stencil_enabled = 1;
+        let initial = cache.resolve(&mut compiler, &packet).unwrap();
+        packet.pipelines[0].state.front_stencil.reference = 0x81;
+        assert_ne!(cache.resolve(&mut compiler, &packet).unwrap(), initial);
+        packet.pipelines[0].state.back_stencil.write_mask = 255;
+        cache.resolve(&mut compiler, &packet).unwrap();
+        packet.pipelines[0].state.back_stencil.pass = 2;
+        cache.resolve(&mut compiler, &packet).unwrap();
+        assert_eq!(compiler.creates, 4);
+    }
+    #[test]
+    fn v3_copies_independent_stencil_without_inventing_depth_clear() {
+        checked_v3_layout().unwrap();
+        let mut packet = fixture();
+        packet.pipelines[0].depth = 15;
+        packet.pipelines[0].state.stencil_enabled = 1;
+        let face = raw::StencilFace {
+            compare: 7,
+            fail: 2,
+            depth_fail: 2,
+            pass: 2,
+            reference: 0x81,
+            read_mask: 0,
+            write_mask: 255,
+            reserved: 0,
+        };
+        packet.pipelines[0].state.front_stencil = face;
+        packet.pipelines[0].state.back_stencil = face;
+        packet.images.push(ImagePayload {
+            desc: ImageDesc {
+                width: 2,
+                height: 2,
+                format: ImageFormat::Depth24Stencil8,
+            },
+            layout: None,
+            bytes: None,
+        });
+        packet.passes[0].depth = Attachment {
+            image: 2,
+            load: 2,
+            store: 0,
+            reserved: 0,
+            clear: [0.; 4],
+        };
+        packet.viewports = Some(vec![Viewport {
+            x: 0.,
+            y: 0.,
+            width: 2.,
+            height: 2.,
+            min_depth: 0.,
+            max_depth: 1.,
+            scissor_x: 0,
+            scissor_y: 0,
+            scissor_width: 2,
+            scissor_height: 2,
+            known_fields: 7,
+            reserved: 0,
+        }]);
+        packet.stencils = Some(vec![raw::StencilAttachment {
+            image: 2,
+            load: 0,
+            store: 0,
+            clear_value: 0x81,
+            flags: 0,
+            reserved: 0,
+        }]);
+        let copied = copy_view(&packet);
+        let prepared = copied
+            .prepare(&Catalog(&copied), &[1], 32, 1 << 20)
+            .unwrap();
+        let (commands, _) = prepared.into_submission();
+        assert!(matches!(
+            commands.passes()[0].depth.unwrap().load,
+            Load::Discard
+        ));
+        assert_eq!(
+            commands.stencils()[0].unwrap().load,
+            scene::StencilLoad::Clear(0x81)
+        );
+        packet.stencils.as_mut().unwrap()[0].clear_value = 256;
+        assert!(packet.validate(32, 1 << 20).is_err());
+        packet.stencils = None;
+        assert_eq!(packet.validate(32, 1 << 20), Err(-2));
+    }
+}
+
+fn checked_v3_layout() -> Result<(), i32> {
+    unsafe extern "C" {
+        fn mag_native_packet_v3_layout(out: *mut u32, words: u32) -> i32;
+    }
+    let expected = raw::v3_layout();
+    let mut actual = vec![0; expected.len()];
+    let status = unsafe { mag_native_packet_v3_layout(actual.as_mut_ptr(), actual.len() as u32) };
+    if status != 0 {
+        return Err(status);
+    }
+    if actual != expected {
+        return Err(-1);
+    }
+    Ok(())
 }

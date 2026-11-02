@@ -333,3 +333,59 @@ fn alpha_reference_uses_source_surface_formats_not_native_format_ids() {
         );
     }
 }
+
+#[test]
+fn fragment_discard_reflection_is_conservative_and_skips_literal_and_dead_tail_slots() {
+    let bytes = |slots: &[[u32; 4]]| {
+        slots
+            .iter()
+            .flatten()
+            .flat_map(|w| w.rotate_left(16).to_be_bytes())
+            .collect::<Vec<_>>()
+    };
+    for predicate in [0, 1 << 18, 1 << 19, 1 << 20, 7 << 18] {
+        assert_eq!(
+            fragment_may_discard(&bytes(&[[(0x12 << 24) | 1, predicate, 0, 0]])),
+            Ok(true)
+        );
+    }
+    assert_eq!(
+        fragment_may_discard(&bytes(&[
+            [(1 << 24), 2, 0, 0],
+            [(0x12 << 24) | 1, 0, 0, 0],
+            [(1 << 24) | 1, 0, 0, 0]
+        ])),
+        Ok(false)
+    );
+    assert_eq!(
+        fragment_may_discard(&bytes(&[
+            [(1 << 24) | 1, 0, 0, 0],
+            [(0x12 << 24) | 1, 0, 0, 0]
+        ])),
+        Ok(false)
+    );
+}
+#[test]
+fn fragment_discard_reflection_never_certifies_unknown_or_unadmitted_streams() {
+    let bytes = |w: [u32; 4]| {
+        w.into_iter()
+            .flat_map(|w| w.rotate_left(16).to_be_bytes())
+            .collect::<Vec<_>>()
+    };
+    for code in [
+        vec![],
+        vec![0; 15],
+        bytes([0, 0, 0, 0]),
+        bytes([1, 2, 0, 0]),
+    ] {
+        assert!(fragment_may_discard(&code).is_err());
+    }
+    assert_eq!(
+        fragment_may_discard(&bytes([1, 0, 1 << 31, 0])),
+        Err(ProgramError::Unsupported)
+    );
+    assert_eq!(
+        fragment_may_discard(&bytes([(0x3f << 24) | 1, 0, 0, 0])),
+        Err(ProgramError::Unsupported)
+    );
+}

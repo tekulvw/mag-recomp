@@ -1,6 +1,7 @@
 #include "mag_render_native_api.h"
 #include "mag_render_batch.h"
 #include "mag_render_scene_extended.h"
+#include "mag_render_stencil.h"
 #include "mag_render_host_frame.h"
 #include <cstddef>
 #define LAYOUT(t) uint32_t(sizeof(t)), uint32_t(alignof(t))
@@ -132,4 +133,11 @@ extern "C" int mag_native_scene_v3_layout(uint32_t *out,uint32_t words){
  if(!out||words!=sizeof(layout)/sizeof(layout[0]))return MAG_NATIVE_INVALID;
  for(uint32_t i=0;i<words;++i){out[i]=layout[i];}
  return MAG_NATIVE_OK;
+}
+
+extern "C" int mag_native_scene_v4_layout(uint32_t *out,uint32_t words){
+ const uint32_t expected[]={LAYOUT(mag_native_stencil_attachment),OFFSET(mag_native_stencil_attachment,image),OFFSET(mag_native_stencil_attachment,load),OFFSET(mag_native_stencil_attachment,store),OFFSET(mag_native_stencil_attachment,clear_value),OFFSET(mag_native_stencil_attachment,flags),OFFSET(mag_native_stencil_attachment,reserved),
+ LAYOUT(mag_native_scene_v4),OFFSET(mag_native_scene_v4,struct_size),OFFSET(mag_native_scene_v4,abi_version),OFFSET(mag_native_scene_v4,base),OFFSET(mag_native_scene_v4,stencils),OFFSET(mag_native_scene_v4,stencil_count),OFFSET(mag_native_scene_v4,reserved)};
+ if(!out||words!=sizeof(expected)/sizeof(expected[0]))return MAG_NATIVE_INVALID;
+ for(uint32_t i=0;i<words;++i){out[i]=expected[i];}return MAG_NATIVE_OK;
 }

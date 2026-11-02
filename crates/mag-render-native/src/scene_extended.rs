@@ -52,7 +52,34 @@ struct SceneV3 {
     viewport_count: u32,
     reserved: u32,
 }
+#[repr(C)]
+struct StencilWire {
+    image: u32,
+    load: u32,
+    store: u32,
+    clear_value: u32,
+    flags: u32,
+    reserved: u32,
+}
+#[repr(C)]
+struct SceneV4 {
+    struct_size: u32,
+    abi_version: u32,
+    base: SceneV3,
+    stencils: *const StencilWire,
+    stencil_count: u32,
+    reserved: u32,
+}
 unsafe extern "C" {
+    fn mag_native_submit_scene_v4(
+        device: *mut c_void,
+        scene: *const SceneV4,
+        target: *const crate::host_image::NativeImage,
+        frame: *const crate::host_frame::HostFrame,
+        out: *mut Ticket,
+    ) -> i32;
+    fn mag_native_scene_v4_layout(out: *mut u32, words: u32) -> i32;
+
     fn mag_native_submit_scene_v3(
         device: *mut c_void,
         scene: *const SceneV3,
@@ -143,7 +170,7 @@ pub(super) fn checked_layout() -> Result<(), i32> {
     if actual != expected {
         return Err(-1);
     }
-    for id in 1..=14 {
+    for id in 1..=16 {
         let f = scene::ImageFormat::from_native(id).map_err(|_| -1)?.info();
         let expected = [
             f.block_width,
@@ -162,6 +189,32 @@ pub(super) fn checked_layout() -> Result<(), i32> {
             return Err(-1);
         }
     }
+    let expected = [
+        size_of::<StencilWire>() as u32,
+        align_of::<StencilWire>() as u32,
+        offset_of!(StencilWire, image) as u32,
+        offset_of!(StencilWire, load) as u32,
+        offset_of!(StencilWire, store) as u32,
+        offset_of!(StencilWire, clear_value) as u32,
+        offset_of!(StencilWire, flags) as u32,
+        offset_of!(StencilWire, reserved) as u32,
+        size_of::<SceneV4>() as u32,
+        align_of::<SceneV4>() as u32,
+        offset_of!(SceneV4, struct_size) as u32,
+        offset_of!(SceneV4, abi_version) as u32,
+        offset_of!(SceneV4, base) as u32,
+        offset_of!(SceneV4, stencils) as u32,
+        offset_of!(SceneV4, stencil_count) as u32,
+        offset_of!(SceneV4, reserved) as u32,
+    ];
+    let mut actual = [0; 16];
+    let status = unsafe { mag_native_scene_v4_layout(actual.as_mut_ptr(), 16) };
+    if status != 0 {
+        return Err(status);
+    }
+    if actual != expected {
+        return Err(-1);
+    }
     Ok(())
 }
 pub(super) struct Plan {
@@ -169,14 +222,23 @@ pub(super) struct Plan {
     layouts: Vec<Layout>,
     views: Vec<View>,
     viewports: Vec<Viewport>,
+    stencils: Option<Vec<StencilWire>>,
     pub(super) texture_codes: Vec<Vec<u32>>,
 }
 impl Plan {
     pub(super) fn build(commands: &scene::SceneCommands) -> Result<Option<Self>, i32> {
-        let extended = commands
-            .images()
-            .iter()
-            .any(|i| i.layout.is_some() || i.desc.format.native_id() > 3)
+        let v4 = commands.stencils().iter().any(Option::is_some)
+            || commands.passes().iter().any(|p| {
+                p.color
+                    .is_some_and(|a| matches!(a.load, scene::Load::Discard))
+                    || p.depth
+                        .is_some_and(|a| matches!(a.load, scene::Load::Discard))
+            });
+        let extended = v4
+            || commands
+                .images()
+                .iter()
+                .any(|i| i.layout.is_some() || i.desc.format.native_id() > 3)
             || commands
                 .passes()
                 .iter()
@@ -283,6 +345,41 @@ impl Plan {
             layouts,
             views,
             viewports,
+            stencils: if v4 {
+                Some(
+                    commands
+                        .stencils()
+                        .iter()
+                        .map(|s| match s {
+                            Some(s) => {
+                                let (load, clear) = match s.load {
+                                    scene::StencilLoad::Clear(v) => (0, u32::from(v)),
+                                    scene::StencilLoad::Load => (1, 0),
+                                    scene::StencilLoad::Discard => (2, 0),
+                                };
+                                StencilWire {
+                                    image: s.image.index() as u32,
+                                    load,
+                                    store: u32::from(s.store == scene::Store::Discard),
+                                    clear_value: clear,
+                                    flags: u32::from(s.source_full_write),
+                                    reserved: 0,
+                                }
+                            }
+                            None => StencilWire {
+                                image: u32::MAX,
+                                load: 0,
+                                store: 0,
+                                clear_value: 0,
+                                flags: 0,
+                                reserved: 0,
+                            },
+                        })
+                        .collect(),
+                )
+            } else {
+                None
+            },
             texture_codes: codes,
         }))
     }
@@ -314,6 +411,25 @@ impl Plan {
             viewport_count: self.viewports.len() as u32,
             reserved: 0,
         };
+        if let Some(stencils) = &self.stencils {
+            let v4 = SceneV4 {
+                struct_size: size_of::<SceneV4>() as u32,
+                abi_version: 4,
+                base: v3,
+                stencils: stencils.as_ptr(),
+                stencil_count: stencils.len() as u32,
+                reserved: 0,
+            };
+            return unsafe {
+                mag_native_submit_scene_v4(
+                    device,
+                    &v4,
+                    target.map_or(std::ptr::null(), |t| t),
+                    frame.map_or(std::ptr::null(), |f| f),
+                    out,
+                )
+            };
+        }
         unsafe {
             mag_native_submit_scene_v3(
                 device,

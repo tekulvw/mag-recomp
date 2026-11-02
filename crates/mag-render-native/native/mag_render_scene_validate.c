@@ -1,4 +1,5 @@
 #include "mag_render_scene_validate.h"
+#include "mag_render_stencil_validate.h"
 #include "mag_render_image_validate.h"
 #include <math.h>
 #include <string.h>
@@ -16,6 +17,7 @@ static int power(uint64_t n) { return n && !(n & (n - 1)); }
 static int range(uint64_t offset, uint64_t length, uint64_t total, uint64_t align) {
     return length && power(align) && !(offset % align) && offset <= total && length <= total - offset;
 }
+static int depth_format(uint32_t f){mag_native_image_format info;return mag_native_image_format_info(f,&info)&&info.depth_attachment;}
 static int color_format(uint32_t f){mag_native_image_format info;return mag_native_image_format_info(f,&info)&&info.color_attachment;}
 static int sample_format(uint32_t f){mag_native_image_format info;return mag_native_image_format_info(f,&info);}
 static int stage_source(const mag_native_shader_stage *s) {
@@ -25,7 +27,7 @@ static int stage_source(const mag_native_shader_stage *s) {
 static int scene_graphics_schema(const mag_native_scene_graphics_desc *d,uint32_t model) {
     if (model>1 || !d || d->struct_size != sizeof(*d) || d->abi_version != MAG_NATIVE_SCENE_ABI ||
         d->vertex_stride < 4 || d->vertex_stride > 2048 || d->vertex_stride % 4 || (d->color_format && !color_format(d->color_format)) ||
-        (d->depth_format != 0 && d->depth_format != MAG_NATIVE_SCENE_D32) ||
+        (d->depth_format != 0 && !depth_format(d->depth_format)) ||
         (!d->color_format && !d->depth_format) || d->depth_compare > MAG_NATIVE_SCENE_DEPTH_ALWAYS ||
         d->depth_write > 1 || d->blend > MAG_NATIVE_SCENE_ALPHA || (!d->color_format && d->blend) ||
         (!d->depth_format && (d->depth_compare || d->depth_write)) || (!d->depth_compare && d->depth_write) ||
@@ -49,7 +51,7 @@ static int scene_graphics_schema(const mag_native_scene_graphics_desc *d,uint32_
         if (t->stage > 1 || t->reserved || (t->stage == 1 && !d->fragment.source_length) ||
             t->texture_slot >= 16 || t->sampler_slot >= 16 || (!model && t->texture_slot == t->sampler_slot) ||
             ((model?textures[t->stage]:slots[t->stage]) & (1u << t->texture_slot)) || !sample_format(t->format) ||
-            t->comparison > 1 || (t->comparison && t->format != MAG_NATIVE_SCENE_D32))
+            t->comparison > 1 || (t->comparison && !depth_format(t->format)))
             return MAG_NATIVE_INVALID;
         textures[t->stage] |= 1u << t->texture_slot;
         if(!model)slots[t->stage] |= 1u << t->texture_slot;
@@ -119,7 +121,7 @@ static int add_bytes(mag_native_scene_usage *u, uint64_t n) {
     return MAG_NATIVE_OK;
 }
 static int scene_validate(const mag_native_scene *s, const mag_native_scene_registry *r,
-                              mag_native_scene_usage *u,const mag_native_scene_registry_v2 *v2,const mag_native_scene_v3 *v3) {
+                              mag_native_scene_usage *u,const mag_native_scene_registry_v2 *v2,const mag_native_scene_v3 *v3,const mag_native_scene_v4 *v4,const mag_native_scene_registry_v4 *registry4) {
     if (!s || !r || !u || !r->buffer || !r->compute || !r->graphics || s->struct_size != sizeof(*s) ||
         s->abi_version != MAG_NATIVE_SCENE_ABI || s->reserved || (s->resource_count && !s->resources) ||
         s->resource_count > MAG_NATIVE_SCENE_MAX_RESOURCES || !s->images || !s->image_count ||
@@ -203,9 +205,10 @@ static int scene_validate(const mag_native_scene *s, const mag_native_scene_regi
                 u->write[i] = 1;
             }
     }
-    uint8_t initialized[MAG_NATIVE_SCENE_MAX_IMAGES] = {0};
+    uint8_t initialized[MAG_NATIVE_SCENE_MAX_IMAGES] = {0},stencil_initialized[MAG_NATIVE_SCENE_MAX_IMAGES]={0};
     for (uint32_t i = 0; i < s->image_count; ++i) {
         const mag_native_scene_image *im = &s->images[i];
+        if(mag_native_image_has_stencil(im->format)&&!v4)return MAG_NATIVE_UNSUPPORTED;
         uint64_t bytes,upload_extent;
         if(v3&&v3->image_layout_count){
             int status=mag_native_image_layout_validate(im,&v3->image_layouts[i],&bytes,&upload_extent);
@@ -245,9 +248,9 @@ static int scene_validate(const mag_native_scene *s, const mag_native_scene_regi
             const mag_native_scene_attachment *a = attachments[k];
             if (a->image == MAG_NATIVE_SCENE_NONE)
                 continue;
-            if (a->image >= s->image_count || a->reserved || a->load > 1 || a->store > 1 ||
+            if (a->image >= s->image_count || a->reserved || a->load > (v4?2u:1u) || a->store > 1 ||
                 (v3&&v3->image_layout_count&&(v3->image_layouts[a->image].dimension!=2||v3->image_layouts[a->image].mip_count!=1)) ||
-                (k ? s->images[a->image].format != MAG_NATIVE_SCENE_D32 : !color_format(s->images[a->image].format)) ||
+                (k ? !depth_format(s->images[a->image].format) : !color_format(s->images[a->image].format)) ||
                 (a->load == MAG_NATIVE_SCENE_LOAD && !initialized[a->image]))
                 return MAG_NATIVE_INVALID;
             const mag_native_scene_image *im = &s->images[a->image];
@@ -263,6 +266,7 @@ static int scene_validate(const mag_native_scene *s, const mag_native_scene_regi
         if (!width)
             return MAG_NATIVE_INVALID;
         if(v3&&v3->viewport_count&&!mag_native_viewport_valid(&v3->viewports[pass_index],width,height))return MAG_NATIVE_INVALID;
+        if(v4){int stencil_status=mag_native_stencil_pass_validate(v4,registry4,pass_index,stencil_initialized);if(stencil_status)return stencil_status;}
         for (uint32_t draw_index = 0; draw_index < p->draw_count; ++draw_index) {
             const mag_native_scene_draw *d = &p->draws[draw_index];
             const mag_native_scene_graphics_desc *g = NULL;
@@ -270,12 +274,18 @@ static int scene_validate(const mag_native_scene *s, const mag_native_scene_regi
             int status = r->graphics(r->context, d->pipeline, &g,&binding_model);
             if (status)
                 return status;
+            if(v4&&p->depth.image!=MAG_NATIVE_SCENE_NONE&&p->depth.load==MAG_NATIVE_SCENE_DISCARD_LOAD){
+                const mag_native_raster_state *state=NULL;
+                int status=registry4->raster(r->context,d->pipeline,&state);if(status)return status;
+                if(state?(state->depth_enabled&&state->depth_compare!=MAG_NATIVE_COMPARE_ALWAYS&&state->depth_compare!=MAG_NATIVE_COMPARE_NEVER):
+                    (g&&g->depth_compare!=MAG_NATIVE_SCENE_DEPTH_DISABLED&&g->depth_compare!=MAG_NATIVE_SCENE_DEPTH_ALWAYS))return MAG_NATIVE_INVALID;
+            }
             if (!g || scene_graphics_schema(g,binding_model) || d->reserved || d->buffer_count != g->buffer_count ||
                 d->texture_count != g->texture_count || (d->buffer_count && !d->buffers) ||
                 (d->texture_count && !d->textures) || !d->index_count || d->index_count % 3 ||
                 d->index_length < (uint64_t)d->index_count * 4 || d->vertex_length % g->vertex_stride ||
                 g->color_format != (p->color.image == MAG_NATIVE_SCENE_NONE ? 0 : s->images[p->color.image].format) ||
-                g->depth_format != (p->depth.image == MAG_NATIVE_SCENE_NONE ? 0 : MAG_NATIVE_SCENE_D32))
+                g->depth_format != (p->depth.image == MAG_NATIVE_SCENE_NONE ? 0 : s->images[p->depth.image].format))
                 return MAG_NATIVE_INVALID;
             if (read_buffer(s, d->vertices, d->vertex_offset, d->vertex_length, 4, infos, writers, u) ||
                 read_buffer(s, d->indices, d->index_offset, d->index_length, 4, infos, writers, u))
@@ -340,7 +350,7 @@ static int scene_validate(const mag_native_scene *s, const mag_native_scene_regi
         }
         for (unsigned k = 0; k < 2; ++k)
             if (attachments[k]->image != MAG_NATIVE_SCENE_NONE)
-                initialized[attachments[k]->image] = attachments[k]->store == MAG_NATIVE_SCENE_STORE;
+                initialized[attachments[k]->image] = attachments[k]->store == MAG_NATIVE_SCENE_STORE && attachments[k]->load!=MAG_NATIVE_SCENE_DISCARD_LOAD;
     }
     if (s->output_image != MAG_NATIVE_SCENE_NONE) {
         if (s->output_image >= s->image_count || !initialized[s->output_image] ||
@@ -370,6 +380,7 @@ int mag_native_scene_graphics_v3_validate(const mag_native_scene_graphics_v3_des
  if(!d||d->struct_size!=sizeof(*d)||d->abi_version!=3)return MAG_NATIVE_INVALID;
  if(d->base.base.depth_compare||d->base.base.depth_write||d->base.base.blend)return MAG_NATIVE_INVALID;
  int status=mag_native_scene_graphics_v2_validate(&d->base);if(status)return status;
+ if(d->raster.stencil_enabled&&!mag_native_image_has_stencil(d->base.base.depth_format))return MAG_NATIVE_UNSUPPORTED;
  return mag_native_raster_validate(&d->raster);
 }
 void mag_native_scene_graphics_v3_schema(const mag_native_scene_graphics_v3_desc *d,mag_native_scene_graphics_desc *out){
@@ -380,7 +391,7 @@ void mag_native_scene_graphics_v3_schema(const mag_native_scene_graphics_v3_desc
 }
 
 int mag_native_scene_validate(const mag_native_scene *scene,const mag_native_scene_registry *registry,mag_native_scene_usage *usage){
-    return scene_validate(scene,registry,usage,NULL,NULL);
+    return scene_validate(scene,registry,usage,NULL,NULL,NULL,NULL);
 }
 int mag_native_scene_validate_v2(const mag_native_scene *scene,const mag_native_scene_registry_v2 *v2,mag_native_scene_usage *usage){
     if(!v2||!v2->base||v2->sampler_count>MAG_NATIVE_MAX_SAMPLERS||(v2->sampler_count&&(!v2->samplers||!v2->sampler)))return MAG_NATIVE_INVALID;
@@ -389,10 +400,10 @@ int mag_native_scene_validate_v2(const mag_native_scene *scene,const mag_native_
         if(status)return status;
         if(!state)return MAG_NATIVE_INVALID;
     }
-    return scene_validate(scene,v2->base,usage,v2,NULL);
+    return scene_validate(scene,v2->base,usage,v2,NULL,NULL,NULL);
 }
 
-int mag_native_scene_validate_v3(const mag_native_scene_v3 *v3,const mag_native_scene_registry_v2 *v2,mag_native_scene_usage *usage){
+static int scene_validate_extended(const mag_native_scene_v3 *v3,const mag_native_scene_registry_v2 *v2,mag_native_scene_usage *usage,const mag_native_scene_v4 *v4,const mag_native_scene_registry_v4 *registry4){
     if(!v3||v3->struct_size!=sizeof(*v3)||v3->abi_version!=3||v3->reserved||
        v3->base.struct_size!=sizeof(v3->base)||v3->base.abi_version!=2||v3->base.reserved||!v3->base.scene||
        (v3->image_layout_count&&(v3->image_layout_count!=v3->base.scene->image_count||!v3->image_layouts))||
@@ -402,5 +413,11 @@ int mag_native_scene_validate_v3(const mag_native_scene_v3 *v3,const mag_native_
        v2->sampler_count>MAG_NATIVE_MAX_SAMPLERS||(v2->sampler_count&&(!v2->samplers||!v2->sampler)))return MAG_NATIVE_INVALID;
     for(uint32_t i=0;i<v2->sampler_count;++i){const mag_native_sampler_state *state=NULL;
         int status=v2->sampler(v2->base->context,v2->samplers[i],&state);if(status)return status;if(!state)return MAG_NATIVE_INVALID;}
-    return scene_validate(v3->base.scene,v2->base,usage,v2,v3);
+    return scene_validate(v3->base.scene,v2->base,usage,v2,v3,v4,registry4);
+}
+
+int mag_native_scene_validate_v3(const mag_native_scene_v3 *v3,const mag_native_scene_registry_v2 *v2,mag_native_scene_usage *usage){return scene_validate_extended(v3,v2,usage,NULL,NULL);}
+int mag_native_scene_validate_v4(const mag_native_scene_v4 *v4,const mag_native_scene_registry_v4 *registry,mag_native_scene_usage *usage){
+ if(!v4||v4->struct_size!=sizeof(*v4)||v4->abi_version!=4||v4->reserved||!registry||!registry->base||!registry->raster||!v4->base.base.scene||v4->stencil_count!=v4->base.base.scene->pass_count||!v4->stencils)return MAG_NATIVE_INVALID;
+ return scene_validate_extended(&v4->base,registry->base,usage,v4,registry);
 }

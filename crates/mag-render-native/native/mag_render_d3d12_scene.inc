@@ -8,7 +8,7 @@ static DXGI_FORMAT scene_format(uint32_t format) {
     DXGI_FORMAT_BC2_UNORM, DXGI_FORMAT_BC3_UNORM,
     DXGI_FORMAT_R16_UNORM, DXGI_FORMAT_R16G16_UNORM,
     DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_R32G32B32A32_FLOAT,
-    DXGI_FORMAT_R32_FLOAT, DXGI_FORMAT_R16G16_FLOAT};
+    DXGI_FORMAT_R32_FLOAT, DXGI_FORMAT_R16G16_FLOAT,DXGI_FORMAT_D24_UNORM_S8_UINT,DXGI_FORMAT_D32_FLOAT_S8X24_UINT};
   return format < sizeof(formats)/sizeof(formats[0]) ? formats[format] : DXGI_FORMAT_UNKNOWN;
 }
 struct SceneBlob {
@@ -22,6 +22,10 @@ static int scene_graphics_layout(Context *c,
                                  const mag_native_raster_state *raster,mag_native_pipeline *out) {
   if (c->failed)
     return MAG_NATIVE_DEVICE_FAILED;
+  if(raster&&raster->stencil_enabled&&
+     ((raster->front_stencil.reference&255u)!=(raster->back_stencil.reference&255u)||
+      (raster->front_stencil.read_mask&255u)!=(raster->back_stencil.read_mask&255u)||
+      (raster->front_stencil.write_mask&255u)!=(raster->back_stencil.write_mask&255u)))return MAG_NATIVE_UNSUPPORTED;
   try {
     auto p = std::make_shared<Pipeline>();
     p->graphics = true;
@@ -175,7 +179,7 @@ static int scene_graphics_layout(Context *c,
     if (desc->color_format)
       gpu.RTVFormats[0] = scene_format(desc->color_format);
     gpu.DSVFormat =
-        desc->depth_format ? DXGI_FORMAT_D32_FLOAT : DXGI_FORMAT_UNKNOWN;
+        scene_format(desc->depth_format);
     gpu.SampleDesc.Count = 1;
     gpu.SampleMask = UINT_MAX;
     gpu.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
@@ -223,6 +227,15 @@ static int scene_graphics_layout(Context *c,
       gpu.DepthStencilState.DepthEnable=raster->depth_enabled&&desc->depth_format;
       gpu.DepthStencilState.DepthWriteMask=raster->depth_enabled&&desc->depth_format&&raster->depth_write?D3D12_DEPTH_WRITE_MASK_ALL:D3D12_DEPTH_WRITE_MASK_ZERO;
       gpu.DepthStencilState.DepthFunc=full_compares[raster->depth_compare];
+      gpu.DepthStencilState.StencilEnable=raster->stencil_enabled;
+      if(raster->stencil_enabled){
+        const D3D12_STENCIL_OP ops[]={D3D12_STENCIL_OP_KEEP,D3D12_STENCIL_OP_ZERO,D3D12_STENCIL_OP_REPLACE,D3D12_STENCIL_OP_INCR_SAT,D3D12_STENCIL_OP_DECR_SAT,D3D12_STENCIL_OP_INVERT,D3D12_STENCIL_OP_INCR,D3D12_STENCIL_OP_DECR};
+        const mag_native_stencil_face *faces[]={&raster->front_stencil,&raster->back_stencil};
+        for(unsigned i=0;i<2;++i){const auto &f=*faces[i];D3D12_DEPTH_STENCILOP_DESC value={ops[f.fail],ops[f.depth_fail],ops[f.pass],full_compares[f.compare]};if(i)gpu.DepthStencilState.BackFace=value;else gpu.DepthStencilState.FrontFace=value;}
+        gpu.DepthStencilState.StencilReadMask=static_cast<UINT8>(raster->front_stencil.read_mask);
+        gpu.DepthStencilState.StencilWriteMask=static_cast<UINT8>(raster->front_stencil.write_mask);
+      }
+
       const D3D12_BLEND factors[]={D3D12_BLEND_ZERO,D3D12_BLEND_ONE,D3D12_BLEND_SRC_COLOR,D3D12_BLEND_INV_SRC_COLOR,D3D12_BLEND_DEST_COLOR,D3D12_BLEND_INV_DEST_COLOR,
         D3D12_BLEND_SRC_ALPHA,D3D12_BLEND_INV_SRC_ALPHA,D3D12_BLEND_DEST_ALPHA,D3D12_BLEND_INV_DEST_ALPHA,D3D12_BLEND_BLEND_FACTOR,D3D12_BLEND_INV_BLEND_FACTOR,
         D3D12_BLEND_BLEND_FACTOR,D3D12_BLEND_INV_BLEND_FACTOR,D3D12_BLEND_SRC_ALPHA_SAT};
@@ -285,6 +298,7 @@ struct SceneDrawPlan {
   std::array<uint64_t, 2> sampler_indices = {{UINT64_MAX, UINT64_MAX}};
 };
 struct ScenePlan {
+  const mag_native_scene_v4 *stencil=nullptr;
   const mag_native_scene_v3 *extended=nullptr;
   const mag_native_sampler *sampler_table=nullptr;uint32_t sampler_count=0;
   Plan buffers;
@@ -326,8 +340,11 @@ static int scene_graphics_info(void *opaque, mag_native_pipeline ref,
   *model = p->scene_model;
   return MAG_NATIVE_OK;
 }
+static int scene_raster_info(void *opaque,mag_native_pipeline ref,const mag_native_raster_state **out){
+ auto p=pipeline(static_cast<Context*>(opaque),ref);if(!p)return MAG_NATIVE_STALE;if(!p->scene)return MAG_NATIVE_INVALID;*out=p->explicit_raster?&p->raster:nullptr;return MAG_NATIVE_OK;
+}
 static int scene_prepare(Context *c, const mag_native_scene *scene,
-                         ScenePlan &plan,const mag_native_sampler *sampler_table=nullptr,uint32_t sampler_count=0,const mag_native_scene_v3 *extended=nullptr) {
+                         ScenePlan &plan,const mag_native_sampler *sampler_table=nullptr,uint32_t sampler_count=0,const mag_native_scene_v3 *extended=nullptr,const mag_native_scene_v4 *stencil=nullptr) {
   if (c->failed)
     return MAG_NATIVE_DEVICE_FAILED;
   mag_native_scene_registry registry = {c,
@@ -340,8 +357,9 @@ static int scene_prepare(Context *c, const mag_native_scene *scene,
                                         UINT32_MAX};
   plan.sampler_table=sampler_table;plan.sampler_count=sampler_count;
   mag_native_scene_registry_v2 registry_v2={&registry,sampler_table,sampler_count,sampler_info};
-  plan.extended=extended;
-  int status = extended ? mag_native_scene_validate_v3(extended, &registry_v2, &plan.usage) : mag_native_scene_validate_v2(scene, &registry_v2, &plan.usage);
+  plan.extended=extended;plan.stencil=stencil;
+  mag_native_scene_registry_v4 registry_v4={&registry_v2,scene_raster_info};
+  int status = stencil?mag_native_scene_validate_v4(stencil,&registry_v4,&plan.usage):extended ? mag_native_scene_validate_v3(extended, &registry_v2, &plan.usage) : mag_native_scene_validate_v2(scene, &registry_v2, &plan.usage);
   if (status)
     return status;
   plan.buffers.buffers.resize(scene->resource_count);
@@ -440,11 +458,12 @@ static int scene_image(Context *c, const mag_native_scene_image &im,
   desc.DepthOrArraySize = static_cast<UINT16>(layout ? layout->layers : 1);
   desc.MipLevels = static_cast<UINT16>(layout ? layout->mip_count : 1);
   desc.SampleDesc.Count = 1;
-  const bool depth = im.format == MAG_NATIVE_SCENE_D32;
+  const bool depth = im.format == MAG_NATIVE_SCENE_D32||mag_native_image_has_stencil(im.format);
   mag_native_image_format info={};
   if(!mag_native_image_format_info(im.format,&info)) return MAG_NATIVE_INVALID;
   out.format = scene_format(im.format);
-  desc.Format = depth ? DXGI_FORMAT_R32_TYPELESS : out.format;
+  desc.Format = im.format==MAG_NATIVE_SCENE_D24S8?DXGI_FORMAT_R24G8_TYPELESS:
+      im.format==MAG_NATIVE_SCENE_D32S8?DXGI_FORMAT_R32G8X24_TYPELESS:depth?DXGI_FORMAT_R32_TYPELESS:out.format;
   desc.Flags = depth ? D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL
                      : info.color_attachment ? D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET : D3D12_RESOURCE_FLAG_NONE;
   D3D12_FEATURE_DATA_FORMAT_SUPPORT support = {
@@ -558,7 +577,8 @@ static void scene_descriptors(Context *c, Slot &slot,
         const auto *image_layout=extended && extended->image_layout_count ? &extended->image_layouts[image] : nullptr;
         D3D12_SHADER_RESOURCE_VIEW_DESC view = {};
         view.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-        view.Format = layout.format == MAG_NATIVE_SCENE_D32
+        view.Format = layout.format==MAG_NATIVE_SCENE_D24S8?DXGI_FORMAT_R24_UNORM_X8_TYPELESS:
+          layout.format==MAG_NATIVE_SCENE_D32S8?DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS:layout.format == MAG_NATIVE_SCENE_D32
                           ? DXGI_FORMAT_R32_FLOAT
                           : scene_format(layout.format);
         if(explicit_view) view.Shader4ComponentMapping=D3D12_ENCODE_SHADER_4_COMPONENT_MAPPING(
@@ -816,7 +836,7 @@ static int scene_execute(Context *c, const mag_native_scene *scene,
         depth = slot->dsv->GetCPUDescriptorHandleForHeapStart();
         depth.ptr += SIZE_T(pass.depth.image) * c->dsv_step;
         D3D12_DEPTH_STENCIL_VIEW_DESC view = {};
-        view.Format = DXGI_FORMAT_D32_FLOAT;
+        view.Format = image.format;
         view.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
         c->device->CreateDepthStencilView(image.gpu.p, &view, depth);
       }
@@ -825,9 +845,14 @@ static int scene_execute(Context *c, const mag_native_scene *scene,
           color.ptr ? &color : nullptr, FALSE, depth.ptr ? &depth : nullptr);
       if (color.ptr && pass.color.load == MAG_NATIVE_SCENE_CLEAR)
         list->ClearRenderTargetView(color, pass.color.clear, 0, nullptr);
-      if (depth.ptr && pass.depth.load == MAG_NATIVE_SCENE_CLEAR)
-        list->ClearDepthStencilView(depth, D3D12_CLEAR_FLAG_DEPTH,
-                                    pass.depth.clear[0], 0, 0, nullptr);
+      if(depth.ptr){
+        UINT flags=pass.depth.load==MAG_NATIVE_SCENE_CLEAR?D3D12_CLEAR_FLAG_DEPTH:0;
+        UINT8 stencil_value=0;
+        if(plan.stencil&&mag_native_image_has_stencil(scene->images[pass.depth.image].format)){
+          const auto &ops=plan.stencil->stencils[n];if(ops.load==MAG_NATIVE_STENCIL_CLEAR)flags|=D3D12_CLEAR_FLAG_STENCIL;stencil_value=static_cast<UINT8>(ops.clear_value);
+        }
+        if(flags)list->ClearDepthStencilView(depth,static_cast<D3D12_CLEAR_FLAGS>(flags),pass.depth.clear[0],stencil_value,0,nullptr);
+      }
       D3D12_VIEWPORT viewport = {
           0, 0, static_cast<float>(im.width), static_cast<float>(im.height),
           0, 1};
@@ -885,6 +910,7 @@ static int scene_execute(Context *c, const mag_native_scene *scene,
           if(p.raster.src_rgb==12||p.raster.src_rgb==13||p.raster.dst_rgb==12||p.raster.dst_rgb==13)
             constants[0]=constants[1]=constants[2]=constants[3];
           list->OMSetBlendFactor(constants);
+          if(p.raster.stencil_enabled)list->OMSetStencilRef(p.raster.front_stencil.reference&255u);
         }
         list->SetPipelineState(p.gpu.p);
         for (uint32_t stage = 0; stage < 2; ++stage) {
@@ -979,11 +1005,11 @@ static int scene_execute(Context *c, const mag_native_scene *scene,
     return MAG_NATIVE_ALLOCATION_FAILED;
   }
 }
-static int submit_scene_impl(void *opaque,const mag_native_scene *scene,mag_native_ticket *out,const mag_native_sampler *sampler_table,uint32_t sampler_count,const mag_native_scene_v3 *extended=nullptr) {
+static int submit_scene_impl(void *opaque,const mag_native_scene *scene,mag_native_ticket *out,const mag_native_sampler *sampler_table,uint32_t sampler_count,const mag_native_scene_v3 *extended=nullptr,const mag_native_scene_v4 *stencil=nullptr) {
   auto *c = static_cast<Context *>(opaque);
   try {
     ScenePlan plan;
-    int status = scene_prepare(c, scene, plan,sampler_table,sampler_count,extended);
+    int status = scene_prepare(c, scene, plan,sampler_table,sampler_count,extended,stencil);
     return status ? status : scene_execute(c, scene, plan, out);
   } catch (const std::bad_alloc &) {
     return MAG_NATIVE_ALLOCATION_FAILED;
@@ -999,4 +1025,9 @@ static int submit_scene_v2(void *opaque,const mag_native_scene_v2 *desc,const ma
 static int submit_scene_v3(void *opaque,const mag_native_scene_v3 *desc,const mag_native_image *target,const MagRenderHostFrame *frame,mag_native_ticket *out){
  if(target||frame)return MAG_NATIVE_UNSUPPORTED;
  return submit_scene_impl(opaque,desc->base.scene,out,desc->base.samplers,desc->base.sampler_count,desc);
+}
+
+static int submit_scene_v4(void *opaque,const mag_native_scene_v4 *desc,const mag_native_image *target,const MagRenderHostFrame *frame,mag_native_ticket *out){
+ if(target||frame)return MAG_NATIVE_UNSUPPORTED;
+ return submit_scene_impl(opaque,desc->base.base.scene,out,desc->base.base.samplers,desc->base.base.sampler_count,&desc->base,desc);
 }

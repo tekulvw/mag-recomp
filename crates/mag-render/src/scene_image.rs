@@ -33,6 +33,8 @@ impl ImageFormat {
             Self::Rgba32Float => 12,
             Self::R32Float => 13,
             Self::Rg16Float => 14,
+            Self::Depth24Stencil8 => 15,
+            Self::Depth32Stencil8 => 16,
         }
     }
     pub fn from_native(id: u32) -> Result<Self, SceneError> {
@@ -51,13 +53,16 @@ impl ImageFormat {
             12 => Self::Rgba32Float,
             13 => Self::R32Float,
             14 => Self::Rg16Float,
+            15 => Self::Depth24Stencil8,
+            16 => Self::Depth32Stencil8,
             _ => return Err(SceneError::InvalidBindings),
         })
     }
     pub const fn info(self) -> FormatInfo {
         let (bw, bh, bytes, sample, color, depth) = match self {
             Self::Rgba8 | Self::Bgra8 => (1, 1, 4, 0, true, false),
-            Self::Depth32 => (1, 1, 4, 3, false, true),
+            Self::Depth32 | Self::Depth24Stencil8 => (1, 1, 4, 3, false, true),
+            Self::Depth32Stencil8 => (1, 1, 8, 3, false, true),
             Self::R8 => (1, 1, 1, 0, true, false),
             Self::Rg8 | Self::R16Unorm => (1, 1, 2, 0, true, false),
             Self::Rg16Unorm | Self::R32Float | Self::Rg16Float => (1, 1, 4, 0, true, false),
@@ -74,6 +79,9 @@ impl ImageFormat {
             color_attachment: color,
             depth_attachment: depth,
         }
+    }
+    pub const fn has_stencil(self) -> bool {
+        matches!(self, Self::Depth24Stencil8 | Self::Depth32Stencil8)
     }
     pub const fn floating_color(self) -> bool {
         matches!(
@@ -167,6 +175,9 @@ impl ImageLayout {
             || self.mip_count == 0
             || self.mip_count > 32 - desc.width.max(desc.height).leading_zeros()
         {
+            return Err(SceneError::InvalidBindings);
+        }
+        if upload_length.is_some() && desc.format.has_stencil() {
             return Err(SceneError::InvalidBindings);
         }
         if upload_length.is_some() {

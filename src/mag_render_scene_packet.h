@@ -206,6 +206,14 @@ typedef struct MagRenderScenePacketV2Desc {
     const uint32_t *view_dimensions;
     uint32_t view_dimension_count, reserved1;
 } MagRenderScenePacketV2Desc;
+/* ABI3 adds a complete per-pass independent stencil plane table. Existing
+ * color/depth load2 means Discard only through this entry. Discard+store never
+ * implies initialized contents. FULL_WRITE requires actual producer coverage
+ * qualification, plus native necessary raster and viewport checks. */
+#define MAG_RENDER_PACKET_STENCIL_SOURCE_FULL_WRITE 1u
+typedef struct MagRenderPacketStencilAttachment {uint32_t image,load,store,clear_value,flags,reserved;} MagRenderPacketStencilAttachment;
+typedef struct MagRenderScenePacketV3Desc {uint32_t abi_version,struct_size;MagRenderScenePacketV2Desc base;const MagRenderPacketStencilAttachment *stencils;uint32_t stencil_count,reserved;} MagRenderScenePacketV3Desc;
+int mag_render_client_worker_submit_scene_v3(uint64_t,const MagRenderScenePacketV3Desc*,MagRenderClientReceipt*);
 /* Uses the SAME persistent worker/session/SceneDevice and genuine ticket path.
  * Negative is definitely uncommitted; caller owns early frame cancellation.
  * Positive indeterminate must not be replayed. Physical present remains separate.

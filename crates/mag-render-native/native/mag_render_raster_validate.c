@@ -15,7 +15,7 @@ int mag_native_raster_validate(const mag_native_raster_state *s) {
     if (!isfinite(s->depth_bounds_min) || !isfinite(s->depth_bounds_max) || !isfinite(s->bias_constant) ||
         !isfinite(s->bias_slope) || !isfinite(s->bias_clamp))
         return MAG_NATIVE_INVALID;
-    if (s->known_fields != MAG_NATIVE_RASTER_KNOWN_ALL || s->unresolved_obligations || s->stencil_enabled ||
+    if (s->known_fields != MAG_NATIVE_RASTER_KNOWN_ALL || s->unresolved_obligations ||
         s->depth_bounds_enabled || s->bias_enabled || s->topology || s->samples != 1 ||
         s->cull_mode == MAG_NATIVE_CULL_BOTH)
         return MAG_NATIVE_UNSUPPORTED;
@@ -34,6 +34,12 @@ int mag_native_raster_validate(const mag_native_raster_state *s) {
             (s->blend_constant[0] != s->blend_constant[3] || s->blend_constant[1] != s->blend_constant[3] ||
              s->blend_constant[2] != s->blend_constant[3]))
             return MAG_NATIVE_UNSUPPORTED;
+    }
+    if(s->stencil_enabled){
+        const mag_native_stencil_face *faces[]={&s->front_stencil,&s->back_stencil};
+        for(unsigned i=0;i<2;++i){const mag_native_stencil_face *f=faces[i];
+            if(f->compare>7||f->fail>7||f->depth_fail>7||f->pass>7)return MAG_NATIVE_INVALID;
+        }
     }
     return MAG_NATIVE_OK;
 }

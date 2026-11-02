@@ -543,3 +543,46 @@ pub fn v2_layout() -> Vec<u32> {
         offset_of!(DescV2, reserved1) as u32,
     ]
 }
+
+/// Independent plane operations. Full-write is an explicit source qualification,
+/// never inferred from a draw or discard-load. Image indexes are packet-local.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StencilAttachment {
+    pub image: u32,
+    pub load: u32,
+    pub store: u32,
+    pub clear_value: u32,
+    pub flags: u32,
+    pub reserved: u32,
+}
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct DescV3 {
+    pub abi_version: u32,
+    pub struct_size: u32,
+    pub base: DescV2,
+    pub stencils: *const StencilAttachment,
+    pub stencil_count: u32,
+    pub reserved: u32,
+}
+pub fn v3_layout() -> Vec<u32> {
+    vec![
+        size_of::<StencilAttachment>() as u32,
+        align_of::<StencilAttachment>() as u32,
+        offset_of!(StencilAttachment, image) as u32,
+        offset_of!(StencilAttachment, load) as u32,
+        offset_of!(StencilAttachment, store) as u32,
+        offset_of!(StencilAttachment, clear_value) as u32,
+        offset_of!(StencilAttachment, flags) as u32,
+        offset_of!(StencilAttachment, reserved) as u32,
+        size_of::<DescV3>() as u32,
+        align_of::<DescV3>() as u32,
+        offset_of!(DescV3, abi_version) as u32,
+        offset_of!(DescV3, struct_size) as u32,
+        offset_of!(DescV3, base) as u32,
+        offset_of!(DescV3, stencils) as u32,
+        offset_of!(DescV3, stencil_count) as u32,
+        offset_of!(DescV3, reserved) as u32,
+    ]
+}

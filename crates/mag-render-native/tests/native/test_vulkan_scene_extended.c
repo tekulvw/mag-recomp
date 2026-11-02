@@ -13,6 +13,8 @@ static VkImageCreateInfo last_image;
 static VkImageViewCreateInfo last_view;
 static VkViewport last_viewport;
 static VkSamplerCreateInfo last_sampler;
+static VkAttachmentDescription last_attachment;
+static unsigned combined_barriers;
 static uint32_t uploaded_regions;
 static VkBufferImageCopy last_copy;
 static int linear_supported=1;
@@ -34,7 +36,7 @@ static VKAPI_ATTR void VKAPI_CALL destroy_sampler(VkDevice d,VkSampler v,const V
 static VKAPI_ATTR VkResult VKAPI_CALL reset_pool(VkDevice d,VkCommandPool p,VkCommandPoolResetFlags f){(void)d;(void)p;(void)f;return VK_SUCCESS;}
 static VKAPI_ATTR VkResult VKAPI_CALL reset_descriptors(VkDevice d,VkDescriptorPool p,VkDescriptorPoolResetFlags f){(void)d;(void)p;(void)f;return VK_SUCCESS;}
 static VKAPI_ATTR VkResult VKAPI_CALL reset_fences(VkDevice d,uint32_t n,const VkFence *f){(void)d;assert(n==1&&f);return VK_SUCCESS;}
-static VKAPI_ATTR VkResult VKAPI_CALL create_renderpass(VkDevice d,const VkRenderPassCreateInfo *i,const VkAllocationCallbacks *a,VkRenderPass *out){(void)d;(void)a;assert(i->attachmentCount==1);assert(i->pAttachments[0].loadOp==VK_ATTACHMENT_LOAD_OP_CLEAR);*out=(VkRenderPass)(uintptr_t)++next_handle;return VK_SUCCESS;}
+static VKAPI_ATTR VkResult VKAPI_CALL create_renderpass(VkDevice d,const VkRenderPassCreateInfo *i,const VkAllocationCallbacks *a,VkRenderPass *out){(void)d;(void)a;assert(i->attachmentCount==1);last_attachment=i->pAttachments[0];*out=(VkRenderPass)(uintptr_t)++next_handle;return VK_SUCCESS;}
 static VKAPI_ATTR void VKAPI_CALL destroy_renderpass(VkDevice d,VkRenderPass v,const VkAllocationCallbacks *a){(void)d;(void)v;(void)a;}
 static VKAPI_ATTR VkResult VKAPI_CALL create_framebuffer(VkDevice d,const VkFramebufferCreateInfo *i,const VkAllocationCallbacks *a,VkFramebuffer *out){(void)d;(void)a;assert(i->width==4&&i->height==4&&i->layers==1);*out=(VkFramebuffer)(uintptr_t)++next_handle;return VK_SUCCESS;}
 static VKAPI_ATTR void VKAPI_CALL destroy_framebuffer(VkDevice d,VkFramebuffer v,const VkAllocationCallbacks *a){(void)d;(void)v;(void)a;}
@@ -42,9 +44,9 @@ static VKAPI_ATTR VkResult VKAPI_CALL descriptor_sets(VkDevice d,const VkDescrip
 static VKAPI_ATTR void VKAPI_CALL update_descriptors(VkDevice d,uint32_t n,const VkWriteDescriptorSet *w,uint32_t c,const VkCopyDescriptorSet *copy){(void)d;(void)c;(void)copy;assert(n==2);assert(w[0].descriptorType==VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE&&w[0].pImageInfo->imageView);}
 static VKAPI_ATTR VkResult VKAPI_CALL begin_command(VkCommandBuffer b,const VkCommandBufferBeginInfo *i){(void)b;(void)i;return VK_SUCCESS;}
 static VKAPI_ATTR VkResult VKAPI_CALL end_command(VkCommandBuffer b){(void)b;return VK_SUCCESS;}
-static VKAPI_ATTR void VKAPI_CALL barrier(VkCommandBuffer b,VkPipelineStageFlags a,VkPipelineStageFlags z,VkDependencyFlags f,uint32_t m,const VkMemoryBarrier *mb,uint32_t c,const VkBufferMemoryBarrier *bb,uint32_t n,const VkImageMemoryBarrier *im){(void)b;(void)a;(void)z;(void)f;(void)m;(void)mb;(void)c;(void)bb;if(n&&im[0].subresourceRange.levelCount==3){assert(im[0].subresourceRange.layerCount==6);++full_ranges;}}
+static VKAPI_ATTR void VKAPI_CALL barrier(VkCommandBuffer b,VkPipelineStageFlags a,VkPipelineStageFlags z,VkDependencyFlags f,uint32_t m,const VkMemoryBarrier *mb,uint32_t c,const VkBufferMemoryBarrier *bb,uint32_t n,const VkImageMemoryBarrier *im){(void)b;(void)a;(void)z;(void)f;(void)m;(void)mb;(void)c;(void)bb;if(n&&(im[0].subresourceRange.aspectMask&VK_IMAGE_ASPECT_STENCIL_BIT)){assert(im[0].subresourceRange.aspectMask==(VK_IMAGE_ASPECT_DEPTH_BIT|VK_IMAGE_ASPECT_STENCIL_BIT));++combined_barriers;}if(n&&im[0].subresourceRange.levelCount==3){assert(im[0].subresourceRange.layerCount==6);++full_ranges;}}
 static VKAPI_ATTR void VKAPI_CALL upload(VkCommandBuffer b,VkBuffer from,VkImage to,VkImageLayout layout,uint32_t n,const VkBufferImageCopy *r){(void)b;(void)from;(void)to;assert(layout==VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);++copies;uploaded_regions=n;last_copy=r[n-1];}
-static VKAPI_ATTR void VKAPI_CALL begin_pass(VkCommandBuffer b,const VkRenderPassBeginInfo *i,VkSubpassContents c){(void)b;(void)c;assert(i->renderArea.extent.width==4&&i->clearValueCount==1&&i->pClearValues[0].color.float32[0]==.5f);++passes;}
+static VKAPI_ATTR void VKAPI_CALL begin_pass(VkCommandBuffer b,const VkRenderPassBeginInfo *i,VkSubpassContents c){(void)b;(void)c;assert(i->renderArea.extent.width==4&&i->clearValueCount==1);if(last_attachment.format==VK_FORMAT_D24_UNORM_S8_UINT){assert(last_attachment.loadOp==VK_ATTACHMENT_LOAD_OP_DONT_CARE);assert(i->pClearValues[0].depthStencil.stencil==0x81);}else{assert(i->pClearValues[0].color.float32[0]==.5f);}++passes;}
 static VKAPI_ATTR void VKAPI_CALL end_pass(VkCommandBuffer b){(void)b;++ends;}
 static VKAPI_ATTR void VKAPI_CALL viewport(VkCommandBuffer b,uint32_t first,uint32_t n,const VkViewport *v){(void)b;assert(!first&&n==1);last_viewport=*v;}
 static VKAPI_ATTR void VKAPI_CALL scissor(VkCommandBuffer b,uint32_t first,uint32_t n,const VkRect2D *v){(void)b;(void)v;assert(!first&&n==1);}
@@ -83,14 +85,28 @@ int main(void){
     mag_native_scene_pass pass={.color={0,0,0,0,{.5f,0,0,1}},.depth={.image=MAG_NATIVE_SCENE_NONE},.draws=&d,.draw_count=1};mag_native_batch_resource resources[3]={{{1,1,1},0,0},{{1,2,1},0,0},{{1,3,1},0,0}};
     mag_native_scene scene={.struct_size=sizeof(scene),.abi_version=1,.resources=resources,.resource_count=3,.image_count=2,.images=images,.pass_count=1,.passes=&pass,.output_image=0};mag_native_scene_v3 desc={.struct_size=sizeof(desc),.abi_version=3,.base={sizeof(desc.base),2,&scene,NULL,0,0},.image_layouts=layouts,.image_layout_count=2,.view_count=1,.views=&view,.viewports=&vp,.viewport_count=1};
     unsigned old_views=destroyed_views;mag_native_ticket ticket;
-    assert(submit_scene_owned(c,&scene,&ticket,NULL,0,&desc)==0);assert(ticket.submission_id==1&&queue_calls==1&&passes==1&&ends==1&&draws==0);assert(copies==1&&uploaded_regions==18&&last_copy.bufferOffset==136&&last_copy.imageSubresource.mipLevel==2&&last_copy.imageSubresource.baseArrayLayer==5);assert(full_ranges==2);assert(last_viewport.x==-.25f&&last_viewport.y==5.5f&&last_viewport.height==-4&&last_viewport.minDepth==.2f);assert(c->slots[0].scene_view_count==1&&destroyed_views==old_views&&a.readers==1&&p.references==1);assert(last_view.components.r==VK_COMPONENT_SWIZZLE_B&&last_view.components.a==VK_COMPONENT_SWIZZLE_ONE);assert(scene_texture_view(&c->slots[0],MAG_NATIVE_SCENE_VIEW_TABLE_BIT)==c->slots[0].scene_views[0]);
+    assert(submit_scene_owned(c,&scene,&ticket,NULL,0,&desc,NULL)==0);assert(ticket.submission_id==1&&queue_calls==1&&passes==1&&ends==1&&draws==0);assert(copies==1&&uploaded_regions==18&&last_copy.bufferOffset==136&&last_copy.imageSubresource.mipLevel==2&&last_copy.imageSubresource.baseArrayLayer==5);assert(full_ranges==2);assert(last_viewport.x==-.25f&&last_viewport.y==5.5f&&last_viewport.height==-4&&last_viewport.minDepth==.2f);assert(c->slots[0].scene_view_count==1&&destroyed_views==old_views&&a.readers==1&&p.references==1);assert(last_view.components.r==VK_COMPONENT_SWIZZLE_B&&last_view.components.a==VK_COMPONENT_SWIZZLE_ONE);assert(scene_texture_view(&c->slots[0],MAG_NATIVE_SCENE_VIEW_TABLE_BIT)==c->slots[0].scene_views[0]);
     slot_release(c,&c->slots[0]);assert(destroyed_views==old_views+3&&a.readers==0&&p.references==0);
-    vp.scissor_width=4;assert(submit_scene_owned(c,&scene,&ticket,NULL,0,&desc)==0);assert(draws==1&&passes==2&&ends==2);slot_release(c,&c->slots[0]);
-    tb.sampler=1;linear_supported=0;assert(submit_scene_owned(c,&scene,&ticket,NULL,0,&desc)==MAG_NATIVE_UNSUPPORTED&&queue_calls==2);linear_supported=1;
-    c->known_features=0;tb.sampler=0;assert(submit_scene_owned(c,&scene,&ticket,NULL,0,&desc)==MAG_NATIVE_UNSUPPORTED&&queue_calls==2);assert(!c->slots[0].scene_images&&!c->slots[0].scene_views);
+    vp.scissor_width=4;assert(submit_scene_owned(c,&scene,&ticket,NULL,0,&desc,NULL)==0);assert(draws==1&&passes==2&&ends==2);slot_release(c,&c->slots[0]);
+    tb.sampler=1;linear_supported=0;assert(submit_scene_owned(c,&scene,&ticket,NULL,0,&desc,NULL)==MAG_NATIVE_UNSUPPORTED&&queue_calls==2);linear_supported=1;
+    c->known_features=0;tb.sampler=0;assert(submit_scene_owned(c,&scene,&ticket,NULL,0,&desc,NULL)==MAG_NATIVE_UNSUPPORTED&&queue_calls==2);assert(!c->slots[0].scene_images&&!c->slots[0].scene_views);
     scene.image_count=1;scene.resource_count=0;scene.resources=NULL;pass.draw_count=0;pass.draws=NULL;
     assert(submit_scene(c,&scene,&ticket)==0&&queue_calls==3&&last_viewport.x==0&&last_viewport.y==4&&last_viewport.height==-4);slot_release(c,&c->slots[0]);
     mag_native_scene_v2 old={sizeof(old),2,&scene,NULL,0,0};
     assert(submit_scene_v2(c,&old,NULL,NULL,&ticket)==0&&queue_calls==4&&draws==1);slot_release(c,&c->slots[0]);
+    /* Run actual V4 encoder clear-only passes: independent stencil clear/load,
+     * discarded depth, full-aspect barriers and two independently owned views. */
+    mag_native_scene_image combined={MAG_NATIVE_SCENE_D24S8,4,4,0,{0}};
+    mag_native_scene_image_layout combined_shape={2,1,1,1,1,0,NULL,0,0};
+    mag_native_scene_pass depth_passes[2]={0};mag_native_stencil_attachment planes[2]={0};
+    for(unsigned i=0;i<2;++i){depth_passes[i].color.image=MAG_NATIVE_SCENE_NONE;depth_passes[i].depth=(mag_native_scene_attachment){0,MAG_NATIVE_SCENE_DISCARD_LOAD,MAG_NATIVE_SCENE_STORE,0,{0}};planes[i]=(mag_native_stencil_attachment){0,i?MAG_NATIVE_STENCIL_LOAD:MAG_NATIVE_STENCIL_CLEAR,MAG_NATIVE_SCENE_STORE,0x81,0,0};}
+    mag_native_scene combined_scene={.struct_size=sizeof(combined_scene),.abi_version=1,.images=&combined,.image_count=1,.passes=depth_passes,.pass_count=2,.output_image=MAG_NATIVE_SCENE_NONE};
+    mag_native_scene_v4 v4={.struct_size=sizeof(v4),.abi_version=4,.base={.struct_size=sizeof(v4.base),.abi_version=3,.base={sizeof(v4.base.base),2,&combined_scene,NULL,0,0},.image_layouts=&combined_shape,.image_layout_count=1},.stencils=planes,.stencil_count=2};
+    unsigned before_views=destroyed_views;
+    assert(submit_scene_v4(c,&v4,NULL,NULL,&ticket)==0);assert(queue_calls==5&&combined_barriers==2);
+    const frontend_vk_scene_image *ci=&c->slots[0].scene_images[0];assert(ci->view&&ci->sampled_view&&ci->view!=ci->sampled_view);
+    assert(last_view.subresourceRange.aspectMask==VK_IMAGE_ASPECT_DEPTH_BIT&&last_attachment.stencilLoadOp==VK_ATTACHMENT_LOAD_OP_LOAD);
+    slot_release(c,&c->slots[0]);assert(destroyed_views==before_views+2);
+    assert(operations.submit_scene_v4==submit_scene_v4);
     assert(operations.submit_scene_v3==submit_scene_v3);assert(!mag_native_sampler_registry_close(&c->samplers));free(c);puts("PASS VulkanV3 CPU command/lease fixture; no GPU driver calls");return 0;
 }

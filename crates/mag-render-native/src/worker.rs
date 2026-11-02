@@ -829,6 +829,61 @@ pub unsafe extern "C" fn mag_render_client_worker_submit_scene_v2(
     }
     status
 }
+/// # Safety
+/// V3 packet, nested tables and receipt storage are valid synchronous ranges.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mag_render_client_worker_submit_scene_v3(
+    id: u64,
+    input: *const client::scene_packet::raw::DescV3,
+    out: *mut client::Receipt,
+) -> i32 {
+    if out.is_null() {
+        return -1;
+    }
+    unsafe {
+        *out = client::Receipt {
+            abi_version: 1,
+            struct_size: size_of::<client::Receipt>() as u32,
+            flags: 1,
+            ..client::Receipt::default()
+        }
+    };
+    let status = ffi(
+        || {
+            let worker = get(id)?;
+            let _serial = worker.serial.try_lock().map_err(|_| -4)?;
+            let input = unsafe { checked_ref(input) }?;
+            let packet = unsafe {
+                client::scene_packet::ScenePacket::copy_v3(
+                    input,
+                    worker.max_draws as usize,
+                    worker.max_bytes,
+                )
+            }?;
+            let target = unsafe { TargetPin::copy(input.base.base.target, input.base.base.frame) }?;
+            unsafe {
+                (*out).source = packet.source;
+                (*out).intended_items = packet.intended;
+            }
+            let (status, receipt) = worker.call_serial(
+                |reply| Command::Scene(Box::new(OwnedScene { packet, target }), reply),
+                true,
+            )?;
+            unsafe {
+                *out = receipt;
+            }
+            Ok(status)
+        },
+        1,
+    );
+    unsafe {
+        (*out).status = status;
+        if status > 0 {
+            (*out).flags |= 3;
+        }
+    }
+    status
+}
 /// Non-waiting terminal check on the same fixed native thread. Physical present
 /// events remain separate SDK host observations; this API does not poll them.
 /// # Safety
