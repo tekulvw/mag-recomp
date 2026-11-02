@@ -15,13 +15,14 @@ static int power(uint64_t n) { return n && !(n & (n - 1)); }
 static int range(uint64_t offset, uint64_t length, uint64_t total, uint64_t align) {
     return length && power(align) && !(offset % align) && offset <= total && length <= total - offset;
 }
+static int color_format(uint32_t f){return f==MAG_NATIVE_SCENE_RGBA8 || f==MAG_NATIVE_SCENE_BGRA8;}
 static int stage_source(const mag_native_shader_stage *s) {
     return s->source && s->source_length && s->source_length <= 1024 * 1024 && s->entry && s->entry_length &&
            s->entry_length <= 128 && s->language >= MAG_NATIVE_MSL && s->language <= MAG_NATIVE_SPIRV;
 }
 static int scene_graphics_schema(const mag_native_scene_graphics_desc *d) {
     if (!d || d->struct_size != sizeof(*d) || d->abi_version != MAG_NATIVE_SCENE_ABI ||
-        d->vertex_stride < 4 || d->vertex_stride > 2048 || d->vertex_stride % 4 || d->color_format > MAG_NATIVE_SCENE_RGBA8 ||
+        d->vertex_stride < 4 || d->vertex_stride > 2048 || d->vertex_stride % 4 || (d->color_format && !color_format(d->color_format)) ||
         (d->depth_format != 0 && d->depth_format != MAG_NATIVE_SCENE_D32) ||
         (!d->color_format && !d->depth_format) || d->depth_compare > MAG_NATIVE_SCENE_DEPTH_ALWAYS ||
         d->depth_write > 1 || d->blend > MAG_NATIVE_SCENE_ALPHA || (!d->color_format && d->blend) ||
@@ -45,7 +46,7 @@ static int scene_graphics_schema(const mag_native_scene_graphics_desc *d) {
         const mag_native_scene_texture_layout *t = &d->textures[i];
         if (t->stage > 1 || t->reserved || (t->stage == 1 && !d->fragment.source_length) ||
             t->texture_slot >= 16 || t->sampler_slot >= 16 || t->texture_slot == t->sampler_slot ||
-            (slots[t->stage] & (1u << t->texture_slot)) || t->format < 1 || t->format > 2 ||
+            (slots[t->stage] & (1u << t->texture_slot)) || (!color_format(t->format) && t->format!=MAG_NATIVE_SCENE_D32) ||
             t->comparison > 1 || (t->comparison && t->format != MAG_NATIVE_SCENE_D32))
             return MAG_NATIVE_INVALID;
         slots[t->stage] |= 1u << t->texture_slot;
@@ -203,14 +204,14 @@ int mag_native_scene_validate(const mag_native_scene *s, const mag_native_scene_
     for (uint32_t i = 0; i < s->image_count; ++i) {
         const mag_native_scene_image *im = &s->images[i];
         if (im->reserved || !im->width || !im->height || im->width > 8192 || im->height > 8192 ||
-            im->format < 1 || im->format > 2)
+            (!color_format(im->format) && im->format!=MAG_NATIVE_SCENE_D32))
             return MAG_NATIVE_INVALID;
         uint64_t bytes = (uint64_t)im->width * im->height * 4;
         if (add_bytes(u, bytes))
             return MAG_NATIVE_ALLOCATION_FAILED;
         if (!zero_buffer(im->upload)) {
             int j = resource(s, im->upload);
-            if (j < 0 || im->format != MAG_NATIVE_SCENE_RGBA8 || s->resources[j].role != MAG_NATIVE_UPLOAD ||
+            if (j < 0 || !color_format(im->format) || s->resources[j].role != MAG_NATIVE_UPLOAD ||
                 infos[j].length != bytes)
                 return MAG_NATIVE_INVALID;
             u->read[j] = 1;
@@ -231,7 +232,7 @@ int mag_native_scene_validate(const mag_native_scene *s, const mag_native_scene_
             if (a->image == MAG_NATIVE_SCENE_NONE)
                 continue;
             if (a->image >= s->image_count || a->reserved || a->load > 1 || a->store > 1 ||
-                s->images[a->image].format != (k ? MAG_NATIVE_SCENE_D32 : MAG_NATIVE_SCENE_RGBA8) ||
+                (k ? s->images[a->image].format != MAG_NATIVE_SCENE_D32 : !color_format(s->images[a->image].format)) ||
                 (a->load == MAG_NATIVE_SCENE_LOAD && !initialized[a->image]))
                 return MAG_NATIVE_INVALID;
             const mag_native_scene_image *im = &s->images[a->image];
@@ -256,7 +257,7 @@ int mag_native_scene_validate(const mag_native_scene *s, const mag_native_scene_
                 d->texture_count != g->texture_count || (d->buffer_count && !d->buffers) ||
                 (d->texture_count && !d->textures) || !d->index_count || d->index_count % 3 ||
                 d->index_length < (uint64_t)d->index_count * 4 || d->vertex_length % g->vertex_stride ||
-                g->color_format != (p->color.image == MAG_NATIVE_SCENE_NONE ? 0 : MAG_NATIVE_SCENE_RGBA8) ||
+                g->color_format != (p->color.image == MAG_NATIVE_SCENE_NONE ? 0 : s->images[p->color.image].format) ||
                 g->depth_format != (p->depth.image == MAG_NATIVE_SCENE_NONE ? 0 : MAG_NATIVE_SCENE_D32))
                 return MAG_NATIVE_INVALID;
             if (read_buffer(s, d->vertices, d->vertex_offset, d->vertex_length, 4, infos, writers, u) ||
@@ -315,7 +316,7 @@ int mag_native_scene_validate(const mag_native_scene *s, const mag_native_scene_
     }
     if (s->output_image != MAG_NATIVE_SCENE_NONE) {
         if (s->output_image >= s->image_count || !initialized[s->output_image] ||
-            s->images[s->output_image].format != MAG_NATIVE_SCENE_RGBA8)
+            !color_format(s->images[s->output_image].format))
             return MAG_NATIVE_INVALID;
     }
     if (!zero_buffer(s->diagnostic_readback)) {

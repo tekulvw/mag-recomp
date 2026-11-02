@@ -12,12 +12,13 @@ extern "C" {
 #define MAG_NATIVE_SCENE_MAX_PASSES 16u
 #define MAG_NATIVE_SCENE_MAX_DRAWS 16384u
 #define MAG_NATIVE_SCENE_NONE UINT32_MAX
-/* Formats are explicit. Texture uploads are tightly packed RGBA8; no guessed
+/* Formats are explicit. Texture uploads are tightly packed RGBA8/BGRA8 as declared; no guessed
  * guest layout, implicit mip chain, color conversion, or original GPU state. */
 enum mag_native_scene_format {
     MAG_NATIVE_SCENE_NO_FORMAT = 0,
     MAG_NATIVE_SCENE_RGBA8 = 1,
-    MAG_NATIVE_SCENE_D32 = 2
+    MAG_NATIVE_SCENE_D32 = 2,
+    MAG_NATIVE_SCENE_BGRA8 = 3
 };
 enum mag_native_scene_stage { MAG_NATIVE_SCENE_VERTEX = 0, MAG_NATIVE_SCENE_FRAGMENT = 1 };
 enum mag_native_scene_compare {
@@ -109,7 +110,7 @@ typedef struct mag_native_scene {
     uint32_t dispatch_count, pass_count;
     const mag_native_scene_pass *passes;
     uint32_t output_image, reserved;
-    mag_native_buffer diagnostic_readback; /* zero=no staging/copy/CPU packing */
+    mag_native_buffer diagnostic_readback; /* zero=no copy; otherwise tight bytes in output format (RGBA/BGRA) */
 } mag_native_scene;
 /* Synchronous complete validation + reservation before queue effects. Ordered
  * compute prefix then passes share one native submission/terminal ticket.

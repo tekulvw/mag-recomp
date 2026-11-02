@@ -372,9 +372,25 @@ fn ffi(work: impl FnOnce() -> Result<i32, i32>, panic_status: i32) -> i32 {
 /// consumer lease or wait for GPU completion. NativeContext stays on the worker.
 /// # Safety
 /// owner/out point to valid synchronous storage; the above host contract holds.
+/// # Safety
+/// Same genuine provider and synchronous storage contract as create_for_format.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mag_render_client_worker_create(
     owner: *const HostOwner,
+    max_draws: u32,
+    max_bytes: u64,
+    out: *mut u64,
+) -> i32 {
+    unsafe { mag_render_client_worker_create_for_format(owner, 1, max_draws, max_bytes, out) }
+}
+/// Create with the exact imported host target format (RGBA8=1 or BGRA8=3).
+/// No source-format inference or channel conversion is performed.
+/// # Safety
+/// Genuine provider callback and synchronous storage contract described above.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mag_render_client_worker_create_for_format(
+    owner: *const HostOwner,
+    color_format: u32,
     max_draws: u32,
     max_bytes: u64,
     out: *mut u64,
@@ -385,6 +401,9 @@ pub unsafe extern "C" fn mag_render_client_worker_create(
     unsafe { *out = 0 };
     ffi(
         || {
+            if !matches!(color_format, 1 | 3) {
+                return Err(-2);
+            }
             let host = *unsafe { checked_ref(owner) }?;
             if host.abi_version != 1
                 || host.struct_size as usize != size_of::<HostOwner>()
@@ -432,7 +451,8 @@ pub unsafe extern "C" fn mag_render_client_worker_create(
                         if status != 0 {
                             return Err(status);
                         }
-                        let pipeline = unsafe { pipeline.assume_init() };
+                        let mut pipeline = unsafe { pipeline.assume_init() };
+                        pipeline.color_format = color_format;
                         let mut session = 0;
                         let status = unsafe {
                             client::mag_render_client_create(
@@ -826,6 +846,17 @@ mod tests {
             ));
             worker.join.lock().unwrap().take().unwrap().join().unwrap();
         });
+    }
+    #[test]
+    fn unsupported_target_format_refuses_before_borrowing_owner() {
+        let mut id = 99;
+        assert_eq!(
+            unsafe {
+                mag_render_client_worker_create_for_format(std::ptr::null(), 99, 4, 1024, &mut id)
+            },
+            -2
+        );
+        assert_eq!(id, 0);
     }
     #[test]
     fn unknown_worker_is_not_a_thread_local_session_alias() {

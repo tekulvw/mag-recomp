@@ -264,6 +264,7 @@ struct Pending {
 struct Session {
     backend: RenderBackend<Driver>,
     pipeline: u64,
+    color_format: ImageFormat,
     max_draws: usize,
     max_bytes: u64,
     pending: BTreeMap<u64, Pending>,
@@ -401,7 +402,7 @@ pub unsafe extern "C" fn mag_render_client_create(
         // Initial ingress has explicit clip positions, one pipeline and no hidden
         // material bindings. Full material ingress is a separate extension.
         if d.vertex_stride != 16
-            || d.color_format != 1
+            || !matches!(d.color_format, 1 | 3)
             || d.depth_format != 2
             || d.buffer_count != 0
             || d.texture_count != 0
@@ -442,6 +443,11 @@ pub unsafe extern "C" fn mag_render_client_create(
                 Session {
                     backend,
                     pipeline,
+                    color_format: if d.color_format == 3 {
+                        ImageFormat::Bgra8
+                    } else {
+                        ImageFormat::Rgba8
+                    },
                     max_draws: max_draws as usize,
                     max_bytes,
                     pending: BTreeMap::new(),
@@ -455,6 +461,7 @@ pub unsafe extern "C" fn mag_render_client_create(
 }
 struct SceneSetup {
     pipeline: u64,
+    color_format: ImageFormat,
     max_draws: usize,
     max_bytes: u64,
     width: u32,
@@ -469,6 +476,7 @@ fn prepare(
 ) -> Result<PreparedScene, i32> {
     let SceneSetup {
         pipeline,
+        color_format,
         max_draws,
         max_bytes,
         width,
@@ -519,7 +527,7 @@ fn prepare(
         .image(ImageDesc {
             width,
             height,
-            format: ImageFormat::Rgba8,
+            format: color_format,
         })
         .map_err(|_| -5)?;
     let depth = scene
@@ -601,11 +609,21 @@ pub unsafe extern "C" fn mag_render_client_submit(
             if frame.owner_lifetime != target.owner_lifetime {
                 return Err(-3);
             }
+            if target.format
+                != match s.color_format {
+                    ImageFormat::Rgba8 => 1,
+                    ImageFormat::Bgra8 => 3,
+                    ImageFormat::Depth32 => 2,
+                }
+            {
+                return Err(-2);
+            }
             let identities: Vec<_> = packed.draws.iter().map(|d| d.identity).collect();
             let scene = prepare(
                 &*s.backend.device().0.borrow(),
                 SceneSetup {
                     pipeline: s.pipeline,
+                    color_format: s.color_format,
                     max_draws: s.max_draws,
                     max_bytes: s.max_bytes,
                     width: target.width,
@@ -911,7 +929,7 @@ mod tests {
         fn scene_graphics(&self, pipeline: u64) -> Option<GraphicsLayout> {
             (pipeline == 1).then_some(GraphicsLayout {
                 vertex_stride: 16,
-                color_attachment: true,
+                color_format: Some(ImageFormat::Rgba8),
                 fragment_stage: true,
                 depth_attachment: true,
                 depth: DepthState {
@@ -923,6 +941,48 @@ mod tests {
                 textures: vec![],
             })
         }
+    }
+    #[test]
+    fn production_scene_preparation_keeps_actual_bgra_target_format() {
+        struct BgraCatalog;
+        impl PipelineCatalog for BgraCatalog {
+            fn owner_generation(&self) -> u64 {
+                7
+            }
+            fn bindings(&self, _: u64) -> Option<&[BindingRequirement]> {
+                None
+            }
+        }
+        impl SceneCatalog for BgraCatalog {
+            fn scene_graphics(&self, id: u64) -> Option<GraphicsLayout> {
+                Catalog.scene_graphics(id).map(|mut layout| {
+                    layout.color_format = Some(ImageFormat::Bgra8);
+                    layout
+                })
+            }
+        }
+        let positions = [[0., 0., 0., 1.]; 3];
+        let indices = [0, 1, 2];
+        let draws = [draw(&positions, &indices, 0, 0)];
+        let mut packed = unsafe { pack(&input(&draws), MAX_DRAWS, MAX_BYTES) }.unwrap();
+        let scene = prepare(
+            &BgraCatalog,
+            SceneSetup {
+                pipeline: 1,
+                color_format: ImageFormat::Bgra8,
+                max_draws: MAX_DRAWS,
+                max_bytes: MAX_BYTES,
+                width: 2560,
+                height: 720,
+                clear: [0.; 4],
+                depth_clear: 1.,
+            },
+            &mut packed,
+        )
+        .unwrap();
+        assert_eq!(scene.images()[0].desc.format, ImageFormat::Bgra8);
+        assert_eq!(scene.images()[0].desc.width, 2560);
+        assert!(!scene.output().unwrap().diagnostic_readback);
     }
     #[test]
     fn packed_geometry_passes_actual_common_scene_validation() {
@@ -937,6 +997,7 @@ mod tests {
             &Catalog,
             SceneSetup {
                 pipeline: 1,
+                color_format: ImageFormat::Rgba8,
                 max_draws: MAX_DRAWS,
                 max_bytes: MAX_BYTES,
                 width: 1280,

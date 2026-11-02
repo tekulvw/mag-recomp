@@ -1,5 +1,10 @@
 /* Frontend-owned ordered multipass Vulkan scene on the genuine borrowed queue. */
 #include "mag_render_scene_validate.h"
+static VkFormat scene_vk_format(uint32_t format) {
+    return format == MAG_NATIVE_SCENE_D32     ? VK_FORMAT_D32_SFLOAT
+           : format == MAG_NATIVE_SCENE_BGRA8 ? VK_FORMAT_B8G8R8A8_UNORM
+                                              : VK_FORMAT_R8G8B8A8_UNORM;
+}
 static int scene_renderpass(frontend_vk *c, uint32_t color, uint32_t depth, const mag_native_scene_pass *pass,
                             VkRenderPass *out) {
     VkAttachmentDescription attachments[2];
@@ -8,7 +13,7 @@ static int scene_renderpass(frontend_vk *c, uint32_t color, uint32_t depth, cons
     uint32_t count = 0;
     if (color)
         attachments[count++] = (VkAttachmentDescription){
-            .format = VK_FORMAT_R8G8B8A8_UNORM,
+            .format = scene_vk_format(color),
             .samples = VK_SAMPLE_COUNT_1_BIT,
             .loadOp = pass && pass->color.load == MAG_NATIVE_SCENE_LOAD ? VK_ATTACHMENT_LOAD_OP_LOAD
                                                                         : VK_ATTACHMENT_LOAD_OP_CLEAR,
@@ -57,7 +62,7 @@ static int scene_graphics_create_layout(void *opaque, const mag_native_scene_gra
     if (!format_properties)
         return MAG_NATIVE_UNSUPPORTED;
     VkFormatProperties color_format, depth_format;
-    format_properties((VkPhysicalDevice)c->owner.host.physical_device, VK_FORMAT_R8G8B8A8_UNORM,
+    format_properties((VkPhysicalDevice)c->owner.host.physical_device, scene_vk_format(desc->color_format),
                       &color_format);
     format_properties((VkPhysicalDevice)c->owner.host.physical_device, VK_FORMAT_D32_SFLOAT, &depth_format);
     if (!(color_format.optimalTilingFeatures & VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT) ||
@@ -477,24 +482,23 @@ static int submit_scene_owned(frontend_vk *c, const mag_native_scene *scene, mag
         frontend_vk_scene_image *im = &slot->scene_images[i];
         slot->scene_image_count = i + 1;
         im->aspect =
-            desc->format == MAG_NATIVE_SCENE_RGBA8 ? VK_IMAGE_ASPECT_COLOR_BIT : VK_IMAGE_ASPECT_DEPTH_BIT;
+            desc->format != MAG_NATIVE_SCENE_D32 ? VK_IMAGE_ASPECT_COLOR_BIT : VK_IMAGE_ASPECT_DEPTH_BIT;
         VkImageUsageFlags flags =
             VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
-            (desc->format == MAG_NATIVE_SCENE_RGBA8 ? VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT
-                                                    : VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT);
-        status = batch_image(c, desc->width, desc->height,
-                             desc->format == MAG_NATIVE_SCENE_RGBA8 ? VK_FORMAT_R8G8B8A8_UNORM
-                                                                    : VK_FORMAT_D32_SFLOAT,
-                             im->aspect, flags, &im->image, &im->memory, &im->view);
+            (desc->format != MAG_NATIVE_SCENE_D32 ? VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT
+                                                  : VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT);
+        status = batch_image(c, desc->width, desc->height, scene_vk_format(desc->format), im->aspect, flags,
+                             &im->image, &im->memory, &im->view);
         if (status)
             goto fail;
     }
     for (uint32_t i = 0; i < scene->pass_count; ++i) {
         const mag_native_scene_pass *p = &scene->passes[i];
         slot->scene_pass_count = i + 1;
-        status = scene_renderpass(c, p->color.image == MAG_NATIVE_SCENE_NONE ? 0 : MAG_NATIVE_SCENE_RGBA8,
-                                  p->depth.image == MAG_NATIVE_SCENE_NONE ? 0 : MAG_NATIVE_SCENE_D32, p,
-                                  &slot->scene_renderpasses[i]);
+        status = scene_renderpass(
+            c, p->color.image == MAG_NATIVE_SCENE_NONE ? 0 : scene->images[p->color.image].format,
+            p->depth.image == MAG_NATIVE_SCENE_NONE ? 0 : MAG_NATIVE_SCENE_D32, p,
+            &slot->scene_renderpasses[i]);
         if (status)
             goto fail;
         VkImageView views[2];

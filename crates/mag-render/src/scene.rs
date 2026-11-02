@@ -26,6 +26,7 @@ pub struct SceneLimits {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ImageFormat {
     Rgba8,
+    Bgra8,
     Depth32,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -125,7 +126,7 @@ pub struct TextureLayout {
 #[derive(Clone, Debug)]
 pub struct GraphicsLayout {
     pub vertex_stride: u32,
-    pub color_attachment: bool,
+    pub color_format: Option<ImageFormat>,
     pub fragment_stage: bool,
     pub depth_attachment: bool,
     pub depth: DepthState,
@@ -267,7 +268,7 @@ impl SceneBuilder {
     ) -> Result<Image, SceneError> {
         let size = Self::image_bytes(desc)?;
         if let Some(ref lease) = upload
-            && (desc.format != ImageFormat::Rgba8 || lease.bytes().len() as u64 != size)
+            && (desc.format == ImageFormat::Depth32 || lease.bytes().len() as u64 != size)
         {
             return Err(SceneError::InvalidBindings);
         }
@@ -361,7 +362,11 @@ impl SceneBuilder {
             {
                 return Err(SceneError::InvalidPass);
             }
-            extent = Some(self.attachment(c.image, &c.load, ImageFormat::Rgba8)?);
+            let format = self.state(c.image)?.plan.desc.format;
+            if format == ImageFormat::Depth32 {
+                return Err(SceneError::InvalidPass);
+            }
+            extent = Some(self.attachment(c.image, &c.load, format)?);
             attached.push((c.image, c.store));
         }
         if let Some(d) = pass.depth {
@@ -467,7 +472,7 @@ impl SceneBuilder {
     ) -> Result<(), SceneError> {
         self.valid(value)?;
         let s = self.state(value.image)?;
-        if s.plan.desc.format != ImageFormat::Rgba8 {
+        if s.plan.desc.format == ImageFormat::Depth32 {
             return Err(SceneError::InvalidPass);
         }
         let extra = if diagnostic_readback {
@@ -499,11 +504,15 @@ impl SceneBuilder {
             self.valid(out.image)?;
         }
         for pass in &self.passes {
+            let color_format = match pass.color {
+                Some(c) => Some(self.state(c.image)?.plan.desc.format),
+                None => None,
+            };
             for draw in &pass.draws {
                 let schema = catalog
                     .scene_graphics(draw.pipeline)
                     .ok_or(SceneError::UnknownPipeline)?;
-                if schema.color_attachment != pass.color.is_some()
+                if schema.color_format != color_format
                     || schema.depth_attachment != pass.depth.is_some()
                     || schema.vertex_stride < 4
                     || schema.vertex_stride > 2048

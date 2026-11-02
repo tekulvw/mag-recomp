@@ -45,7 +45,7 @@ typedef struct MagRenderClientDrawIdentity {
  uint64_t source_item,source_partition,unresolved_obligations;
 } MagRenderClientDrawIdentity;
 /* max_bytes includes uploads and attachments, up to64MiB. Native pipelines
- * currently require Float4 vertex input, RGBA8+D32, and no external bindings.
+ * currently require Float4 vertex input, explicit RGBA8/BGRA8+D32, and no external bindings.
  * This constraint is explicit; omitted source materials are never called parity. */
 /* Build-time Naga-translated unlit stages with process-lived pointers. No
  * previous build directory or runtime shader generator is needed. This does not
@@ -79,6 +79,8 @@ int mag_render_client_close(uint64_t);
  * separately, outside FIFO callback. Close refuses pending/undelivered results;
  * it never calls SDK shutdown-retry or waits for a GPU fence. */
 int mag_render_client_worker_create(const MagRenderHostOwner*,uint32_t max_draws,uint64_t max_bytes,uint64_t *worker);
+/* Exact imported host target format:RGBA8=1/BGRA8=3. Existing create usesRGBA8. */
+int mag_render_client_worker_create_for_format(const MagRenderHostOwner*,uint32_t target_format,uint32_t max_draws,uint64_t max_bytes,uint64_t *worker);
 int mag_render_client_worker_submit(uint64_t,const MagRenderClientInput*,MagRenderClientReceipt*);
 int mag_render_client_worker_poll(uint64_t,MagRenderClientReceipt*);
 int mag_render_client_worker_close(uint64_t);

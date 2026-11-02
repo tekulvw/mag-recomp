@@ -299,7 +299,11 @@ impl SceneDevice<'_> {
         };
         let schema = scene::GraphicsLayout {
             vertex_stride: desc.vertex_stride,
-            color_attachment: desc.color_format != 0,
+            color_format: match desc.color_format {
+                1 => Some(scene::ImageFormat::Rgba8),
+                3 => Some(scene::ImageFormat::Bgra8),
+                _ => None,
+            },
             fragment_stage: desc.fragment.source_length != 0,
             depth_attachment: desc.depth_format != 0,
             depth: scene::DepthState {
@@ -334,10 +338,10 @@ impl SceneDevice<'_> {
                     stage: stage(t.stage),
                     texture_slot: t.texture_slot,
                     sampler_slot: t.sampler_slot,
-                    format: if t.format == 1 {
-                        scene::ImageFormat::Rgba8
-                    } else {
-                        scene::ImageFormat::Depth32
+                    format: match t.format {
+                        1 => scene::ImageFormat::Rgba8,
+                        3 => scene::ImageFormat::Bgra8,
+                        _ => scene::ImageFormat::Depth32,
                     },
                     comparison: t.comparison != 0,
                 })
@@ -579,10 +583,10 @@ impl RenderDevice for SceneDevice<'_> {
             .images()
             .iter()
             .map(|im| Image {
-                format: if im.desc.format == scene::ImageFormat::Rgba8 {
-                    1
-                } else {
-                    2
+                format: match im.desc.format {
+                    scene::ImageFormat::Rgba8 => 1,
+                    scene::ImageFormat::Bgra8 => 3,
+                    scene::ImageFormat::Depth32 => 2,
                 },
                 width: im.desc.width,
                 height: im.desc.height,
@@ -863,6 +867,18 @@ mod abi_tests {
             unsafe { mag_native_scene_graphics_v2_validate(&desc) }
         };
         assert_eq!(validate(&attributes), 0);
+        let bgra = SceneGraphicsV2Desc {
+            struct_size: size_of::<SceneGraphicsV2Desc>() as u32,
+            abi_version: 2,
+            base: SceneGraphicsDesc {
+                color_format: 3,
+                ..base
+            },
+            attributes: attributes.as_ptr(),
+            attribute_count: 3,
+            reserved: 0,
+        };
+        assert_eq!(unsafe { mag_native_scene_graphics_v2_validate(&bgra) }, 0);
         attributes[1].offset = 8;
         assert_eq!(validate(&attributes), -1);
         attributes[1].offset = 12;

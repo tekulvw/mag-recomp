@@ -73,7 +73,7 @@ static int metal_scene_graphics_create_layout(void *opaque, const mag_native_sce
     pd.fragmentFunction = fragment;
     pd.vertexDescriptor = v;
     if (desc->color_format) {
-        pd.colorAttachments[0].pixelFormat = MTLPixelFormatRGBA8Unorm;
+        pd.colorAttachments[0].pixelFormat = desc->color_format==MAG_NATIVE_SCENE_BGRA8?MTLPixelFormatBGRA8Unorm:MTLPixelFormatRGBA8Unorm;
         if (desc->blend == MAG_NATIVE_SCENE_ALPHA) {
             pd.colorAttachments[0].blendingEnabled = YES;
             pd.colorAttachments[0].rgbBlendOperation = MTLBlendOperationAdd;
@@ -160,7 +160,7 @@ static int metal_scene_owned(void *opaque, const mag_native_scene *scene, mag_na
         MTLTextureDescriptor *d =
             [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:im->format == MAG_NATIVE_SCENE_RGBA8
                                                                          ? MTLPixelFormatRGBA8Unorm
-                                                                         : MTLPixelFormatDepth32Float
+                                                                         : im->format==MAG_NATIVE_SCENE_BGRA8?MTLPixelFormatBGRA8Unorm:MTLPixelFormatDepth32Float
                                                                width:im->width
                                                               height:im->height
                                                            mipmapped:NO];
@@ -361,7 +361,7 @@ static int metal_image_import(void *opaque,const MagRenderHostImage *host,mag_na
  if(c->images.count>=64||c->next_image==UINT64_MAX)return MAG_NATIVE_ALLOCATION_FAILED;
  int status=host->retain(host->userdata,host->owner_lifetime,host->resource_id,host->resource_generation);if(status)return status<0?status:MAG_NATIVE_DEVICE_FAILED;
  id<MTLTexture> image=(__bridge id<MTLTexture>)host->image;
- if(!image||image.device!=c->device||image.width!=host->width||image.height!=host->height||!host->width||!host->height||!(image.usage&MTLTextureUsageRenderTarget)||image.textureType!=MTLTextureType2D||image.sampleCount!=1||host->format!=MAG_NATIVE_SCENE_RGBA8||image.pixelFormat!=MTLPixelFormatRGBA8Unorm){host->release(host->userdata,host->owner_lifetime,host->resource_id,host->resource_generation);return MAG_NATIVE_UNSUPPORTED;}
+ if(!image||image.device!=c->device||image.width!=host->width||image.height!=host->height||!host->width||!host->height||!(image.usage&MTLTextureUsageRenderTarget)||image.textureType!=MTLTextureType2D||image.sampleCount!=1||(host->format!=MAG_NATIVE_SCENE_RGBA8&&host->format!=MAG_NATIVE_SCENE_BGRA8)||image.pixelFormat!=(host->format==MAG_NATIVE_SCENE_BGRA8?MTLPixelFormatBGRA8Unorm:MTLPixelFormatRGBA8Unorm)){host->release(host->userdata,host->owner_lifetime,host->resource_id,host->resource_generation);return MAG_NATIVE_UNSUPPORTED;}
  MagRenderImportedImage *record=[MagRenderImportedImage new];record->image=image;record->host=*host;uint64_t id=++c->next_image;c->images[@(id)]=record;*out=(mag_native_image){c->generation,id};return MAG_NATIVE_OK;
 }
 static int metal_image_release(void *opaque,mag_native_image ref){

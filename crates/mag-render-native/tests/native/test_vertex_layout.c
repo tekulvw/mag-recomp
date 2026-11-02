@@ -23,6 +23,8 @@ int main(void) {
     d.attributes = attributes;
     d.attribute_count = 3;
     assert(mag_native_scene_graphics_v2_validate(&d) == 0);
+    d.base.color_format=MAG_NATIVE_SCENE_BGRA8;assert(mag_native_scene_graphics_v2_validate(&d)==0);
+    d.base.color_format=MAG_NATIVE_SCENE_RGBA8;
     assert(mag_native_scene_graphics_validate(&d.base) ==
            MAG_NATIVE_INVALID); /* ABI1 defaults not silently widened */
     attributes[1].location = 0;

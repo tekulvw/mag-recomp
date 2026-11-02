@@ -32,7 +32,7 @@ impl SceneCatalog for Catalog {
     fn scene_graphics(&self, id: u64) -> Option<GraphicsLayout> {
         (id == 2).then_some(GraphicsLayout {
             vertex_stride: 16,
-            color_attachment: true,
+            color_format: Some(ImageFormat::Rgba8),
             fragment_stage: true,
             depth_attachment: true,
             depth: DepthState {
@@ -574,7 +574,7 @@ fn explicit_interleaved_stride_accepts_float3_uv_color_and_rejects_torn_vertex()
         fn scene_graphics(&self, id: u64) -> Option<GraphicsLayout> {
             (id == 2).then_some(GraphicsLayout {
                 vertex_stride: self.0,
-                color_attachment: true,
+                color_format: Some(ImageFormat::Rgba8),
                 fragment_stage: true,
                 depth_attachment: false,
                 depth: DepthState {
@@ -651,4 +651,102 @@ fn explicit_interleaved_stride_accepts_float3_uv_color_and_rejects_torn_vertex()
     assert!(make(24).is_ok());
     assert!(matches!(make(32), Err(SceneError::InvalidBindings)));
     assert!(matches!(make(0), Err(SceneError::InvalidBindings)));
+}
+
+#[test]
+fn bgra_target_preserves_declared_format_and_requires_matching_pipeline() {
+    struct ColorCatalog(ImageFormat);
+    impl PipelineCatalog for ColorCatalog {
+        fn owner_generation(&self) -> u64 {
+            1
+        }
+        fn bindings(&self, _: u64) -> Option<&[BindingRequirement]> {
+            None
+        }
+    }
+    impl SceneCatalog for ColorCatalog {
+        fn scene_graphics(&self, _: u64) -> Option<GraphicsLayout> {
+            Some(GraphicsLayout {
+                vertex_stride: 16,
+                color_format: Some(self.0),
+                fragment_stage: true,
+                depth_attachment: false,
+                depth: DepthState {
+                    compare: DepthCompare::Disabled,
+                    write: false,
+                },
+                blend: Blend::Opaque,
+                buffers: vec![],
+                textures: vec![],
+            })
+        }
+    }
+    fn make(pipeline: ImageFormat) -> Result<PreparedScene, SceneError> {
+        let catalog = ColorCatalog(pipeline);
+        let mut batch = BatchBuilder::new(
+            1,
+            BatchLimits {
+                max_commands: 1,
+                max_gpu_buffers: 1,
+                max_gpu_bytes: 1024,
+                max_uploads: 2,
+            },
+        )
+        .unwrap();
+        let vertices = batch.upload(source(vec![0; 48])).unwrap();
+        let indices = batch.upload(source(vec![0; 12])).unwrap();
+        let base = batch.prepare_scene_prefix(&catalog).unwrap();
+        let mut scene = SceneBuilder::new(
+            base,
+            SceneLimits {
+                max_images: 1,
+                max_passes: 1,
+                max_draws: 1,
+                max_bytes: 1024,
+            },
+        )
+        .unwrap();
+        let color = scene
+            .image(ImageDesc {
+                width: 8,
+                height: 8,
+                format: ImageFormat::Bgra8,
+            })
+            .unwrap();
+        let values = scene
+            .render_pass(RenderPass {
+                color: Some(ColorAttachment {
+                    image: color,
+                    load: Load::Clear([1., 0., 0., 1.]),
+                    store: Store::Store,
+                }),
+                depth: None,
+                draws: vec![SceneDraw {
+                    pipeline: 1,
+                    vertices: ReadSource::Upload(vertices),
+                    indices: ReadSource::Upload(indices),
+                    vertex_range: ByteRange {
+                        offset: 0,
+                        length: 48,
+                    },
+                    index_range: ByteRange {
+                        offset: 0,
+                        length: 12,
+                    },
+                    index_count: 3,
+                    buffers: vec![],
+                    textures: vec![],
+                }],
+            })
+            .unwrap();
+        scene.output(values[0], false).unwrap();
+        scene.prepare(&catalog)
+    }
+    let scene = make(ImageFormat::Bgra8).unwrap();
+    assert_eq!(scene.images()[0].desc.format, ImageFormat::Bgra8);
+    assert!(!scene.output().unwrap().diagnostic_readback);
+    assert!(matches!(
+        make(ImageFormat::Rgba8),
+        Err(SceneError::InvalidBindings)
+    ));
 }
