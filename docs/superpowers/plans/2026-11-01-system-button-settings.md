@@ -10,11 +10,14 @@
 
 - [x] Verify native handler/context evidence with Astra; retain it privately.
 - [x] Test then implement public controller capture/grouped descriptor rendering and profile edits.
-- [ ] Test then implement native grouped-button routing and neutralization, including pause and active HUD children.
-- [ ] Check old KBM/aim regressions, Rust fmt/Clippy/tests, public/native fixtures, then build the source-bound candidate with the reviewed SDK and normal rendering.
-- [ ] Run a bounded owned correctness test where useful; distinguish keyboard acceptance from unavailable physical-controller verification. Coordinate the focused PR/integration with the existing owner.
+- [x] Test then implement native grouped-button routing and neutralization, including pause and active HUD children.
+- [x] Check old KBM/aim regressions, Rust fmt/Clippy/tests, public/native fixtures, then build the source-bound candidate with the reviewed SDK and normal rendering.
+- [x] Run a bounded owned correctness test where useful; distinguish keyboard acceptance from unavailable physical-controller verification. Coordinate the focused PR/integration with the existing owner.
 
 **Review focus:** old Start/Select/D-pad action after rebinding; Up/Down shared consumers; Down+Up HUD callbacks; reserved Guide; stale focus/profile events; pause/menu callbacks allowing gameplay behind UI; native consumption/priority retained.
 
 
 Implementation checkpoint: the native traversal remains authoritative. Public shared-context continuity is per physical source/device/code and matching action/behavior, so menu-only alternates cannot cancel or inherit a shared binding. An explicit native-controller action set retains native recognizers without inventing host pulse continuity. Menu relative-capture changes preserve valid mouse buttons and clear only motion. The UI now offers On foot and Menus scopes, editing one without changing the other. Focused checks passed49 Rust tests with rustfmt/Clippy and38 public input/settings fixtures; source-bound build and live acceptance remain pending.
+
+
+Final implementation/test checkpoint: source-bound native full build and corrected incremental link passed with the reviewed framework SDK and30 original WWS registrars.54 Rust tests, rustfmt/Clippy denied warnings, affected public fixtures and23 private context/actual-linked checks passed. The user accepted Escape hold/open/close, gameplay isolation in options, P secondary Start in both scopes and arrow navigation. Select command-screen and ordinary TCM were unavailable in Training; physical controller hardware was unavailable. These remain explicit live acceptance limits. The owned run was stopped and its absence verified. Publication/private reviewed-pin integration is handed to the existing coordinating owner.
