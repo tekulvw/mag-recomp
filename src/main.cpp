@@ -393,6 +393,7 @@ int main(int argc, char** argv)
         printf("usage: %s <PPU ELF>\n", argv[0]);
         return 2;
     }
+    if (auto prepare = mag_extension()->prepare) prepare(argv[1]);
 #ifdef MAG_PLAYER_SETTINGS
     // Setup and recovery run before allocating guest memory or connecting.
     const int settings_result = mag_player_settings_prepare();

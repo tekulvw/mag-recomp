@@ -1,0 +1,17 @@
+# Controls settings integration
+
+The existing macOS MAG Settings window offers General and Controls pages when an input integration registers its supported action catalog. Controls has separate Keyboard & Mouse and Controller pages, two binding slots per action, explicit conflict replacement, clear and per-device reset. Mouse sensitivity and vertical inversion affect the existing relative mouse aim path. Aim assist cannot be enabled for KBM.
+
+Bindings are physical USB HID key positions, zero-based mouse buttons, or normalized controller button codes. Controller codes0–31 use SDL's button numbering;32 and33 are left and right triggers. A runtime must reject unsupported physical controls before saving, rather than accept a binding it cannot implement. Game-specific action identifiers and native routing remain outside this repository.
+
+`player_controls_settings.h` is the portable frontend contract. Register defaults, descriptors, a preferences path, pure capability validation and a queue-only apply callback. Descriptors remain complete when a user unbinds an action. Sources is a bit mask (keyboard1, mouse2, controller4). The initial panel supports OnFoot context1 only. Other frontends can reuse the service and Rust `mag_input_edit_binding` boundary without AppKit. The Windows host capture adapter and native settings frontend still require implementation and runtime verification.
+
+An optional extension `prepare(elf)` runs before settings and guest allocation, permitting a catalog to be registered for first-run setup without constructing native input state. Existing extension `start` timing is unchanged. With no integration registered, behavior stays unchanged.
+
+Schema2 adds `controller_remap`. False keeps digital controller input on the native path and displays the runtime's default controller map. Editing or clearing a controller binding sets it true; the integration then replaces the complete supported digital action set, including explicitly unbound actions. Reset Controller restores defaults and native digital routing. Schema1 files load with controller_remap false. Unknown schemas and damaged files remain untouched and visible as errors.
+
+The service validates a copied draft, saves atomically, then queues it for the runtime. It never configures the input engine from the UI thread. The native adapter installs a validated revision at its input boundary, cancels pending old input and preserves process-wide KBM provenance. A startup input-mode environment override is identified in the panel; Apply uses the selected saved mode. Controller analog movement and look retain the native response.
+
+While settings are open, gameplay input is blocked. Binding capture temporarily chains the existing keyboard/mouse callbacks, filters held controls, consumes local AppKit input, cancels on focus loss, device-page changes, Escape or a15-second timeout, and restores callbacks conditionally. Controller capture uses fresh button edges and trigger hysteresis (press≥0.55, release≤0.45). Closing settings requires fresh gameplay activation; captured presses must not become gameplay actions.
+
+Apply controls saves only the Controls page. General retains its existing Apply, display confirmation and rollback behavior. Cancel discards drafts on both pages. In startup setup, Play saves both pages before launch. Controls profile errors do not replace the file automatically.

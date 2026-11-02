@@ -7,3 +7,5 @@ pub mod ffi;
 pub mod gesture;
 mod input;
 pub mod policy;
+
+pub mod editor;

@@ -14,6 +14,9 @@ typedef struct {uint64_t pulse_id,duration_ns;uint32_t down,source_mask;} MagInp
 typedef struct {uint32_t mode,mouse_owner,flags,reserved;} MagInputPolicy;
 typedef struct {uint64_t press_delay_ns,double_tap_gap_ns,repeat_delay_ns,repeat_interval_ns,refocus_delay_ns;double down_threshold,change_epsilon;} MagInputRecognitionConfig;
 typedef struct {double value;uint64_t elapsed_ns;uint32_t phase,events;} MagInputRecognition;
+/* Stateless transactional editor. flags: clear1, replace-conflicts2.
+ * status7=conflict, conflict_action identifies it. No output on failure. */
+int32_t mag_input_edit_binding(const MagInputBinding*,uint32_t,MagInputBinding request,uint32_t slot,uint32_t flags,MagInputBinding*,uint32_t capacity,uint32_t* count,uint32_t* conflict_action);
 uint32_t mag_input_abi_version(void);
 int32_t mag_input_create(uint64_t session,const MagInputBinding*,uint32_t count,uint64_t* handle);
 int32_t mag_input_destroy(uint64_t handle);
