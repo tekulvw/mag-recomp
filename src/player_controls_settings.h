@@ -9,6 +9,7 @@ struct ActionDescriptor {
     std::string label;
     uint32_t contexts=1;
     uint32_t sources=7; // Keyboard=1, Mouse=2, Controller=4.
+    std::string group={};
 };
 struct ControlsSettingsRegistration {
     ControlsProfile defaults;
@@ -19,6 +20,7 @@ struct ControlsSettingsRegistration {
     // apply callback. The runtime installs the copied profile on its own thread.
     std::function<void(const ControlsProfile&)> validate;
     std::function<void(const ControlsProfile&)> apply;
+    std::function<void(ControlsProfile&)> upgrade; // Pure, copied in-memory catalog migration.
 };
 void mag_controls_settings_register(ControlsSettingsRegistration);
 void mag_controls_settings_unregister();

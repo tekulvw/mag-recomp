@@ -107,6 +107,7 @@ void mag_controls_validate_profile(const ControlsProfile& profile) {
         }
     }
 }
+void mag_controls_set_shared_native_actions(std::span<const ActionId> ids){auto& s=state();std::lock_guard lock(s.mutex);check(mag_input_shared_native_actions(s.handle,ids.data(),uint32_t(ids.size())));}
 void mag_controls_configure(const ControlsProfile& profile){
     mag_controls_validate_profile(profile);auto& s=state();std::lock_guard lock(s.mutex);
     std::vector<MagInputBinding> bindings;
@@ -140,10 +141,11 @@ const HostInputFrame& attach(State& s,InputFrameKey k,const InputInterpretation&
     MagInputFrame raw{};check(mag_input_seal(s.handle,key(k),s.sample_time,k.process_session,uint32_t(interpretation.context),&raw));s.generation=raw.generation;
     const bool neutral=interpretation.controller_neutral.value_or(s.sample->capture.stick_neutral);
     const bool fresh=s.last_neutral&&!neutral;s.last_neutral=neutral;
-    MagInputPolicy resolved{};check(mag_input_policy(s.handle,uint32_t(s.profile.mode),uint32_t(s.capture.focused&&s.capture.supported_context)|(uint32_t(s.capture.controller_connected)<<1)|(uint32_t(neutral)<<2)|(uint32_t(fresh)<<3),&resolved));
+    const bool gameplay=interpretation.context!=InputContext::Menu && interpretation.context!=InputContext::Settings && interpretation.context!=InputContext::Rebinding;
+    MagInputPolicy resolved{};check(mag_input_policy(s.handle,uint32_t(s.profile.mode),uint32_t(gameplay&&s.capture.focused&&s.capture.supported_context)|(uint32_t(s.capture.controller_connected)<<1)|(uint32_t(neutral)<<2)|(uint32_t(fresh)<<3),&resolved));
     HostInputFrame result;result.key=k;result.context=interpretation.context;result.capture_generation=raw.generation;result.policy=policy(resolved);
-    if(result.policy.mode!=InputMode::Controller){result.mouse_dx=raw.dx;result.mouse_dy=raw.dy;if(raw.dx!=0||raw.dy!=0)result.policy.look_owner=LookOwner::Mouse;}
-    if(result.policy.mode!=InputMode::KBM && result.policy.stick_rearmed)result.controller_axes=s.sample->controller_axes;
+    if(gameplay && result.policy.mode!=InputMode::Controller){result.mouse_dx=raw.dx;result.mouse_dy=raw.dy;if(raw.dx!=0||raw.dy!=0)result.policy.look_owner=LookOwner::Mouse;}
+    if(gameplay && result.policy.mode!=InputMode::KBM && result.policy.stick_rearmed)result.controller_axes=s.sample->controller_axes;
     std::set<ActionId> actions;for(auto binding:s.profile.bindings)actions.insert(binding.action);
     for(auto action:actions){MagInputOffer value{};const int status=mag_input_offer(s.handle,key(k),action,&value);if(status!=3)check(status);result.values.push_back({action,status==0&&value.down?1.0:0.0});}
     s.frame=std::move(result);return *s.frame;
@@ -164,7 +166,8 @@ bool mag_controls_frame_valid(InputFrameKey k,uint64_t generation){auto& s=state
 uint64_t mag_controls_current_generation(){auto& s=state();std::lock_guard lock(s.mutex);return s.generation;}
 InputPolicy mag_controls_current_policy(){auto& s=state();std::lock_guard lock(s.mutex);return s.read_policy();}
 std::optional<ControlOffer> mag_controls_offer(InputFrameKey k,ActionId action){auto& s=state();std::lock_guard lock(s.mutex);if(!s.frame||s.frame->key!=k)return {};MagInputOffer value{};const int status=mag_input_offer(s.handle,key(k),action,&value);if(status==3)return {};check(status);return ControlOffer{value.pulse_id,value.duration_ns,bool(value.down),value.source_mask};}
-ControlRecognition mag_controls_recognize(InputFrameKey k,uint64_t consumer,uint64_t control,ActionId action,double value,bool blocked,const ControlRecognitionConfig& config){auto& s=state();std::lock_guard lock(s.mutex);if(!s.frame||s.frame->key!=k)throw std::invalid_argument("recognition requires attached frame");MagInputRecognition result{};check(mag_input_recognize(s.handle,key(k),consumer,control,action,value,uint32_t(blocked),{config.press_delay_ns,config.double_tap_gap_ns,config.repeat_delay_ns,config.repeat_interval_ns,config.refocus_delay_ns,config.down_threshold,config.change_epsilon},&result));return {result.value,result.elapsed_ns,ControlPhase(result.phase),result.events};}
+ControlRecognition mag_controls_recognize(InputFrameKey k,uint64_t consumer,uint64_t control,ActionId action,double value,bool blocked,const ControlRecognitionConfig& config,std::optional<bool> native){auto& s=state();std::lock_guard lock(s.mutex);if(!s.frame||s.frame->key!=k)throw std::invalid_argument("recognition requires attached frame");MagInputRecognition result{};const MagInputRecognitionConfig tuning{config.press_delay_ns,config.double_tap_gap_ns,config.repeat_delay_ns,config.repeat_interval_ns,config.refocus_delay_ns,config.down_threshold,config.change_epsilon};check(native?mag_input_recognize_native(s.handle,key(k),consumer,control,action,value,uint32_t(blocked),tuning,uint32_t(*native),&result):mag_input_recognize(s.handle,key(k),consumer,control,action,value,uint32_t(blocked),tuning,&result));return {result.value,result.elapsed_ns,ControlPhase(result.phase),result.events};}
+void mag_controls_seed_recognizer(InputFrameKey k,uint64_t consumer,uint64_t control,ActionId action,ControlRecognition previous,const ControlRecognitionConfig& config){auto& s=state();std::lock_guard lock(s.mutex);if(!s.frame||s.frame->key!=k)throw std::invalid_argument("recognizer seed requires attached frame");check(mag_input_seed_recognizer(s.handle,key(k),consumer,control,action,{previous.value,previous.elapsed_ns,uint32_t(previous.phase),0},{config.press_delay_ns,config.double_tap_gap_ns,config.repeat_delay_ns,config.repeat_interval_ns,config.refocus_delay_ns,config.down_threshold,config.change_epsilon}));}
 void mag_controls_observe(InputFrameKey k,ActionId action,const ControlOffer& value){auto& s=state();std::lock_guard lock(s.mutex);if(!s.frame||s.frame->key!=k)throw std::invalid_argument("observation requires attached frame");check(mag_input_observe(s.handle,key(k),action,offer(value)));}
 void mag_controls_accept_action(InputFrameKey k,ActionId action,const ControlOffer& value){auto& s=state();std::lock_guard lock(s.mutex);if(!s.frame||s.frame->key!=k)throw std::invalid_argument("acceptance requires attached frame");check(mag_input_accept_action(s.handle,key(k),action,offer(value)));}
 void mag_controls_accept_mouse(InputFrameKey k){auto& s=state();std::lock_guard lock(s.mutex);if(!s.frame||s.frame->key!=k)throw std::invalid_argument("acceptance requires attached frame");check(mag_input_accept_mouse(s.handle,key(k),uint32_t(s.last_neutral)));}

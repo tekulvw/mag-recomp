@@ -16,6 +16,41 @@ pub fn edit(
     clear: bool,
     replace: bool,
 ) -> Result<Vec<Binding>, EditError> {
+    if request.contexts == 0 || request.contexts & !127 != 0 {
+        return Err(EditError::Invalid);
+    }
+    let mut next = original.to_vec();
+    for bit in [1, 2, 4, 8, 16, 32, 64] {
+        if request.contexts & bit != 0 {
+            let one = Binding {
+                contexts: bit,
+                ..request
+            };
+            next = edit_context(&next, one, slot, clear, replace)?;
+        }
+    }
+    let mut merged: Vec<Binding> = Vec::new();
+    for binding in next {
+        if let Some(existing) = merged.iter_mut().find(|b| {
+            b.action == binding.action
+                && b.control == binding.control
+                && b.behavior == binding.behavior
+        }) {
+            existing.contexts |= binding.contexts;
+        } else {
+            merged.push(binding);
+        }
+    }
+    Ok(merged)
+}
+
+fn edit_context(
+    original: &[Binding],
+    request: Binding,
+    slot: u32,
+    clear: bool,
+    replace: bool,
+) -> Result<Vec<Binding>, EditError> {
     if slot > 1
         || request.contexts.count_ones() != 1
         || request.contexts & !127 != 0
@@ -117,6 +152,39 @@ mod tests {
         assert_eq!(
             edit(&original, binding(5, 1, 1), 2, false, false),
             Err(EditError::Invalid)
+        );
+    }
+}
+
+#[cfg(test)]
+mod shared_context_tests {
+    use super::*;
+    use crate::bindings::Behavior;
+    use crate::input::{Control, Source};
+    fn b(code: u32, action: u32, contexts: u32) -> Binding {
+        Binding {
+            control: Control {
+                source: Source::Keyboard,
+                code,
+            },
+            action,
+            contexts,
+            behavior: Behavior::Hold,
+        }
+    }
+    #[test]
+    fn shared_context_edit_updates_both_and_rolls_back_on_a_later_conflict() {
+        let original = vec![b(41, 1, 17), b(43, 2, 16)];
+        assert_eq!(
+            edit(&original, b(43, 1, 17), 0, false, false),
+            Err(EditError::Conflict(2))
+        );
+        let replaced = edit(&original, b(43, 1, 17), 0, false, true).unwrap();
+        assert_eq!(replaced, vec![b(43, 1, 17)]);
+        assert!(
+            edit(&replaced, b(0, 1, 17), 0, true, false)
+                .unwrap()
+                .is_empty()
         );
     }
 }

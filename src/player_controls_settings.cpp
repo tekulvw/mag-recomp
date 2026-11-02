@@ -41,6 +41,7 @@ ControlsProfile mag_controls_settings_load(){
     auto p=std::filesystem::exists(r.path)?mag_controls_load_profile(r.path,catalog(r)):r.defaults;
     // Schema1/native profiles did not store editable controller defaults. Fill
     // them only while Native still owns digital buttons; explicit unbound stays empty.
+    if(r.upgrade)r.upgrade(p);
     if(!p.controller_remap) {
         std::erase_if(p.bindings,[](auto b){return b.control.source==InputSource::Controller;});
         for(auto b:r.defaults.bindings)if(b.control.source==InputSource::Controller)p.bindings.push_back(b);
@@ -78,7 +79,7 @@ void mag_controls_settings_reset(ControlsProfile& p,bool controller){
 std::string mag_controls_settings_control_name(PhysicalControl c){
     if(c.source==InputSource::Mouse)return c.code==0?"Left mouse":c.code==1?"Right mouse":c.code==2?"Middle mouse":"Mouse "+std::to_string(c.code+1);
     if(c.source==InputSource::Controller){
-        static const char* names[]={"Cross / A","Circle / B","Square / X","Triangle / Y","Back","Guide","Start","L3","R3","L1 / LB","R1 / RB","D-pad Up","D-pad Down","D-pad Left","D-pad Right"};
+        static const char* names[]={"Cross / A","Circle / B","Square / X","Triangle / Y","Select / Back","Guide","Start / Menu","L3","R3","L1 / LB","R1 / RB","D-pad Up","D-pad Down","D-pad Left","D-pad Right"};
         if(c.code<std::size(names))return names[c.code];
         if(c.code==32)return "L2 / LT";if(c.code==33)return "R2 / RT";return "Controller "+std::to_string(c.code);
     }

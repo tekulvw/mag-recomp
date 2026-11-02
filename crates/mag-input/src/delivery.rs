@@ -34,6 +34,7 @@ impl std::error::Error for Error {}
 pub struct Contributor {
     pub source: u8,
     pub device: u64,
+    pub code: u32,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -227,6 +228,31 @@ impl Delivery {
                 .pulses
                 .back()
                 .is_some_and(|pulse| pulse.up_time.is_none());
+        }
+    }
+
+    pub(crate) fn current_offer_retained(
+        &self,
+        action: u32,
+        allowed: impl Fn(&Contributor) -> bool,
+    ) -> bool {
+        self.actions
+            .get(&action)
+            .and_then(|state| state.pulses.front())
+            .is_some_and(|pulse| pulse.contributors.iter().any(allowed))
+    }
+
+    pub(crate) fn retain_contributors(&mut self, allowed: impl Fn(u32, &Contributor) -> bool) {
+        for (action, state) in &mut self.actions {
+            state.pulses.retain_mut(|pulse| {
+                pulse.contributors.retain(|c| allowed(*action, c));
+                if !pulse.contributors.is_empty() {
+                    return true;
+                }
+                self.pulse_count -= 1;
+                false
+            });
+            state.physically_down = state.pulses.back().is_some_and(|p| p.up_time.is_none());
         }
     }
 

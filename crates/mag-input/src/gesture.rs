@@ -88,17 +88,10 @@ pub struct Recognizer {
     last_tap: Option<u64>,
     last_repeat: Option<u64>,
     last_value: f64,
+    adopted_hold: bool,
 }
 impl Recognizer {
-    pub fn update(
-        &mut self,
-        sequence: u64,
-        now: u64,
-        offer: Option<Offer>,
-        value: f64,
-        blocked: bool,
-        config: Config,
-    ) -> Result<Output, Error> {
+    fn validate(value: f64, config: Config) -> Result<(), Error> {
         if !value.is_finite()
             || !(0.0..=1.0).contains(&value)
             || !config.down_threshold.is_finite()
@@ -108,6 +101,55 @@ impl Recognizer {
         {
             return Err(Error::InvalidValue);
         }
+        Ok(())
+    }
+
+    /// Adopt a previously recognized native hold without emitting an event.
+    /// Phase and age are portable semantics; prior event bits are ignored.
+    pub fn seed(previous: Output, now: u64, config: Config) -> Result<Self, Error> {
+        Self::validate(previous.value, config)?;
+        if previous.value <= 0.0 || previous.value < config.down_threshold {
+            return Err(Error::InvalidValue);
+        }
+        if previous.elapsed_ns > now {
+            return Err(Error::InvalidTime);
+        }
+        let (pressed, second) = match previous.phase {
+            Phase::Down => (false, false),
+            Phase::SecondDown => (false, true),
+            Phase::Pressed => (true, false),
+            Phase::SecondPressed => (true, true),
+            _ => return Err(Error::InvalidValue),
+        };
+        Ok(Self {
+            down: true,
+            pressed,
+            second,
+            adopted_hold: true,
+            down_time: now - previous.elapsed_ns,
+            elapsed: previous.elapsed_ns,
+            last_value: previous.value,
+            last_repeat: if config.repeat_interval_ns > 0
+                && previous.elapsed_ns >= config.repeat_delay_ns
+            {
+                Some((previous.elapsed_ns - config.repeat_delay_ns) / config.repeat_interval_ns)
+            } else {
+                None
+            },
+            ..Self::default()
+        })
+    }
+
+    pub fn update(
+        &mut self,
+        sequence: u64,
+        now: u64,
+        offer: Option<Offer>,
+        value: f64,
+        blocked: bool,
+        config: Config,
+    ) -> Result<Output, Error> {
+        Self::validate(value, config)?;
         let input = Input {
             sequence,
             now,
@@ -145,6 +187,7 @@ impl Recognizer {
             ..
         } = input;
         if blocked {
+            self.adopted_hold = false;
             self.down = false;
             self.pressed = false;
             self.blocked = true;
@@ -182,6 +225,7 @@ impl Recognizer {
             self.last_tap = None;
         }
         if down && !self.down {
+            self.adopted_hold = false;
             self.down_time = now;
             self.elapsed = 0;
             self.pressed = false;
@@ -196,10 +240,12 @@ impl Recognizer {
             events |= Events::DOWN;
         }
         if down {
-            self.elapsed = offer.filter(|offer| offer.down).map_or_else(
-                || now.saturating_sub(self.down_time).max(self.elapsed),
-                |offer| offer.physical_duration_ns.max(self.elapsed),
-            );
+            self.elapsed = offer
+                .filter(|offer| offer.down && !self.adopted_hold)
+                .map_or_else(
+                    || now.saturating_sub(self.down_time).max(self.elapsed),
+                    |offer| offer.physical_duration_ns.max(self.elapsed),
+                );
             events |= Events::WHILE_DOWN;
             if self.elapsed >= config.press_delay_ns {
                 if !self.pressed {
@@ -219,7 +265,7 @@ impl Recognizer {
                 }
             }
         } else if self.down {
-            self.elapsed = offer.map_or(
+            self.elapsed = offer.filter(|_| !self.adopted_hold).map_or(
                 self.elapsed.max(now.saturating_sub(self.down_time)),
                 |offer| offer.physical_duration_ns.max(self.elapsed),
             );
@@ -254,6 +300,9 @@ impl Recognizer {
             Phase::Idle
         };
         self.down = down;
+        if !down {
+            self.adopted_hold = false;
+        }
         Output {
             value,
             elapsed_ns: self.elapsed,

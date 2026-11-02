@@ -1,6 +1,8 @@
 #pragma once
 #include "player_controls.h"
+#include <span>
 namespace mag {
+void mag_controls_set_shared_native_actions(std::span<const ActionId>);
 // Portable semantics only; the private adapter translates native event/cache words.
 enum class ControlPhase : uint32_t { Idle, ReleasedTap, Down, SecondDown, Pressed, SecondPressed, Blocked, Refocus };
 enum ControlEvent : uint32_t {
@@ -23,7 +25,8 @@ struct ControlRecognition {
 struct ControlOffer {uint64_t pulse_id{},physical_duration_ns{};bool down{};uint32_t source_mask{};};
 std::optional<ControlOffer> mag_controls_offer(InputFrameKey,ActionId);
 ControlRecognition mag_controls_recognize(InputFrameKey,uint64_t consumer,uint64_t control,ActionId,
-    double normalized_value,bool blocked,const ControlRecognitionConfig&);
+    double normalized_value,bool blocked,const ControlRecognitionConfig&,std::optional<bool> native_contribution=std::nullopt);
+void mag_controls_seed_recognizer(InputFrameKey,uint64_t consumer,uint64_t control,ActionId,ControlRecognition previous,const ControlRecognitionConfig&);
 // Explicit completion receipt; pure reads/recognition do not consume a pulse.
 void mag_controls_observe(InputFrameKey,ActionId,const ControlOffer&);
 void mag_controls_accept_action(InputFrameKey,ActionId,const ControlOffer&);

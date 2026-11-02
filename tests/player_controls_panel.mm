@@ -17,6 +17,8 @@ int main(int argc,char**argv){@autoreleasepool{
     const uint32_t keys[]={26,22,4,7,44,225,21,8,6,20,10,9,0,1};
     const uint32_t buttons[]={0,0,0,0,0,7,2,1,3,33,32,8,10,9};
     for(unsigned i=0;i<14;++i){registration.actions.push_back({i+1,labels[i],1,i<4?3u:7u});registration.defaults.bindings.push_back({{i<12?InputSource::Keyboard:InputSource::Mouse,keys[i]},i+1});if(i>=4)registration.defaults.bindings.push_back({{InputSource::Controller,buttons[i]},i+1});}
+    const uint32_t extraKeys[]={41,43,82,81,80,79},extraButtons[]={6,4,11,12,13,14};
+    for(unsigned i=0;i<6;++i){registration.actions.push_back({15+i,"Native button "+std::to_string(i),17,7,"Native menu / command buttons"});registration.defaults.bindings.push_back({{InputSource::Keyboard,extraKeys[i]},15+i,17});registration.defaults.bindings.push_back({{InputSource::Controller,extraButtons[i]},15+i,17});}
     unsigned applied=0;registration.apply=[&](const ControlsProfile&){++applied;};mag_controls_settings_register(registration);
     NSString* path=[[NSString stringWithUTF8String:argv[1]] stringByAppendingPathComponent:@"settings.json"];
     NSMutableDictionary* settings=MAGSettingsDefaults().mutableCopy;settings[@"server_address"]=@"fixture.example.net";settings[@"render_scale"]=@200;assert(MAGSettingsSave(path,settings,NULL));
@@ -29,6 +31,17 @@ int main(int argc,char**argv){@autoreleasepool{
     auto device=(NSSegmentedControl*)find(pane.view,@"controls_device");device.selectedSegment=1;change(device);
     auto clear=(NSButton*)find(pane.view,@"clear_binding_5_0");assert(clear.enabled);[clear performClick:nil];assert(pane.controlsDirty);[controller cancel:nil];assert(!pane.controlsDirty);
     clear=(NSButton*)find(pane.view,@"clear_binding_5_0");assert(clear.enabled);[clear performClick:nil];[controller apply:nil];assert(applied==2);auto saved=mag_controls_settings_load();assert(saved.controller_remap);assert(std::none_of(saved.bindings.begin(),saved.bindings.end(),[](auto b){return b.action==5&&b.control.source==InputSource::Controller;}));
+    auto systemClear=(NSButton*)find(pane.view,@"clear_binding_15_0");assert(systemClear.enabled);
+    [systemClear performClick:nil];[controller apply:nil];
+    auto systemProfile=mag_controls_settings_load();
+    assert(std::none_of(systemProfile.bindings.begin(),systemProfile.bindings.end(),[](auto b){return b.action==15 && b.control.source==InputSource::Controller && (b.contexts&1);}));
+    assert(std::any_of(systemProfile.bindings.begin(),systemProfile.bindings.end(),[](auto b){return b.action==15 && b.control.source==InputSource::Controller && b.contexts==16;}));
+    auto contextPicker=(NSPopUpButton*)find(pane.view,@"controls_context");[contextPicker selectItemAtIndex:1];change(contextPicker);
+    assert(!find(pane.view,@"binding_1_0"));
+    systemClear=(NSButton*)find(pane.view,@"clear_binding_15_0");assert(systemClear.enabled);[systemClear performClick:nil];[controller apply:nil];
+    systemProfile=mag_controls_settings_load();assert(std::none_of(systemProfile.bindings.begin(),systemProfile.bindings.end(),[](auto b){return b.action==15 && b.control.source==InputSource::Controller;}));
+    [contextPicker selectItemAtIndex:0];change(contextPicker);
+    assert(find(pane.view,@"controls_action_group"));
     [controller showSettings:nil];[controller.window layoutIfNeeded];
     device.selectedSegment=0;change(device);
     auto jump=(NSButton*)find(pane.view,@"binding_5_0");assert(jump.enabled);

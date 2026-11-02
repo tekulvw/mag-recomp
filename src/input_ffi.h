@@ -20,6 +20,7 @@ int32_t mag_input_edit_binding(const MagInputBinding*,uint32_t,MagInputBinding r
 uint32_t mag_input_abi_version(void);
 int32_t mag_input_create(uint64_t session,const MagInputBinding*,uint32_t count,uint64_t* handle);
 int32_t mag_input_destroy(uint64_t handle);
+int32_t mag_input_shared_native_actions(uint64_t,const uint32_t*,uint32_t count);
 int32_t mag_input_configure(uint64_t,const MagInputBinding*,uint32_t);
 /* capture bits: focus=1,supported=2,mouse=4,controller=8; source: keyboard0,mouse1,controller2. */
 int32_t mag_input_capture(uint64_t,uint32_t flags,uint64_t* generation);
@@ -38,6 +39,8 @@ int32_t mag_input_policy_reduce(MagInputPolicy,uint32_t requested_or_unchanged,u
 int32_t mag_input_accept_action(uint64_t,MagInputFrameKey,uint32_t action,MagInputOffer);
 int32_t mag_input_accept_mouse(uint64_t,MagInputFrameKey,uint32_t neutral);
 int32_t mag_input_recognize(uint64_t,MagInputFrameKey,uint64_t consumer,uint64_t control,uint32_t action,double value,uint32_t blocked,MagInputRecognitionConfig,MagInputRecognition*);
+int32_t mag_input_recognize_native(uint64_t,MagInputFrameKey,uint64_t consumer,uint64_t control,uint32_t action,double value,uint32_t blocked,MagInputRecognitionConfig,uint32_t native_contribution,MagInputRecognition*);
+int32_t mag_input_seed_recognizer(uint64_t,MagInputFrameKey,uint64_t consumer,uint64_t control,uint32_t action,MagInputRecognition previous,MagInputRecognitionConfig);
 int32_t mag_input_forget_consumer(uint64_t,uint64_t consumer);
 #ifdef __cplusplus
 }
