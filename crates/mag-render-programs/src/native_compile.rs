@@ -4,7 +4,7 @@ use crate::HlslProgram;
 use naga::{AddressSpace, Binding, TypeInner};
 use std::ffi::{CStr, CString, c_char};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Stage {
     Vertex,
     Fragment,
@@ -444,3 +444,7 @@ pub fn lower(program: &HlslProgram, stage: Stage) -> Result<NativeProgram, Strin
         vertex_locations,
     })
 }
+
+#[path = "native_cache.rs"]
+mod cache;
+pub use cache::{CacheLimits, CacheStats, NativeCompilerCache};

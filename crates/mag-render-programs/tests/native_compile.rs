@@ -226,3 +226,53 @@ fn texture_shape_and_comparison_survive_native_reflection() {
     assert_eq!(p.texture_bindings[0].sample_kind, TextureSampleKind::Depth);
     assert!(p.sampler_bindings[0].comparison);
 }
+
+#[test]
+fn bounded_compiler_cache_reuses_exact_programs_and_preserves_live_evicted_owners() {
+    use std::sync::Arc;
+    let mut cache = NativeCompilerCache::new(CacheLimits {
+        entries: 1,
+        retained_payload_bytes: 4 * 1024 * 1024,
+    });
+    let source = vertex_program();
+    let first = cache.compile(&source, Stage::Vertex).unwrap();
+    let same = cache.compile(&source, Stage::Vertex).unwrap();
+    assert!(Arc::ptr_eq(&first, &same));
+    assert_eq!(cache.stats().compilations, 1);
+    assert_eq!(cache.stats().hits, 1);
+    let other = cache.compile(&fragment_program(), Stage::Fragment).unwrap();
+    assert!(!other.msl.is_empty());
+    assert_eq!(cache.stats().evictions, 1);
+    assert_eq!(cache.retained_entries(), 1);
+    assert!(
+        !first.msl.is_empty(),
+        "eviction must not invalidate a live scene owner"
+    );
+    let recompiled = cache.compile(&source, Stage::Vertex).unwrap();
+    assert!(!Arc::ptr_eq(&first, &recompiled));
+    assert_eq!(first.spirv, recompiled.spirv);
+    cache.clear();
+    assert_eq!(cache.retained_payload_bytes(), 0);
+    assert!(!recompiled.hlsl.is_empty());
+}
+#[test]
+fn compiler_cache_does_not_reuse_incompatible_layout_or_retain_over_budget() {
+    let mut cache = NativeCompilerCache::new(CacheLimits {
+        entries: 4,
+        retained_payload_bytes: 4 * 1024 * 1024,
+    });
+    let mut source = vertex_program();
+    cache.compile(&source, Stage::Vertex).unwrap();
+    source.constant_buffer_bytes += 16;
+    assert!(cache.compile(&source, Stage::Vertex).is_err());
+    assert_eq!(cache.stats().hits, 0);
+    assert_eq!(cache.retained_entries(), 1);
+    let mut tiny = NativeCompilerCache::new(CacheLimits {
+        entries: 1,
+        retained_payload_bytes: 1,
+    });
+    let program = tiny.compile(&fragment_program(), Stage::Fragment).unwrap();
+    assert!(!program.spirv.is_empty());
+    assert_eq!(tiny.retained_entries(), 0);
+    assert_eq!(tiny.retained_payload_bytes(), 0);
+}
