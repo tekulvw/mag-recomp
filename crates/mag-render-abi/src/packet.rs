@@ -1,5 +1,8 @@
 // C-compatible synchronous views. Owned packet copies never retain these pointers.
-use super::*;
+use crate::TextureLayout as NativeTextureLayout;
+use crate::packet as raw;
+use crate::*;
+use core::mem::{align_of, offset_of, size_of};
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct TextureSlot {
@@ -257,7 +260,7 @@ pub struct Desc {
     pub target: *const HostImage,
     pub frame: *const HostFrame,
 }
-pub(super) fn layout() -> Vec<u32> {
+pub fn layout() -> Vec<u32> {
     vec![
         size_of::<raw::TextureSlot>() as u32,
         align_of::<raw::TextureSlot>() as u32,

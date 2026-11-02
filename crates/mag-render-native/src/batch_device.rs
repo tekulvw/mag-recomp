@@ -8,21 +8,13 @@ use mag_render::{
     resources::ResourceLease,
     sdk_compute::*,
 };
+pub use mag_render_abi::ShaderStage;
 use std::{
     collections::{BTreeMap, VecDeque},
-    ffi::{c_char, c_void},
+    ffi::c_void,
     marker::PhantomData,
     mem::{align_of, offset_of, size_of},
 };
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub struct ShaderStage {
-    pub source: *const c_void,
-    pub source_length: u64,
-    pub entry: *const c_char,
-    pub entry_length: u32,
-    pub language: u32,
-}
 #[repr(C)]
 pub struct GraphicsDesc {
     pub struct_size: u32,

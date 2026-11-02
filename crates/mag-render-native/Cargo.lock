@@ -148,15 +148,21 @@ checksum = "5d15f86d12da44cd8d4ec3c73984537eb7f4cadcb9776a575a0a8a05ca11005c"
 name = "mag-render"
 version = "0.1.0"
 dependencies = [
+ "mag-render-abi",
  "serde",
  "serde_json",
 ]
+
+[[package]]
+name = "mag-render-abi"
+version = "0.1.0"
 
 [[package]]
 name = "mag-render-native"
 version = "0.1.0"
 dependencies = [
  "mag-render",
+ "mag-render-abi",
  "mag-render-shaders",
 ]
 

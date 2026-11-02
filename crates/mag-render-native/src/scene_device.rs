@@ -14,16 +14,7 @@ pub struct BufferLayout {
     pub reserved: u32,
     pub binding: BindingLayout,
 }
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub struct TextureLayout {
-    pub stage: u32,
-    pub texture_slot: u32,
-    pub sampler_slot: u32,
-    pub format: u32,
-    pub comparison: u32,
-    pub reserved: u32,
-}
+pub use mag_render_abi::TextureLayout;
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct SceneGraphicsDesc {
@@ -43,14 +34,7 @@ pub struct SceneGraphicsDesc {
     pub textures: *const TextureLayout,
 }
 /// Prepared interleaved vertex fields, never guest layout inference.
-#[repr(C)]
-#[derive(Clone, Copy, Debug)]
-pub struct VertexAttribute {
-    pub location: u32,
-    pub format: u32,
-    pub offset: u32,
-    pub reserved: u32,
-}
+pub use mag_render_abi::VertexAttribute;
 pub const BINDINGS_COMBINED: u32 = 0;
 pub const BINDINGS_NAMESPACED: u32 = 1;
 pub const VERTEX_FLOAT: u32 = 1;

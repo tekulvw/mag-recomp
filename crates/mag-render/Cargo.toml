@@ -15,6 +15,7 @@ default = []
 sdk-compute = []
 
 [dependencies]
+mag-render-abi = { path = "../mag-render-abi" }
 serde = { version = "=1.0.228", features = ["derive"] }
 serde_json = "=1.0.149"
 

@@ -17,6 +17,7 @@ vulkan = []
 d3d12 = []
 
 [dependencies]
+mag-render-abi = { path = "../mag-render-abi" }
 mag-render = { path = "../mag-render", features = ["sdk-compute"] }
 
 [build-dependencies]

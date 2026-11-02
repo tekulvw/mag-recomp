@@ -1,9 +1,6 @@
 //! Genuine host frame reservation and distinct final/present observations.
 //! Engine-update association is not a display frame or a world/camera epoch.
-use std::{
-    ffi::c_void,
-    mem::{align_of, offset_of, size_of},
-};
+use std::mem::{align_of, offset_of, size_of};
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct FrameSource {
@@ -14,31 +11,8 @@ pub struct FrameSource {
     pub source_publication: u64,
     pub pass_occurrence: u64,
 }
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub struct HostFrame {
-    pub abi_version: u32,
-    pub struct_size: u32,
-    pub owner_lifetime: u64,
-    pub reservation: u64,
-    pub userdata: *mut c_void,
-    pub preflight: Option<unsafe extern "C" fn(*mut c_void, u64, u64, u64, u64) -> i32>,
-    pub committed: Option<unsafe extern "C" fn(*mut c_void, u64, u64, u64, u64, u32) -> i32>,
-    pub cancel: Option<unsafe extern "C" fn(*mut c_void, u64, u64) -> i32>,
-}
-impl HostFrame {
-    /// Validate representation only. A caller still must supply genuine,
-    /// process-lived callbacks from the same target/owner reservation provider.
-    pub fn valid(&self) -> bool {
-        self.abi_version == 1
-            && self.struct_size == size_of::<Self>() as u32
-            && self.owner_lifetime != 0
-            && self.reservation != 0
-            && self.preflight.is_some()
-            && self.committed.is_some()
-            && self.cancel.is_some()
-    }
-}
+pub use mag_render_abi::HostFrame;
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct FrameEvent {

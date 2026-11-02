@@ -1,0 +1,13 @@
+[package]
+name = "mag-render-abi"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99"
+license = "MIT"
+description = "Pure Rust C-compatible rendering frontend transport records"
+
+[lib]
+name = "mag_render_abi"
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"

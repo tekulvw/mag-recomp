@@ -13,17 +13,8 @@ use crate::{
     host_frame::HostFrame,
 };
 use mag_render::sdk_compute::BindingLayout;
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub struct Attachment {
-    pub image: u32,
-    pub load: u32,
-    pub store: u32,
-    pub reserved: u32,
-    pub clear: [f32; 4],
-}
-#[path = "scene_packet_ffi.rs"]
-pub mod raw;
+pub use mag_render_abi::Attachment;
+pub use mag_render_abi::packet as raw;
 unsafe extern "C" {
     fn mag_native_packet_layout(out: *mut u32, words: u32) -> i32;
 }

@@ -22,14 +22,7 @@ const DIAGNOSTIC: u32 = 1;
 const UNCERTAIN: u32 = 2;
 const TERMINAL: u32 = 4;
 const FAILED: u32 = 8;
-#[repr(C)]
-#[derive(Clone, Copy, Default)]
-pub struct Source {
-    pub engine_update: u64,
-    pub cohort: u64,
-    pub publication: u64,
-    pub pass_occurrence: u64,
-}
+pub use mag_render_abi::Source;
 #[repr(C)]
 pub struct Draw {
     pub abi_version: u32,

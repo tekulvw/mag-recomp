@@ -28,17 +28,7 @@ pub struct BufferDesc {
     pub byte_length: u64,
     pub initial_bytes: *const c_void,
 }
-#[repr(C)]
-#[derive(Clone, Copy, Default)]
-pub struct BindingLayout {
-    pub slot: u32,
-    pub access: u32,
-    pub minimum_bytes: u64,
-    pub runtime_array_stride: u32,
-    pub runtime_size_index: u32,
-    pub alignment_bytes: u32,
-    pub binding_kind: u32,
-}
+pub use mag_render_abi::BindingLayout;
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
 pub struct Pipeline {

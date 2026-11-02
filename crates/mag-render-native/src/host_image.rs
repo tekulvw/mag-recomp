@@ -2,30 +2,11 @@
 //! Import pins before native dereference; each new submission validates it again
 //! under the original queue lease. Rust image tokens never contain native ObjC.
 use crate::{NativeContext, batch_device::scene_device::SceneDevice};
+pub use mag_render_abi::HostImage;
 use std::{
     ffi::c_void,
     mem::{align_of, offset_of, size_of},
 };
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub struct HostImage {
-    pub abi_version: u32,
-    pub struct_size: u32,
-    pub backend: u32,
-    pub format: u32,
-    pub width: u32,
-    pub height: u32,
-    pub reserved: u32,
-    pub reserved1: u32,
-    pub owner_lifetime: u64,
-    pub resource_id: u64,
-    pub resource_generation: u64,
-    pub image: *mut c_void,
-    pub userdata: *mut c_void,
-    pub retain: Option<unsafe extern "C" fn(*mut c_void, u64, u64, u64) -> i32>,
-    pub release: Option<unsafe extern "C" fn(*mut c_void, u64, u64, u64)>,
-    pub validate: Option<unsafe extern "C" fn(*mut c_void, u64, u64, u64) -> i32>,
-}
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct NativeImage {

@@ -181,7 +181,11 @@ jobs:
       - name: Locked native crate dependencies
         run: cargo fetch --manifest-path crates/mag-render-native/Cargo.toml --locked
       - name: Native Rust format
-        run: cargo fmt --manifest-path crates/mag-render-native/Cargo.toml --check
+        run: |
+          cargo fmt --manifest-path crates/mag-render-native/Cargo.toml --check
+          cargo fmt --manifest-path crates/mag-render-abi/Cargo.toml --check
+      - name: Pure ABI dependency check
+        run: cargo clippy --manifest-path crates/mag-render-abi/Cargo.toml --locked --offline -- -D warnings
       - name: D3D12 portable allocation and view preflight
         if: runner.os != 'Windows'
         run: python tools/test_render_frontend_d3d12_cpu.py --output-dir build/native-d3d12-cpu
