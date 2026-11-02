@@ -57,9 +57,11 @@ struct ControlBinding {
 };
 struct ControlsProfile {
     InputMode mode=InputMode::Auto;
+    bool controller_remap=false; // Complete digital override, including unbound actions.
     MouseLookSettings mouse;
     ControllerLookSettings controller;
     std::vector<ControlBinding> bindings;
+    uint32_t catalog_revision=0; // Integration-defined default/catalog migration revision.
 };
 struct InputFrameKey {
     // Advances for an actual input sample, not an outer scheduler callback.

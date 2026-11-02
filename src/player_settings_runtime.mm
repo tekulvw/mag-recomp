@@ -2,6 +2,11 @@
 #import "player_settings_macos.h"
 #import "player_server_overlay.h"
 #include "player_input_desktop.h"
+#ifdef MAG_INPUT_RUST
+#import "player_controls_macos.h"
+#include "player_controls_settings.h"
+static MAGControlsSettingsController *controlsController;
+#endif
 #import <QuartzCore/CAMetalLayer.h>
 #include <cstring>
 #include <cstdlib>
@@ -26,6 +31,12 @@ int mag_player_settings_prepare(void) { @autoreleasepool {
     BOOL exists=NO;NSError *error=nil;
     NSDictionary *settings=MAGSettingsLoad(path,&exists,&error);
     controller=[[MAGSettingsController alloc] initWithPath:path settings:settings?:MAGSettingsDefaults() error:error];
+#ifdef MAG_INPUT_RUST
+    if(mag::mag_controls_settings_available()){
+        controlsController=[MAGControlsSettingsController new];
+        [controller setControlsPane:controlsController view:controlsController.view];
+    }
+#endif
     controller.editingChanged=^(BOOL editing){mag_player_set_input_blocked(editing);mag_input_desktop_refresh();};
     BOOL launcherPhase=environment("MAG_PLAYER_SETUP")!=nil;
     BOOL setup=error||environment("MAG_PLAYER_SHOW_SETTINGS")||(!exists&&environment("MAG_PLAYER_SETUP"));
@@ -89,6 +100,14 @@ void mag_player_settings_poll(void) {
     if(!controller)return;
     // The backend can reset the drawable when the guest changes display buffers.
     // Keep output dimensions separate from those guest render targets.
-    if(NSThread.isMainThread)[controller refreshOutput];
-    else dispatch_sync(dispatch_get_main_queue(),^{[controller refreshOutput];});
+    void (^refresh)(void)=^{
+#ifdef MAG_INPUT_RUST
+        if(!controlsController && mag::mag_controls_settings_available()) {
+            controlsController=[MAGControlsSettingsController new];
+            [controller setControlsPane:controlsController view:controlsController.view];
+        }
+#endif
+        [controller refreshOutput];
+    };
+    if(NSThread.isMainThread)refresh();else dispatch_sync(dispatch_get_main_queue(),refresh);
 }

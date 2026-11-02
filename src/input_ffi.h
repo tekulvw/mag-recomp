@@ -14,9 +14,13 @@ typedef struct {uint64_t pulse_id,duration_ns;uint32_t down,source_mask;} MagInp
 typedef struct {uint32_t mode,mouse_owner,flags,reserved;} MagInputPolicy;
 typedef struct {uint64_t press_delay_ns,double_tap_gap_ns,repeat_delay_ns,repeat_interval_ns,refocus_delay_ns;double down_threshold,change_epsilon;} MagInputRecognitionConfig;
 typedef struct {double value;uint64_t elapsed_ns;uint32_t phase,events;} MagInputRecognition;
+/* Stateless transactional editor. flags: clear1, replace-conflicts2.
+ * status7=conflict, conflict_action identifies it. No output on failure. */
+int32_t mag_input_edit_binding(const MagInputBinding*,uint32_t,MagInputBinding request,uint32_t slot,uint32_t flags,MagInputBinding*,uint32_t capacity,uint32_t* count,uint32_t* conflict_action);
 uint32_t mag_input_abi_version(void);
 int32_t mag_input_create(uint64_t session,const MagInputBinding*,uint32_t count,uint64_t* handle);
 int32_t mag_input_destroy(uint64_t handle);
+int32_t mag_input_shared_native_actions(uint64_t,const uint32_t*,uint32_t count);
 int32_t mag_input_configure(uint64_t,const MagInputBinding*,uint32_t);
 /* capture bits: focus=1,supported=2,mouse=4,controller=8; source: keyboard0,mouse1,controller2. */
 int32_t mag_input_capture(uint64_t,uint32_t flags,uint64_t* generation);
@@ -35,6 +39,8 @@ int32_t mag_input_policy_reduce(MagInputPolicy,uint32_t requested_or_unchanged,u
 int32_t mag_input_accept_action(uint64_t,MagInputFrameKey,uint32_t action,MagInputOffer);
 int32_t mag_input_accept_mouse(uint64_t,MagInputFrameKey,uint32_t neutral);
 int32_t mag_input_recognize(uint64_t,MagInputFrameKey,uint64_t consumer,uint64_t control,uint32_t action,double value,uint32_t blocked,MagInputRecognitionConfig,MagInputRecognition*);
+int32_t mag_input_recognize_native(uint64_t,MagInputFrameKey,uint64_t consumer,uint64_t control,uint32_t action,double value,uint32_t blocked,MagInputRecognitionConfig,uint32_t native_contribution,MagInputRecognition*);
+int32_t mag_input_seed_recognizer(uint64_t,MagInputFrameKey,uint64_t consumer,uint64_t control,uint32_t action,MagInputRecognition previous,MagInputRecognitionConfig);
 int32_t mag_input_forget_consumer(uint64_t,uint64_t consumer);
 #ifdef __cplusplus
 }

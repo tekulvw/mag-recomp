@@ -16,6 +16,8 @@ typedef struct MagExtensionCallbacks {
     void (*trace_exit)(void* ppu_ctx, uint32_t function, const uint64_t args[3], int completed, uint64_t scratch[8]);
     bool (*payload_select)(uint32_t queue, uint64_t capture);
     void (*payload_begin)(void* spu_ctx, uint64_t span, uint32_t target);
+    /* Optional host-only setup before settings and guest allocation. */
+    void (*prepare)(const char* elf);
 } MagExtensionCallbacks;
 
 /* Adds every non-null slot. Returns 0, or -1 (changing nothing) if any of them is already taken. */

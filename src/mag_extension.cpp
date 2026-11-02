@@ -15,11 +15,11 @@ extern "C" int mag_extension_register(const MagExtensionCallbacks* c) {
     MagExtensionCallbacks& r = registry;
     if (taken(r.start, c->start) || taken(r.frame_poll, c->frame_poll) || taken(r.stop, c->stop) ||
         taken(r.trace_enter, c->trace_enter) || taken(r.trace_exit, c->trace_exit) ||
-        taken(r.payload_select, c->payload_select) || taken(r.payload_begin, c->payload_begin))
+        taken(r.payload_select, c->payload_select) || taken(r.payload_begin, c->payload_begin) || taken(r.prepare, c->prepare))
         return -1;
     take(r.start, c->start); take(r.frame_poll, c->frame_poll); take(r.stop, c->stop);
     take(r.trace_enter, c->trace_enter); take(r.trace_exit, c->trace_exit);
-    take(r.payload_select, c->payload_select); take(r.payload_begin, c->payload_begin);
+    take(r.payload_select, c->payload_select); take(r.payload_begin, c->payload_begin);take(r.prepare,c->prepare);
     return 0;
 }
 

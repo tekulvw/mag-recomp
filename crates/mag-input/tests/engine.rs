@@ -479,3 +479,183 @@ fn changing_owner_after_physical_sealing_cancels_the_sample_without_failing_the_
     let frame = engine.seal(key(2), 30, context(100)).unwrap();
     assert!(frame.action(MOVE).is_none());
 }
+
+#[test]
+fn shared_button_survives_menu_transition_and_delivers_release_without_gameplay() {
+    let mut shared = binding(41, INTERACT);
+    shared.contexts = 17;
+    let mut engine = setup(vec![binding(26, MOVE), shared]);
+    event(&mut engine, 1, 26, true, 10);
+    event(&mut engine, 1, 41, true, 11);
+    let first = engine.seal(key(1), 20, context(99)).unwrap();
+    let start = first.action(INTERACT).unwrap();
+    engine.observe(key(1), INTERACT, start).unwrap();
+    engine.push_mouse(engine.generation(), 3.0, 4.0).unwrap();
+    let menu = ContextKey {
+        owner: 99,
+        context: Context::Menu,
+    };
+    let held = engine.seal(key(2), 30, menu).unwrap();
+    assert_eq!(held.action(INTERACT).unwrap().pulse_id, start.pulse_id);
+    assert!(held.action(MOVE).is_none());
+    assert_eq!(held.mouse.dx, 0.0);
+    event(&mut engine, 1, 41, false, 35);
+    let up = engine
+        .seal(key(3), 40, menu)
+        .unwrap()
+        .action(INTERACT)
+        .unwrap();
+    assert!(!up.down);
+    assert_eq!(up.pulse_id, start.pulse_id);
+    engine.observe(key(3), INTERACT, up).unwrap();
+    assert!(
+        engine
+            .seal(key(4), 50, context(99))
+            .unwrap()
+            .action(MOVE)
+            .is_none()
+    );
+}
+
+#[test]
+fn shared_button_does_not_survive_owner_or_focus_changes() {
+    let mut shared = binding(41, INTERACT);
+    shared.contexts = 17;
+    let mut engine = setup(vec![shared]);
+    event(&mut engine, 1, 41, true, 10);
+    engine.seal(key(1), 20, context(99)).unwrap();
+    assert!(
+        engine
+            .seal(
+                key(2),
+                30,
+                ContextKey {
+                    owner: 100,
+                    context: Context::Menu
+                }
+            )
+            .unwrap()
+            .action(INTERACT)
+            .is_none()
+    );
+    event(&mut engine, 1, 41, false, 35);
+    event(&mut engine, 1, 41, true, 36);
+    engine
+        .seal(
+            key(3),
+            40,
+            ContextKey {
+                owner: 100,
+                context: Context::Menu,
+            },
+        )
+        .unwrap();
+    engine.set_capture(Capture::default()).unwrap();
+    engine
+        .set_capture(Capture {
+            focused: true,
+            supported_context: true,
+            ..Capture::default()
+        })
+        .unwrap();
+    assert!(
+        engine
+            .seal(key(4), 50, context(100))
+            .unwrap()
+            .action(INTERACT)
+            .is_none()
+    );
+}
+
+#[test]
+fn menu_relative_capture_release_preserves_mouse_button_up() {
+    let mut shared = binding(0, INTERACT);
+    shared.contexts = 17;
+    shared.control.source = Source::Mouse;
+    let mut engine = setup(vec![shared]);
+    let down = Event {
+        device: 1,
+        control: shared.control,
+        down: true,
+        time_ns: 10,
+        generation: engine.generation(),
+    };
+    engine.push(down).unwrap();
+    let first = engine.seal(key(1), 20, context(99)).unwrap();
+    let offer = first.action(INTERACT).unwrap();
+    engine.observe(key(1), INTERACT, offer).unwrap();
+    let menu = ContextKey {
+        owner: 99,
+        context: Context::Menu,
+    };
+    engine.seal(key(2), 30, menu).unwrap();
+    engine
+        .set_capture(Capture {
+            focused: true,
+            supported_context: true,
+            mouse_captured: false,
+            controller_connected: false,
+        })
+        .unwrap();
+    assert!(
+        engine
+            .seal(key(3), 40, menu)
+            .unwrap()
+            .action(INTERACT)
+            .unwrap()
+            .down
+    );
+    engine
+        .push(Event {
+            down: false,
+            time_ns: 45,
+            generation: engine.generation(),
+            ..down
+        })
+        .unwrap();
+    assert!(
+        !engine
+            .seal(key(4), 50, menu)
+            .unwrap()
+            .action(INTERACT)
+            .unwrap()
+            .down
+    );
+}
+
+#[test]
+fn shared_physical_binding_survives_a_menu_only_alternate_on_the_same_keyboard() {
+    let mut shared = binding(41, INTERACT);
+    shared.contexts = 17;
+    let mut menu_only = binding(43, INTERACT);
+    menu_only.contexts = 16;
+    let mut engine = setup(vec![shared, menu_only]);
+    let menu = ContextKey {
+        owner: 99,
+        context: Context::Menu,
+    };
+    event(&mut engine, 1, 41, true, 10);
+    let first = engine.seal(key(1), 20, menu).unwrap();
+    let offer = first.action(INTERACT).unwrap();
+    engine.observe(key(1), INTERACT, offer).unwrap();
+    assert_eq!(
+        engine
+            .seal(key(2), 30, context(99))
+            .unwrap()
+            .action(INTERACT)
+            .unwrap()
+            .pulse_id,
+        offer.pulse_id
+    );
+    let mut engine = setup(vec![shared, menu_only]);
+    event(&mut engine, 1, 43, true, 10);
+    event(&mut engine, 1, 43, false, 11);
+    engine.seal(key(1), 20, menu).unwrap();
+    assert!(
+        engine
+            .seal(key(2), 30, context(99))
+            .unwrap()
+            .action(INTERACT)
+            .is_none()
+    );
+}

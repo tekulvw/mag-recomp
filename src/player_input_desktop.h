@@ -6,6 +6,9 @@ extern "C" {
 // borrowed; this API never creates or activates a window.
 void mag_input_desktop_attach_window(void* window);
 void mag_input_desktop_set_enabled(int enabled);
+// A native menu can keep keyboard/buttons while relinquishing relative motion.
+// Defaults enabled; real focus/device loss still cancels owned input.
+void mag_input_desktop_set_mouse_enabled(int enabled);
 void mag_input_desktop_refresh(void);
 int mag_input_desktop_raw_mouse_available(void);
 #ifdef __cplusplus

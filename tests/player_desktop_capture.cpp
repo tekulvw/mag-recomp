@@ -11,6 +11,10 @@ int main() {
     auto current=gate.stamp();gate.publish(true,true);check(gate.accepts(current,true));
     gate.publish(true,false);check(!gate.accepts(current));current=gate.stamp();
     check(gate.accepts(current) && !gate.accepts(current,true));gate.invalidate();check(!gate.accepts(current));
+    gate.publish(true,true);auto modeReceipt=gate.stamp();
+    gate.publish(true,false,true);check(gate.accepts(modeReceipt) && !gate.accepts(modeReceipt,true));
+    gate.publish(true,true,true);check(gate.accepts(modeReceipt) && !gate.accepts(modeReceipt,true));
+    gate.publish(false,false);gate.publish(true,true);check(!gate.accepts(modeReceipt));
     DesktopButtonAggregation buttons;
     check(buttons.update(0,11,true)==true);check(!buttons.update(0,12,true));
     check(!buttons.update(0,11,false));check(buttons.update(0,12,false)==false);
