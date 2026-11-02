@@ -1,4 +1,5 @@
 #include "mag_render_native_api.h"
+#include "mag_render_batch.h"
 #include <cstddef>
 #define LAYOUT(t) uint32_t(sizeof(t)), uint32_t(alignof(t))
 #define OFFSET(t,f) uint32_t(offsetof(t,f))
@@ -28,4 +29,18 @@ extern "C" int mag_render_native_get_api(mag_native_device *device, MagRenderNat
     out->pipeline_create=mag_native_pipeline_create;out->pipeline_release=mag_native_pipeline_release;
     out->submit=mag_native_submit;out->poll=mag_native_poll;
     return MAG_NATIVE_OK;
+}
+
+extern "C" int mag_native_batch_layout(uint32_t *out,uint32_t words){
+    const uint32_t layout[]={
+    LAYOUT(MagRenderHostOwner), OFFSET(MagRenderHostOwner,lifetime), OFFSET(MagRenderHostOwner,device), OFFSET(MagRenderHostOwner,userdata), OFFSET(MagRenderHostOwner,get_device_proc), OFFSET(MagRenderHostOwner,retain), OFFSET(MagRenderHostOwner,try_begin),
+    LAYOUT(mag_native_shader_stage), OFFSET(mag_native_shader_stage,source_length), OFFSET(mag_native_shader_stage,entry), OFFSET(mag_native_shader_stage,language),
+    LAYOUT(mag_native_graphics_desc), OFFSET(mag_native_graphics_desc,vertex), OFFSET(mag_native_graphics_desc,fragment), OFFSET(mag_native_graphics_desc,vertex_stride),
+    LAYOUT(mag_native_batch_resource), OFFSET(mag_native_batch_resource,role),
+    LAYOUT(mag_native_indexed_draw), OFFSET(mag_native_indexed_draw,vertices), OFFSET(mag_native_indexed_draw,color_readback), OFFSET(mag_native_indexed_draw,vertex_offset), OFFSET(mag_native_indexed_draw,index_count), OFFSET(mag_native_indexed_draw,clear_color), OFFSET(mag_native_indexed_draw,clear_depth),
+    LAYOUT(mag_native_batch_command), OFFSET(mag_native_batch_command,dispatch), OFFSET(mag_native_batch_command,draw),
+    LAYOUT(mag_native_batch), OFFSET(mag_native_batch,resources), OFFSET(mag_native_batch,resource_count), OFFSET(mag_native_batch,commands)
+    };
+    if(!out||words!=sizeof(layout)/sizeof(layout[0]))return MAG_NATIVE_INVALID;
+    for(uint32_t i=0;i<words;++i)out[i]=layout[i];return MAG_NATIVE_OK;
 }

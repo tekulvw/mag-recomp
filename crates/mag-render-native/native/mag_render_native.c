@@ -81,3 +81,14 @@ int mag_native_poll(mag_native_device *device, mag_native_event *events, uint32_
     return device && events && capacity && capacity <= 64 && count ?
         device->ops->poll(device->context, events, capacity, count) : MAG_NATIVE_INVALID;
 }
+
+int mag_native_graphics_create(mag_native_device *device,const mag_native_graphics_desc *desc,mag_native_pipeline *out){
+    if(out)memset(out,0,sizeof(*out));
+    if(!device||!VALID(desc)||!out)return MAG_NATIVE_INVALID;
+    return device->ops->graphics_create?device->ops->graphics_create(device->context,desc,out):MAG_NATIVE_UNSUPPORTED;
+}
+int mag_native_submit_batch(mag_native_device *device,const mag_native_batch *batch,mag_native_ticket *out){
+    if(out)memset(out,0,sizeof(*out));
+    if(!device||!VALID(batch)||!out)return MAG_NATIVE_INVALID;
+    return device->ops->submit_batch?device->ops->submit_batch(device->context,batch,out):MAG_NATIVE_UNSUPPORTED;
+}

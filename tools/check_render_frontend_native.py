@@ -64,6 +64,11 @@ def check(args):
     before = source_inputs(args.sdk_source)
     run(["cargo", "+1.99.0", "build", "--manifest-path", ROOT / "crates/mag-render-shaders/Cargo.toml", "--locked", "--offline"])
     run([sys.executable, ROOT / "tools/check_render_frontend_shaders.py", "--output-dir", args.shader_root])
+    # Explicit authored geometry preparation until the fixed shader checker
+    # includes it; regeneration is always from current checked CLI sources.
+    run([ROOT / "crates/mag-render-shaders/target/debug/mag-render-shaders",
+         "--source", ROOT / "shaders/render_frontend/scene_prepare.wgsl",
+         "--out-dir", args.shader_root / "scene_prepare"])
     run(["cmake", "-S", NATIVE / "tests/compat", "-B", args.build_dir,
          f"-DMAG_RENDER_SDK_SOURCE={args.sdk_source}"])
     run(["cmake", "--build", args.build_dir, "--parallel", "4"])
@@ -75,15 +80,30 @@ def check(args):
                     retained_before_terminal=352, retained_after_terminal=0, upload_bytes=624)
     if any(receipt.get(key) != value for key, value in expected.items()):
         raise RuntimeError(f"invalid extracted native receipt: {receipt}")
+    draw = run([executable, "--draw", args.shader_root], timeout=20)
+    without_copy = run([executable, "--draw-no-readback", args.shader_root], timeout=20)
+    draw_receipt, no_copy_receipt = json.loads(draw.stdout), json.loads(without_copy.stdout)
+    for result, diagnostic in ((draw_receipt, True), (no_copy_receipt, False)):
+        expected_draw = dict(status=0, submitted=2, completed=2, pending=0,
+                             retained_before_terminal=208, retained_after_terminal=0,
+                             compute_dispatches_per_batch=2, indexed_draws_per_batch=1,
+                             native_rejection_cases=8, diagnostic_readback=diagnostic)
+        if any(result.get(key) != value for key, value in expected_draw.items()):
+            raise RuntimeError(f"invalid connected draw receipt: {result}")
+    if draw_receipt["center_rgba"] != 0xffff9933 or draw_receipt["outside_rgba"] != 0:
+        raise RuntimeError("GPU-produced geometry did not yield the expected opaque triangle/clear")
+    if no_copy_receipt["center_rgba"] != 0 or no_copy_receipt["outside_rgba"] != 0:
+        raise RuntimeError("diagnostic pixels appeared despite disabled readback")
     if source_inputs(args.sdk_source) != before:
         raise RuntimeError("source inputs changed during extracted build/run")
     shader = args.shader_root / "copy_transform"
     manifest = json.loads((shader / "manifest.json").read_text())
     return dict(schema_version=1, passed=True, backend="metal", real_hardware=True,
-                coverage="synthetic extracted compute ownership and actual SDK owner lifecycle",
-                full_m2="pending", native=receipt, owner_stdout=owner.stdout,
-                native_stderr=native.stderr + owner.stderr, naga_version=manifest["naga_version"],
-                source_sha256=before, shader_sha256={name: digest(shader / name)
+                coverage="authored connected compute/compute/indexed-draw, optional diagnostic readback and actual SDK owner lifecycle",
+                full_m2="pending", native=receipt, draw=draw_receipt, draw_no_readback=no_copy_receipt, owner_stdout=owner.stdout,
+                native_stderr=native.stderr + owner.stderr + draw.stderr + without_copy.stderr, naga_version=manifest["naga_version"],
+                source_sha256=before, shader_sha256={f"{shader_name}/{name}": digest(args.shader_root / shader_name / name)
+                    for shader_name in ("copy_transform", "scene_prepare", "scene_vertex", "scene_fragment")
                     for name in ("shader.metal", "manifest.json")},
                 executable_sha256=digest(executable),
                 host=dict(system=platform.system(), machine=platform.machine(), release=platform.release()))

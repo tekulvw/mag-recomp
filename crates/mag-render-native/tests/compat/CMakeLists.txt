@@ -20,7 +20,7 @@ add_custom_command(OUTPUT "${ARCHIVE}"
     WORKING_DIRECTORY "${PUBLIC_ROOT}" VERBATIM)
 add_custom_target(native_rust DEPENDS "${ARCHIVE}")
 set(SDK "${MAG_RENDER_SDK_SOURCE}")
-add_executable(native_regression metal_main.mm metal_owner.m no_guest.c "${SDK}/libs/video/rsx_texture_layout.c"
+add_executable(native_regression metal_main.mm draw_main.mm metal_owner.m no_guest.c "${SDK}/libs/video/rsx_texture_layout.c"
     "${SDK}/libs/video/rsx_draw_engine.c" "${SDK}/libs/video/rsx_commands.c" "${SDK}/libs/video/rsx_dispatch.c"
     "${SDK}/libs/video/rsx_vertex_fetch.c" "${SDK}/libs/video/rsx_vertex_compact.c" "${SDK}/libs/video/rsx_vp_decompiler.c"
     "${SDK}/libs/video/rsx_fp_decompiler.c" "${SDK}/libs/video/rsx_shader_msl.cpp"

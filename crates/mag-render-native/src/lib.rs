@@ -190,3 +190,7 @@ mod tests {
         assert_eq!(RETAINS.load(Ordering::SeqCst), 1);
     }
 }
+
+pub mod batch_device;
+
+mod draw_probe;

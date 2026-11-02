@@ -505,7 +505,7 @@ impl BatchBuilder {
         let target = draw.target;
         let bytes = u64::from(target.width)
             .checked_mul(u64::from(target.height))
-            .and_then(|n| n.checked_mul(12))
+            .and_then(|n| n.checked_mul(8))
             .ok_or(BatchError::Capacity)?;
         if self
             .gpu_bytes

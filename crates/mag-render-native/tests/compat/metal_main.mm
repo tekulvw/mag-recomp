@@ -8,7 +8,10 @@ extern "C" int mag_render_test_owner_gate(void);
 extern "C" const char *mag_render_test_owner_name(void);
 extern "C" void mag_render_test_owner_signal(void *);
 extern "C" void mag_render_test_owner_close(int);
+int mag_render_draw_main(const char *,bool);
 int main(int argc,char **argv) {
+    if(argc==3&&!std::strcmp(argv[1],"--draw"))return mag_render_draw_main(argv[2],true);
+    if(argc==3&&!std::strcmp(argv[1],"--draw-no-readback"))return mag_render_draw_main(argv[2],false);
     if (argc==2 && !std::strcmp(argv[1],"--owner-contract")) return mag_render_test_owner_contract();
     if (argc!=2) {std::fprintf(stderr,"provide fresh generated copy_transform directory\n");return 2;}
     @autoreleasepool {

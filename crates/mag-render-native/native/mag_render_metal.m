@@ -5,15 +5,17 @@
 #import <Metal/Metal.h>
 #include "mag_render_native_internal.h"
 #include <stdio.h>
+#include <math.h>
 #include <string.h>
 
 @interface MagRenderBuffer : NSObject {
-@public id<MTLBuffer> gpu; uint64_t identifier, version; uint32_t readers, writers;
+@public id<MTLBuffer> gpu; uint64_t identifier, version; uint32_t readers, writers; int seed_zero,gpu_written;
 }
 @end
 @implementation MagRenderBuffer @end
 @interface MagRenderPipeline : NSObject {
 @public id<MTLComputePipelineState> gpu; MTLSize threads;
+    id<MTLRenderPipelineState> graphics;id<MTLDepthStencilState> depth;
     mag_native_binding_layout bindings[MAG_NATIVE_MAX_BINDINGS];
     uint32_t binding_count, sizes_count;
 }
@@ -27,6 +29,8 @@
 @interface MagRenderSubmission : NSObject {
 @public id<MTLCommandBuffer> command; MagRenderPipeline *pipeline;
     id<MTLBuffer> sizes; NSArray<MagRenderUse *> *uses; mag_native_ticket ticket;
+    NSArray *retained;id<MTLBuffer> packed_source;MagRenderBuffer *packed_destination;
+    uint32_t packed_width,packed_height,packed_pitch;
 }
 @end
 @implementation MagRenderSubmission @end
@@ -56,7 +60,7 @@ static MagRenderPipeline *find_pipeline(MagRenderMetal *c, mag_native_pipeline r
 static int metal_caps(void *opaque, mag_native_caps_desc *out) {
     MagRenderMetal *c = context(opaque);
     *out = (mag_native_caps_desc){sizeof(*out), MAG_NATIVE_ABI_VERSION, c->generation,
-        1, 0, 2, MAG_NATIVE_MAX_BINDINGS, 30, 0};
+        1, 1, 2, MAG_NATIVE_MAX_BINDINGS, 30, 0};
     return MAG_NATIVE_OK;
 }
 static int metal_buffer_create(void *opaque, mag_native_buffer previous,
@@ -80,7 +84,7 @@ static int metal_buffer_create(void *opaque, mag_native_buffer previous,
     if (desc->initial_bytes) memcpy(gpu.contents, desc->initial_bytes, (size_t)desc->byte_length);
     else memset(gpu.contents, 0, (size_t)desc->byte_length);
     MagRenderBuffer *record = [MagRenderBuffer new]; record->gpu = gpu;
-    record->identifier = buffer_id; record->version = version;
+    record->identifier = buffer_id; record->version = version;record->seed_zero=!desc->initial_bytes;
     c->buffers[buffer_key(buffer_id, version)] = record; c->versions[@(buffer_id)] = @(version);
     *out = (mag_native_buffer){c->generation, buffer_id, version};
     return MAG_NATIVE_OK;
@@ -223,7 +227,7 @@ static int metal_submit_owned(void *opaque, const mag_native_frame *frame, mag_n
     [encoder dispatchThreadgroups:MTLSizeMake(frame->groups[0], frame->groups[1], frame->groups[2]) threadsPerThreadgroup:pipeline->threads];
     [encoder endEncoding];
     submission->ticket = (mag_native_ticket){c->generation, ++c->next_submission};
-    for (MagRenderUse *use in uses) { if (use->write) ++use->buffer->writers; else ++use->buffer->readers; }
+    for (MagRenderUse *use in uses) { if (use->write) {++use->buffer->writers;use->buffer->gpu_written=1;} else ++use->buffer->readers; }
     [c->pending addObject:submission]; *out = submission->ticket;
     @try { [submission->command commit]; }
     @catch (NSException *error) {
@@ -242,12 +246,18 @@ static int metal_submit(void *opaque,const mag_native_frame *frame,mag_native_ti
     @catch (NSException *error) { (void)error;return out->submission_id?MAG_NATIVE_INDETERMINATE:MAG_NATIVE_DEVICE_FAILED; }
     @finally { c->host.end(c->host.userdata,c->host.lifetime); }
 }
+#include "mag_render_metal_batch.inc"
 static int metal_poll(void *opaque, mag_native_event *events, uint32_t capacity, uint32_t *count) {
     MagRenderMetal *c = context(opaque);
     for (NSUInteger i = 0; i < c->pending.count && *count < capacity;) {
         MagRenderSubmission *submission = c->pending[i];
         MTLCommandBufferStatus status = submission->command.status;
         if (status != MTLCommandBufferStatusCompleted && status != MTLCommandBufferStatusError) { ++i; continue; }
+        if(status==MTLCommandBufferStatusCompleted && !submission->command.error && submission->packed_source){
+            for(uint32_t y=0;y<submission->packed_height;++y)
+                memcpy((char*)submission->packed_destination->gpu.contents+(size_t)y*submission->packed_width*4,
+                    (const char*)submission->packed_source.contents+(size_t)y*submission->packed_pitch,(size_t)submission->packed_width*4);
+        }
         events[(*count)++] = (mag_native_event){sizeof(*events), MAG_NATIVE_ABI_VERSION, submission->ticket,
             status == MTLCommandBufferStatusCompleted && !submission->command.error, 1, (uint32_t)status, 0};
         release_uses(submission); [c->pending removeObjectAtIndex:i];
@@ -264,7 +274,7 @@ static int metal_close(void *opaque) {
     host.release(host.userdata,host.lifetime);return MAG_NATIVE_OK;
 }
 static const mag_native_ops metal_ops = {metal_caps, metal_buffer_create, metal_buffer_release,
-    metal_buffer_read, metal_pipeline_create, metal_pipeline_release, metal_submit, metal_poll, metal_close};
+    metal_buffer_read, metal_pipeline_create, metal_pipeline_release, metal_submit, metal_poll, metal_close,metal_graphics_create,metal_submit_batch};
 int mag_native_metal_create(const MagRenderHostOwner *owner,mag_native_device **out) {
     if (!owner || !out || owner->backend!=MAG_RENDER_HOST_METAL) return MAG_NATIVE_INVALID;
     *out=NULL;int status=owner->retain(owner->userdata,owner->lifetime);

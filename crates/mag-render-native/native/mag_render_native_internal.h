@@ -4,6 +4,7 @@
 #ifndef MAG_RENDER_NATIVE_INTERNAL_H
 #define MAG_RENDER_NATIVE_INTERNAL_H
 #include "mag_render_native.h"
+#include "mag_render_batch.h"
 typedef struct mag_native_ops {
     int (*caps)(void *, mag_native_caps_desc *);
     int (*buffer_create)(void *, mag_native_buffer, const mag_native_buffer_desc *, mag_native_buffer *);
@@ -14,6 +15,8 @@ typedef struct mag_native_ops {
     int (*submit)(void *, const mag_native_frame *, mag_native_ticket *);
     int (*poll)(void *, mag_native_event *, uint32_t, uint32_t *);
     int (*close)(void *);
+    int (*graphics_create)(void *,const mag_native_graphics_desc *,mag_native_pipeline *);
+    int (*submit_batch)(void *,const mag_native_batch *,mag_native_ticket *);
 } mag_native_ops;
 mag_native_device *mag_native_wrap(const mag_native_ops *, void *);
 int mag_native_close(mag_native_device *);
