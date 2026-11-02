@@ -214,6 +214,15 @@ frontend Rust tools or dependencies are required. It is independent of `MAG_INPU
 See [the frontend build and verification guide](docs/render-frontend.md) for native platform
 requirements, the synthetic static-library fixture and the remaining game acceptance gates.
 
+An integration build that needs an unmerged SDK can also supply
+`-DMAG_RUNTIME_CANDIDATE_MANIFEST=/absolute/path/candidate.json`. This requires
+`MAG_RENDER_FRONTEND_RUST=ON`. The manifest has `schema_version: 1`, a nonempty
+`purpose`, the exact `sdk_revision` and `sdk_tree` from the clean SDK checkout,
+and `framework_sha256` for the selected framework profile. Configuration and
+the binary receipt both validate it. The receipt explicitly marks the runtime
+experimental; this option does not alter the normal SDK allowlist or establish
+gameplay acceptance. Preserve the manifest beside the build receipt.
+
 ### Project checks
 
 ```sh

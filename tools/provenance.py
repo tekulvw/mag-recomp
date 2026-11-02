@@ -159,18 +159,47 @@ def extension_record(extras: dict | None) -> dict:
     return record
 
 
-def record_build(binary: Path, sdk: Path, recomp: Path, spu: Path | None = None,
-                 firmware: Path | None = None, image_name: str = 'EBOOT', extras: dict | None = None) -> dict:
-    image,lift=validate_build_image(recomp,image_name)
+def runtime_identity(sdk: Path, framework: dict, framework_path: Path,
+                     candidate: Path | None = None) -> dict:
+    """Validate normal pins, or an explicit source-bound experimental exception.
+
+    The candidate manifest is a local build input, not a change to the normal
+    framework allowlist and not evidence of runtime acceptance.
+    """
     revision=subprocess.check_output(['git','-C',str(sdk),'rev-parse','HEAD'],text=True).strip()
-    dirty=subprocess.check_output(['git','-C',str(sdk),'status','--porcelain','--untracked-files=no'],text=True)
+    status=['git','-C',str(sdk),'status','--porcelain']
+    if candidate is None:
+        status.append('--untracked-files=no')
+    dirty=subprocess.check_output(status,text=True)
+    if dirty:
+        raise ValueError('Runtime SDK must be clean')
+    result=dict(sdk_revision=revision, sdk_path=str(sdk))
+    if candidate is None:
+        if revision not in framework['allowed_runtime_revisions']:
+            raise ValueError('Runtime SDK must be recorded in profiles/framework.json')
+        return result
+    data=json.loads(candidate.read_text())
+    tree=subprocess.check_output(['git','-C',str(sdk),'rev-parse','HEAD^{tree}'],text=True).strip()
+    if (data.get('schema_version') != 1 or not isinstance(data.get('purpose'),str)
+            or not data['purpose'].strip() or data.get('sdk_revision') != revision
+            or data.get('sdk_tree') != tree
+            or data.get('framework_sha256') != sha256_file(framework_path)):
+        raise ValueError('Runtime candidate does not match SDK revision/tree and framework baseline')
+    result['runtime_candidate']=dict(experimental=True, purpose=data['purpose'], sdk_tree=tree,
+        manifest_path=str(candidate.resolve()), manifest_sha256=sha256_file(candidate),
+        framework_sha256=data['framework_sha256'])
+    return result
+
+
+def record_build(binary: Path, sdk: Path, recomp: Path, spu: Path | None = None,
+                 firmware: Path | None = None, image_name: str = 'EBOOT', extras: dict | None = None,
+                 runtime_candidate: Path | None = None) -> dict:
+    image,lift=validate_build_image(recomp,image_name)
     framework,framework_path=load_framework()
-    allowed=framework['allowed_runtime_revisions']
+    runtime=runtime_identity(sdk,framework,framework_path,runtime_candidate)
     extensions=extension_record(extras)
-    if revision not in allowed or dirty:
-        raise ValueError('Runtime SDK must be clean and recorded in profiles/framework.json')
     record=dict(binary_sha256=sha256_file(binary), image_name=image_name, elf_sha256=image['elf_sha256'],
-                sdk_revision=revision, sdk_path=str(sdk), lift_provenance=lift,
+                **runtime, lift_provenance=lift,
                 runner_sources={str(p.relative_to(ROOT)):sha256_file(p) for p in
                                 [ROOT/'CMakeLists.txt', *sorted((ROOT/'src').glob('*'))] if p.is_file()},
                 framework=dict(path=str(framework_path), sha256=sha256_file(framework_path)))
@@ -188,11 +217,18 @@ if __name__=='__main__':
     parser.add_argument('--recomp',type=Path,required=True)
     parser.add_argument('--image',choices=['EBOOT','mage_g'],default='EBOOT')
     parser.add_argument('--validate-image',action='store_true',help='Validate the selected ELF and lift without creating a receipt')
+    parser.add_argument('--validate-runtime',action='store_true',help='Validate runtime identity without creating a receipt')
+    parser.add_argument('--runtime-candidate',type=Path,help='Explicit experimental SDK revision/tree manifest; normal pins stay unchanged')
     parser.add_argument('--spu',type=Path)
     parser.add_argument('--firmware',type=Path)
     parser.add_argument('--receipt-extra',action='append',default=[],metavar='NAME=PATH',help='Record an extension input in the receipt')
     args=parser.parse_args()
-    if args.validate_image:
+    if args.validate_runtime:
+        if args.sdk is None:
+            parser.error('--sdk is required to validate runtime identity')
+        framework,framework_path=load_framework()
+        runtime_identity(args.sdk,framework,framework_path,args.runtime_candidate)
+    elif args.validate_image:
         validate_build_image(args.recomp,args.image,args.firmware,args.spu)
     else:
         if args.binary is None or args.sdk is None:
@@ -202,4 +238,4 @@ if __name__=='__main__':
             name,sep,value=item.partition('=')
             if not sep: parser.error('--receipt-extra needs NAME=PATH')
             extras[name]=Path(value)
-        record_build(args.binary,args.sdk,args.recomp,args.spu,args.firmware,args.image,extras)
+        record_build(args.binary,args.sdk,args.recomp,args.spu,args.firmware,args.image,extras,args.runtime_candidate)
