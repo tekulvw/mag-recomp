@@ -588,6 +588,84 @@ pub unsafe extern "C" fn mag_input_recognize(
     config: crate::gesture::Config,
     output: *mut RecognitionRecord,
 ) -> i32 {
+    unsafe {
+        recognize(
+            handle,
+            record,
+            RecognitionRequest {
+                consumer,
+                control,
+                action,
+                value,
+                blocked,
+                config,
+                native: None,
+            },
+            output,
+        )
+    }
+}
+
+/// # Safety
+/// Output must point to writable aligned RecognitionRecord storage.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mag_input_recognize_native(
+    handle: u64,
+    record: FrameKeyRecord,
+    consumer: u64,
+    control: u64,
+    action: u32,
+    value: f64,
+    blocked: u32,
+    config: crate::gesture::Config,
+    native: u32,
+    output: *mut RecognitionRecord,
+) -> i32 {
+    if native > 1 {
+        return INVALID;
+    }
+    unsafe {
+        recognize(
+            handle,
+            record,
+            RecognitionRequest {
+                consumer,
+                control,
+                action,
+                value,
+                blocked,
+                config,
+                native: Some(native != 0),
+            },
+            output,
+        )
+    }
+}
+
+struct RecognitionRequest {
+    consumer: u64,
+    control: u64,
+    action: u32,
+    value: f64,
+    blocked: u32,
+    config: crate::gesture::Config,
+    native: Option<bool>,
+}
+unsafe fn recognize(
+    handle: u64,
+    record: FrameKeyRecord,
+    request: RecognitionRequest,
+    output: *mut RecognitionRecord,
+) -> i32 {
+    let RecognitionRequest {
+        consumer,
+        control,
+        action,
+        value,
+        blocked,
+        config,
+        native,
+    } = request;
     if output.is_null() || consumer == 0 || control == 0 || action == 0 || blocked > 1 {
         return INVALID;
     }
@@ -609,10 +687,12 @@ pub unsafe extern "C" fn mag_input_recognize(
         state.action = action;
         if let Some(offer) = offer {
             state.sources = offer.source_mask;
-            state.native_contribution = false;
+            state.native_contribution = native.unwrap_or(false);
         } else if value > 0.0 {
             state.sources = 4;
-            state.native_contribution = true;
+            state.native_contribution = native.unwrap_or(true);
+        } else if let Some(native) = native {
+            state.native_contribution = native;
         }
         let output_value = state
             .recognizer
@@ -783,6 +863,63 @@ pub unsafe extern "C" fn mag_input_shared_native_actions(
     }
     operate(handle, |runtime| {
         runtime.shared_native_actions = ids.iter().copied().collect();
+        Ok(())
+    })
+}
+
+/// Adopt an existing native controller hold before this control's first update.
+/// Prior event bits are ignored. All state is semantic, never native layout.
+#[unsafe(no_mangle)]
+pub extern "C" fn mag_input_seed_recognizer(
+    handle: u64,
+    record: FrameKeyRecord,
+    consumer: u64,
+    control: u64,
+    action: u32,
+    previous: RecognitionRecord,
+    config: crate::gesture::Config,
+) -> i32 {
+    if consumer == 0 || control == 0 || action == 0 {
+        return INVALID;
+    }
+    operate(handle, |runtime| {
+        runtime
+            .engine
+            .current_frame(key(record)?)
+            .map_err(|_| ENGINE_ERROR)?;
+        if runtime.recognizers.contains_key(&(consumer, control)) {
+            return Err(INVALID);
+        }
+        if runtime.recognizers.len() >= 4096 {
+            return Err(CAPACITY);
+        }
+        let phase = match previous.phase {
+            2 => crate::gesture::Phase::Down,
+            3 => crate::gesture::Phase::SecondDown,
+            4 => crate::gesture::Phase::Pressed,
+            5 => crate::gesture::Phase::SecondPressed,
+            _ => return Err(INVALID),
+        };
+        let recognizer = crate::gesture::Recognizer::seed(
+            crate::gesture::Output {
+                value: previous.value,
+                elapsed_ns: previous.elapsed_ns,
+                phase,
+                events: 0,
+            },
+            runtime.now_ns,
+            config,
+        )
+        .map_err(|_| INVALID)?;
+        runtime.recognizers.insert(
+            (consumer, control),
+            RecognitionState {
+                recognizer,
+                sources: 4,
+                action,
+                native_contribution: true,
+            },
+        );
         Ok(())
     })
 }

@@ -39,6 +39,8 @@ int32_t mag_input_policy_reduce(MagInputPolicy,uint32_t requested_or_unchanged,u
 int32_t mag_input_accept_action(uint64_t,MagInputFrameKey,uint32_t action,MagInputOffer);
 int32_t mag_input_accept_mouse(uint64_t,MagInputFrameKey,uint32_t neutral);
 int32_t mag_input_recognize(uint64_t,MagInputFrameKey,uint64_t consumer,uint64_t control,uint32_t action,double value,uint32_t blocked,MagInputRecognitionConfig,MagInputRecognition*);
+int32_t mag_input_recognize_native(uint64_t,MagInputFrameKey,uint64_t consumer,uint64_t control,uint32_t action,double value,uint32_t blocked,MagInputRecognitionConfig,uint32_t native_contribution,MagInputRecognition*);
+int32_t mag_input_seed_recognizer(uint64_t,MagInputFrameKey,uint64_t consumer,uint64_t control,uint32_t action,MagInputRecognition previous,MagInputRecognitionConfig);
 int32_t mag_input_forget_consumer(uint64_t,uint64_t consumer);
 #ifdef __cplusplus
 }

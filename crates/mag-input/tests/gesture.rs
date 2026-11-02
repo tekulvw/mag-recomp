@@ -227,3 +227,68 @@ fn analog_threshold_and_change_epsilon_are_independent() {
         0
     );
 }
+
+#[test]
+fn adopting_an_existing_hold_preserves_age_without_down_press_or_repeat() {
+    use mag_input::gesture::{Config, Events, Output, Phase, Recognizer};
+    let config = Config {
+        press_delay_ns: 20,
+        repeat_interval_ns: 50,
+        ..Config::default()
+    };
+    let mut input = Recognizer::seed(
+        Output {
+            value: 1.0,
+            elapsed_ns: 100,
+            phase: Phase::Pressed,
+            events: u32::MAX,
+        },
+        1000,
+        config,
+    )
+    .unwrap();
+    let held = input.update(1, 1000, None, 1.0, false, config).unwrap();
+    assert_eq!(
+        held.events & (Events::DOWN | Events::PRESS | Events::REPEAT),
+        0
+    );
+    assert_eq!(held.elapsed_ns, 100);
+    let later = input.update(2, 1051, None, 1.0, false, config).unwrap();
+    assert_ne!(later.events & Events::REPEAT, 0);
+    assert_eq!(later.elapsed_ns, 151);
+    let released = input.update(3, 1060, None, 0.0, false, config).unwrap();
+    assert_ne!(released.events & Events::UP, 0);
+}
+
+#[test]
+fn a_host_button_joining_an_adopted_hold_does_not_restart_its_age() {
+    use mag_input::gesture::{Config, Events, Output, Phase, Recognizer};
+    let config = Config {
+        press_delay_ns: 20,
+        repeat_interval_ns: 50,
+        ..Config::default()
+    };
+    let mut input = Recognizer::seed(
+        Output {
+            value: 1.0,
+            elapsed_ns: 75,
+            phase: Phase::Pressed,
+            events: 0,
+        },
+        1000,
+        config,
+    )
+    .unwrap();
+    let joined = mag_input::delivery::Offer {
+        pulse_id: 1,
+        down: true,
+        physical_duration_ns: 10,
+        source_mask: 1,
+    };
+    let next = input
+        .update(1, 1030, Some(joined), 1.0, false, config)
+        .unwrap();
+    assert_eq!(next.elapsed_ns, 105);
+    assert_ne!(next.events & Events::REPEAT, 0);
+    assert_eq!(next.events & Events::DOWN, 0);
+}
