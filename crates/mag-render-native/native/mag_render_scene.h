@@ -1,6 +1,7 @@
 #ifndef MAG_RENDER_SCENE_H
 #define MAG_RENDER_SCENE_H
 #include "mag_render_batch.h"
+#include "mag_render_raster.h"
 #include "mag_render_host_image.h"
 #include "mag_render_host_frame.h"
 #ifdef __cplusplus
@@ -74,6 +75,16 @@ typedef struct mag_native_scene_graphics_v2_desc {
      * buffers t32+N, textures tN and samplers sN; register space and visibility
      * are stage-qualified (space0 vertex, space1 fragment). */
 } mag_native_scene_graphics_v2_desc;
+/* V3 keeps explicit raster state authoritative. The legacy depth_compare,
+ * depth_write and blend fields in base.base must be zero. The native registry
+ * derives only the legacy admission classification; actual PSOs use raster. */
+typedef struct mag_native_scene_graphics_v3_desc {
+    uint32_t struct_size,abi_version;
+    mag_native_scene_graphics_v2_desc base;
+    mag_native_raster_state raster;
+} mag_native_scene_graphics_v3_desc;
+int mag_native_scene_graphics_create_v3(mag_native_device *,const mag_native_scene_graphics_v3_desc *,mag_native_pipeline *);
+int mag_native_scene_graphics_v3_layout(uint32_t *,uint32_t);
 int mag_native_scene_graphics_create_v2(mag_native_device *,const mag_native_scene_graphics_v2_desc *,mag_native_pipeline *);
 int mag_native_scene_graphics_v2_layout(uint32_t *,uint32_t);
 typedef struct mag_native_scene_image {

@@ -13,7 +13,7 @@ static int scene_graphics_layout(Context *c,
                                  const mag_native_scene_graphics_desc *desc,
                                  const mag_native_vertex_attribute *attributes,
                                  uint32_t attribute_count, uint32_t model,
-                                 mag_native_pipeline *out) {
+                                 const mag_native_raster_state *raster,mag_native_pipeline *out) {
   if (c->failed)
     return MAG_NATIVE_DEVICE_FAILED;
   try {
@@ -207,6 +207,25 @@ static int scene_graphics_layout(Context *c,
         D3D12_STENCIL_OP_KEEP, D3D12_STENCIL_OP_KEEP, D3D12_STENCIL_OP_KEEP,
         D3D12_COMPARISON_FUNC_ALWAYS};
     gpu.DepthStencilState.BackFace = gpu.DepthStencilState.FrontFace;
+    if(raster){
+      p->raster=*raster;p->explicit_raster=true;
+      const D3D12_CULL_MODE culls[]={D3D12_CULL_MODE_NONE,D3D12_CULL_MODE_FRONT,D3D12_CULL_MODE_BACK};
+      gpu.RasterizerState.CullMode=culls[raster->cull_mode];
+      gpu.RasterizerState.FrontCounterClockwise=raster->front_face==MAG_NATIVE_FRONT_CCW;
+      const D3D12_COMPARISON_FUNC full_compares[]={D3D12_COMPARISON_FUNC_NEVER,D3D12_COMPARISON_FUNC_LESS,D3D12_COMPARISON_FUNC_EQUAL,D3D12_COMPARISON_FUNC_LESS_EQUAL,
+        D3D12_COMPARISON_FUNC_GREATER,D3D12_COMPARISON_FUNC_NOT_EQUAL,D3D12_COMPARISON_FUNC_GREATER_EQUAL,D3D12_COMPARISON_FUNC_ALWAYS};
+      gpu.DepthStencilState.DepthEnable=raster->depth_enabled&&desc->depth_format;
+      gpu.DepthStencilState.DepthWriteMask=raster->depth_enabled&&desc->depth_format&&raster->depth_write?D3D12_DEPTH_WRITE_MASK_ALL:D3D12_DEPTH_WRITE_MASK_ZERO;
+      gpu.DepthStencilState.DepthFunc=full_compares[raster->depth_compare];
+      const D3D12_BLEND factors[]={D3D12_BLEND_ZERO,D3D12_BLEND_ONE,D3D12_BLEND_SRC_COLOR,D3D12_BLEND_INV_SRC_COLOR,D3D12_BLEND_DEST_COLOR,D3D12_BLEND_INV_DEST_COLOR,
+        D3D12_BLEND_SRC_ALPHA,D3D12_BLEND_INV_SRC_ALPHA,D3D12_BLEND_DEST_ALPHA,D3D12_BLEND_INV_DEST_ALPHA,D3D12_BLEND_BLEND_FACTOR,D3D12_BLEND_INV_BLEND_FACTOR,
+        D3D12_BLEND_BLEND_FACTOR,D3D12_BLEND_INV_BLEND_FACTOR,D3D12_BLEND_SRC_ALPHA_SAT};
+      const D3D12_BLEND_OP equations[]={D3D12_BLEND_OP_ADD,D3D12_BLEND_OP_SUBTRACT,D3D12_BLEND_OP_REV_SUBTRACT,D3D12_BLEND_OP_MIN,D3D12_BLEND_OP_MAX};
+      auto &blend=gpu.BlendState.RenderTarget[0];blend.BlendEnable=raster->blend_enabled;
+      blend.SrcBlend=factors[raster->src_rgb];blend.DestBlend=factors[raster->dst_rgb];
+      blend.SrcBlendAlpha=factors[raster->src_alpha];blend.DestBlendAlpha=factors[raster->dst_alpha];
+      blend.BlendOp=equations[raster->rgb_equation];blend.BlendOpAlpha=equations[raster->alpha_equation];blend.RenderTargetWriteMask=static_cast<UINT8>(raster->color_write_mask);
+    }
     result = c->device->CreateGraphicsPipelineState(
         &gpu, __uuidof(ID3D12PipelineState),
         reinterpret_cast<void **>(p->gpu.put()));
@@ -235,7 +254,7 @@ static int scene_graphics_create(void *opaque,
   const mag_native_vertex_attribute attribute = {0, MAG_NATIVE_VERTEX_FLOAT4, 0,
                                                  0};
   return scene_graphics_layout(static_cast<Context *>(opaque), desc, &attribute,
-                               1, 0, out);
+                               1, 0, nullptr, out);
 }
 static int
 scene_graphics_create_v2(void *opaque,
@@ -246,7 +265,12 @@ scene_graphics_create_v2(void *opaque,
     return status;
   return scene_graphics_layout(static_cast<Context *>(opaque), &desc->base,
                                desc->attributes, desc->attribute_count,
-                               desc->binding_model, out);
+                               desc->binding_model, nullptr, out);
+}
+static int scene_graphics_create_v3(void *opaque,const mag_native_scene_graphics_v3_desc *desc,mag_native_pipeline *out){
+  int status=mag_native_scene_graphics_v3_validate(desc);if(status)return status;
+  mag_native_scene_graphics_desc schema;mag_native_scene_graphics_v3_schema(desc,&schema);
+  return scene_graphics_layout(static_cast<Context*>(opaque),&schema,desc->base.attributes,desc->base.attribute_count,desc->base.binding_model,&desc->raster,out);
 }
 struct SceneDrawPlan {
   const mag_native_scene_draw *source = nullptr;
@@ -790,6 +814,12 @@ static int scene_execute(Context *c, const mag_native_scene *scene,
             states[k] = desired[k];
           }
         list->SetGraphicsRootSignature(p.root.p);
+        if(p.explicit_raster){
+          float constants[4];std::copy(p.raster.blend_constant,p.raster.blend_constant+4,constants);
+          if(p.raster.src_rgb==12||p.raster.src_rgb==13||p.raster.dst_rgb==12||p.raster.dst_rgb==13)
+            constants[0]=constants[1]=constants[2]=constants[3];
+          list->OMSetBlendFactor(constants);
+        }
         list->SetPipelineState(p.gpu.p);
         for (uint32_t stage = 0; stage < 2; ++stage) {
           if (p.scene_resource_root[stage] != UINT32_MAX)

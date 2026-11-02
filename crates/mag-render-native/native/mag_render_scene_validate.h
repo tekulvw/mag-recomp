@@ -24,6 +24,8 @@ typedef struct mag_native_scene_usage {
  * actual generation-qualified native registry entries. No GPU effects. */
 int mag_native_scene_graphics_validate(const mag_native_scene_graphics_desc *);
 int mag_native_scene_graphics_v2_validate(const mag_native_scene_graphics_v2_desc *);
+int mag_native_scene_graphics_v3_validate(const mag_native_scene_graphics_v3_desc *);
+void mag_native_scene_graphics_v3_schema(const mag_native_scene_graphics_v3_desc *,mag_native_scene_graphics_desc *);
 int mag_native_scene_validate(const mag_native_scene *, const mag_native_scene_registry *,
                               mag_native_scene_usage *);
 #endif

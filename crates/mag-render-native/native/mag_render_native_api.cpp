@@ -100,3 +100,10 @@ extern "C" int mag_native_scene_graphics_v2_layout(uint32_t *out,uint32_t words)
  if(!out||words!=sizeof(layout)/sizeof(layout[0]))return MAG_NATIVE_INVALID;
  for(uint32_t i=0;i<words;++i){out[i]=layout[i];}return MAG_NATIVE_OK;
 }
+
+extern "C" int mag_native_scene_graphics_v3_layout(uint32_t *out,uint32_t words){
+ const uint32_t expected[]={LAYOUT(mag_native_scene_graphics_v3_desc),OFFSET(mag_native_scene_graphics_v3_desc,base),OFFSET(mag_native_scene_graphics_v3_desc,raster),
+ LAYOUT(mag_native_raster_state),OFFSET(mag_native_raster_state,known_fields),OFFSET(mag_native_raster_state,cull_mode),OFFSET(mag_native_raster_state,src_rgb),OFFSET(mag_native_raster_state,blend_constant),OFFSET(mag_native_raster_state,front_stencil),OFFSET(mag_native_raster_state,depth_bounds_enabled),OFFSET(mag_native_raster_state,bias_constant)};
+ if(!out||words!=sizeof(expected)/sizeof(expected[0]))return MAG_NATIVE_INVALID;
+ for(uint32_t i=0;i<words;++i){out[i]=expected[i];}return MAG_NATIVE_OK;
+}

@@ -50,7 +50,7 @@ static id<MTLFunction> metal_scene_function(MagRenderMetal *c, const mag_native_
     return [lib newFunctionWithName:entry];
 }
 static int metal_scene_graphics_create_layout(void *opaque, const mag_native_scene_graphics_desc *desc,
-                                       const mag_native_vertex_attribute *attributes,uint32_t attribute_count,uint32_t binding_model,mag_native_pipeline *out) {
+                                       const mag_native_vertex_attribute *attributes,uint32_t attribute_count,uint32_t binding_model,const mag_native_raster_state *raster,mag_native_pipeline *out) {
     MagRenderMetal *c = context(opaque);
     if (c->next_pipeline == UINT64_MAX)
         return MAG_NATIVE_ALLOCATION_FAILED;
@@ -84,6 +84,20 @@ static int metal_scene_graphics_create_layout(void *opaque, const mag_native_sce
             pd.colorAttachments[0].destinationAlphaBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
         }
     }
+    if (raster && desc->color_format) {
+        const MTLBlendFactor factors[]={MTLBlendFactorZero,MTLBlendFactorOne,MTLBlendFactorSourceColor,MTLBlendFactorOneMinusSourceColor,
+            MTLBlendFactorDestinationColor,MTLBlendFactorOneMinusDestinationColor,MTLBlendFactorSourceAlpha,MTLBlendFactorOneMinusSourceAlpha,
+            MTLBlendFactorDestinationAlpha,MTLBlendFactorOneMinusDestinationAlpha,MTLBlendFactorBlendColor,MTLBlendFactorOneMinusBlendColor,
+            MTLBlendFactorBlendAlpha,MTLBlendFactorOneMinusBlendAlpha,MTLBlendFactorSourceAlphaSaturated};
+        const MTLBlendOperation operations[]={MTLBlendOperationAdd,MTLBlendOperationSubtract,MTLBlendOperationReverseSubtract,MTLBlendOperationMin,MTLBlendOperationMax};
+        MTLRenderPipelineColorAttachmentDescriptor *color=pd.colorAttachments[0];
+        color.blendingEnabled=raster->blend_enabled;
+        color.rgbBlendOperation=operations[raster->rgb_equation];color.alphaBlendOperation=operations[raster->alpha_equation];
+        color.sourceRGBBlendFactor=factors[raster->src_rgb];color.destinationRGBBlendFactor=factors[raster->dst_rgb];
+        color.sourceAlphaBlendFactor=factors[raster->src_alpha];color.destinationAlphaBlendFactor=factors[raster->dst_alpha];
+        color.writeMask=((raster->color_write_mask&1)?MTLColorWriteMaskRed:0)|((raster->color_write_mask&2)?MTLColorWriteMaskGreen:0)
+          |((raster->color_write_mask&4)?MTLColorWriteMaskBlue:0)|((raster->color_write_mask&8)?MTLColorWriteMaskAlpha:0);
+    }
     if (desc->depth_format)
         pd.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float;
     NSError *error = nil;
@@ -95,11 +109,18 @@ static int metal_scene_graphics_create_layout(void *opaque, const mag_native_sce
                                            MTLCompareFunctionLessEqual, MTLCompareFunctionAlways};
     depth.depthCompareFunction = compares[desc->depth_compare];
     depth.depthWriteEnabled = desc->depth_write;
+    if(raster){
+        const MTLCompareFunction full_compares[]={MTLCompareFunctionNever,MTLCompareFunctionLess,MTLCompareFunctionEqual,MTLCompareFunctionLessEqual,
+            MTLCompareFunctionGreater,MTLCompareFunctionNotEqual,MTLCompareFunctionGreaterEqual,MTLCompareFunctionAlways};
+        depth.depthCompareFunction=raster->depth_enabled&&desc->depth_format?full_compares[raster->depth_compare]:MTLCompareFunctionAlways;
+        depth.depthWriteEnabled=raster->depth_enabled&&desc->depth_format&&raster->depth_write;
+    }
     id<MTLDepthStencilState> depth_gpu = [c->device newDepthStencilStateWithDescriptor:depth];
     if (!depth_gpu)
         return MAG_NATIVE_ALLOCATION_FAILED;
     MagRenderPipeline *p = [MagRenderPipeline new];
     p->scene = 1;p->scene_binding_model=binding_model;
+    if(raster){p->explicit_raster=1;p->raster=*raster;}
     p->graphics = graphics;
     p->depth = depth_gpu;
     p->scene_desc = *desc;
@@ -122,11 +143,16 @@ static int metal_scene_graphics_create_layout(void *opaque, const mag_native_sce
 static int metal_scene_graphics_create(void *opaque,const mag_native_scene_graphics_desc *desc,mag_native_pipeline *out){
     int status=mag_native_scene_graphics_validate(desc);if(status)return status;
     const mag_native_vertex_attribute attributes[]={{0,MAG_NATIVE_VERTEX_FLOAT4,0,0}};
-    return metal_scene_graphics_create_layout(opaque,desc,attributes,1,0,out);
+    return metal_scene_graphics_create_layout(opaque,desc,attributes,1,0,NULL,out);
 }
 static int metal_scene_graphics_create_v2(void *opaque,const mag_native_scene_graphics_v2_desc *desc,mag_native_pipeline *out){
     int status=mag_native_scene_graphics_v2_validate(desc);if(status)return status;
-    return metal_scene_graphics_create_layout(opaque,&desc->base,desc->attributes,desc->attribute_count,desc->binding_model,out);
+    return metal_scene_graphics_create_layout(opaque,&desc->base,desc->attributes,desc->attribute_count,desc->binding_model,NULL,out);
+}
+static int metal_scene_graphics_create_v3(void *opaque,const mag_native_scene_graphics_v3_desc *desc,mag_native_pipeline *out){
+    int status=mag_native_scene_graphics_v3_validate(desc);if(status)return status;
+    mag_native_scene_graphics_desc schema;mag_native_scene_graphics_v3_schema(desc,&schema);
+    return metal_scene_graphics_create_layout(opaque,&schema,desc->base.attributes,desc->base.attribute_count,desc->base.binding_model,&desc->raster,out);
 }
 static int metal_scene_owned(void *opaque, const mag_native_scene *scene, mag_native_ticket *out,MagRenderImportedImage *target) {
     MagRenderMetal *c = context(opaque);
@@ -263,6 +289,16 @@ static int metal_scene_owned(void *opaque, const mag_native_scene *scene, mag_na
             [retained addObject:pipeline];
             [e setRenderPipelineState:pipeline->graphics];
             [e setDepthStencilState:pipeline->depth];
+            if(pipeline->explicit_raster){
+                const MTLCullMode cull[]={MTLCullModeNone,MTLCullModeFront,MTLCullModeBack};
+                [e setCullMode:cull[pipeline->raster.cull_mode]];
+                [e setFrontFacingWinding:pipeline->raster.front_face?MTLWindingClockwise:MTLWindingCounterClockwise];
+                [e setBlendColorRed:pipeline->raster.blend_constant[0] green:pipeline->raster.blend_constant[1]
+                    blue:pipeline->raster.blend_constant[2] alpha:pipeline->raster.blend_constant[3]];
+            }else{
+                [e setCullMode:MTLCullModeNone];
+                [e setFrontFacingWinding:MTLWindingClockwise];
+            }
             MagRenderBuffer *v = find_buffer(c, d->vertices), *i = find_buffer(c, d->indices);
             [e setVertexBuffer:v->gpu offset:d->vertex_offset atIndex:16];
             for (uint32_t k = 0; k < d->buffer_count; ++k) {

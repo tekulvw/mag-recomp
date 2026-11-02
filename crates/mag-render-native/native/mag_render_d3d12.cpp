@@ -76,6 +76,7 @@ struct Pipeline {
   bool graphics = false,scene=false;
   uint32_t scene_model=0;
   mag_native_scene_graphics_desc scene_desc={};
+  mag_native_raster_state raster={};bool explicit_raster=false;
   std::vector<mag_native_scene_buffer_layout> scene_buffers;
   std::vector<mag_native_scene_texture_layout> scene_textures;
   std::array<uint32_t,2> scene_resource_count={},scene_resource_root={},scene_sampler_mask={},scene_sampler_index={};
@@ -1296,7 +1297,7 @@ static int buffer_read(void *opaque, mag_native_buffer ref, uint64_t offset,
 }
 #include "mag_render_d3d12_scene.inc"
 static const mag_native_ops operations={caps,buffer_create,buffer_release,buffer_read,pipeline_create,pipeline_release,
- submit,poll,close,graphics_create,submit_batch,scene_graphics_create,submit_scene,nullptr,nullptr,nullptr,nullptr,scene_graphics_create_v2};
+ submit,poll,close,graphics_create,submit_batch,scene_graphics_create,submit_scene,nullptr,nullptr,nullptr,nullptr,scene_graphics_create_v2,scene_graphics_create_v3};
 static int compiler_path(std::string &out) {
   DWORD count = GetEnvironmentVariableW(L"PS3RECOMP_DXC_LIBRARY", nullptr, 0);
   if (!count)

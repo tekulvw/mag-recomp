@@ -53,7 +53,7 @@ static int scene_renderpass(frontend_vk *c, uint32_t color, uint32_t depth, cons
 static int scene_graphics_create_layout(void *opaque, const mag_native_scene_graphics_desc *desc,
                                         const mag_native_vertex_attribute *attributes,
                                         uint32_t attribute_count, uint32_t binding_model,
-                                        mag_native_pipeline *out) {
+                                        const mag_native_raster_state *state, mag_native_pipeline *out) {
     frontend_vk *c = opaque;
     if (c->failed)
         return MAG_NATIVE_DEVICE_FAILED;
@@ -244,6 +244,25 @@ static int scene_graphics_create_layout(void *opaque, const mag_native_scene_gra
         .sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
         .attachmentCount = desc->color_format ? 1u : 0u,
         .pAttachments = &blend};
+    if(state){
+        const VkCullModeFlags culls[]={VK_CULL_MODE_NONE,VK_CULL_MODE_FRONT_BIT,VK_CULL_MODE_BACK_BIT};
+        raster.cullMode=culls[state->cull_mode];raster.frontFace=state->front_face?VK_FRONT_FACE_CLOCKWISE:VK_FRONT_FACE_COUNTER_CLOCKWISE;
+        depth_state.depthTestEnable=state->depth_enabled&&desc->depth_format;
+        depth_state.depthWriteEnable=state->depth_enabled&&desc->depth_format&&state->depth_write;
+        const VkCompareOp compares[]={VK_COMPARE_OP_NEVER,VK_COMPARE_OP_LESS,VK_COMPARE_OP_EQUAL,VK_COMPARE_OP_LESS_OR_EQUAL,
+            VK_COMPARE_OP_GREATER,VK_COMPARE_OP_NOT_EQUAL,VK_COMPARE_OP_GREATER_OR_EQUAL,VK_COMPARE_OP_ALWAYS};
+        depth_state.depthCompareOp=compares[state->depth_compare];
+        const VkBlendFactor factors[]={VK_BLEND_FACTOR_ZERO,VK_BLEND_FACTOR_ONE,VK_BLEND_FACTOR_SRC_COLOR,VK_BLEND_FACTOR_ONE_MINUS_SRC_COLOR,
+            VK_BLEND_FACTOR_DST_COLOR,VK_BLEND_FACTOR_ONE_MINUS_DST_COLOR,VK_BLEND_FACTOR_SRC_ALPHA,VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+            VK_BLEND_FACTOR_DST_ALPHA,VK_BLEND_FACTOR_ONE_MINUS_DST_ALPHA,VK_BLEND_FACTOR_CONSTANT_COLOR,VK_BLEND_FACTOR_ONE_MINUS_CONSTANT_COLOR,
+            VK_BLEND_FACTOR_CONSTANT_ALPHA,VK_BLEND_FACTOR_ONE_MINUS_CONSTANT_ALPHA,VK_BLEND_FACTOR_SRC_ALPHA_SATURATE};
+        const VkBlendOp equations[]={VK_BLEND_OP_ADD,VK_BLEND_OP_SUBTRACT,VK_BLEND_OP_REVERSE_SUBTRACT,VK_BLEND_OP_MIN,VK_BLEND_OP_MAX};
+        blend.blendEnable=state->blend_enabled;blend.colorWriteMask=state->color_write_mask;
+        blend.srcColorBlendFactor=factors[state->src_rgb];blend.dstColorBlendFactor=factors[state->dst_rgb];
+        blend.srcAlphaBlendFactor=factors[state->src_alpha];blend.dstAlphaBlendFactor=factors[state->dst_alpha];
+        blend.colorBlendOp=equations[state->rgb_equation];blend.alphaBlendOp=equations[state->alpha_equation];
+        memcpy(color_blend.blendConstants,state->blend_constant,sizeof(color_blend.blendConstants));
+    }
     VkDynamicState states[2] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
     VkPipelineDynamicStateCreateInfo dynamic = {.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
                                                 .dynamicStateCount = 2,
@@ -300,7 +319,7 @@ static int scene_graphics_create(void *opaque, const mag_native_scene_graphics_d
     if (status)
         return status;
     const mag_native_vertex_attribute attributes[] = {{0, MAG_NATIVE_VERTEX_FLOAT4, 0, 0}};
-    return scene_graphics_create_layout(opaque, desc, attributes, 1, 0, out);
+    return scene_graphics_create_layout(opaque, desc, attributes, 1, 0, NULL, out);
 }
 static int scene_graphics_create_v2(void *opaque, const mag_native_scene_graphics_v2_desc *desc,
                                     mag_native_pipeline *out) {
@@ -308,7 +327,12 @@ static int scene_graphics_create_v2(void *opaque, const mag_native_scene_graphic
     if (status)
         return status;
     return scene_graphics_create_layout(opaque, &desc->base, desc->attributes, desc->attribute_count,
-                                        desc->binding_model, out);
+                                        desc->binding_model, NULL, out);
+}
+static int scene_graphics_create_v3(void *opaque,const mag_native_scene_graphics_v3_desc *desc,mag_native_pipeline *out){
+    int status=mag_native_scene_graphics_v3_validate(desc);if(status)return status;
+    mag_native_scene_graphics_desc schema;mag_native_scene_graphics_v3_schema(desc,&schema);
+    return scene_graphics_create_layout(opaque,&schema,desc->base.attributes,desc->base.attribute_count,desc->base.binding_model,&desc->raster,out);
 }
 static int scene_buffer_info(void *opaque, mag_native_buffer ref, mag_native_scene_buffer_info *out) {
     frontend_vk_buffer *b = buffer_find(opaque, ref);

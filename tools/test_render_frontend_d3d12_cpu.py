@@ -41,16 +41,18 @@ def check(args):
         # C++ language flag to C input in the strict clang-cl build.
         validator = args.output_dir / "scene_validate.obj"
         run([compiler,"/nologo","/std:c17","/W4","/WX","/c",NATIVE / "mag_render_scene_validate.c",f"/Fo{validator}"])
+        raster = args.output_dir / "raster_validate.obj"
+        run([compiler,"/nologo","/std:c17","/W4","/WX","/c",NATIVE / "mag_render_raster_validate.c",f"/Fo{raster}"])
         fixtures.append(("owner_contract", [FIXTURES / "test_d3d12_owner_contract.cpp",
-                                           NATIVE / "mag_render_d3d12.cpp", NATIVE / "mag_render_dxc.cpp",validator]))
+                                           NATIVE / "mag_render_d3d12.cpp", NATIVE / "mag_render_dxc.cpp",validator,raster]))
         fixtures.append(("draw_preflight", [FIXTURES / "test_d3d12_draw_preflight.cpp",
-                                           NATIVE / "mag_render_dxc.cpp",validator]))
-        fixtures.append(("scene_preflight", [FIXTURES / "test_d3d12_scene_preflight.cpp",NATIVE / "mag_render_dxc.cpp",validator]))
-    for name in ("vertex_layout", "bgra_scene", "binding_scene", "scene_capacity"):
-        fixtures.append((name, [FIXTURES / f"test_{name}.c", NATIVE / "mag_render_scene_validate.c"]))
+                                           NATIVE / "mag_render_dxc.cpp",validator,raster]))
+        fixtures.append(("scene_preflight", [FIXTURES / "test_d3d12_scene_preflight.cpp",NATIVE / "mag_render_dxc.cpp",validator,raster]))
+    for name in ("vertex_layout", "bgra_scene", "binding_scene", "scene_capacity", "raster_state"):
+        fixtures.append((name, [FIXTURES / f"test_{name}.c", NATIVE / "mag_render_scene_validate.c", NATIVE / "mag_render_raster_validate.c"]))
     results = {}
     sources = {Path(__file__).resolve(), *(NATIVE / name for name in (
-        "mag_render_d3d12_limits.h", "mag_render_batch.h", "mag_render_native.h", "mag_render_host_owner.h", "mag_render_scene.h", "mag_render_scene_validate.h", "mag_render_host_image.h", "mag_render_host_frame.h"))}
+        "mag_render_raster.h", "mag_render_raster_validate.c", "mag_render_d3d12_limits.h", "mag_render_batch.h", "mag_render_native.h", "mag_render_host_owner.h", "mag_render_scene.h", "mag_render_scene_validate.h", "mag_render_host_image.h", "mag_render_host_frame.h"))}
     if windows:
         sources.update(NATIVE / name for name in ("mag_render_native_internal.h", "mag_render_dxc.h", "mag_render_scene.h", "mag_render_scene_validate.h", "mag_render_scene_validate.c", "mag_render_d3d12_scene.inc", "mag_render_host_image.h", "mag_render_host_frame.h"))
     for name, inputs in fixtures:

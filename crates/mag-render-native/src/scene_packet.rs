@@ -6,8 +6,8 @@ use crate::{
     batch_device::{
         ShaderStage,
         scene_device::{
-            BufferLayout, SceneGraphicsV2Desc, TextureLayout as NativeTextureLayout,
-            VertexAttribute,
+            BufferLayout, SceneGraphicsV2Desc, SceneGraphicsV3Desc,
+            TextureLayout as NativeTextureLayout, VertexAttribute,
         },
     },
     host_frame::HostFrame,
@@ -30,56 +30,12 @@ fn checked_layout() -> Result<(), i32> {
     }
     Ok(())
 }
-fn raster(s: &raw::RasterState) -> Result<(u32, u32, u32), i32> {
-    // The existing native ABI represents these exact states only. In particular
-    // its alpha preset uses ONE for source alpha, not SRC_ALPHA.
-    if s.known_fields != 511
-        || s.unresolved_obligations != 0
-        || s.reserved != 0
-        || s.cull_mode != 0
-        || s.front_face > 1
-        || s.color_write_mask != 15
-        || s.stencil_enabled != 0
-        || s.depth_bounds_enabled != 0
-        || s.bias_enabled != 0
-        || s.topology != 0
-        || s.samples != 1
-        || s.depth_enabled > 1
-        || s.depth_write > 1
-        || s.blend_enabled > 1
-    {
-        return Err(-2);
-    }
-    let depth = if s.depth_enabled == 0 {
-        if s.depth_write != 0 {
-            return Err(-2);
-        }
-        0
-    } else {
-        match s.depth_compare {
-            1 => 1,
-            3 => 2,
-            7 => 3,
-            _ => return Err(-2),
-        }
-    };
-    let blend = if s.blend_enabled == 0 {
-        0
-    } else {
-        if (
-            s.src_rgb,
-            s.dst_rgb,
-            s.rgb_equation,
-            s.src_alpha,
-            s.dst_alpha,
-            s.alpha_equation,
-        ) != (6, 7, 0, 1, 7, 0)
-        {
-            return Err(-2);
-        }
-        1
-    };
-    Ok((depth, s.depth_write, blend))
+unsafe extern "C" {
+    fn mag_native_raster_validate(state: *const raw::RasterState) -> i32;
+}
+fn raster(s: &raw::RasterState) -> Result<(), i32> {
+    let status = unsafe { mag_native_raster_validate(s) };
+    if status == 0 { Ok(()) } else { Err(status) }
 }
 #[cfg(test)]
 mod tests {
@@ -88,7 +44,7 @@ mod tests {
         unsafe { std::mem::zeroed() }
     }
     #[test]
-    fn actual_alpha_factor_is_not_native_alpha_preset() {
+    fn actual_alpha_factor_is_preserved_by_explicit_native_state() {
         let mut s = state();
         s.known_fields = 511;
         s.samples = 1;
@@ -98,7 +54,7 @@ mod tests {
         s.dst_rgb = 7;
         s.src_alpha = 6;
         s.dst_alpha = 7;
-        assert_eq!(raster(&s), Err(-2));
+        assert_eq!(raster(&s), Ok(()));
     }
     #[test]
     fn unknown_effective_state_is_not_defaulted() {
@@ -572,7 +528,11 @@ impl ScenePacket {
                     || !slots.insert(b.slot)
                     || b.access != 1
                     || b.minimum_bytes == 0
-                    || b.alignment_bytes == 0
+                    || !b.minimum_bytes.is_multiple_of(4)
+                    || b.runtime_array_stride != 0
+                    || b.runtime_size_index != u32::MAX
+                    || b.alignment_bytes < 4
+                    || b.alignment_bytes > 256
                     || !b.alignment_bytes.is_power_of_two()
                     || b.binding_kind > 1
                 {
@@ -1066,7 +1026,7 @@ impl PipelineCache {
         Ok(self.next_program)
     }
     fn pipeline_key(p: &Pipeline, vp: u64, fp: u64) -> Result<Vec<u8>, i32> {
-        let (depth, write, blend) = raster(&p.state)?;
+        raster(&p.state)?;
         let mut key = Vec::new();
         key.extend(vp.to_le_bytes());
         key.extend(fp.to_le_bytes());
@@ -1077,13 +1037,32 @@ impl PipelineCache {
                 p.color,
                 p.depth,
                 p.binding_model,
-                depth,
-                write,
-                blend,
                 p.attributes.len() as u32,
                 p.textures.len() as u32,
             ],
         );
+        let s = &p.state;
+        words(
+            &mut key,
+            &[
+                s.cull_mode,
+                s.front_face,
+                s.depth_enabled,
+                s.depth_compare,
+                s.depth_write,
+                s.blend_enabled,
+                s.src_rgb,
+                s.dst_rgb,
+                s.rgb_equation,
+                s.src_alpha,
+                s.dst_alpha,
+                s.alpha_equation,
+                s.color_write_mask,
+            ],
+        );
+        for f in s.blend_constant {
+            key.extend(f.to_bits().to_le_bytes());
+        }
         for a in &p.attributes {
             words(&mut key, &[a.location, a.format, a.offset, a.reserved])
         }
@@ -1177,7 +1156,7 @@ impl PipelineCompiler for SceneDevice<'_> {
                 }
             }
         }
-        let (depth_compare, depth_write, blend) = raster(&p.state)?;
+        raster(&p.state)?;
         let desc = SceneGraphicsV2Desc {
             struct_size: size_of::<SceneGraphicsV2Desc>() as u32,
             abi_version: 2,
@@ -1195,9 +1174,9 @@ impl PipelineCompiler for SceneDevice<'_> {
                 vertex_stride: p.stride,
                 color_format: p.color,
                 depth_format: p.depth,
-                depth_compare,
-                depth_write,
-                blend,
+                depth_compare: 0,
+                depth_write: 0,
+                blend: 0,
                 buffers: buffers.as_ptr(),
                 buffer_count: buffers.len() as u32,
                 texture_count: p.textures.len() as u32,
@@ -1207,7 +1186,13 @@ impl PipelineCompiler for SceneDevice<'_> {
             attribute_count: p.attributes.len() as u32,
             binding_model: p.binding_model,
         };
-        unsafe { self.graphics_pipeline_v2(&desc) }
+        let desc = SceneGraphicsV3Desc {
+            struct_size: size_of::<SceneGraphicsV3Desc>() as u32,
+            abi_version: 3,
+            base: desc,
+            raster: p.state,
+        };
+        unsafe { self.graphics_pipeline_v3(&desc) }
     }
 }
 /// Called only on the fixed worker's session thread. It shares the same backend,
@@ -1366,6 +1351,7 @@ pub(crate) mod packet_tests {
                 slot: stage,
                 access: 1,
                 minimum_bytes: 16,
+                runtime_size_index: u32::MAX,
                 alignment_bytes: 16,
                 binding_kind: 1,
                 ..BindingLayout::default()
@@ -1627,6 +1613,50 @@ pub(crate) mod packet_tests {
         packet.programs[0].buffers[0].minimum_bytes = 32;
         cache.resolve(&mut compiler, &packet).unwrap();
         assert_eq!(compiler.creates, 3);
+    }
+    #[test]
+    fn explicit_blend_cull_and_compare_changes_get_distinct_pipeline_ids() {
+        let mut packet = fixture();
+        let mut compiler = Compiler::default();
+        let mut cache = PipelineCache::default();
+        packet.pipelines[0].state.blend_enabled = 1;
+        packet.pipelines[0].state.src_rgb = 6;
+        packet.pipelines[0].state.dst_rgb = 7;
+        packet.pipelines[0].state.src_alpha = 6;
+        packet.pipelines[0].state.dst_alpha = 7;
+        packet.validate(32, 1 << 20).unwrap();
+        let first = cache.resolve(&mut compiler, &packet).unwrap();
+        packet.pipelines[0].state.src_alpha = 1;
+        assert_ne!(cache.resolve(&mut compiler, &packet).unwrap(), first);
+        packet.pipelines[0].state.cull_mode = 2;
+        cache.resolve(&mut compiler, &packet).unwrap();
+        packet.pipelines[0].state.depth_enabled = 1;
+        packet.pipelines[0].state.depth_compare = 6;
+        cache.resolve(&mut compiler, &packet).unwrap();
+        assert_eq!(compiler.creates, 4);
+        assert_eq!(cache.resolve(&mut compiler, &packet).unwrap(), vec![4]);
+    }
+    #[test]
+    fn unsupported_or_ambiguous_raster_state_never_becomes_a_preset() {
+        let packet = fixture();
+        let mut s = packet.pipelines[0].state;
+        s.stencil_enabled = 1;
+        assert_eq!(raster(&s), Err(-2));
+        s.stencil_enabled = 0;
+        s.bias_enabled = 1;
+        assert_eq!(raster(&s), Err(-2));
+        s.bias_enabled = 0;
+        s.blend_enabled = 1;
+        s.src_rgb = 10;
+        s.dst_rgb = 12;
+        s.blend_constant = [0.1, 0.2, 0.3, 0.4];
+        assert_eq!(raster(&s), Err(-2));
+        s.dst_rgb = 7;
+        s.color_write_mask = 16;
+        assert_eq!(raster(&s), Err(-1));
+        s.color_write_mask = 15;
+        s.blend_constant[0] = f32::NAN;
+        assert_eq!(raster(&s), Err(-1));
     }
     #[test]
     fn pipeline_lru_releases_old_public_refs_under_bounded_capacity() {

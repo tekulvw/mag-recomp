@@ -51,6 +51,15 @@ pub struct SceneGraphicsV2Desc {
     pub attribute_count: u32,
     pub binding_model: u32,
 }
+/// Additive explicit effective raster state. Legacy depth/blend fields in
+/// base.base are zero; this state is authoritative for actual backend PSOs.
+#[repr(C)]
+pub struct SceneGraphicsV3Desc {
+    pub struct_size: u32,
+    pub abi_version: u32,
+    pub base: SceneGraphicsV2Desc,
+    pub raster: mag_render_abi::packet::RasterState,
+}
 #[repr(C)]
 struct Image {
     format: u32,
@@ -124,6 +133,17 @@ struct Scene {
     diagnostic_readback: Buffer,
 }
 unsafe extern "C" {
+    fn mag_native_scene_graphics_create_v3(
+        context: *mut c_void,
+        desc: *const SceneGraphicsV3Desc,
+        out: *mut Pipeline,
+    ) -> i32;
+    fn mag_native_scene_graphics_v3_layout(out: *mut u32, words: u32) -> i32;
+    fn mag_native_scene_graphics_v3_schema(
+        desc: *const SceneGraphicsV3Desc,
+        out: *mut SceneGraphicsDesc,
+    );
+
     fn mag_native_scene_layout(out: *mut u32, words: u32) -> i32;
     fn mag_native_scene_graphics_create_v2(
         context: *mut c_void,
@@ -292,6 +312,46 @@ impl SceneDevice<'_> {
             return Err(status);
         }
         unsafe { self.register_graphics(&desc.base, out) }
+    }
+    /// # Safety
+    /// Shader/entry/schema/attribute pointers are valid synchronous ranges.
+    /// Effective raster fields are explicit and source-qualified by the caller.
+    pub unsafe fn graphics_pipeline_v3(&mut self, desc: &SceneGraphicsV3Desc) -> Result<u64, i32> {
+        checked_graphics_v3_layout()?;
+        if self.inner.pipelines.len() >= self.inner.limits.max_pipelines {
+            return Err(-5);
+        }
+        let mut out = Pipeline::default();
+        let status =
+            unsafe { mag_native_scene_graphics_create_v3(self.inner.api.device, desc, &mut out) };
+        if status != 0 {
+            return Err(status);
+        }
+        let mut schema = std::mem::MaybeUninit::uninit();
+        unsafe { mag_native_scene_graphics_v3_schema(desc, schema.as_mut_ptr()) };
+        let id = unsafe { self.register_graphics(&schema.assume_init(), out) }?;
+        let layout = self.graphics.get_mut(&id).ok_or(-6)?;
+        layout.depth.compare = if desc.raster.depth_enabled == 0 || desc.base.base.depth_format == 0
+        {
+            scene::DepthCompare::Disabled
+        } else {
+            match desc.raster.depth_compare {
+                0 => scene::DepthCompare::Never,
+                1 => scene::DepthCompare::Less,
+                2 => scene::DepthCompare::Equal,
+                3 => scene::DepthCompare::LessEqual,
+                4 => scene::DepthCompare::Greater,
+                5 => scene::DepthCompare::NotEqual,
+                6 => scene::DepthCompare::GreaterEqual,
+                _ => scene::DepthCompare::Always,
+            }
+        };
+        layout.blend = if desc.raster.blend_enabled != 0 && desc.base.base.color_format != 0 {
+            scene::Blend::Explicit
+        } else {
+            scene::Blend::Opaque
+        };
+        Ok(id)
     }
     unsafe fn register_graphics(
         &mut self,
@@ -806,6 +866,34 @@ fn checked_scene_layout() -> Result<(), i32> {
     }
     Ok(())
 }
+fn checked_graphics_v3_layout() -> Result<(), i32> {
+    use mag_render_abi::packet::RasterState;
+    let expected = [
+        size_of::<SceneGraphicsV3Desc>() as u32,
+        align_of::<SceneGraphicsV3Desc>() as u32,
+        offset_of!(SceneGraphicsV3Desc, base) as u32,
+        offset_of!(SceneGraphicsV3Desc, raster) as u32,
+        size_of::<RasterState>() as u32,
+        align_of::<RasterState>() as u32,
+        offset_of!(RasterState, known_fields) as u32,
+        offset_of!(RasterState, cull_mode) as u32,
+        offset_of!(RasterState, src_rgb) as u32,
+        offset_of!(RasterState, blend_constant) as u32,
+        offset_of!(RasterState, front_stencil) as u32,
+        offset_of!(RasterState, depth_bounds_enabled) as u32,
+        offset_of!(RasterState, bias_constant) as u32,
+    ];
+    let mut actual = [0; 13];
+    let status =
+        unsafe { mag_native_scene_graphics_v3_layout(actual.as_mut_ptr(), actual.len() as u32) };
+    if status != 0 {
+        return Err(status);
+    }
+    if actual != expected {
+        return Err(-1);
+    }
+    Ok(())
+}
 fn checked_graphics_v2_layout() -> Result<(), i32> {
     let expected = [
         size_of::<VertexAttribute>() as u32,
@@ -841,6 +929,10 @@ mod abi_tests {
     use super::*;
     unsafe extern "C" {
         fn mag_native_scene_graphics_v2_validate(desc: *const SceneGraphicsV2Desc) -> i32;
+    }
+    #[test]
+    fn explicit_raster_descriptor_matches_independent_c_layout() {
+        checked_graphics_v3_layout().unwrap();
     }
     #[test]
     fn material_namespaces_allow_same_unit_for_buffer_texture_and_sampler() {

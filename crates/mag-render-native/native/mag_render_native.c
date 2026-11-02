@@ -131,3 +131,10 @@ int mag_native_scene_graphics_create_v2(mag_native_device *device,const mag_nati
  int status=mag_native_scene_graphics_v2_validate(desc);if(status)return status;
  return device->ops->scene_graphics_create_v2?device->ops->scene_graphics_create_v2(device->context,desc,out):MAG_NATIVE_UNSUPPORTED;
 }
+
+int mag_native_scene_graphics_create_v3(mag_native_device *device,const mag_native_scene_graphics_v3_desc *desc,mag_native_pipeline *out){
+ if(out)memset(out,0,sizeof(*out));
+ if(!device||!out)return MAG_NATIVE_INVALID;
+ int status=mag_native_scene_graphics_v3_validate(desc);if(status)return status;
+ return device->ops->scene_graphics_create_v3?device->ops->scene_graphics_create_v3(device->context,desc,out):MAG_NATIVE_UNSUPPORTED;
+}

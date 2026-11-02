@@ -338,3 +338,16 @@ int mag_native_scene_validate(const mag_native_scene *s, const mag_native_scene_
             return MAG_NATIVE_INVALID;
     return MAG_NATIVE_OK;
 }
+
+int mag_native_scene_graphics_v3_validate(const mag_native_scene_graphics_v3_desc *d) {
+ if(!d||d->struct_size!=sizeof(*d)||d->abi_version!=3)return MAG_NATIVE_INVALID;
+ if(d->base.base.depth_compare||d->base.base.depth_write||d->base.base.blend)return MAG_NATIVE_INVALID;
+ int status=mag_native_scene_graphics_v2_validate(&d->base);if(status)return status;
+ return mag_native_raster_validate(&d->raster);
+}
+void mag_native_scene_graphics_v3_schema(const mag_native_scene_graphics_v3_desc *d,mag_native_scene_graphics_desc *out){
+ *out=d->base.base;
+ out->depth_compare=!d->raster.depth_enabled||!out->depth_format?0:d->raster.depth_compare==1?1:d->raster.depth_compare==3?2:3;
+ out->depth_write=d->raster.depth_enabled&&out->depth_format?d->raster.depth_write:0;
+ out->blend=out->color_format&&d->raster.blend_enabled?1:0;
+}

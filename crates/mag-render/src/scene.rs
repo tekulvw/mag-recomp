@@ -75,6 +75,11 @@ pub enum Stage {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DepthCompare {
     Disabled,
+    Never,
+    Equal,
+    Greater,
+    NotEqual,
+    GreaterEqual,
     Less,
     LessEqual,
     Always,
@@ -86,6 +91,8 @@ pub struct DepthState {
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Blend {
+    /// Exact effective factors/equations are retained by the native V3 registry.
+    Explicit,
     Opaque,
     Alpha,
 }
