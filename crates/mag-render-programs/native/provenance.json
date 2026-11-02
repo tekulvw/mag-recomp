@@ -1,0 +1,28 @@
+{
+  "source": "https://github.com/tekulvw/ps3recomp",
+  "commit": "6b35ad753cf44e42acb97e4a516ba81748e643c6",
+  "files": [
+    {
+      "path": "libs/video/rsx_vp_decompiler.c",
+      "sha256": "74463a2eed6c728cd13c43bda010975c5de647a77e12fcca33f50316c6361de3"
+    },
+    {
+      "path": "libs/video/rsx_vp_decompiler.h",
+      "sha256": "935106084f7f065d211e4fc1d1dd66fecc7f0bfdaa64961e6129b74f5cb27cb2"
+    },
+    {
+      "path": "libs/video/rsx_fp_decompiler.c",
+      "sha256": "8f60035c44c39b545e18727412363123ea6b3e07dea04658cbf052e1a49b15f8"
+    },
+    {
+      "path": "libs/video/rsx_fp_decompiler.h",
+      "sha256": "f8fd5c759801ea0ab90f743ee81e0bdd2d0141e005db697e2a96db0fd267e65b"
+    }
+  ],
+  "changes": [
+    "Prefix all exported compiler functions/counter to isolate legacy state",
+    "Use standalone integer aliases and original bounded logging helper",
+    "Disable environment-controlled shader debugging; production input is explicit",
+    "Clarify an inherited nested comment without changing executable semantics"
+  ]
+}
