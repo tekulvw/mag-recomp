@@ -123,3 +123,20 @@ extern "C" int mag_render_frontend_native_boundary(uint64_t *ticket) {
     return -2;
 #endif
 }
+
+extern "C" int mag_render_frontend_shutdown_requested(uint64_t lifetime) {
+#if defined(__APPLE__)
+    return rsx_metal_backend_owner_shutdown_requested(lifetime);
+#else
+    (void)lifetime;
+    return -2;
+#endif
+}
+extern "C" int mag_render_frontend_retry_shutdown(uint64_t lifetime) {
+#if defined(__APPLE__)
+    return rsx_metal_backend_owner_retry_shutdown(lifetime);
+#else
+    (void)lifetime;
+    return -2;
+#endif
+}
