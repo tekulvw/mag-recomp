@@ -269,3 +269,54 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends spirv-tools
           cargo test --manifest-path crates/mag-render-programs/Cargo.toml --features native-compiler --locked --offline --test native_compile -- --ignored
+
+  vulkan-sdk-cpu:
+    name: Vulkan SDK provider and bridge (CPU only)
+    # Explicit candidate-SDK override for this integration, never a normal
+    # framework pin or a release job. No fork-supplied SDK ref is consumed.
+    if: >-
+      (github.event_name == 'pull_request' &&
+       github.head_ref == 'codex/render-frontend-integration' &&
+       github.event.pull_request.head.repo.full_name == github.repository) ||
+      (github.event_name == 'workflow_dispatch' &&
+       github.ref == 'refs/heads/codex/render-frontend-integration')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: tekulvw/ps3recomp
+          ref: 204b8fa6fbff35efa972cd9012c12fd4ee7c0226
+          # Also retain its exact pre-image-ABI parent for guarded fallback.
+          fetch-depth: 2
+          path: build/vulkan-sdk-source
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: CPU compilers and Vulkan/SDL headers (no runtime execution)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc g++ binutils libvulkan-dev libsdl2-dev
+      - name: Runner failure receipts
+        run: python -m unittest tests.test_render_frontend_vulkan_sdk_cpu -v
+      - name: Existing native cases, actual SDK provider, ABI and guarded bridge
+        run: >-
+          python tools/test_render_frontend_vulkan_sdk_cpu.py
+          --sdk-root build/vulkan-sdk-source
+          --sdk-revision 204b8fa6fbff35efa972cd9012c12fd4ee7c0226
+          --old-sdk-revision 27ecb554cd39b394d362d8719555d1c4d3a8ca75
+          --vulkan-include /usr/include
+          --sdl-include /usr/include
+          --output-dir build/vulkan-sdk-cpu
+      - name: CPU-only receipt and failure logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: render-frontend-vulkan-sdk-cpu
+          path: |
+            build/vulkan-sdk-cpu/report.json
+            build/vulkan-sdk-cpu/*.log
+            build/vulkan-sdk-cpu/native/report.json
+          if-no-files-found: error
