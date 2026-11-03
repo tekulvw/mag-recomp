@@ -66,7 +66,8 @@ typedef struct mag_native_raster_state {
 } mag_native_raster_state;
 /* Pure range/known-state admission. Current cross-backend subset supports all
  * compare operations, independent RGB/alpha factors/equations, color masks,
- * front/back cull and explicit winding. Stencil/depth bounds/bias, nontriangle
+ * front/back cull, explicit winding and range-checked stored-depth bounds.
+ * Bounds require an explicit backend execution mode; bias, nontriangle
  * topology, multisample and cull-both remain explicit UNSUPPORTED. */
 int mag_native_raster_validate(const mag_native_raster_state *);
 #ifdef __cplusplus

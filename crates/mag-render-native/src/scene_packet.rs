@@ -93,6 +93,7 @@ mod tests {
 /// crosses the worker channel. SPIR-V storage remains explicitly word aligned.
 #[derive(Clone)]
 pub struct Program {
+    pub flags: u32,
     pub stage: u32,
     pub language: u32,
     pub source: Vec<u8>,
@@ -124,7 +125,7 @@ impl Program {
     }
     fn key(&self) -> Vec<u8> {
         let mut k = Vec::new();
-        words(&mut k, &[self.stage, self.language]);
+        words(&mut k, &[self.stage, self.language, self.flags]);
         bytes(&mut k, &self.source);
         k.extend((self.spirv.len() as u64).to_le_bytes());
         for x in &self.spirv {
@@ -221,6 +222,7 @@ pub struct ScenePacket {
     pub pipelines: Vec<Pipeline>,
     pub buffers: Vec<Vec<u8>>,
     pub images: Vec<ImagePayload>,
+    pub imports: Vec<raw::ImageRequirement>,
     pub views: Vec<raw::ImageView>,
     pub view_dimensions: Vec<Dimension>,
     pub viewports: Option<Vec<Viewport>>,
@@ -293,6 +295,30 @@ impl ScenePacket {
         }
         let stencils = unsafe { slice(d.stencils, d.stencil_count as usize) }?.to_vec();
         unsafe { Self::copy_v2_impl(&d.base, max_draws, max_bytes, Some(stencils)) }
+    }
+    /// # Safety
+    /// Same copy contract; requirement records are exact source-bound external inputs.
+    pub unsafe fn copy_imported_v3(
+        d: &raw::DescV3,
+        requirements: &[raw::ImageRequirement],
+        max_draws: usize,
+        max_bytes: u64,
+    ) -> Result<Self, i32> {
+        if requirements.len() > 1024 {
+            return Err(-5);
+        }
+        let metadata = (requirements.len() as u64)
+            .checked_mul(size_of::<raw::ImageBinding>() as u64)
+            .ok_or(-5)?;
+        let mut packet =
+            unsafe { Self::copy_v3(d, max_draws, max_bytes.checked_sub(metadata).ok_or(-5)?) }?;
+        packet
+            .imports
+            .try_reserve_exact(requirements.len())
+            .map_err(|_| -5)?;
+        packet.imports.extend_from_slice(requirements);
+        packet.validate(max_draws, max_bytes)?;
+        Ok(packet)
     }
     unsafe fn copy_v2_impl(
         d: &raw::DescV2,
@@ -400,7 +426,8 @@ impl ScenePacket {
         let mut programs = Vec::new();
         for p in unsafe { slice(d.programs, d.program_count as usize) }? {
             if p.stage > 1
-                || p.reserved != 0
+                || p.reserved & !raw::PROGRAM_STORED_DEPTH_AUX != 0
+                || p.reserved != 0 && (p.stage != 1 || p.shader.language != 1)
                 || p.reserved1 != 0
                 || p.buffer_count > 16
                 || p.texture_count > 16
@@ -434,6 +461,7 @@ impl ScenePacket {
                 return Err(-1);
             }
             programs.push(Program {
+                flags: p.reserved,
                 stage: p.stage,
                 language: p.shader.language,
                 source,
@@ -613,6 +641,7 @@ impl ScenePacket {
             pipelines,
             buffers,
             images,
+            imports: Vec::new(),
             view_dimensions: dimensions.unwrap_or_else(|| vec![Dimension::D2; views.len()]),
             viewports,
             stencils,
@@ -675,6 +704,11 @@ impl ScenePacket {
             return Err(-1);
         }
         for p in &self.programs {
+            if p.flags & !raw::PROGRAM_STORED_DEPTH_AUX != 0
+                || p.flags != 0 && (p.stage != 1 || p.language != 1)
+            {
+                return Err(-1);
+            }
             let mut slots = BTreeSet::new();
             for b in &p.buffers {
                 if b.slot >= 16
@@ -726,6 +760,20 @@ impl ScenePacket {
             } else {
                 Some(self.programs.get(p.fragment as usize).ok_or(-1)?)
             };
+            let aux = fp.is_some_and(|f| f.flags == raw::PROGRAM_STORED_DEPTH_AUX);
+            if aux != (p.state.depth_bounds_enabled != 0)
+                || aux
+                    && (p.binding_model != 1
+                        || p.textures
+                            .iter()
+                            .any(|t| t.stage == 1 && t.texture_slot == 15)
+                        || fp.is_some_and(|f| {
+                            f.buffers.iter().any(|b| b.slot == 2)
+                                || f.textures.iter().any(|t| t.slot == 15)
+                        }))
+            {
+                return Err(-2);
+            }
             if vp.stage != 0
                 || fp.is_some_and(|f| f.stage != 1)
                 || p.binding_model > 1
@@ -823,6 +871,33 @@ impl ScenePacket {
             let image = &self.images[v.image as usize];
             let shape = image.layout.clone().unwrap_or_default();
             self.view_desc(index)?.validate(&shape).map_err(|_| -1)?;
+        }
+        let mut external_indices = BTreeSet::new();
+        let mut source_keys = BTreeSet::new();
+        for r in &self.imports {
+            let image = self.images.get(r.image as usize).ok_or(-1)?;
+            let planes = if image.desc.format.has_stencil() {
+                6
+            } else if image.desc.format.info().depth_attachment {
+                2
+            } else {
+                1
+            };
+            if r.source_key == 0
+                || r.required_initialized_planes & !planes != 0
+                || !external_indices.insert(r.image)
+                || !source_keys.insert(r.source_key)
+                || image.bytes.is_some()
+                || image.layout.as_ref().is_some_and(|l| {
+                    l.dimension != Dimension::D2
+                        || l.mip_count != 1
+                        || l.layers != 1
+                        || l.samples != 1
+                        || !l.subresources.is_empty()
+                })
+            {
+                return Err(-1);
+            }
         }
         for image in &self.images {
             if let Some(layout) = &image.layout {
@@ -1074,20 +1149,34 @@ impl ScenePacket {
         )
         .map_err(|_| -1)?;
         let mut images = Vec::new();
-        for image in &self.images {
-            let i = match (&image.layout, &image.bytes) {
-                (Some(layout), Some(bytes)) => scene
-                    .texture_with_layout(image.desc, layout.clone(), lease(bytes)?)
+        for (index, image) in self.images.iter().enumerate() {
+            let i = if let Some(requirement) =
+                self.imports.iter().find(|r| r.image as usize == index)
+            {
+                scene
+                    .require_image(
+                        image.desc,
+                        mag_render::scene::ExternalImage {
+                            source_key: requirement.source_key,
+                            required_initialized_planes: requirement.required_initialized_planes,
+                        },
+                    )
                     .map_err(|_| -1)?
-                    .image(),
-                (Some(layout), None) => scene
-                    .image_with_layout(image.desc, layout.clone())
-                    .map_err(|_| -1)?,
-                (None, Some(bytes)) => scene
-                    .texture(image.desc, lease(bytes)?)
-                    .map_err(|_| -1)?
-                    .image(),
-                (None, None) => scene.image(image.desc).map_err(|_| -1)?,
+            } else {
+                match (&image.layout, &image.bytes) {
+                    (Some(layout), Some(bytes)) => scene
+                        .texture_with_layout(image.desc, layout.clone(), lease(bytes)?)
+                        .map_err(|_| -1)?
+                        .image(),
+                    (Some(layout), None) => scene
+                        .image_with_layout(image.desc, layout.clone())
+                        .map_err(|_| -1)?,
+                    (None, Some(bytes)) => scene
+                        .texture(image.desc, lease(bytes)?)
+                        .map_err(|_| -1)?
+                        .image(),
+                    (None, None) => scene.image(image.desc).map_err(|_| -1)?,
+                }
             };
             images.push(i)
         }
@@ -1201,6 +1290,24 @@ impl ScenePacket {
                     pass,
                     self.viewports.as_ref().map(|v| v[pass_index]),
                     stencil,
+                )
+                .map_err(|_| -1)?;
+            scene
+                .draw_depth_bounds(
+                    pass_index,
+                    self.passes[pass_index]
+                        .draws
+                        .iter()
+                        .map(|d| {
+                            let r = self.pipelines[d.pipeline as usize].state;
+                            (r.depth_bounds_enabled != 0).then_some(
+                                mag_render::scene::DepthBounds {
+                                    minimum: r.depth_bounds_min,
+                                    maximum: r.depth_bounds_max,
+                                },
+                            )
+                        })
+                        .collect(),
                 )
                 .map_err(|_| -1)?;
         }
@@ -1346,7 +1453,7 @@ impl PipelineCache {
                 s.color_write_mask,
             ],
         );
-        words(&mut key, &[s.stencil_enabled]);
+        words(&mut key, &[s.stencil_enabled, s.depth_bounds_enabled]);
         for f in [s.front_stencil, s.back_stencil] {
             words(
                 &mut key,
@@ -1494,7 +1601,7 @@ impl PipelineCompiler for SceneDevice<'_> {
             base: desc,
             raster: p.state,
         };
-        unsafe { self.graphics_pipeline_v3(&desc) }
+        unsafe { self.graphics_pipeline_aux(&desc, fragment.map_or(0, |p| p.flags)) }
     }
 }
 /// CPU preparation only. No target pin, queue lease, submission or original
@@ -1569,6 +1676,7 @@ pub(crate) fn admit(id: u64, worker: u64, packet: ScenePacket) -> Result<raw::Ad
             leases,
             pipelines: ids.clone(),
             output,
+            imports: packet.imports.clone(),
             receipt,
             identities,
         };
@@ -1610,6 +1718,23 @@ pub(crate) fn commit(
     target: &HostImage,
     frame: HostFrame,
 ) -> (i32, Receipt) {
+    commit_impl(id, admission, source, Some((target, frame)), &[])
+}
+pub(crate) fn commit_subgraph(
+    id: u64,
+    admission: raw::Admission,
+    source: Source,
+    bindings: &[raw::ImageBinding],
+) -> (i32, Receipt) {
+    commit_impl(id, admission, source, None, bindings)
+}
+fn commit_impl(
+    id: u64,
+    admission: raw::Admission,
+    source: Source,
+    target: Option<(&HostImage, HostFrame)>,
+    bindings: &[raw::ImageBinding],
+) -> (i32, Receipt) {
     let mut out = Receipt {
         abi_version: 1,
         struct_size: size_of::<Receipt>() as u32,
@@ -1621,23 +1746,41 @@ pub(crate) fn commit(
     let status = ffi(|| {
         with_session(id, |s| {
             let p = s.admissions.get(admission, source)?;
-            if !frame.valid()
-                || frame.owner_lifetime != target.owner_lifetime
-                || target.width != p.output.width
-                || target.height != p.output.height
-                || format(target.format)? != p.output.format
-            {
-                return Err(-3);
+            if let Some((target, frame)) = target {
+                if !p.imports.is_empty()
+                    || !frame.valid()
+                    || frame.owner_lifetime != target.owner_lifetime
+                    || target.width != p.output.width
+                    || target.height != p.output.height
+                    || format(target.format)? != p.output.format
+                {
+                    return Err(-3);
+                }
+            } else if p.imports.is_empty() {
+                return Err(-1);
             }
+            let requirements = p.imports.clone();
             let commands = p.commands.clone();
             let leases = p.leases.clone();
             let mut receipt = p.receipt;
             let identities = p.identities.clone();
-            let image = unsafe { s.backend.device().0.borrow_mut().import_target(target) }?;
-            if let Err(e) = unsafe { s.backend.device().0.borrow_mut().frame_context(frame) } {
-                s.backend.device().0.borrow_mut().release_target(image)?;
-                return Err(e);
-            }
+            let image = if let Some((target, frame)) = target {
+                let image = unsafe { s.backend.device().0.borrow_mut().import_target(target) }?;
+                if let Err(e) = unsafe { s.backend.device().0.borrow_mut().frame_context(frame) } {
+                    s.backend.device().0.borrow_mut().release_target(image)?;
+                    return Err(e);
+                }
+                Some(image)
+            } else {
+                unsafe {
+                    s.backend
+                        .device()
+                        .0
+                        .borrow_mut()
+                        .bind_imports(bindings, &requirements)
+                }?;
+                None
+            };
             let result = s
                 .backend
                 .submit_diagnostic(source.publication, commands, leases);
@@ -1645,7 +1788,11 @@ pub(crate) fn commit(
                 Ok(t) => (t, false),
                 Err(BackendError::SubmissionUncertain { ticket, .. }) => (ticket, true),
                 Err(e) => {
-                    s.backend.device().0.borrow_mut().release_target(image)?;
+                    if let Some(image) = image {
+                        s.backend.device().0.borrow_mut().release_target(image)?
+                    } else {
+                        s.backend.device().0.borrow_mut().release_imports()?
+                    }
                     return Err(match e {
                         BackendError::DeviceRejected { code } => {
                             -(code.min(i32::MAX as u32) as i32).max(1)
@@ -1658,13 +1805,16 @@ pub(crate) fn commit(
             // Remove the replayable preparation before any further fallible cleanup.
             let p = s.admissions.remove(admission, source)?;
             uncertain |= s.packet_cache.unpin(&p.pipelines).is_err();
-            uncertain |= s
-                .backend
-                .device()
-                .0
-                .borrow_mut()
-                .release_target(image)
-                .is_err();
+            uncertain |= if let Some(image) = image {
+                s.backend
+                    .device()
+                    .0
+                    .borrow_mut()
+                    .release_target(image)
+                    .is_err()
+            } else {
+                s.backend.device().0.borrow_mut().release_imports().is_err()
+            };
             let (generation, native) = s
                 .backend
                 .device()
@@ -1848,6 +1998,7 @@ pub(crate) mod packet_tests {
     }
     pub(crate) fn fixture() -> ScenePacket {
         let program = |stage| Program {
+            flags: 0,
             stage,
             language: 1,
             source: format!("authored stage {stage}").into_bytes(),
@@ -2030,6 +2181,7 @@ pub(crate) mod packet_tests {
                 unresolved_obligations: 0,
             }],
             output: 0,
+            imports: Vec::new(),
         }
     }
     struct Catalog<'a>(&'a ScenePacket);
@@ -2073,7 +2225,7 @@ pub(crate) mod packet_tests {
                 depth_attachment: p.depth != 0,
                 depth: DepthState {
                     compare: DepthCompare::Disabled,
-                    write: false,
+                    write: p.state.depth_enabled != 0 && p.state.depth_write != 0,
                 },
                 blend: Blend::Opaque,
                 buffers,
@@ -2181,10 +2333,16 @@ pub(crate) mod packet_tests {
     }
     #[test]
     fn unsupported_or_ambiguous_raster_state_never_becomes_a_preset() {
-        let packet = fixture();
+        let mut packet = fixture();
         let mut s = packet.pipelines[0].state;
         s.depth_bounds_enabled = 1;
-        assert_eq!(raster(&s), Err(-2));
+        packet.pipelines[0].state = s;
+        assert_eq!(packet.validate(32, 1 << 20), Err(-2));
+        s.depth_bounds_min = 0.8;
+        s.depth_bounds_max = 0.2;
+        assert_eq!(raster(&s), Err(-1));
+        s.depth_bounds_min = 0.;
+        s.depth_bounds_max = 1.;
         s.depth_bounds_enabled = 0;
         s.bias_enabled = 1;
         assert_eq!(raster(&s), Err(-2));
@@ -2288,7 +2446,7 @@ pub(crate) mod packet_tests {
             .iter()
             .map(|p| raw::Program {
                 stage: p.stage,
-                reserved: 0,
+                reserved: p.flags,
                 shader: p.shader(),
                 buffers: p.buffers.as_ptr(),
                 buffer_count: p.buffers.len() as u32,
@@ -2695,6 +2853,122 @@ pub(crate) mod packet_tests {
         assert!(packet.validate(32, 1 << 20).is_err());
         packet.stencils = None;
         assert_eq!(packet.validate(32, 1 << 20), Err(-2));
+    }
+    #[test]
+    fn imported_inputs_are_conditional_source_requirements_not_fresh_textures() {
+        let mut packet = fixture();
+        packet.images[1].bytes = None;
+        assert!(
+            packet
+                .prepare(&Catalog(&packet), &[1], 32, 1 << 20)
+                .is_err()
+        );
+        packet.imports = vec![raw::ImageRequirement {
+            image: 1,
+            required_initialized_planes: 1,
+            source_key: 99,
+        }];
+        packet.validate(32, 1 << 20).unwrap();
+        let prepared = packet
+            .prepare(&Catalog(&packet), &[1], 32, 1 << 20)
+            .unwrap();
+        assert_eq!(prepared.images()[1].external.unwrap().source_key, 99);
+        assert!(prepared.images()[1].upload.is_none());
+        packet.imports[0].required_initialized_planes = 0;
+        assert!(
+            packet
+                .prepare(&Catalog(&packet), &[1], 32, 1 << 20)
+                .is_err()
+        );
+        packet.imports[0].required_initialized_planes = 2;
+        assert_eq!(packet.validate(32, 1 << 20), Err(-1));
+        packet.imports[0].required_initialized_planes = 1;
+        packet.images[1].bytes = Some(vec![0; 4]);
+        assert_eq!(packet.validate(32, 1 << 20), Err(-1));
+    }
+    fn bounds_fixture() -> ScenePacket {
+        let mut packet = fixture();
+        packet.programs[1].flags = raw::PROGRAM_STORED_DEPTH_AUX;
+        packet.images.push(ImagePayload {
+            desc: ImageDesc {
+                width: 2,
+                height: 2,
+                format: ImageFormat::Depth32,
+            },
+            layout: None,
+            bytes: None,
+        });
+        packet.imports = vec![raw::ImageRequirement {
+            image: 2,
+            required_initialized_planes: 2,
+            source_key: 101,
+        }];
+        packet.passes[0].depth.image = 2;
+        packet.passes[0].depth.load = 1;
+        let r = &mut packet.pipelines[0];
+        r.depth = 2;
+        r.state.depth_bounds_enabled = 1;
+        r.state.depth_bounds_min = 0.2;
+        r.state.depth_bounds_max = 0.7;
+        packet
+    }
+    #[test]
+    fn stored_depth_mode_requires_initialized_readonly_attachment_and_exact_aux_mode() {
+        let mut packet = bounds_fixture();
+        packet.validate(32, 1 << 20).unwrap();
+        let prepared = packet
+            .prepare(&Catalog(&packet), &[1], 32, 1 << 20)
+            .unwrap();
+        assert_eq!(
+            prepared.depth_bounds()[0][0],
+            Some(mag_render::scene::DepthBounds {
+                minimum: 0.2,
+                maximum: 0.7
+            })
+        );
+        // Actual buffers/images plus depth snapshot fit 180 bytes only if the
+        // hidden per-draw range allocation is incorrectly omitted.
+        assert!(packet.prepare(&Catalog(&packet), &[1], 32, 180).is_err());
+        packet.imports[0].required_initialized_planes = 0;
+        assert!(
+            packet
+                .prepare(&Catalog(&packet), &[1], 32, 1 << 20)
+                .is_err()
+        );
+        packet.imports[0].required_initialized_planes = 2;
+        packet.passes[0].depth.load = 0;
+        assert!(
+            packet
+                .prepare(&Catalog(&packet), &[1], 32, 1 << 20)
+                .is_err()
+        );
+        packet.passes[0].depth.load = 1;
+        packet.pipelines[0].state.depth_enabled = 1;
+        packet.pipelines[0].state.depth_write = 1;
+        assert!(
+            packet
+                .prepare(&Catalog(&packet), &[1], 32, 1 << 20)
+                .is_err()
+        );
+        packet.pipelines[0].state.depth_write = 0;
+        packet.programs[1].flags = 0;
+        assert_eq!(packet.validate(32, 1 << 20), Err(-2));
+        packet.programs[1].flags = 2;
+        assert_eq!(packet.validate(32, 1 << 20), Err(-1));
+        packet.programs[1].flags = 1;
+        packet.programs[1].buffers[0].slot = 2;
+        assert_eq!(packet.validate(32, 1 << 20), Err(-2));
+    }
+    #[test]
+    fn dynamic_depth_bounds_reuse_pso_but_mode_and_shader_identity_do_not() {
+        let mut packet = bounds_fixture();
+        let mut cache = PipelineCache::default();
+        let mut compiler = Compiler::default();
+        let first = cache.resolve(&mut compiler, &packet).unwrap();
+        packet.pipelines[0].state.depth_bounds_max = 0.9;
+        assert_eq!(cache.resolve(&mut compiler, &packet).unwrap(), first);
+        packet.programs[1].source.push(9);
+        assert_ne!(cache.resolve(&mut compiler, &packet).unwrap(), first);
     }
 }
 

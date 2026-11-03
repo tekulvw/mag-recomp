@@ -288,6 +288,7 @@ scene_graphics_create_v2(void *opaque,
 }
 static int scene_graphics_create_v3(void *opaque,const mag_native_scene_graphics_v3_desc *desc,mag_native_pipeline *out){
   int status=mag_native_scene_graphics_v3_validate(desc);if(status)return status;
+    if(desc->raster.depth_bounds_enabled)return MAG_NATIVE_UNSUPPORTED;
   mag_native_scene_graphics_desc schema;mag_native_scene_graphics_v3_schema(desc,&schema);
   return scene_graphics_layout(static_cast<Context*>(opaque),&schema,desc->base.attributes,desc->base.attribute_count,desc->base.binding_model,&desc->raster,out);
 }

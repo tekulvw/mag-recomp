@@ -29,6 +29,7 @@ pub(super) struct Prepared {
     pub leases: Vec<ResourceLease>,
     pub pipelines: Vec<u64>,
     pub output: ImageDesc,
+    pub imports: Vec<mag_render_abi::packet::ImageRequirement>,
     pub receipt: Receipt,
     pub identities: Vec<DrawIdentity>,
 }
@@ -186,5 +187,42 @@ mod tests {
         assert_eq!(t.len(), 1);
         t.remove(a, source()).unwrap();
         assert!(t.insert((1, 7), source(), 3, 4, 2, 2).is_err());
+    }
+}
+pub(crate) fn checked_import_layout() -> Result<(), i32> {
+    use mag_render_abi::packet::{ImageBinding as B, ImageRequirement as R};
+    let expected = [
+        size_of::<R>() as u32,
+        align_of::<R>() as u32,
+        offset_of!(R, image) as u32,
+        offset_of!(R, required_initialized_planes) as u32,
+        offset_of!(R, source_key) as u32,
+        size_of::<B>() as u32,
+        align_of::<B>() as u32,
+        offset_of!(B, image) as u32,
+        offset_of!(B, reserved) as u32,
+        offset_of!(B, source_key) as u32,
+        offset_of!(B, host) as u32,
+        offset_of!(B, validate_planes) as u32,
+        mag_render_abi::packet::PROGRAM_STORED_DEPTH_AUX,
+    ];
+    unsafe extern "C" {
+        fn mag_native_packet_import_layout(out: *mut u32, words: u32) -> i32;
+    }
+    let mut actual = [0; 13];
+    let status = unsafe { mag_native_packet_import_layout(actual.as_mut_ptr(), 13) };
+    if status != 0 {
+        return Err(status);
+    }
+    if actual != expected {
+        return Err(-1);
+    }
+    Ok(())
+}
+#[cfg(test)]
+mod import_layout_tests {
+    #[test]
+    fn imported_packet_c_fields_and_aux_flag_match() {
+        super::checked_import_layout().unwrap()
     }
 }

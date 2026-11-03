@@ -56,8 +56,9 @@ static id<MTLFunction> metal_scene_function(MagRenderMetal *c, const mag_native_
     return [lib newFunctionWithName:entry];
 }
 static int metal_scene_graphics_create_layout(void *opaque, const mag_native_scene_graphics_desc *desc,
-                                       const mag_native_vertex_attribute *attributes,uint32_t attribute_count,uint32_t binding_model,const mag_native_raster_state *raster,mag_native_pipeline *out) {
+                                       const mag_native_vertex_attribute *attributes,uint32_t attribute_count,uint32_t binding_model,const mag_native_raster_state *raster,uint32_t flags,mag_native_pipeline *out) {
     MagRenderMetal *c = context(opaque);
+    if(!!flags!=!!(raster&&raster->depth_bounds_enabled))return MAG_NATIVE_UNSUPPORTED;
     if(desc->depth_format==MAG_NATIVE_SCENE_D24S8&&![c->device isDepth24Stencil8PixelFormatSupported])return MAG_NATIVE_UNSUPPORTED;
     if (c->next_pipeline == UINT64_MAX)
         return MAG_NATIVE_ALLOCATION_FAILED;
@@ -109,9 +110,21 @@ static int metal_scene_graphics_create_layout(void *opaque, const mag_native_sce
         pd.depthAttachmentPixelFormat = metal_scene_format(desc->depth_format);
     if(mag_native_image_has_stencil(desc->depth_format))pd.stencilAttachmentPixelFormat=metal_scene_format(desc->depth_format);
     NSError *error = nil;
-    id<MTLRenderPipelineState> graphics = [c->device newRenderPipelineStateWithDescriptor:pd error:&error];
-    if (!graphics)
-        return MAG_NATIVE_UNSUPPORTED;
+    id<MTLRenderPipelineState> graphics=nil;
+    if(flags){
+        if(@available(macOS 13.0,*)){
+            MTLRenderPipelineReflection *reflection=nil;
+            graphics=[c->device newRenderPipelineStateWithDescriptor:pd options:MTLPipelineOptionBindingInfo|MTLPipelineOptionBufferTypeInfo reflection:&reflection error:&error];
+            if(!graphics)return MAG_NATIVE_UNSUPPORTED;
+            int texture=0,buffer=0;
+            for(id<MTLBinding> binding in reflection.fragmentBindings){
+                if(binding.type==MTLBindingTypeTexture&&binding.index==15){id<MTLTextureBinding> t=(id<MTLTextureBinding>)binding;texture=t.depthTexture&&t.textureType==MTLTextureType2D&&t.textureDataType==MTLDataTypeFloat&&t.access==MTLBindingAccessReadOnly;}
+                if(binding.type==MTLBindingTypeBuffer&&binding.index==2){id<MTLBufferBinding> b=(id<MTLBufferBinding>)binding;buffer=b.bufferDataSize==16&&b.access==MTLBindingAccessReadOnly;}
+            }
+            if(!texture||!buffer)return MAG_NATIVE_UNSUPPORTED;
+        }else{return MAG_NATIVE_UNSUPPORTED;}
+    }else{graphics=[c->device newRenderPipelineStateWithDescriptor:pd error:&error];}
+    if(!graphics)return MAG_NATIVE_UNSUPPORTED;
     MTLDepthStencilDescriptor *depth = [MTLDepthStencilDescriptor new];
     const MTLCompareFunction compares[] = {MTLCompareFunctionAlways, MTLCompareFunctionLess,
                                            MTLCompareFunctionLessEqual, MTLCompareFunctionAlways};
@@ -133,7 +146,7 @@ static int metal_scene_graphics_create_layout(void *opaque, const mag_native_sce
     if (!depth_gpu)
         return MAG_NATIVE_ALLOCATION_FAILED;
     MagRenderPipeline *p = [MagRenderPipeline new];
-    p->scene = 1;p->scene_binding_model=binding_model;
+    p->scene = 1;p->scene_binding_model=binding_model;p->stored_depth_aux=!!flags;
     if(raster){p->explicit_raster=1;p->raster=*raster;}
     p->graphics = graphics;
     p->depth = depth_gpu;
@@ -157,21 +170,32 @@ static int metal_scene_graphics_create_layout(void *opaque, const mag_native_sce
 static int metal_scene_graphics_create(void *opaque,const mag_native_scene_graphics_desc *desc,mag_native_pipeline *out){
     int status=mag_native_scene_graphics_validate(desc);if(status)return status;
     const mag_native_vertex_attribute attributes[]={{0,MAG_NATIVE_VERTEX_FLOAT4,0,0}};
-    return metal_scene_graphics_create_layout(opaque,desc,attributes,1,0,NULL,out);
+    return metal_scene_graphics_create_layout(opaque,desc,attributes,1,0,NULL,0,out);
 }
 static int metal_scene_graphics_create_v2(void *opaque,const mag_native_scene_graphics_v2_desc *desc,mag_native_pipeline *out){
     int status=mag_native_scene_graphics_v2_validate(desc);if(status)return status;
-    return metal_scene_graphics_create_layout(opaque,&desc->base,desc->attributes,desc->attribute_count,desc->binding_model,NULL,out);
+    return metal_scene_graphics_create_layout(opaque,&desc->base,desc->attributes,desc->attribute_count,desc->binding_model,NULL,0,out);
 }
 static int metal_scene_graphics_create_v3(void *opaque,const mag_native_scene_graphics_v3_desc *desc,mag_native_pipeline *out){
     int status=mag_native_scene_graphics_v3_validate(desc);if(status)return status;
     mag_native_scene_graphics_desc schema;mag_native_scene_graphics_v3_schema(desc,&schema);
-    return metal_scene_graphics_create_layout(opaque,&schema,desc->base.attributes,desc->base.attribute_count,desc->base.binding_model,&desc->raster,out);
+    return metal_scene_graphics_create_layout(opaque,&schema,desc->base.attributes,desc->base.attribute_count,desc->base.binding_model,&desc->raster,0,out);
+}
+static int metal_scene_graphics_create_aux(void *opaque,const mag_native_scene_graphics_v3_desc *desc,uint32_t flags,mag_native_pipeline *out){
+    mag_native_scene_graphics_desc schema;mag_native_scene_graphics_v3_schema(desc,&schema);
+    return metal_scene_graphics_create_layout(opaque,&schema,desc->base.attributes,desc->base.attribute_count,desc->base.binding_model,&desc->raster,flags,out);
 }
 static int metal_scene_raster_info(void *opaque,mag_native_pipeline ref,const mag_native_raster_state **out){
  MagRenderPipeline *p=find_pipeline(context(opaque),ref);if(!p)return MAG_NATIVE_STALE;if(!p->scene)return MAG_NATIVE_INVALID;*out=p->explicit_raster?&p->raster:NULL;return MAG_NATIVE_OK;
 }
-static int metal_scene_owned(void *opaque, const mag_native_scene *scene, mag_native_ticket *out,MagRenderImportedImage *target,const mag_native_sampler *sampler_table,uint32_t sampler_count,const mag_native_scene_v3 *v3,const mag_native_scene_v4 *v4) {
+static MagRenderImportedImage *metal_imported(MagRenderMetal *c,mag_native_image ref){return ref.device_generation==c->generation&&ref.id?c->images[@(ref.id)]:nil;}
+static int metal_scene_import_info(void *opaque,mag_native_image ref,uint32_t required,mag_native_import_info *out){
+ MagRenderMetal *c=context(opaque);MagRenderImportedImage *image=metal_imported(c,ref);if(!image)return MAG_NATIVE_STALE;
+ int status=image->host.validate(image->host.userdata,image->host.owner_lifetime,image->host.resource_id,image->host.resource_generation);if(status)return status<0?status:MAG_NATIVE_DEVICE_FAILED;
+ if(required){if(!image->validate_planes)return MAG_NATIVE_UNSUPPORTED;status=image->validate_planes(image->host.userdata,image->host.owner_lifetime,image->host.resource_id,image->host.resource_generation,required);if(status)return status<0?status:MAG_NATIVE_DEVICE_FAILED;}
+ *out=(mag_native_import_info){image->host.format,image->host.width,image->host.height,0,image->host.owner_lifetime,image->host.resource_id,image->host.resource_generation};return MAG_NATIVE_OK;
+}
+static int metal_scene_owned(void *opaque, const mag_native_scene *scene, mag_native_ticket *out,MagRenderImportedImage *target,const mag_native_sampler *sampler_table,uint32_t sampler_count,const mag_native_scene_v3 *v3,const mag_native_scene_v4 *v4,const mag_native_scene_v5 *v5) {
     MagRenderMetal *c = context(opaque);
     if (c->pending.count >= 2)
         return MAG_NATIVE_BUSY;
@@ -188,7 +212,8 @@ static int metal_scene_owned(void *opaque, const mag_native_scene *scene, mag_na
     mag_native_scene_usage usage;
     mag_native_scene_registry_v2 registry_v2={&registry,sampler_table,sampler_count,metal_sampler_info};
     mag_native_scene_registry_v4 registry_v4={&registry_v2,metal_scene_raster_info};
-    int status=v4?mag_native_scene_validate_v4(v4,&registry_v4,&usage):v3?mag_native_scene_validate_v3(v3,&registry_v2,&usage):mag_native_scene_validate_v2(scene,&registry_v2,&usage);
+    mag_native_scene_registry_v5 registry_v5={&registry_v4,metal_scene_import_info};
+    int status=v5?mag_native_scene_validate_v5(v5,&registry_v5,&usage):v4?mag_native_scene_validate_v4(v4,&registry_v4,&usage):v3?mag_native_scene_validate_v3(v3,&registry_v2,&usage):mag_native_scene_validate_v2(scene,&registry_v2,&usage);
     if (status)
         return status;
     NSMutableArray *retained = [NSMutableArray new];
@@ -208,6 +233,18 @@ static int metal_scene_owned(void *opaque, const mag_native_scene *scene, mag_na
     }
     for (uint32_t i = 0; i < scene->image_count; ++i) {
         const mag_native_scene_image *im = &scene->images[i];
+        MagRenderImportedImage *borrowed=nil;
+        if(v5)for(uint32_t k=0;k<v5->import_count;++k)if(v5->imports[k].image==i)borrowed=metal_imported(c,v5->imports[k].ref);
+        if(borrowed){
+            if(target&&i==scene->output_image&&target->image!=borrowed->image)return MAG_NATIVE_INVALID;
+            if(target&&i!=scene->output_image&&target->image==borrowed->image)return MAG_NATIVE_INVALID;
+            for(uint32_t pass=0;pass<scene->pass_count;++pass){
+                const mag_native_scene_pass *p=&scene->passes[pass];
+                if((p->color.image==i||p->depth.image==i)&&!(borrowed->image.usage&MTLTextureUsageRenderTarget))return MAG_NATIVE_UNSUPPORTED;
+                for(uint32_t d=0;d<p->draw_count;++d)for(uint32_t t=0;t<p->draws[d].texture_count;++t)if(mag_native_scene_image_index(v3,p->draws[d].textures[t].image)==i&&!(borrowed->image.usage&MTLTextureUsageShaderRead))return MAG_NATIVE_UNSUPPORTED;
+            }
+            [images addObject:borrowed->image];[retained addObject:borrowed];continue;
+        }
         const mag_native_scene_image_layout *shape=v3&&v3->image_layout_count?&v3->image_layouts[i]:NULL;
         mag_native_image_format info;mag_native_image_format_info(im->format,&info);
         if(info.block_width>1&&!c->device.supportsBCTextureCompression)return MAG_NATIVE_UNSUPPORTED;
@@ -241,7 +278,11 @@ static int metal_scene_owned(void *opaque, const mag_native_scene *scene, mag_na
     if(v3)for(uint32_t i=0;i<v3->view_count;++i){
         const mag_native_image_view *v=&v3->views[i];id<MTLTexture> parent=images[v->image];id<MTLTexture> view=nil;
         const MTLTextureSwizzle components[]={MTLTextureSwizzleRed,MTLTextureSwizzleGreen,MTLTextureSwizzleBlue,MTLTextureSwizzleAlpha,MTLTextureSwizzleZero,MTLTextureSwizzleOne};
-        if(@available(macOS 10.15,*)){
+        int identity=v->dimension==2&&v->base_mip==0&&v->mip_count==parent.mipmapLevelCount&&v->base_layer==0&&v->layer_count==1;
+        for(unsigned component=0;component<4;++component)identity&=v->remap[component]==component;
+        if(identity)view=parent;
+        else if(!(parent.usage&MTLTextureUsagePixelFormatView))return MAG_NATIVE_UNSUPPORTED;
+        else if(@available(macOS 10.15,*)){
             MTLTextureSwizzleChannels swizzle=MTLTextureSwizzleChannelsMake(components[v->remap[0]],components[v->remap[1]],components[v->remap[2]],components[v->remap[3]]);
             view=[parent newTextureViewWithPixelFormat:parent.pixelFormat textureType:v->dimension==4?MTLTextureTypeCube:MTLTextureType2D
                 levels:NSMakeRange(v->base_mip,v->mip_count) slices:NSMakeRange(v->base_layer,v->layer_count) swizzle:swizzle];
@@ -261,6 +302,24 @@ static int metal_scene_owned(void *opaque, const mag_native_scene *scene, mag_na
         if (!samplers[i])
             return MAG_NATIVE_ALLOCATION_FAILED;
         [retained addObject:samplers[i]];
+    }
+    NSMutableArray<id> *snapshots=[NSMutableArray new];
+    uint32_t flattened=0;
+    for(uint32_t n=0;n<scene->pass_count;++n){
+        const mag_native_scene_pass *p=&scene->passes[n];int needed=0;
+        for(uint32_t j=0;j<p->draw_count;++j){MagRenderPipeline *pipeline=find_pipeline(c,p->draws[j].pipeline);
+            int enabled=v5&&v5->bounds_count&&v5->bounds[flattened+j].enabled;
+            if(enabled!=pipeline->stored_depth_aux)return MAG_NATIVE_INVALID;
+            if(enabled){needed=1;if(pipeline->raster.stencil_enabled&&((pipeline->raster.front_stencil.write_mask|pipeline->raster.back_stencil.write_mask)&255u))return MAG_NATIVE_UNSUPPORTED;}
+        }
+        flattened+=p->draw_count;
+        if(!needed){[snapshots addObject:[NSNull null]];continue;}
+        if(p->depth.image==MAG_NATIVE_SCENE_NONE||p->depth.load!=MAG_NATIVE_SCENE_LOAD)return MAG_NATIVE_UNSUPPORTED;
+        for(uint32_t j=0;j<p->draw_count;++j){MagRenderPipeline *pipeline=find_pipeline(c,p->draws[j].pipeline);if(pipeline->explicit_raster?(pipeline->raster.depth_enabled&&pipeline->raster.depth_write):pipeline->scene_desc.depth_write)return MAG_NATIVE_UNSUPPORTED;}
+        id<MTLTexture> source=images[p->depth.image];
+        MTLTextureDescriptor *shape=[MTLTextureDescriptor texture2DDescriptorWithPixelFormat:source.pixelFormat width:source.width height:source.height mipmapped:NO];shape.storageMode=MTLStorageModePrivate;shape.usage=MTLTextureUsageShaderRead;
+        id<MTLTexture> snapshot=[c->device newTextureWithDescriptor:shape];if(!snapshot)return MAG_NATIVE_ALLOCATION_FAILED;
+        [snapshots addObject:snapshot];[retained addObject:snapshot];
     }
     MagRenderSubmission *submission = [MagRenderSubmission new];
     submission->uses = uses;
@@ -301,8 +360,14 @@ static int metal_scene_owned(void *opaque, const mag_native_scene *scene, mag_na
             threadsPerThreadgroup:p->threads];
         [e endEncoding];
     }
+    flattened=0;
     for (uint32_t n = 0; n < scene->pass_count; ++n) {
         const mag_native_scene_pass *p = &scene->passes[n];
+        id<MTLTexture> snapshot=snapshots[n]==[NSNull null]?nil:snapshots[n];
+        if(snapshot){
+            id<MTLTexture> source=images[p->depth.image];id<MTLBlitCommandEncoder> blit=[submission->command blitCommandEncoder];if(!blit)return MAG_NATIVE_DEVICE_FAILED;
+            [blit copyFromTexture:source sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0,0,0) sourceSize:MTLSizeMake(source.width,source.height,1) toTexture:snapshot destinationSlice:0 destinationLevel:0 destinationOrigin:MTLOriginMake(0,0,0)];[blit endEncoding];
+        }
         MTLRenderPassDescriptor *pd = [MTLRenderPassDescriptor renderPassDescriptor];
         if (p->color.image != MAG_NATIVE_SCENE_NONE) {
             pd.colorAttachments[0].texture = images[p->color.image];
@@ -333,7 +398,7 @@ static int metal_scene_owned(void *opaque, const mag_native_scene *scene, mag_na
         [e setCullMode:MTLCullModeNone];
         if(v3&&v3->viewport_count){const mag_native_viewport *v=&v3->viewports[n];
             [e setViewport:(MTLViewport){v->x,v->y,v->width,v->height,v->min_depth,v->max_depth}];
-            if(!v->scissor_width||!v->scissor_height){[e endEncoding];continue;}
+            if(!v->scissor_width||!v->scissor_height){[e endEncoding];flattened+=p->draw_count;continue;}
             [e setScissorRect:(MTLScissorRect){v->scissor_x,v->scissor_y,v->scissor_width,v->scissor_height}];
         }
         for (uint32_t j = 0; j < p->draw_count; ++j) {
@@ -342,6 +407,10 @@ static int metal_scene_owned(void *opaque, const mag_native_scene *scene, mag_na
             [retained addObject:pipeline];
             [e setRenderPipelineState:pipeline->graphics];
             [e setDepthStencilState:pipeline->depth];
+            if(pipeline->stored_depth_aux){
+                const mag_native_depth_bounds *bounds=&v5->bounds[flattened+j];float range[4]={bounds->minimum,bounds->maximum,0,0};
+                [e setFragmentTexture:snapshot atIndex:15];[e setFragmentBytes:range length:sizeof(range) atIndex:2];
+            }
             if(pipeline->explicit_raster){
                 const MTLCullMode cull[]={MTLCullModeNone,MTLCullModeFront,MTLCullModeBack};
                 [e setCullMode:cull[pipeline->raster.cull_mode]];
@@ -386,6 +455,7 @@ static int metal_scene_owned(void *opaque, const mag_native_scene *scene, mag_na
                    indexBufferOffset:d->index_offset];
         }
         [e endEncoding];
+        flattened+=p->draw_count;
     }
     if (scene->diagnostic_readback.id) {
         const mag_native_scene_image *im = &scene->images[scene->output_image];
@@ -436,13 +506,13 @@ static int metal_scene_owned(void *opaque, const mag_native_scene *scene, mag_na
     }
     return MAG_NATIVE_OK;
 }
-static int metal_submit_scene_impl(void *opaque, const mag_native_scene *scene, mag_native_ticket *out,const mag_native_sampler *sampler_table,uint32_t sampler_count,const mag_native_scene_v3 *v3,const mag_native_scene_v4 *v4) {
+static int metal_submit_scene_impl(void *opaque, const mag_native_scene *scene, mag_native_ticket *out,const mag_native_sampler *sampler_table,uint32_t sampler_count,const mag_native_scene_v3 *v3,const mag_native_scene_v4 *v4,const mag_native_scene_v5 *v5) {
     MagRenderMetal *c = context(opaque);
     int status = c->host.try_begin(c->host.userdata, c->host.lifetime);
     if (status)
         return status < 0 ? status : MAG_NATIVE_DEVICE_FAILED;
     @try {
-        return metal_scene_owned(opaque, scene, out,nil,sampler_table,sampler_count,v3,v4);
+        return metal_scene_owned(opaque, scene, out,nil,sampler_table,sampler_count,v3,v4,v5);
     } @catch (NSException *e) {
         (void)e;
         return out->submission_id ? MAG_NATIVE_INDETERMINATE : MAG_NATIVE_DEVICE_FAILED;
@@ -451,19 +521,23 @@ static int metal_submit_scene_impl(void *opaque, const mag_native_scene *scene, 
     }
 }
 
-static int metal_image_import(void *opaque,const MagRenderHostImage *host,mag_native_image *out){
+static int metal_import_image(void *opaque,const MagRenderHostImage *host,mag_native_validate_planes_fn planes,int certified,mag_native_image *out){
  MagRenderMetal *c=context(opaque);
  if(host->backend!=MAG_RENDER_HOST_METAL||host->owner_lifetime!=c->host.lifetime)return MAG_NATIVE_STALE;
- if(c->images.count>=64||c->next_image==UINT64_MAX)return MAG_NATIVE_ALLOCATION_FAILED;
+ if(c->images.count>=MAG_NATIVE_SCENE_MAX_IMAGES+2||c->next_image==UINT64_MAX)return MAG_NATIVE_ALLOCATION_FAILED;
  int status=host->retain(host->userdata,host->owner_lifetime,host->resource_id,host->resource_generation);if(status)return status<0?status:MAG_NATIVE_DEVICE_FAILED;
  id<MTLTexture> image=(__bridge id<MTLTexture>)host->image;
- if(!image||image.device!=c->device||image.width!=host->width||image.height!=host->height||!host->width||!host->height||!(image.usage&MTLTextureUsageRenderTarget)||image.textureType!=MTLTextureType2D||image.sampleCount!=1||(host->format!=MAG_NATIVE_SCENE_RGBA8&&host->format!=MAG_NATIVE_SCENE_BGRA8)||image.pixelFormat!=(host->format==MAG_NATIVE_SCENE_BGRA8?MTLPixelFormatBGRA8Unorm:MTLPixelFormatRGBA8Unorm)){host->release(host->userdata,host->owner_lifetime,host->resource_id,host->resource_generation);return MAG_NATIVE_UNSUPPORTED;}
- MagRenderImportedImage *record=[MagRenderImportedImage new];record->image=image;record->host=*host;uint64_t id=++c->next_image;c->images[@(id)]=record;*out=(mag_native_image){c->generation,id};return MAG_NATIVE_OK;
+ MTLPixelFormat format=metal_scene_format(host->format);
+ if(!image||image.device!=c->device||image.width!=host->width||image.height!=host->height||!host->width||!host->height||image.textureType!=MTLTextureType2D||image.sampleCount!=1||image.mipmapLevelCount!=1||format==MTLPixelFormatInvalid||image.pixelFormat!=format||
+   (certified?!(image.usage&(MTLTextureUsageRenderTarget|MTLTextureUsageShaderRead)):!(image.usage&MTLTextureUsageRenderTarget))){host->release(host->userdata,host->owner_lifetime,host->resource_id,host->resource_generation);return MAG_NATIVE_UNSUPPORTED;}
+ MagRenderImportedImage *record=[MagRenderImportedImage new];record->image=image;record->host=*host;record->validate_planes=planes;uint64_t id=++c->next_image;c->images[@(id)]=record;*out=(mag_native_image){c->generation,id};return MAG_NATIVE_OK;
 }
+static int metal_image_import(void *opaque,const MagRenderHostImage *host,mag_native_image *out){return metal_import_image(opaque,host,NULL,0,out);}
+static int metal_image_import_certified(void *opaque,const mag_native_image_certificate *cert,mag_native_image *out){return metal_import_image(opaque,&cert->host,cert->validate_planes,1,out);}
 static int metal_image_release(void *opaque,mag_native_image ref){
  MagRenderMetal *c=context(opaque);if(ref.device_generation!=c->generation||!ref.id||!c->images[@(ref.id)])return MAG_NATIVE_STALE;[c->images removeObjectForKey:@(ref.id)];return MAG_NATIVE_OK;
 }
-static int metal_submit_scene_target_impl(void *opaque,const mag_native_scene *scene,mag_native_image ref,mag_native_ticket *out,const mag_native_sampler *sampler_table,uint32_t sampler_count,const mag_native_scene_v3 *v3,const mag_native_scene_v4 *v4){
+static int metal_submit_scene_target_impl(void *opaque,const mag_native_scene *scene,mag_native_image ref,mag_native_ticket *out,const mag_native_sampler *sampler_table,uint32_t sampler_count,const mag_native_scene_v3 *v3,const mag_native_scene_v4 *v4,const mag_native_scene_v5 *v5){
  MagRenderMetal *c=context(opaque);if(ref.device_generation!=c->generation||!ref.id)return MAG_NATIVE_STALE;
  MagRenderImportedImage *target=c->images[@(ref.id)];if(!target)return MAG_NATIVE_STALE;
  int status=c->host.try_begin(c->host.userdata,c->host.lifetime);if(status)return status<0?status:MAG_NATIVE_DEVICE_FAILED;
@@ -471,11 +545,11 @@ static int metal_submit_scene_target_impl(void *opaque,const mag_native_scene *s
   status=target->host.validate(target->host.userdata,target->host.owner_lifetime,target->host.resource_id,target->host.resource_generation);if(status)return status<0?status:MAG_NATIVE_DEVICE_FAILED;
   if(!scene->images||scene->output_image>=scene->image_count)return MAG_NATIVE_INVALID;
   const mag_native_scene_image *im=&scene->images[scene->output_image];if(im->format!=target->host.format||im->width!=target->host.width||im->height!=target->host.height||im->upload.id||im->upload.device_generation||im->upload.version)return MAG_NATIVE_INVALID;
-  return metal_scene_owned(opaque,scene,out,target,sampler_table,sampler_count,v3,v4);
+  return metal_scene_owned(opaque,scene,out,target,sampler_table,sampler_count,v3,v4,v5);
  }@catch(NSException *e){(void)e;return out->submission_id?MAG_NATIVE_INDETERMINATE:MAG_NATIVE_DEVICE_FAILED;}@finally{c->host.end(c->host.userdata,c->host.lifetime);}
 }
 
-static int metal_submit_scene_frame_impl(void *opaque,const mag_native_scene *scene,mag_native_image ref,const MagRenderHostFrame *frame,mag_native_ticket *out,const mag_native_sampler *sampler_table,uint32_t sampler_count,const mag_native_scene_v3 *v3,const mag_native_scene_v4 *v4){
+static int metal_submit_scene_frame_impl(void *opaque,const mag_native_scene *scene,mag_native_image ref,const MagRenderHostFrame *frame,mag_native_ticket *out,const mag_native_sampler *sampler_table,uint32_t sampler_count,const mag_native_scene_v3 *v3,const mag_native_scene_v4 *v4,const mag_native_scene_v5 *v5){
  MagRenderMetal *c=context(opaque);if(frame->owner_lifetime!=c->host.lifetime||ref.device_generation!=c->generation||!ref.id)return MAG_NATIVE_STALE;
  MagRenderImportedImage *target=c->images[@(ref.id)];if(!target)return MAG_NATIVE_STALE;
  int status=c->host.try_begin(c->host.userdata,c->host.lifetime);if(status)return status<0?status:MAG_NATIVE_DEVICE_FAILED;
@@ -485,7 +559,7 @@ static int metal_submit_scene_frame_impl(void *opaque,const mag_native_scene *sc
   status=frame->preflight(frame->userdata,frame->owner_lifetime,frame->reservation,target->host.resource_id,target->host.resource_generation);if(status)return status<0?status:MAG_NATIVE_DEVICE_FAILED;reserved=1;
   if(!scene->images||scene->output_image>=scene->image_count){frame->cancel(frame->userdata,frame->owner_lifetime,frame->reservation);return MAG_NATIVE_INVALID;}
   const mag_native_scene_image *im=&scene->images[scene->output_image];if(im->format!=target->host.format||im->width!=target->host.width||im->height!=target->host.height||im->upload.id||im->upload.device_generation||im->upload.version){frame->cancel(frame->userdata,frame->owner_lifetime,frame->reservation);return MAG_NATIVE_INVALID;}
-  status=metal_scene_owned(opaque,scene,out,target,sampler_table,sampler_count,v3,v4);
+  status=metal_scene_owned(opaque,scene,out,target,sampler_table,sampler_count,v3,v4,v5);
   if(status<0){frame->cancel(frame->userdata,frame->owner_lifetime,frame->reservation);return status;}
   int publication=frame->committed(frame->userdata,frame->owner_lifetime,frame->reservation,out->device_generation,out->submission_id,status?1u:0u);
   return publication?MAG_NATIVE_INDETERMINATE:status;
@@ -495,24 +569,31 @@ static int metal_submit_scene_frame_impl(void *opaque,const mag_native_scene *sc
  }@finally{c->host.end(c->host.userdata,c->host.lifetime);}
 }
 
-static int metal_submit_scene(void *opaque,const mag_native_scene *scene,mag_native_ticket *out){return metal_submit_scene_impl(opaque,scene,out,NULL,0,NULL,NULL);}
-static int metal_submit_scene_target(void *opaque,const mag_native_scene *scene,mag_native_image target,mag_native_ticket *out){return metal_submit_scene_target_impl(opaque,scene,target,out,NULL,0,NULL,NULL);}
-static int metal_submit_scene_frame(void *opaque,const mag_native_scene *scene,mag_native_image target,const MagRenderHostFrame *frame,mag_native_ticket *out){return metal_submit_scene_frame_impl(opaque,scene,target,frame,out,NULL,0,NULL,NULL);}
+static int metal_submit_scene(void *opaque,const mag_native_scene *scene,mag_native_ticket *out){return metal_submit_scene_impl(opaque,scene,out,NULL,0,NULL,NULL,NULL);}
+static int metal_submit_scene_target(void *opaque,const mag_native_scene *scene,mag_native_image target,mag_native_ticket *out){return metal_submit_scene_target_impl(opaque,scene,target,out,NULL,0,NULL,NULL,NULL);}
+static int metal_submit_scene_frame(void *opaque,const mag_native_scene *scene,mag_native_image target,const MagRenderHostFrame *frame,mag_native_ticket *out){return metal_submit_scene_frame_impl(opaque,scene,target,frame,out,NULL,0,NULL,NULL,NULL);}
 static int metal_submit_scene_v2(void *opaque,const mag_native_scene_v2 *desc,const mag_native_image *target,const MagRenderHostFrame *frame,mag_native_ticket *out){
-    if(frame)return metal_submit_scene_frame_impl(opaque,desc->scene,*target,frame,out,desc->samplers,desc->sampler_count,NULL,NULL);
-    if(target)return metal_submit_scene_target_impl(opaque,desc->scene,*target,out,desc->samplers,desc->sampler_count,NULL,NULL);
-    return metal_submit_scene_impl(opaque,desc->scene,out,desc->samplers,desc->sampler_count,NULL,NULL);
+    if(frame)return metal_submit_scene_frame_impl(opaque,desc->scene,*target,frame,out,desc->samplers,desc->sampler_count,NULL,NULL,NULL);
+    if(target)return metal_submit_scene_target_impl(opaque,desc->scene,*target,out,desc->samplers,desc->sampler_count,NULL,NULL,NULL);
+    return metal_submit_scene_impl(opaque,desc->scene,out,desc->samplers,desc->sampler_count,NULL,NULL,NULL);
 }
 
 static int metal_submit_scene_v3(void *opaque,const mag_native_scene_v3 *v3,const mag_native_image *target,const MagRenderHostFrame *frame,mag_native_ticket *out){
  const mag_native_scene_v2 *desc=&v3->base;
- if(frame)return metal_submit_scene_frame_impl(opaque,desc->scene,*target,frame,out,desc->samplers,desc->sampler_count,v3,NULL);
- if(target)return metal_submit_scene_target_impl(opaque,desc->scene,*target,out,desc->samplers,desc->sampler_count,v3,NULL);
- return metal_submit_scene_impl(opaque,desc->scene,out,desc->samplers,desc->sampler_count,v3,NULL);
+ if(frame)return metal_submit_scene_frame_impl(opaque,desc->scene,*target,frame,out,desc->samplers,desc->sampler_count,v3,NULL,NULL);
+ if(target)return metal_submit_scene_target_impl(opaque,desc->scene,*target,out,desc->samplers,desc->sampler_count,v3,NULL,NULL);
+ return metal_submit_scene_impl(opaque,desc->scene,out,desc->samplers,desc->sampler_count,v3,NULL,NULL);
 }
 
 static int metal_submit_scene_v4(void *opaque,const mag_native_scene_v4 *desc,const mag_native_image *target,const MagRenderHostFrame *frame,mag_native_ticket *out){
- if(frame)return metal_submit_scene_frame_impl(opaque,desc->base.base.scene,*target,frame,out,desc->base.base.samplers,desc->base.base.sampler_count,&desc->base,desc);
- if(target)return metal_submit_scene_target_impl(opaque,desc->base.base.scene,*target,out,desc->base.base.samplers,desc->base.base.sampler_count,&desc->base,desc);
- return metal_submit_scene_impl(opaque,desc->base.base.scene,out,desc->base.base.samplers,desc->base.base.sampler_count,&desc->base,desc);
+ if(frame)return metal_submit_scene_frame_impl(opaque,desc->base.base.scene,*target,frame,out,desc->base.base.samplers,desc->base.base.sampler_count,&desc->base,desc,NULL);
+ if(target)return metal_submit_scene_target_impl(opaque,desc->base.base.scene,*target,out,desc->base.base.samplers,desc->base.base.sampler_count,&desc->base,desc,NULL);
+ return metal_submit_scene_impl(opaque,desc->base.base.scene,out,desc->base.base.samplers,desc->base.base.sampler_count,&desc->base,desc,NULL);
+}
+
+static int metal_submit_scene_v5(void *opaque,const mag_native_scene_v5 *v5,const mag_native_image *target,const MagRenderHostFrame *frame,mag_native_ticket *out){
+ const mag_native_scene_v4 *v4=&v5->base;const mag_native_scene_v3 *v3=&v4->base;const mag_native_scene_v2 *desc=&v3->base;
+ if(frame)return metal_submit_scene_frame_impl(opaque,desc->scene,*target,frame,out,desc->samplers,desc->sampler_count,v3,v4,v5);
+ if(target)return metal_submit_scene_target_impl(opaque,desc->scene,*target,out,desc->samplers,desc->sampler_count,v3,v4,v5);
+ return metal_submit_scene_impl(opaque,desc->scene,out,desc->samplers,desc->sampler_count,v3,v4,v5);
 }

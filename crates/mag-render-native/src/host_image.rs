@@ -111,3 +111,44 @@ mod tests {
         super::checked_image_layout().unwrap();
     }
 }
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub(crate) struct Certificate {
+    pub host: HostImage,
+    pub validate_planes: Option<mag_render_abi::packet::ValidateImagePlanes>,
+}
+unsafe extern "C" {
+    fn mag_native_image_import_certified(
+        context: *mut c_void,
+        certificate: *const Certificate,
+        out: *mut NativeImage,
+    ) -> i32;
+}
+impl NativeContext {
+    /// # Safety
+    /// Same genuine cross-thread provider contract as import_image. Plane callback
+    /// validates full allocation initialization under the already held native gate.
+    pub(crate) unsafe fn import_certified(
+        &mut self,
+        certificate: &Certificate,
+    ) -> Result<ImageHandle, i32> {
+        checked_image_layout()?;
+        let mut out = NativeImage::default();
+        let status = unsafe {
+            mag_native_image_import_certified(self.raw.ok_or(-3)?.as_ptr(), certificate, &mut out)
+        };
+        if status != 0 {
+            return Err(status);
+        }
+        if out.id == 0 || out.device_generation == 0 {
+            return Err(-6);
+        }
+        Ok(ImageHandle {
+            raw: out,
+            width: certificate.host.width,
+            height: certificate.host.height,
+            format: certificate.host.format,
+        })
+    }
+}

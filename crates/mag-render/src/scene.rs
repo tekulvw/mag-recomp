@@ -45,6 +45,11 @@ pub enum ImageFormat {
 #[path = "scene_image.rs"]
 pub mod image;
 pub use image::{Dimension, ImageLayout, Subresource, ViewDesc, Viewport};
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ExternalImage {
+    pub source_key: u64,
+    pub required_initialized_planes: u32,
+}
 #[path = "scene_stencil.rs"]
 pub mod stencil;
 pub use stencil::{StencilLoad, StencilOps};
@@ -204,6 +209,7 @@ pub struct SceneOutput {
 
 #[derive(Clone, Debug)]
 pub struct ImagePlan {
+    pub external: Option<ExternalImage>,
     pub layout: Option<ImageLayout>,
     pub desc: ImageDesc,
     pub upload: Option<usize>,
@@ -213,6 +219,21 @@ struct ImageState {
     epoch: u64,
     initialized: bool,
 }
+/// Inclusive test of the stored attachment depth, not incoming fragment Z.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DepthBounds {
+    pub minimum: f32,
+    pub maximum: f32,
+}
+impl DepthBounds {
+    pub fn valid(self) -> bool {
+        self.minimum.is_finite()
+            && self.maximum.is_finite()
+            && self.minimum >= 0.
+            && self.maximum <= 1.
+            && self.minimum <= self.maximum
+    }
+}
 pub struct SceneBuilder {
     base: PreparedBatch,
     limits: SceneLimits,
@@ -221,6 +242,7 @@ pub struct SceneBuilder {
     passes: Vec<RenderPass>,
     viewports: Vec<Option<Viewport>>,
     stencils: Vec<Option<StencilOps>>,
+    bounds: Vec<Vec<Option<DepthBounds>>>,
     bytes: u64,
     draws: usize,
     output: Option<SceneOutput>,
@@ -232,6 +254,7 @@ pub struct PreparedScene {
     passes: Vec<RenderPass>,
     viewports: Vec<Option<Viewport>>,
     stencils: Vec<Option<StencilOps>>,
+    bounds: Vec<Vec<Option<DepthBounds>>>,
     output: Option<SceneOutput>,
 }
 impl Image {
@@ -283,6 +306,7 @@ impl SceneBuilder {
             passes: vec![],
             viewports: vec![],
             stencils: vec![],
+            bounds: vec![],
             bytes,
             draws: 0,
             output: None,
@@ -367,6 +391,7 @@ impl SceneBuilder {
         });
         self.images.push(ImageState {
             plan: ImagePlan {
+                external: None,
                 layout,
                 desc,
                 upload: index,
@@ -375,6 +400,38 @@ impl SceneBuilder {
             initialized,
         });
         self.bytes = bytes;
+        Ok(image)
+    }
+    /// A conditional existing-image requirement, not a GPU handle or readiness
+    /// observation. Submission must resolve and certify it before encoding.
+    pub fn require_image(
+        &mut self,
+        desc: ImageDesc,
+        requirement: ExternalImage,
+    ) -> Result<Image, SceneError> {
+        let valid_planes = if desc.format.has_stencil() {
+            6
+        } else if desc.format.info().depth_attachment {
+            2
+        } else {
+            1
+        };
+        if requirement.source_key == 0
+            || requirement.required_initialized_planes & !valid_planes != 0
+        {
+            return Err(SceneError::InvalidBindings);
+        }
+        let image = self.image(desc)?;
+        let state = &mut self.images[image.index];
+        state.plan.external = Some(requirement);
+        state.initialized = requirement.required_initialized_planes
+            & if desc.format.info().depth_attachment {
+                2
+            } else {
+                1
+            }
+            != 0;
+        state.epoch = u64::from(state.initialized);
         Ok(image)
     }
     pub fn image(&mut self, desc: ImageDesc) -> Result<Image, SceneError> {
@@ -608,6 +665,14 @@ impl SceneBuilder {
         self.stencils
             .try_reserve(1)
             .map_err(|_| SceneError::Capacity)?;
+        self.bounds
+            .try_reserve(1)
+            .map_err(|_| SceneError::Capacity)?;
+        let mut bounds = Vec::new();
+        bounds
+            .try_reserve_exact(pass.draws.len())
+            .map_err(|_| SceneError::Capacity)?;
+        bounds.resize(pass.draws.len(), None);
         let mut values = Vec::new();
         values
             .try_reserve_exact(attached.len())
@@ -632,10 +697,25 @@ impl SceneBuilder {
             s.initialized = store == Store::Store && known;
         }
         self.draws = draws;
+        self.bounds.push(bounds);
         self.passes.push(pass);
         self.viewports.push(viewport);
         self.stencils.push(stencil);
         Ok(values)
+    }
+    /// Set explicit dynamic bounds for each draw of an already authored pass.
+    /// Snapshot lifetime/read-only restrictions are checked at preparation.
+    pub fn draw_depth_bounds(
+        &mut self,
+        pass: usize,
+        bounds: Vec<Option<DepthBounds>>,
+    ) -> Result<(), SceneError> {
+        let p = self.passes.get(pass).ok_or(SceneError::InvalidPass)?;
+        if bounds.len() != p.draws.len() || bounds.iter().flatten().any(|b| !b.valid()) {
+            return Err(SceneError::InvalidPass);
+        }
+        self.bounds[pass] = bounds;
+        Ok(())
     }
     pub fn output(
         &mut self,
@@ -683,6 +763,47 @@ impl SceneBuilder {
             self.valid(out.image)?;
         }
         stencil::validate(&self, catalog)?;
+        let mut bytes = self.bytes;
+        for (index, pass) in self.passes.iter().enumerate() {
+            let mut snapshot = false;
+            for (draw, bounds) in pass.draws.iter().zip(&self.bounds[index]) {
+                let state = catalog.scene_raster(draw.pipeline);
+                if state.is_some_and(|s| s.depth_bounds_enabled != 0) != bounds.is_some() {
+                    return Err(SceneError::InvalidPass);
+                }
+                if bounds.is_some() {
+                    if !pass.depth.is_some_and(|d| matches!(d.load, Load::Load(_)))
+                        || state.is_none_or(|s| {
+                            s.stencil_enabled != 0
+                                && (s.front_stencil.write_mask & 255 != 0
+                                    || s.back_stencil.write_mask & 255 != 0)
+                        })
+                        || self.stencils[index].is_some_and(|s| s.source_full_write)
+                    {
+                        return Err(SceneError::InvalidPass);
+                    }
+                    bytes = bytes.checked_add(16).ok_or(SceneError::Capacity)?;
+                    snapshot = true;
+                }
+            }
+            if snapshot {
+                for draw in &pass.draws {
+                    let schema = catalog
+                        .scene_graphics(draw.pipeline)
+                        .ok_or(SceneError::UnknownPipeline)?;
+                    if schema.depth.write {
+                        return Err(SceneError::InvalidPass);
+                    }
+                }
+                let depth = pass.depth.ok_or(SceneError::InvalidPass)?;
+                bytes = bytes
+                    .checked_add(Self::image_bytes(self.state(depth.image)?.plan.desc)?)
+                    .ok_or(SceneError::Capacity)?;
+                if bytes > self.limits.max_bytes {
+                    return Err(SceneError::Capacity);
+                }
+            }
+        }
         for pass in &self.passes {
             let color_format = match pass.color {
                 Some(c) => Some(self.state(c.image)?.plan.desc.format),
@@ -755,11 +876,15 @@ impl SceneBuilder {
             passes: self.passes,
             viewports: self.viewports,
             stencils: self.stencils,
+            bounds: self.bounds,
             output: self.output,
         })
     }
 }
 impl PreparedScene {
+    pub fn depth_bounds(&self) -> &[Vec<Option<DepthBounds>>] {
+        &self.bounds
+    }
     pub fn stencils(&self) -> &[Option<StencilOps>] {
         &self.stencils
     }
@@ -793,6 +918,7 @@ impl PreparedScene {
                 passes: self.passes,
                 viewports: self.viewports,
                 stencils: self.stencils,
+                bounds: self.bounds,
                 output: self.output,
                 texture_start,
                 texture_keys,
@@ -807,11 +933,15 @@ pub struct SceneCommands {
     passes: Vec<RenderPass>,
     viewports: Vec<Option<Viewport>>,
     stencils: Vec<Option<StencilOps>>,
+    bounds: Vec<Vec<Option<DepthBounds>>>,
     output: Option<SceneOutput>,
     texture_start: usize,
     texture_keys: Vec<crate::resources::ResourceCacheKey>,
 }
 impl SceneCommands {
+    pub fn depth_bounds(&self) -> &[Vec<Option<DepthBounds>>] {
+        &self.bounds
+    }
     pub fn stencils(&self) -> &[Option<StencilOps>] {
         &self.stencils
     }

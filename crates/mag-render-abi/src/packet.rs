@@ -618,3 +618,25 @@ pub fn admission_layout() -> Vec<u32> {
         offset_of!(Admission, reserved) as u32,
     ]
 }
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ImageRequirement {
+    pub image: u32,
+    pub required_initialized_planes: u32,
+    pub source_key: u64,
+}
+pub type ValidateImagePlanes =
+    unsafe extern "C" fn(*mut core::ffi::c_void, u64, u64, u64, u32) -> i32;
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct ImageBinding {
+    pub image: u32,
+    pub reserved: u32,
+    pub source_key: u64,
+    pub host: HostImage,
+    pub validate_planes: Option<ValidateImagePlanes>,
+}
+
+/// Program.reserved flags: checked compiler-injected Metal stored-depth input.
+pub const PROGRAM_STORED_DEPTH_AUX: u32 = 1;

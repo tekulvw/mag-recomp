@@ -16,9 +16,10 @@ int mag_native_raster_validate(const mag_native_raster_state *s) {
         !isfinite(s->bias_slope) || !isfinite(s->bias_clamp))
         return MAG_NATIVE_INVALID;
     if (s->known_fields != MAG_NATIVE_RASTER_KNOWN_ALL || s->unresolved_obligations ||
-        s->depth_bounds_enabled || s->bias_enabled || s->topology || s->samples != 1 ||
+        s->bias_enabled || s->topology || s->samples != 1 ||
         s->cull_mode == MAG_NATIVE_CULL_BOTH)
         return MAG_NATIVE_UNSUPPORTED;
+    if(s->depth_bounds_enabled&&(s->depth_bounds_min<0||s->depth_bounds_max>1||s->depth_bounds_min>s->depth_bounds_max))return MAG_NATIVE_INVALID;
     /* D3D forbids COLOR factors for the alpha equation and source-alpha-saturate
      * as a destination factor. Require a portable, explicit representation. */
     if (s->blend_enabled &&

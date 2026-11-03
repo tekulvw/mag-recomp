@@ -1,5 +1,7 @@
 #ifndef MAG_RENDER_SCENE_PACKET_H
 #define MAG_RENDER_SCENE_PACKET_H
+/* Program.reserved bit: checked Metal FS injected depth t15 / bounds b2. */
+#define MAG_RENDER_PROGRAM_STORED_DEPTH_AUX 1u
 #include "mag_render_client.h"
 #include "mag_render_viewport.h"
 #ifdef __cplusplus
@@ -51,6 +53,7 @@ typedef struct MagRenderPacketSamplerSlot {
     uint32_t slot, comparison;
 } MagRenderPacketSamplerSlot;
 typedef struct MagRenderPacketProgram {
+    /* reserved is now the named PROGRAM_* flag word; unknown bits reject. */
     uint32_t stage, reserved;
     mag_native_shader_stage shader;
     const mag_native_binding_layout *buffers;
@@ -232,6 +235,26 @@ int mag_render_client_worker_prepare_scene_v3(uint64_t,const MagRenderScenePacke
 int mag_render_client_worker_commit_scene(uint64_t,const MagRenderSceneAdmission*,const MagRenderClientSource*,const MagRenderHostImage*,const MagRenderHostFrame*,MagRenderClientReceipt*);
 /* Precommit only. Unknown/consumed/foreign/stale tokens return STALE. */
 int mag_render_client_worker_cancel_scene(uint64_t,const MagRenderSceneAdmission*);
+/* Late-bound existing GPU allocations. source_key is opaque and scoped by the
+ * Admission Source tuple; it is not an EA, native handle or invented guest
+ * generation. Base image format/extents are exact physical requirements.
+ * No retained HostImage is needed at prepare. Planes are COLOR1/DEPTH2/STENCIL4;
+ * zero means allocation-only (write destination), not initialized contents. */
+typedef struct MagRenderPacketImageRequirement {uint32_t image,required_initialized_planes;uint64_t source_key;} MagRenderPacketImageRequirement;
+typedef int (*MagRenderImageValidatePlanes)(void*,uint64_t,uint64_t,uint64_t,uint32_t);
+typedef struct MagRenderPacketImageBinding {
+ uint32_t image,reserved;uint64_t source_key;MagRenderHostImage host;
+ /* Called only under actual native owner lease; reuses host userdata/identity.
+  * Must validate real allocation and source-qualified ordered initialization.
+  * HostImage's existing retain/release lifetime covers this callback metadata. */
+ MagRenderImageValidatePlanes validate_planes;
+} MagRenderPacketImageBinding;
+int mag_render_client_worker_prepare_scene_imported_v3(uint64_t,const MagRenderScenePacketV3Desc*,const MagRenderPacketImageRequirement*,uint32_t,MagRenderSceneAdmission*);
+/* Genuine queue subgraph commit. No final target/frame/presentation assertion:
+ * source-selected read/write surfaces are all explicit late-bound imports.
+ * Original prior producer work must be ordered at the genuine native boundary.
+ * Exact table/source matching precedes GPU commitment. */
+int mag_render_client_worker_commit_scene_subgraph(uint64_t,const MagRenderSceneAdmission*,const MagRenderClientSource*,const MagRenderPacketImageBinding*,uint32_t,MagRenderClientReceipt*);
 /* Uses the SAME persistent worker/session/SceneDevice and genuine ticket path.
  * Negative is definitely uncommitted; caller owns early frame cancellation.
  * Positive indeterminate must not be replayed. Physical present remains separate.

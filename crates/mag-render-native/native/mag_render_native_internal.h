@@ -7,6 +7,7 @@
 #include "mag_render_batch.h"
 #include "mag_render_scene_extended.h"
 #include "mag_render_stencil.h"
+#include "mag_render_imported_image.h"
 typedef struct mag_native_ops {
     int (*caps)(void *, mag_native_caps_desc *);
     int (*buffer_create)(void *, mag_native_buffer, const mag_native_buffer_desc *, mag_native_buffer *);
@@ -32,6 +33,9 @@ typedef struct mag_native_ops {
     int (*submit_scene_v2)(void *,const mag_native_scene_v2 *,const mag_native_image *,const MagRenderHostFrame *,mag_native_ticket *);
     int (*submit_scene_v3)(void *,const mag_native_scene_v3 *,const mag_native_image *,const MagRenderHostFrame *,mag_native_ticket *);
     int (*submit_scene_v4)(void *,const mag_native_scene_v4 *,const mag_native_image *,const MagRenderHostFrame *,mag_native_ticket *);
+    int (*image_import_certified)(void *,const mag_native_image_certificate *,mag_native_image *);
+    int (*scene_graphics_create_aux)(void *,const mag_native_scene_graphics_v3_desc *,uint32_t,mag_native_pipeline *);
+    int (*submit_scene_v5)(void *,const mag_native_scene_v5 *,const mag_native_image *,const MagRenderHostFrame *,mag_native_ticket *);
 } mag_native_ops;
 mag_native_device *mag_native_wrap(const mag_native_ops *, void *);
 int mag_native_close(mag_native_device *);

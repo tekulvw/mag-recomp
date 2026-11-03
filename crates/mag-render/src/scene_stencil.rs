@@ -28,7 +28,15 @@ pub(super) fn validate(
     builder: &SceneBuilder,
     catalog: &impl SceneCatalog,
 ) -> Result<(), SceneError> {
-    let mut initialized = vec![false; builder.images.len()];
+    let mut initialized = builder
+        .images
+        .iter()
+        .map(|i| {
+            i.plan
+                .external
+                .is_some_and(|e| e.required_initialized_planes & 4 != 0)
+        })
+        .collect::<Vec<_>>();
     for (index, pass) in builder.passes.iter().enumerate() {
         let stencil = builder.stencils[index];
         if let Some(s) = stencil {

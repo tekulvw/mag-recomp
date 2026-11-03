@@ -53,6 +53,7 @@ struct SceneV3 {
     reserved: u32,
 }
 #[repr(C)]
+#[derive(Clone, Copy)]
 struct StencilWire {
     image: u32,
     load: u32,
@@ -70,7 +71,47 @@ struct SceneV4 {
     stencil_count: u32,
     reserved: u32,
 }
+pub(super) struct Import {
+    pub image: u32,
+    pub required_initialized_planes: u32,
+    pub handle: crate::host_image::ImageHandle,
+}
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct ImportWire {
+    image: u32,
+    required_initialized_planes: u32,
+    reference: crate::host_image::NativeImage,
+}
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct BoundsWire {
+    enabled: u32,
+    reserved: u32,
+    minimum: f32,
+    maximum: f32,
+}
+#[repr(C)]
+struct SceneV5 {
+    struct_size: u32,
+    abi_version: u32,
+    base: SceneV4,
+    imports: *const ImportWire,
+    import_count: u32,
+    reserved: u32,
+    bounds: *const BoundsWire,
+    bounds_count: u32,
+    reserved1: u32,
+}
 unsafe extern "C" {
+    fn mag_native_scene_v5_layout(out: *mut u32, words: u32) -> i32;
+    fn mag_native_submit_scene_v5(
+        device: *mut c_void,
+        scene: *const SceneV5,
+        target: *const crate::host_image::NativeImage,
+        frame: *const crate::host_frame::HostFrame,
+        out: *mut Ticket,
+    ) -> i32;
     fn mag_native_submit_scene_v4(
         device: *mut c_void,
         scene: *const SceneV4,
@@ -223,6 +264,7 @@ pub(super) struct Plan {
     views: Vec<View>,
     viewports: Vec<Viewport>,
     stencils: Option<Vec<StencilWire>>,
+    bounds: Vec<BoundsWire>,
     pub(super) texture_codes: Vec<Vec<u32>>,
 }
 impl Plan {
@@ -234,7 +276,13 @@ impl Plan {
                     || p.depth
                         .is_some_and(|a| matches!(a.load, scene::Load::Discard))
             });
-        let extended = v4
+        let extended = commands
+            .depth_bounds()
+            .iter()
+            .flatten()
+            .any(Option::is_some)
+            || commands.images().iter().any(|i| i.external.is_some())
+            || v4
             || commands
                 .images()
                 .iter()
@@ -250,6 +298,7 @@ impl Plan {
             return Ok(None);
         }
         checked_layout()?;
+        checked_v5_layout()?;
         let mut subresources = Vec::new();
         let mut layouts = Vec::new();
         for image in commands.images() {
@@ -341,6 +390,26 @@ impl Plan {
             return Err(-1);
         }
         Ok(Some(Self {
+            bounds: if commands
+                .depth_bounds()
+                .iter()
+                .flatten()
+                .any(Option::is_some)
+            {
+                commands
+                    .depth_bounds()
+                    .iter()
+                    .flatten()
+                    .map(|b| BoundsWire {
+                        enabled: u32::from(b.is_some()),
+                        reserved: 0,
+                        minimum: b.map_or(0., |b| b.minimum),
+                        maximum: b.map_or(0., |b| b.maximum),
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            },
             _subresources: subresources,
             layouts,
             views,
@@ -388,10 +457,14 @@ impl Plan {
         device: *mut c_void,
         scene: &Scene,
         samplers: &[scene_sampler::Handle],
-        target: Option<&crate::host_image::NativeImage>,
-        frame: Option<&crate::host_frame::HostFrame>,
+        imports: &[Import],
+        output: (
+            Option<&crate::host_image::NativeImage>,
+            Option<&crate::host_frame::HostFrame>,
+        ),
         out: &mut Ticket,
     ) -> i32 {
+        let (target, frame) = output;
         let v3 = SceneV3 {
             struct_size: size_of::<SceneV3>() as u32,
             abi_version: 3,
@@ -411,6 +484,55 @@ impl Plan {
             viewport_count: self.viewports.len() as u32,
             reserved: 0,
         };
+        if !imports.is_empty() || !self.bounds.is_empty() {
+            let absent = vec![
+                StencilWire {
+                    image: u32::MAX,
+                    load: 0,
+                    store: 0,
+                    clear_value: 0,
+                    flags: 0,
+                    reserved: 0
+                };
+                scene.pass_count as usize
+            ];
+            let stencils = self.stencils.as_ref().unwrap_or(&absent);
+            let rows = imports
+                .iter()
+                .map(|i| ImportWire {
+                    image: i.image,
+                    required_initialized_planes: i.required_initialized_planes,
+                    reference: i.handle.raw,
+                })
+                .collect::<Vec<_>>();
+            let desc = SceneV5 {
+                struct_size: size_of::<SceneV5>() as u32,
+                abi_version: 5,
+                base: SceneV4 {
+                    struct_size: size_of::<SceneV4>() as u32,
+                    abi_version: 4,
+                    base: v3,
+                    stencils: stencils.as_ptr(),
+                    stencil_count: stencils.len() as u32,
+                    reserved: 0,
+                },
+                imports: rows.as_ptr(),
+                import_count: rows.len() as u32,
+                reserved: 0,
+                bounds: self.bounds.as_ptr(),
+                bounds_count: self.bounds.len() as u32,
+                reserved1: 0,
+            };
+            return unsafe {
+                mag_native_submit_scene_v5(
+                    device,
+                    &desc,
+                    target.map_or(std::ptr::null(), |t| t),
+                    frame.map_or(std::ptr::null(), |f| f),
+                    out,
+                )
+            };
+        }
         if let Some(stencils) = &self.stencils {
             let v4 = SceneV4 {
                 struct_size: size_of::<SceneV4>() as u32,
@@ -439,5 +561,53 @@ impl Plan {
                 out,
             )
         }
+    }
+}
+
+fn checked_v5_layout() -> Result<(), i32> {
+    use crate::host_image::Certificate;
+    let expected = [
+        size_of::<Certificate>() as u32,
+        align_of::<Certificate>() as u32,
+        offset_of!(Certificate, host) as u32,
+        offset_of!(Certificate, validate_planes) as u32,
+        size_of::<ImportWire>() as u32,
+        align_of::<ImportWire>() as u32,
+        offset_of!(ImportWire, image) as u32,
+        offset_of!(ImportWire, required_initialized_planes) as u32,
+        offset_of!(ImportWire, reference) as u32,
+        size_of::<BoundsWire>() as u32,
+        align_of::<BoundsWire>() as u32,
+        offset_of!(BoundsWire, enabled) as u32,
+        offset_of!(BoundsWire, reserved) as u32,
+        offset_of!(BoundsWire, minimum) as u32,
+        offset_of!(BoundsWire, maximum) as u32,
+        size_of::<SceneV5>() as u32,
+        align_of::<SceneV5>() as u32,
+        offset_of!(SceneV5, struct_size) as u32,
+        offset_of!(SceneV5, abi_version) as u32,
+        offset_of!(SceneV5, base) as u32,
+        offset_of!(SceneV5, imports) as u32,
+        offset_of!(SceneV5, import_count) as u32,
+        offset_of!(SceneV5, reserved) as u32,
+        offset_of!(SceneV5, bounds) as u32,
+        offset_of!(SceneV5, bounds_count) as u32,
+        offset_of!(SceneV5, reserved1) as u32,
+    ];
+    let mut actual = [0; 26];
+    let status = unsafe { mag_native_scene_v5_layout(actual.as_mut_ptr(), 26) };
+    if status != 0 {
+        return Err(status);
+    }
+    if expected != actual {
+        return Err(-1);
+    }
+    Ok(())
+}
+#[cfg(test)]
+mod v5_tests {
+    #[test]
+    fn imported_scene_fields_match_independent_c() {
+        super::checked_v5_layout().unwrap();
     }
 }

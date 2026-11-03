@@ -2,6 +2,7 @@
 #define MAG_RENDER_SCENE_VALIDATE_H
 #include "mag_render_scene_extended.h"
 #include "mag_render_stencil.h"
+#include "mag_render_imported_image.h"
 typedef struct mag_native_scene_buffer_info {
     uint64_t length;
     uint32_t busy, gpu_written, seed_zero;
@@ -32,6 +33,9 @@ typedef struct mag_native_scene_registry_v4 {
     const mag_native_scene_registry_v2 *base;
     int (*raster)(void *,mag_native_pipeline,const mag_native_raster_state **);
 } mag_native_scene_registry_v4;
+typedef struct mag_native_import_info {uint32_t format,width,height,reserved;uint64_t owner_lifetime,resource_id,resource_generation;} mag_native_import_info;
+typedef struct mag_native_scene_registry_v5 {const mag_native_scene_registry_v4 *base;int (*image)(void *,mag_native_image,uint32_t required_planes,mag_native_import_info *);} mag_native_scene_registry_v5;
+int mag_native_scene_validate_v5(const mag_native_scene_v5 *,const mag_native_scene_registry_v5 *,mag_native_scene_usage *);
 int mag_native_scene_validate_v4(const mag_native_scene_v4 *,const mag_native_scene_registry_v4 *,mag_native_scene_usage *);
 int mag_native_scene_validate_v3(const mag_native_scene_v3 *,const mag_native_scene_registry_v2 *,mag_native_scene_usage *);
 int mag_native_scene_validate_v2(const mag_native_scene *,const mag_native_scene_registry_v2 *,mag_native_scene_usage *);

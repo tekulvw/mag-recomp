@@ -1,5 +1,7 @@
 #include "../../../src/mag_render_scene_packet.h"
 #include <stddef.h>
+#include "mag_render_imported_image.h"
+static_assert(MAG_NATIVE_PROGRAM_STORED_DEPTH_AUX == MAG_RENDER_PROGRAM_STORED_DEPTH_AUX,"aux flag must match both public boundaries");
 extern "C" int mag_native_packet_layout(uint32_t *out, uint32_t words) {
     const uint32_t expected[] = {
         sizeof(MagRenderPacketTextureSlot),
@@ -298,4 +300,9 @@ extern "C" int mag_native_admission_layout(uint32_t *out,uint32_t words){
  const uint32_t fields[]={sizeof(MagRenderSceneAdmission),alignof(MagRenderSceneAdmission),offsetof(MagRenderSceneAdmission,abi_version),offsetof(MagRenderSceneAdmission,struct_size),offsetof(MagRenderSceneAdmission,worker),offsetof(MagRenderSceneAdmission,token),offsetof(MagRenderSceneAdmission,native_generation),offsetof(MagRenderSceneAdmission,source),offsetof(MagRenderSceneAdmission,intended_items),offsetof(MagRenderSceneAdmission,draws),offsetof(MagRenderSceneAdmission,flags),offsetof(MagRenderSceneAdmission,reserved)};
  if(!out||words!=sizeof(fields)/sizeof(fields[0]))return -1;
  for(uint32_t i=0;i<words;++i){out[i]=fields[i];}return 0;
+}
+extern "C" int mag_native_packet_import_layout(uint32_t *out,uint32_t words){
+ const uint32_t expected[]={sizeof(MagRenderPacketImageRequirement),alignof(MagRenderPacketImageRequirement),offsetof(MagRenderPacketImageRequirement,image),offsetof(MagRenderPacketImageRequirement,required_initialized_planes),offsetof(MagRenderPacketImageRequirement,source_key),sizeof(MagRenderPacketImageBinding),alignof(MagRenderPacketImageBinding),offsetof(MagRenderPacketImageBinding,image),offsetof(MagRenderPacketImageBinding,reserved),offsetof(MagRenderPacketImageBinding,source_key),offsetof(MagRenderPacketImageBinding,host),offsetof(MagRenderPacketImageBinding,validate_planes),MAG_RENDER_PROGRAM_STORED_DEPTH_AUX};
+ if(!out||words!=sizeof(expected)/sizeof(expected[0]))return -1;
+ for(uint32_t i=0;i<words;++i){out[i]=expected[i];}return 0;
 }

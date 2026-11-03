@@ -179,6 +179,7 @@ pub struct SceneDevice<'owner> {
     samplers: scene_sampler::Cache,
     frame: Option<crate::host_frame::HostFrame>,
     target: Option<crate::host_image::NativeImage>,
+    imports: Vec<scene_extended::Import>,
     inner: BatchDevice<'owner>,
     graphics: BTreeMap<u64, scene::GraphicsLayout>,
     rasters: BTreeMap<u64, mag_render_abi::packet::RasterState>,
@@ -190,6 +191,7 @@ impl NativeContext {
             samplers: scene_sampler::Cache::default(),
             frame: None,
             target: None,
+            imports: Vec::new(),
             inner: BatchDevice::from_api_with_byte_cap(self.api()?, limits, None, MAX_SCENE_BYTES)?,
             graphics: BTreeMap::new(),
             rasters: BTreeMap::new(),
@@ -207,6 +209,7 @@ impl SceneDevice<'static> {
             samplers: scene_sampler::Cache::default(),
             frame: None,
             target: None,
+            imports: Vec::new(),
             inner: BatchDevice::from_api_with_byte_cap(
                 context.api()?,
                 limits,
@@ -219,6 +222,74 @@ impl SceneDevice<'static> {
     }
 }
 impl SceneDevice<'_> {
+    /// Bind exact external requirements for this next submission only. Native
+    /// leases are retained independently once accepted; no final-frame assertion.
+    /// # Safety
+    /// Every HostImage/callback must obey the genuine provider contract.
+    pub(crate) unsafe fn bind_imports(
+        &mut self,
+        bindings: &[mag_render_abi::packet::ImageBinding],
+        requirements: &[mag_render_abi::packet::ImageRequirement],
+    ) -> Result<(), i32> {
+        if !self.imports.is_empty() || self.target.is_some() || self.frame.is_some() {
+            return Err(-4);
+        }
+        if bindings.len() != requirements.len() {
+            return Err(-3);
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        for b in bindings {
+            let r = requirements.iter().find(|r| r.image == b.image).ok_or(-3)?;
+            if b.reserved != 0
+                || b.source_key != r.source_key
+                || !seen.insert(b.image)
+                || r.required_initialized_planes != 0 && b.validate_planes.is_none()
+            {
+                return Err(-3);
+            }
+        }
+        for b in bindings {
+            let r = requirements.iter().find(|r| r.image == b.image).ok_or(-3)?;
+            let certificate = crate::host_image::Certificate {
+                host: b.host,
+                validate_planes: b.validate_planes,
+            };
+            let result = unsafe {
+                self.inner
+                    .owned_context
+                    .as_mut()
+                    .ok_or(-2)?
+                    .import_certified(&certificate)
+            };
+            match result {
+                Ok(handle) => self.imports.push(scene_extended::Import {
+                    image: b.image,
+                    required_initialized_planes: r.required_initialized_planes,
+                    handle,
+                }),
+                Err(e) => {
+                    let _ = self.release_imports();
+                    return Err(e);
+                }
+            }
+        }
+        Ok(())
+    }
+    pub(crate) fn release_imports(&mut self) -> Result<(), i32> {
+        let mut error = None;
+        for import in std::mem::take(&mut self.imports) {
+            if let Err(e) = self
+                .inner
+                .owned_context
+                .as_mut()
+                .ok_or(-2)?
+                .release_image(import.handle)
+            {
+                error = Some(e)
+            }
+        }
+        error.map_or(Ok(()), Err)
+    }
     /// Drop only the public pipeline reference. Pending native submissions own
     /// independent references until genuine terminal receipts.
     pub fn release_graphics_pipeline(&mut self, id: u64) -> Result<(), i32> {
@@ -328,13 +399,36 @@ impl SceneDevice<'_> {
     /// Shader/entry/schema/attribute pointers are valid synchronous ranges.
     /// Effective raster fields are explicit and source-qualified by the caller.
     pub unsafe fn graphics_pipeline_v3(&mut self, desc: &SceneGraphicsV3Desc) -> Result<u64, i32> {
+        unsafe { self.graphics_pipeline_aux(desc, 0) }
+    }
+    /// # Safety
+    /// Same synchronous schema contract. Auxiliary flag requires source-qualified
+    /// compiler injected Metal stored-depth logic, never an arbitrary shader.
+    pub(crate) unsafe fn graphics_pipeline_aux(
+        &mut self,
+        desc: &SceneGraphicsV3Desc,
+        flags: u32,
+    ) -> Result<u64, i32> {
+        unsafe extern "C" {
+            fn mag_native_scene_graphics_create_aux(
+                device: *mut c_void,
+                desc: *const SceneGraphicsV3Desc,
+                flags: u32,
+                out: *mut Pipeline,
+            ) -> i32;
+        }
         checked_graphics_v3_layout()?;
         if self.inner.pipelines.len() >= self.inner.limits.max_pipelines {
             return Err(-5);
         }
         let mut out = Pipeline::default();
-        let status =
-            unsafe { mag_native_scene_graphics_create_v3(self.inner.api.device, desc, &mut out) };
+        let status = unsafe {
+            if flags == 0 {
+                mag_native_scene_graphics_create_v3(self.inner.api.device, desc, &mut out)
+            } else {
+                mag_native_scene_graphics_create_aux(self.inner.api.device, desc, flags, &mut out)
+            }
+        };
         if status != 0 {
             return Err(status);
         }
@@ -489,6 +583,25 @@ impl SceneDevice<'_> {
             };
             bytes = bytes.checked_add(allocation).ok_or(-5)?;
         }
+        for (pass, bounds) in commands.passes().iter().zip(commands.depth_bounds()) {
+            let count = bounds.iter().flatten().count() as u64;
+            if count != 0 {
+                let image = commands
+                    .images()
+                    .get(pass.depth.ok_or(-1)?.image.index())
+                    .ok_or(-1)?;
+                let snapshot = image
+                    .desc
+                    .format
+                    .level_layout(image.desc.width, image.desc.height)
+                    .map_err(|_| -1)?
+                    .bytes;
+                bytes = bytes
+                    .checked_add(snapshot)
+                    .and_then(|n| n.checked_add(count * 16))
+                    .ok_or(-5)?;
+            }
+        }
         let readback_len = if let Some(o) = diagnostic {
             let d = commands.images()[o.image.image().index()].desc;
             let level = d.format.level_layout(d.width, d.height).map_err(|_| -1)?;
@@ -632,6 +745,22 @@ impl RenderDevice for SceneDevice<'_> {
                 Ok(v) => v,
                 Err(c) => return reject(c),
             };
+        let expected = commands
+            .images()
+            .iter()
+            .enumerate()
+            .filter_map(|(index, image)| image.external.map(|r| (index as u32, r)))
+            .collect::<Vec<_>>();
+        if expected.len() != self.imports.len()
+            || expected.iter().any(|(index, r)| {
+                !self.imports.iter().any(|i| {
+                    i.image == *index
+                        && i.required_initialized_planes == r.required_initialized_planes
+                })
+            })
+        {
+            return reject(-3);
+        }
         let extended = match scene_extended::Plan::build(commands) {
             Ok(p) => p,
             Err(c) => return reject(c),
@@ -796,8 +925,8 @@ impl RenderDevice for SceneDevice<'_> {
                     self.inner.api.device,
                     &scene,
                     &sampler_table,
-                    self.target.as_ref(),
-                    self.frame.as_ref(),
+                    &self.imports,
+                    (self.target.as_ref(), self.frame.as_ref()),
                     &mut native,
                 )
             } else if !sampler_table.is_empty() {

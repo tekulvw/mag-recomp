@@ -58,6 +58,76 @@ impl Drop for TargetPin {
         };
     }
 }
+struct ImportPins(Vec<mag_render_abi::packet::ImageBinding>);
+// SAFETY: only genuine process-lived provider callbacks cross threads. Each
+// image is pinned before sending; no NativeContext/thread-affine value crosses.
+unsafe impl Send for ImportPins {}
+impl Drop for ImportPins {
+    fn drop(&mut self) {
+        for b in &self.0 {
+            unsafe {
+                (b.host.release.unwrap())(
+                    b.host.userdata,
+                    b.host.owner_lifetime,
+                    b.host.resource_id,
+                    b.host.resource_generation,
+                )
+            }
+        }
+    }
+}
+impl ImportPins {
+    unsafe fn copy(
+        bindings: *const mag_render_abi::packet::ImageBinding,
+        count: u32,
+    ) -> Result<Self, i32> {
+        if count == 0 || count > 1024 {
+            return Err(-1);
+        }
+        let bindings = unsafe { checked_slice(bindings, count as usize) }?;
+        let mut seen = std::collections::BTreeSet::new();
+        for b in bindings {
+            let h = &b.host;
+            if b.reserved != 0
+                || b.source_key == 0
+                || !seen.insert(b.image)
+                || h.abi_version != 1
+                || h.struct_size as usize != size_of::<HostImage>()
+                || h.reserved != 0
+                || h.reserved1 != 0
+                || h.owner_lifetime == 0
+                || h.resource_id == 0
+                || h.resource_generation == 0
+                || h.width == 0
+                || h.height == 0
+                || h.image.is_null()
+                || h.retain.is_none()
+                || h.release.is_none()
+                || h.validate.is_none()
+            {
+                return Err(-1);
+            }
+        }
+        let mut result = Self(Vec::new());
+        result.0.try_reserve_exact(bindings.len()).map_err(|_| -5)?;
+        for b in bindings {
+            let h = &b.host;
+            let status = unsafe {
+                h.retain.unwrap()(
+                    h.userdata,
+                    h.owner_lifetime,
+                    h.resource_id,
+                    h.resource_generation,
+                )
+            };
+            if status != 0 {
+                return Err(if status < 0 { status } else { -6 });
+            }
+            result.0.push(*b);
+        }
+        Ok(result)
+    }
+}
 struct OwnedScene {
     packet: client::scene_packet::ScenePacket,
     target: TargetPin,
@@ -290,6 +360,14 @@ trait Driver {
     ) -> Reply {
         (-2, client::Receipt::default())
     }
+    fn commit_subgraph(
+        &mut self,
+        _admission: mag_render_abi::packet::Admission,
+        _source: client::Source,
+        _bindings: ImportPins,
+    ) -> Reply {
+        (-2, client::Receipt::default())
+    }
     fn cancel(&mut self, _admission: mag_render_abi::packet::Admission) -> Result<(), i32> {
         Err(-2)
     }
@@ -319,6 +397,14 @@ impl Driver for ClientDriver {
         target: TargetPin,
     ) -> Reply {
         client::scene_packet::commit(self.session, admission, source, &target.image, target.frame)
+    }
+    fn commit_subgraph(
+        &mut self,
+        admission: mag_render_abi::packet::Admission,
+        source: client::Source,
+        bindings: ImportPins,
+    ) -> Reply {
+        client::scene_packet::commit_subgraph(self.session, admission, source, &bindings.0)
     }
     fn cancel(&mut self, admission: mag_render_abi::packet::Admission) -> Result<(), i32> {
         client::scene_packet::cancel(self.session, admission)
@@ -355,6 +441,12 @@ enum Command {
         mag_render_abi::packet::Admission,
         client::Source,
         TargetPin,
+        SyncSender<Reply>,
+    ),
+    Subgraph(
+        mag_render_abi::packet::Admission,
+        client::Source,
+        ImportPins,
         SyncSender<Reply>,
     ),
     Cancel(mag_render_abi::packet::Admission, SyncSender<Reply>),
@@ -405,6 +497,9 @@ impl Worker {
                         }
                         Command::Commit(admission, source, target, reply) => {
                             let _ = reply.send(driver.commit(admission, source, target));
+                        }
+                        Command::Subgraph(admission, source, bindings, reply) => {
+                            let _ = reply.send(driver.commit_subgraph(admission, source, bindings));
                         }
                         Command::Cancel(admission, reply) => {
                             let status = driver.cancel(admission).map_or_else(|e| e, |()| 0);
@@ -962,6 +1057,22 @@ pub unsafe extern "C" fn mag_render_client_worker_prepare_scene_v3(
     input: *const client::scene_packet::raw::DescV3,
     out: *mut mag_render_abi::packet::Admission,
 ) -> i32 {
+    unsafe {
+        mag_render_client_worker_prepare_scene_imported_v3(id, input, std::ptr::null(), 0, out)
+    }
+}
+/// Prepare exact source-key external requirements without observing any current
+/// image, queue or display frame. Plane initialization is conditional until commit.
+/// # Safety
+/// All nested input and requirement ranges are readable through synchronous copy.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mag_render_client_worker_prepare_scene_imported_v3(
+    id: u64,
+    input: *const client::scene_packet::raw::DescV3,
+    requirements: *const mag_render_abi::packet::ImageRequirement,
+    count: u32,
+    out: *mut mag_render_abi::packet::Admission,
+) -> i32 {
     if out.is_null() {
         return -1;
     }
@@ -971,15 +1082,21 @@ pub unsafe extern "C" fn mag_render_client_worker_prepare_scene_v3(
     ffi(
         || {
             client::scene_admission::checked_layout()?;
+            client::scene_admission::checked_import_layout()?;
             let worker = get(id)?;
             let _serial = worker.serial.try_lock().map_err(|_| -4)?;
             let input = unsafe { checked_ref(input) }?;
             if !input.base.base.target.is_null() || !input.base.base.frame.is_null() {
                 return Err(-1);
             }
+            if count > 1024 {
+                return Err(-1);
+            }
+            let requirements = unsafe { checked_slice(requirements, count as usize) }?;
             let packet = unsafe {
-                client::scene_packet::ScenePacket::copy_v3(
+                client::scene_packet::ScenePacket::copy_imported_v3(
                     input,
+                    requirements,
                     worker.max_draws as usize,
                     worker.max_bytes,
                 )
@@ -1116,6 +1233,62 @@ pub extern "C" fn mag_render_client_worker_close(id: u64) -> i32 {
         },
         -6,
     )
+}
+
+/// Commit a prepared Main subgraph on explicitly retained existing surfaces.
+/// No final target, display frame, presentation or original CPU completion is implied.
+/// # Safety
+/// POD ranges and genuine provider metadata remain valid through the synchronous
+/// retain/copy. Callbacks are process-lived, non-unwinding and thread-safe.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mag_render_client_worker_commit_scene_subgraph(
+    id: u64,
+    admission: *const mag_render_abi::packet::Admission,
+    source: *const client::Source,
+    bindings: *const mag_render_abi::packet::ImageBinding,
+    count: u32,
+    out: *mut client::Receipt,
+) -> i32 {
+    if out.is_null() {
+        return -1;
+    }
+    unsafe {
+        *out = client::Receipt {
+            abi_version: 1,
+            struct_size: size_of::<client::Receipt>() as u32,
+            flags: 1,
+            ..client::Receipt::default()
+        }
+    };
+    let status = ffi(
+        || {
+            client::scene_admission::checked_import_layout()?;
+            let worker = get(id)?;
+            let _serial = worker.serial.try_lock().map_err(|_| -4)?;
+            let admission = *unsafe { checked_ref(admission) }?;
+            let source = *unsafe { checked_ref(source) }?;
+            if admission.worker != id
+                || !client::scene_admission::same_source(admission.source, source)
+            {
+                return Err(-3);
+            }
+            let bindings = unsafe { ImportPins::copy(bindings, count) }?;
+            let (status, receipt) = worker.call_serial(
+                |reply| Command::Subgraph(admission, source, bindings, reply),
+                true,
+            )?;
+            unsafe { *out = receipt };
+            Ok(status)
+        },
+        1,
+    );
+    unsafe {
+        (*out).status = status;
+        if status > 0 {
+            (*out).flags |= 3
+        }
+    };
+    status
 }
 
 #[cfg(test)]
@@ -1528,6 +1701,32 @@ mod tests {
                 },
             )
         }
+        fn commit_subgraph(
+            &mut self,
+            a: mag_render_abi::packet::Admission,
+            source: client::Source,
+            bindings: ImportPins,
+        ) -> Reply {
+            assert_eq!(self.thread, thread::current().id());
+            if self.prepared.get(a, source).is_err() {
+                return (-3, client::Receipt::default());
+            }
+            assert_eq!(bindings.0.len(), 1);
+            assert_eq!(bindings.0[0].source_key, 99);
+            let status = self.status.load(Ordering::SeqCst);
+            self.events.lock().unwrap().push("subgraph");
+            if status < 0 {
+                return (status, client::Receipt::default());
+            }
+            self.pending.push(self.prepared.remove(a, source).unwrap());
+            (
+                status,
+                client::Receipt {
+                    source,
+                    ..client::Receipt::default()
+                },
+            )
+        }
         fn cancel(&mut self, a: mag_render_abi::packet::Admission) -> Result<(), i32> {
             assert_eq!(self.thread, thread::current().id());
             self.prepared.remove(a, a.source)?;
@@ -1651,6 +1850,110 @@ mod tests {
                 .filter(|e| **e == "cancel")
                 .count(),
             1
+        );
+    }
+    unsafe extern "C" fn retain_except_stale(
+        user: *mut c_void,
+        life: u64,
+        id: u64,
+        generation: u64,
+    ) -> i32 {
+        if id == 99 {
+            return -3;
+        }
+        unsafe { retain(user, life, id, generation) }
+    }
+    #[test]
+    fn imported_batch_partial_retain_failure_releases_prior_pins() {
+        with_input(|input, _, pins| {
+            let mut host = unsafe { *input.target };
+            host.image = std::ptr::dangling_mut::<u8>().cast();
+            host.retain = Some(retain_except_stale);
+            let a = mag_render_abi::packet::ImageBinding {
+                image: 0,
+                reserved: 0,
+                source_key: 99,
+                host,
+                validate_planes: None,
+            };
+            let mut b = a;
+            b.image = 1;
+            b.source_key = 100;
+            b.host.resource_id = 99;
+            assert!(matches!(
+                unsafe { ImportPins::copy([a, b].as_ptr(), 2) },
+                Err(-3)
+            ));
+            assert_eq!(pins.load(Ordering::SeqCst), 0);
+            b.host.resource_id = 4;
+            let owned = unsafe { ImportPins::copy([a, b].as_ptr(), 2) }.unwrap();
+            assert_eq!(pins.load(Ordering::SeqCst), 2);
+            drop(owned);
+            assert_eq!(pins.load(Ordering::SeqCst), 0);
+            b.image = 0;
+            assert!(matches!(
+                unsafe { ImportPins::copy([a, b].as_ptr(), 2) },
+                Err(-1)
+            ));
+            assert_eq!(pins.load(Ordering::SeqCst), 0);
+        });
+    }
+    #[test]
+    fn imported_subgraph_uses_fixed_actor_without_frame_and_preserves_rejected_token() {
+        let status = Arc::new(AtomicI32::new(-4));
+        let events = Arc::new(Mutex::new(vec![]));
+        let worker = prepared_worker(status.clone(), events.clone());
+        let token = prepare_on(&worker).unwrap();
+        with_input(|input, _, pins| {
+            let mut host = unsafe { *input.target };
+            host.image = std::ptr::dangling_mut::<u8>().cast();
+            let binding = mag_render_abi::packet::ImageBinding {
+                image: 0,
+                reserved: 0,
+                source_key: 99,
+                host,
+                validate_planes: None,
+            };
+            let own = || unsafe { ImportPins::copy(&binding, 1) }.unwrap();
+            assert_eq!(
+                worker
+                    .call(|r| Command::Subgraph(token, token.source, own(), r), true)
+                    .unwrap()
+                    .0,
+                -4
+            );
+            assert_eq!(pins.load(Ordering::SeqCst), 0);
+            assert_eq!(worker.call(Command::Close, false).unwrap().0, -4);
+            let mut wrong = token.source;
+            wrong.publication += 1;
+            assert_eq!(
+                worker
+                    .call(|r| Command::Subgraph(token, wrong, own(), r), true)
+                    .unwrap()
+                    .0,
+                -3
+            );
+            status.store(1, Ordering::SeqCst);
+            assert_eq!(
+                worker
+                    .call(|r| Command::Subgraph(token, token.source, own(), r), true)
+                    .unwrap()
+                    .0,
+                1
+            );
+            assert_eq!(
+                worker.call(|r| Command::Cancel(token, r), false).unwrap().0,
+                -3
+            );
+            assert_eq!(pins.load(Ordering::SeqCst), 0);
+            assert_eq!(worker.call(Command::Close, false).unwrap().0, -4);
+            worker.call(Command::Poll, false).unwrap();
+        });
+        assert_eq!(worker.call(Command::Close, false).unwrap().0, 0);
+        worker.join.lock().unwrap().take().unwrap().join().unwrap();
+        assert_eq!(
+            *events.lock().unwrap(),
+            ["admit", "subgraph", "subgraph", "terminal"]
         );
     }
     #[test]

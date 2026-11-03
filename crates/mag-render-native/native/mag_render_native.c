@@ -191,3 +191,25 @@ int mag_native_submit_scene_v4(mag_native_device *device,const mag_native_scene_
  ||(target&&(!target->device_generation||!target->id))||(frame&&(!target||frame->abi_version!=1||frame->struct_size!=sizeof(*frame)||!frame->owner_lifetime||!frame->reservation||!frame->preflight||!frame->committed||!frame->cancel)))return MAG_NATIVE_INVALID;
  return device->ops->submit_scene_v4?device->ops->submit_scene_v4(device->context,desc,target,frame,out):MAG_NATIVE_UNSUPPORTED;
 }
+
+int mag_native_image_import_certified(mag_native_device *device,const mag_native_image_certificate *cert,mag_native_image *out){
+ if(out){memset(out,0,sizeof(*out));}
+ if(!device||!cert||!out)return MAG_NATIVE_INVALID;
+ const MagRenderHostImage *h=&cert->host;
+ if(h->abi_version!=1||h->struct_size!=sizeof(*h)||h->reserved||h->reserved1||!h->owner_lifetime||!h->resource_id||!h->resource_generation||!h->retain||!h->release||!h->validate)return MAG_NATIVE_INVALID;
+ return device->ops->image_import_certified?device->ops->image_import_certified(device->context,cert,out):MAG_NATIVE_UNSUPPORTED;
+}
+int mag_native_submit_scene_v5(mag_native_device *device,const mag_native_scene_v5 *desc,const mag_native_image *target,const MagRenderHostFrame *frame,mag_native_ticket *out){
+ if(out)memset(out,0,sizeof(*out));
+ if(!device||!desc||!out||desc->abi_version!=5||desc->struct_size!=sizeof(*desc)||desc->reserved||desc->reserved1||(target&&(!target->device_generation||!target->id))||(frame&&(!target||!frame->preflight||!frame->committed||!frame->cancel||!frame->owner_lifetime||!frame->reservation||frame->abi_version!=1||frame->struct_size!=sizeof(*frame))))return MAG_NATIVE_INVALID;
+ return device->ops->submit_scene_v5?device->ops->submit_scene_v5(device->context,desc,target,frame,out):MAG_NATIVE_UNSUPPORTED;
+}
+
+int mag_native_scene_graphics_create_aux(mag_native_device *device,const mag_native_scene_graphics_v3_desc *desc,uint32_t flags,mag_native_pipeline *out){
+ if(!device||!desc||!out||flags!=MAG_NATIVE_PROGRAM_STORED_DEPTH_AUX)return MAG_NATIVE_INVALID;
+ *out=(mag_native_pipeline){0};int status=mag_native_scene_graphics_v3_validate(desc);if(status)return status;
+ if(!desc->raster.depth_bounds_enabled||desc->base.binding_model!=1||!desc->base.base.fragment.source_length)return MAG_NATIVE_INVALID;
+ for(uint32_t i=0;i<desc->base.base.buffer_count;++i){const mag_native_scene_buffer_layout *b=&desc->base.base.buffers[i];if(b->stage==MAG_NATIVE_SCENE_FRAGMENT&&b->binding.slot==2)return MAG_NATIVE_INVALID;}
+ for(uint32_t i=0;i<desc->base.base.texture_count;++i){const mag_native_scene_texture_layout *t=&desc->base.base.textures[i];if(t->stage==MAG_NATIVE_SCENE_FRAGMENT&&t->texture_slot==15)return MAG_NATIVE_INVALID;}
+ return device->ops->scene_graphics_create_aux?device->ops->scene_graphics_create_aux(device->context,desc,flags,out):MAG_NATIVE_UNSUPPORTED;
+}

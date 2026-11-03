@@ -363,3 +363,114 @@ fn combined_format_bytes_are_charged_but_uploaded_planes_are_explicitly_unsuppor
     );
     assert!(s.texture(desc, lease(vec![0; 128])).is_err());
 }
+#[test]
+fn external_image_is_a_conditional_requirement_not_an_allocated_initialized_placeholder() {
+    let mut s = builder(4096);
+    let image = s
+        .require_image(
+            ImageDesc {
+                width: 4,
+                height: 4,
+                format: ImageFormat::Rgba8,
+            },
+            ExternalImage {
+                source_key: 71,
+                required_initialized_planes: 1,
+            },
+        )
+        .unwrap();
+    assert!(s.current(image).is_ok());
+    let out = s
+        .image(ImageDesc {
+            width: 4,
+            height: 4,
+            format: ImageFormat::Rgba8,
+        })
+        .unwrap();
+    s.render_pass(RenderPass {
+        color: Some(ColorAttachment {
+            image: out,
+            load: Load::Clear([0.; 4]),
+            store: Store::Store,
+        }),
+        depth: None,
+        draws: vec![],
+    })
+    .unwrap();
+    let prepared = s.prepare(&Catalog).unwrap();
+    let (commands, _) = prepared.into_submission();
+    assert_eq!(commands.images()[0].external.unwrap().source_key, 71);
+    assert_eq!(commands.images()[0].upload, None);
+}
+#[test]
+fn missing_or_wrong_external_plane_facts_are_not_inferred_from_key_existence() {
+    let mut s = builder(4096);
+    let desc = ImageDesc {
+        width: 4,
+        height: 4,
+        format: ImageFormat::Depth32Stencil8,
+    };
+    assert!(
+        s.require_image(
+            desc,
+            ExternalImage {
+                source_key: 0,
+                required_initialized_planes: 2
+            }
+        )
+        .is_err()
+    );
+    assert!(
+        s.require_image(
+            desc,
+            ExternalImage {
+                source_key: 7,
+                required_initialized_planes: 1
+            }
+        )
+        .is_err()
+    );
+    let i = s
+        .require_image(
+            desc,
+            ExternalImage {
+                source_key: 7,
+                required_initialized_planes: 0,
+            },
+        )
+        .unwrap();
+    assert!(matches!(s.current(i), Err(SceneError::Uninitialized)));
+    let i = s
+        .require_image(
+            desc,
+            ExternalImage {
+                source_key: 8,
+                required_initialized_planes: 2,
+            },
+        )
+        .unwrap();
+    assert!(s.current(i).is_ok());
+    s.render_pass_with_aspects(
+        RenderPass {
+            color: None,
+            depth: Some(DepthAttachment {
+                image: i,
+                load: Load::Load(s.current(i).unwrap()),
+                store: Store::Store,
+            }),
+            draws: vec![],
+        },
+        None,
+        Some(StencilOps {
+            image: i,
+            load: StencilLoad::Load,
+            store: Store::Store,
+            source_full_write: false,
+        }),
+    )
+    .unwrap();
+    assert!(matches!(
+        s.prepare(&Catalog),
+        Err(SceneError::Uninitialized)
+    ));
+}
