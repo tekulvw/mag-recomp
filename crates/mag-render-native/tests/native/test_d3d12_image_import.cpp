@@ -299,7 +299,7 @@ struct Cpu3D12Device final : ID3D12Device {
     return {};
   }
 
-  HRESULT STDMETHODCALLTYPE SetStablePowerState(WINBOOL enable) override {
+  HRESULT STDMETHODCALLTYPE SetStablePowerState(BOOL enable) override {
     assert(!"unexpected CPU COM call");
     return {};
   }
