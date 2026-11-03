@@ -125,6 +125,18 @@ static void test_vulkan_import_cpu(frontend_vk *c) {
                .stencil_count = 1},
       .imports = imports,
       .import_count = 2};
+  /* Distinct table entries cannot alias one imported allocation: layout
+   * tracking is per entry even when the two passes do not sample feedback. */
+  mag_native_scene_image alias_images[2]={declarations[0],declarations[0]};
+  mag_native_scene_pass alias_passes[2]={pass,pass};
+  for(unsigned i=0;i<2;++i){alias_passes[i].color.image=i;alias_passes[i].depth.image=MAG_NATIVE_SCENE_NONE;}
+  mag_native_scene_import alias_imports[2]={{0,1,refs[0]},{1,1,refs[0]}};
+  mag_native_stencil_attachment alias_stencils[2]={{0},{0}};
+  alias_stencils[0].image=alias_stencils[1].image=MAG_NATIVE_SCENE_NONE;
+  mag_native_scene alias_scene=scene;alias_scene.images=alias_images;alias_scene.passes=alias_passes;alias_scene.pass_count=2;alias_scene.output_image=1;
+  mag_native_scene_v5 alias_desc=desc;alias_desc.base.base.base.scene=&alias_scene;alias_desc.imports=alias_imports;alias_desc.base.stencils=alias_stencils;alias_desc.base.stencil_count=2;
+  mag_native_ticket alias_ticket={0};unsigned alias_queues=queue_calls;
+  assert(submit_scene_v5(c,&alias_desc,NULL,NULL,&alias_ticket)==MAG_NATIVE_INVALID&&!alias_ticket.submission_id&&queue_calls==alias_queues);
   /* Reserve-view failure before any queue effect rolls back the temporary
    * slot reference without dropping the imported public lease/allocation. */
   fail_next_import_view = 1;

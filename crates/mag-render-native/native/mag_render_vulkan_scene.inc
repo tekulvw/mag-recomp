@@ -740,6 +740,14 @@ static int submit_scene_owned(frontend_vk *c, const mag_native_scene *scene, mag
     int status = v5?mag_native_scene_validate_v5(v5,&registry_v5,&usage):v4?mag_native_scene_validate_v4(v4,&registry_v4,&usage):v3?mag_native_scene_validate_v3(v3,&registry_v2,&usage):mag_native_scene_validate_v2(scene, &registry_v2, &usage);
     if (status)
         return status;
+    if(v5){
+        const frontend_vk_imported_image *seen[MAG_NATIVE_SCENE_MAX_IMAGES];
+        for(uint32_t i=0;i<v5->import_count;++i){
+            const frontend_vk_imported_image *image=imported_image_find(c,v5->imports[i].ref);
+            for(uint32_t j=0;j<i;++j)if(seen[j]->metadata.image_bits==image->metadata.image_bits)return MAG_NATIVE_INVALID;
+            seen[i]=image;
+        }
+    }
     /* Keep pre-V5 encoding unchanged. Imported V5 uses an explicit render area
      * bounded by every attachment; common validation refuses a larger depth
      * CLEAR which would imply initialization outside this render area. */
