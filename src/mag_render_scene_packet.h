@@ -282,6 +282,12 @@ int mag_render_client_worker_prepare_scene_imported_v3(uint64_t,const MagRenderS
  * Original prior producer work must be ordered at the genuine native boundary.
  * Exact table/source matching precedes GPU commitment. */
 int mag_render_client_worker_commit_scene_subgraph(uint64_t,const MagRenderSceneAdmission*,const MagRenderClientSource*,const MagRenderPacketImageBinding*,uint32_t,MagRenderClientReceipt*);
+/* Optional single-command form of prepare_scene_imported_v3 followed by
+ * commit_scene_subgraph: one ordered actor command, no separate admission ACK.
+ * Negative is definitely uncommitted (a rejected commit's preparation is
+ * cancelled before return); zero accepted; positive indeterminate. No GPU
+ * completion, presentation or original CPU publication is implied. */
+int mag_render_client_worker_submit_scene_subgraph_imported_v3(uint64_t,const MagRenderScenePacketV3Desc*,const MagRenderPacketImageRequirement*,uint32_t,const MagRenderPacketImageBinding*,uint32_t,MagRenderClientReceipt*);
 /* Uses the SAME persistent worker/session/SceneDevice and genuine ticket path.
  * Negative is definitely uncommitted; caller owns early frame cancellation.
  * Positive indeterminate must not be replayed. Physical present remains separate.

@@ -2748,22 +2748,32 @@ impl PipelineCompiler for SceneDevice<'_> {
 }
 /// CPU preparation only. No target pin, queue lease, submission or original
 /// completion publication occurs here. Owned leases and native PSOs remain held.
-pub(crate) fn admit(id: u64, worker: u64, packet: ScenePacket) -> Result<raw::Admission, i32> {
+/// `prevalidated` names the exact limits a caller already validated this
+/// immutable owned packet against. Only an exact match with this session's
+/// limits skips the repeated actor validation; anything else validates again.
+pub(crate) fn admit(
+    id: u64,
+    worker: u64,
+    packet: ScenePacket,
+    prevalidated: Option<(usize, u64)>,
+) -> Result<raw::Admission, i32> {
     with_session(id, |s| {
         if s.admissions.len() + s.pending.len() + s.ready.len() >= 2 {
             return Err(-4);
         }
-        packet
-            .validate(s.max_draws, s.max_bytes)
-            .map_err(|status| {
-                packet_failure(
-                    packet.source,
-                    "actor/validate",
-                    None,
-                    "owned-packet",
-                    status,
-                )
-            })?;
+        if prevalidated != Some((s.max_draws, s.max_bytes)) {
+            packet
+                .validate(s.max_draws, s.max_bytes)
+                .map_err(|status| {
+                    packet_failure(
+                        packet.source,
+                        "actor/validate",
+                        None,
+                        "owned-packet",
+                        status,
+                    )
+                })?;
+        }
         if packet.flags != 0 {
             return Err(packet_failure(
                 packet.source,

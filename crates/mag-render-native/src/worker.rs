@@ -12,10 +12,76 @@ use std::{
         mpsc::{self, SyncSender},
     },
     thread::{self, JoinHandle},
+    time::Instant,
 };
 const MAX_WORKERS: usize = 2;
 const MAX_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_DRAWS: u32 = crate::batch_device::scene_device::MAX_SCENE_DRAWS as u32;
+fn env_flag(name: &str) -> bool {
+    std::env::var(name).is_ok_and(|v| v == "1")
+}
+/// Default-off per-occurrence FIFO-thread timing lines for Main transport.
+/// Diagnostics only: durations are host wall time, never GPU completion.
+fn fifo_timing() -> bool {
+    static VALUE: OnceLock<bool> = OnceLock::new();
+    *VALUE.get_or_init(|| env_flag("MAG_RENDER_FIFO_TIMING"))
+}
+/// Default-off: an owned packet that the ingress copy already validated against
+/// these exact worker limits is not validated a second time by the actor.
+fn single_validation() -> bool {
+    static VALUE: OnceLock<bool> = OnceLock::new();
+    *VALUE.get_or_init(|| env_flag("MAG_RENDER_WORKER_SINGLE_VALIDATION"))
+}
+fn elapsed_ns(start: Instant) -> u64 {
+    u64::try_from(start.elapsed().as_nanos()).unwrap_or(u64::MAX)
+}
+/// Host wall durations of the last actor admission/commit, written by the fixed
+/// actor before it replies and read by the caller after that reply arrives.
+#[derive(Default)]
+struct ActorTiming {
+    admit_ns: AtomicU64,
+    commit_ns: AtomicU64,
+}
+impl ActorTiming {
+    fn reset(&self) {
+        self.admit_ns.store(0, Ordering::Relaxed);
+        self.commit_ns.store(0, Ordering::Relaxed);
+    }
+    fn read(&self) -> (u64, u64) {
+        (
+            self.admit_ns.load(Ordering::Relaxed),
+            self.commit_ns.load(Ordering::Relaxed),
+        )
+    }
+}
+#[derive(Default)]
+struct CallerTiming {
+    copy_ns: u64,
+    pin_ns: u64,
+    wait_ns: u64,
+}
+fn report_timing(
+    op: &str,
+    source: client::Source,
+    status: i32,
+    caller: &CallerTiming,
+    actor: (u64, u64),
+    single_validation: bool,
+) {
+    eprintln!(
+        "[mag native worker timing] op={op} engine_update={} cohort={} publication={} pass_occurrence={} status={status} copy_ns={} pin_ns={} send_wait_ns={} actor_admit_ns={} actor_commit_ns={} single_validation={}",
+        source.engine_update,
+        source.cohort,
+        source.publication,
+        source.pass_occurrence,
+        caller.copy_ns,
+        caller.pin_ns,
+        caller.wait_ns,
+        actor.0,
+        actor.1,
+        u32::from(single_validation)
+    );
+}
 fn scene_refusal(
     stage: &str,
     status: i32,
@@ -365,6 +431,7 @@ trait Driver {
         &mut self,
         _worker: u64,
         _packet: client::scene_packet::ScenePacket,
+        _prevalidated: Option<(usize, u64)>,
     ) -> Result<mag_render_abi::packet::Admission, i32> {
         Err(-2)
     }
@@ -403,8 +470,9 @@ impl Driver for ClientDriver {
         &mut self,
         worker: u64,
         packet: client::scene_packet::ScenePacket,
+        prevalidated: Option<(usize, u64)>,
     ) -> Result<mag_render_abi::packet::Admission, i32> {
-        client::scene_packet::admit(self.session, worker, packet)
+        client::scene_packet::admit(self.session, worker, packet, prevalidated)
     }
     fn commit(
         &mut self,
@@ -447,12 +515,20 @@ impl Driver for ClientDriver {
     }
 }
 type Reply = (i32, client::Receipt);
+struct AdmitInput {
+    worker: u64,
+    packet: Box<client::scene_packet::ScenePacket>,
+    prevalidated: Option<(usize, u64)>,
+}
 enum Command {
     Admit(
-        u64,
-        Box<client::scene_packet::ScenePacket>,
+        AdmitInput,
         SyncSender<Result<mag_render_abi::packet::Admission, i32>>,
     ),
+    /// Admission immediately followed by its subgraph commit on the actor, in
+    /// the same order the two separate commands would run. A definite commit
+    /// rejection cancels the uncommitted preparation before replying.
+    AdmitSubgraph(AdmitInput, client::Source, ImportPins, SyncSender<Reply>),
     Commit(
         mag_render_abi::packet::Admission,
         client::Source,
@@ -473,6 +549,7 @@ enum Command {
 }
 struct Worker {
     commands: SyncSender<Command>,
+    timing: Arc<ActorTiming>,
     serial: Mutex<()>,
     join: Mutex<Option<JoinHandle<()>>>,
     max_draws: u32,
@@ -486,6 +563,8 @@ impl Worker {
     ) -> Result<Self, i32> {
         let (commands, receive) = mpsc::sync_channel(1);
         let (started, ready) = mpsc::sync_channel(1);
+        let timing = Arc::new(ActorTiming::default());
+        let actor_timing = Arc::clone(&timing);
         let join = thread::Builder::new()
             .name("mag-render-client".into())
             .spawn(move || {
@@ -502,8 +581,13 @@ impl Worker {
                 }
                 while let Ok(command) = receive.recv() {
                     match command {
-                        Command::Admit(worker, packet, reply) => {
-                            let result = driver.admit(worker, *packet);
+                        Command::Admit(input, reply) => {
+                            let start = Instant::now();
+                            let result =
+                                driver.admit(input.worker, *input.packet, input.prevalidated);
+                            actor_timing
+                                .admit_ns
+                                .store(elapsed_ns(start), Ordering::Relaxed);
                             let token = result.as_ref().ok().copied();
                             if reply.send(result).is_err()
                                 && let Some(token) = token
@@ -511,11 +595,44 @@ impl Worker {
                                 let _ = driver.cancel(token);
                             }
                         }
+                        Command::AdmitSubgraph(input, source, bindings, reply) => {
+                            let start = Instant::now();
+                            let admitted =
+                                driver.admit(input.worker, *input.packet, input.prevalidated);
+                            actor_timing
+                                .admit_ns
+                                .store(elapsed_ns(start), Ordering::Relaxed);
+                            let result = match admitted {
+                                Err(status) => (status, client::Receipt::default()),
+                                Ok(token) => {
+                                    let start = Instant::now();
+                                    let result = driver.commit_subgraph(token, source, bindings);
+                                    if result.0 < 0 {
+                                        let _ = driver.cancel(token);
+                                    }
+                                    actor_timing
+                                        .commit_ns
+                                        .store(elapsed_ns(start), Ordering::Relaxed);
+                                    result
+                                }
+                            };
+                            let _ = reply.send(result);
+                        }
                         Command::Commit(admission, source, target, reply) => {
-                            let _ = reply.send(driver.commit(admission, source, target));
+                            let start = Instant::now();
+                            let result = driver.commit(admission, source, target);
+                            actor_timing
+                                .commit_ns
+                                .store(elapsed_ns(start), Ordering::Relaxed);
+                            let _ = reply.send(result);
                         }
                         Command::Subgraph(admission, source, bindings, reply) => {
-                            let _ = reply.send(driver.commit_subgraph(admission, source, bindings));
+                            let start = Instant::now();
+                            let result = driver.commit_subgraph(admission, source, bindings);
+                            actor_timing
+                                .commit_ns
+                                .store(elapsed_ns(start), Ordering::Relaxed);
+                            let _ = reply.send(result);
                         }
                         Command::Cancel(admission, reply) => {
                             let status = driver.cancel(admission).map_or_else(|e| e, |()| 0);
@@ -548,6 +665,7 @@ impl Worker {
         match ready.recv() {
             Ok(Ok(())) => Ok(Self {
                 commands,
+                timing,
                 serial: Mutex::new(()),
                 join: Mutex::new(Some(join)),
                 max_draws,
@@ -1127,31 +1245,34 @@ pub unsafe extern "C" fn mag_render_client_worker_prepare_scene_imported_v3(
                 return Err(-1);
             }
             let requirements = unsafe { checked_slice(requirements, count as usize) }?;
-            let packet = unsafe {
-                client::scene_packet::ScenePacket::copy_imported_v3(
-                    input,
-                    requirements,
-                    worker.max_draws as usize,
-                    worker.max_bytes,
-                )
+            let timed = fifo_timing();
+            let mut timing = CallerTiming::default();
+            let copy_start = Instant::now();
+            let admit = unsafe { copy_admit_input(&worker, id, input, requirements) }?;
+            timing.copy_ns = elapsed_ns(copy_start);
+            let single = admit.prevalidated.is_some();
+            if timed {
+                worker.timing.reset();
             }
-            .inspect_err(|&status| {
-                if status < 0 {
-                    scene_refusal(
-                        "prepare-copy-imported-v3",
-                        status,
-                        0,
-                        0,
-                        input.base.base.source,
-                    );
-                }
-            })?;
+            let wait_start = Instant::now();
             let (send, reply) = mpsc::sync_channel(1);
             worker
                 .commands
-                .send(Command::Admit(id, Box::new(packet), send))
+                .send(Command::Admit(admit, send))
                 .map_err(|_| -6)?;
-            let admission = reply.recv().map_err(|_| -6)?.map_err(|status| {
+            let admitted = reply.recv().map_err(|_| -6)?;
+            timing.wait_ns = elapsed_ns(wait_start);
+            if timed {
+                report_timing(
+                    "prepare",
+                    input.base.base.source,
+                    admitted.as_ref().map_or_else(|&e| e, |_| 0),
+                    &timing,
+                    worker.timing.read(),
+                    single,
+                );
+            }
+            let admission = admitted.map_err(|status| {
                 scene_refusal("prepare-actor-admit", status, 0, 0, input.base.base.source)
             })?;
             unsafe {
@@ -1161,6 +1282,126 @@ pub unsafe extern "C" fn mag_render_client_worker_prepare_scene_imported_v3(
         },
         -6,
     )
+}
+/// Copy (and validate) the imported packet on the calling thread. The returned
+/// owned input moves into the actor; no further copy of the packet is made.
+/// # Safety
+/// Same synchronous range contract as `prepare_scene_imported_v3`.
+unsafe fn copy_admit_input(
+    worker: &Worker,
+    id: u64,
+    input: &client::scene_packet::raw::DescV3,
+    requirements: &[mag_render_abi::packet::ImageRequirement],
+) -> Result<AdmitInput, i32> {
+    let limits = (worker.max_draws as usize, worker.max_bytes);
+    let packet = unsafe {
+        client::scene_packet::ScenePacket::copy_imported_v3(input, requirements, limits.0, limits.1)
+    }
+    .inspect_err(|&status| {
+        if status < 0 {
+            scene_refusal(
+                "prepare-copy-imported-v3",
+                status,
+                0,
+                0,
+                input.base.base.source,
+            );
+        }
+    })?;
+    Ok(AdmitInput {
+        worker: id,
+        packet: Box::new(packet),
+        // copy_imported_v3 validated this exact packet against these limits.
+        prevalidated: single_validation().then_some(limits),
+    })
+}
+/// Default-off alternative to prepare_imported_v3 followed by commit_subgraph:
+/// one copy, one pin step and ONE ordered actor command, so the caller does not
+/// wait for a separate admission acknowledgement before requesting the commit.
+/// Status meaning is unchanged: negative is definitely uncommitted (a rejected
+/// commit's preparation is cancelled on the actor), zero is accepted and
+/// positive is indeterminate. No GPU completion or publication is implied.
+/// # Safety
+/// All nested input, requirement and binding ranges are valid for the
+/// synchronous call; provider metadata obeys the retained callback contract.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mag_render_client_worker_submit_scene_subgraph_imported_v3(
+    id: u64,
+    input: *const client::scene_packet::raw::DescV3,
+    requirements: *const mag_render_abi::packet::ImageRequirement,
+    count: u32,
+    bindings: *const mag_render_abi::packet::ImageBinding,
+    binding_count: u32,
+    out: *mut client::Receipt,
+) -> i32 {
+    if out.is_null() {
+        return -1;
+    }
+    unsafe {
+        *out = client::Receipt {
+            abi_version: 1,
+            struct_size: size_of::<client::Receipt>() as u32,
+            flags: 1,
+            ..client::Receipt::default()
+        }
+    };
+    let status = ffi(
+        || {
+            client::scene_admission::checked_layout()?;
+            client::scene_admission::checked_import_layout()?;
+            let worker = get(id)?;
+            let _serial = worker.serial.try_lock().map_err(|_| -4)?;
+            let input = unsafe { checked_ref(input) }?;
+            if !input.base.base.target.is_null() || !input.base.base.frame.is_null() {
+                return Err(-1);
+            }
+            if count > 1024 {
+                return Err(-1);
+            }
+            let source = input.base.base.source;
+            unsafe { (*out).source = source };
+            let requirements = unsafe { checked_slice(requirements, count as usize) }?;
+            let timed = fifo_timing();
+            let mut timing = CallerTiming::default();
+            let copy_start = Instant::now();
+            let admit = unsafe { copy_admit_input(&worker, id, input, requirements) }?;
+            timing.copy_ns = elapsed_ns(copy_start);
+            let single = admit.prevalidated.is_some();
+            let pin_start = Instant::now();
+            let pins = unsafe { ImportPins::copy(bindings, binding_count) }?;
+            timing.pin_ns = elapsed_ns(pin_start);
+            if timed {
+                worker.timing.reset();
+            }
+            let wait_start = Instant::now();
+            let result = worker.call_serial(
+                |reply| Command::AdmitSubgraph(admit, source, pins, reply),
+                true,
+            );
+            timing.wait_ns = elapsed_ns(wait_start);
+            if timed {
+                report_timing(
+                    "fused-subgraph",
+                    source,
+                    result.as_ref().map_or_else(|&e| e, |r| r.0),
+                    &timing,
+                    worker.timing.read(),
+                    single,
+                );
+            }
+            let (status, receipt) = result?;
+            unsafe { *out = receipt };
+            Ok(status)
+        },
+        1,
+    );
+    unsafe {
+        (*out).status = status;
+        if status > 0 {
+            (*out).flags |= 3;
+        }
+    }
+    status
 }
 /// Commit an exact preparation/source on a genuine source-qualified target and
 /// frame. Accepted/indeterminate consumes the token, negative leaves it intact.
@@ -1319,11 +1560,31 @@ pub unsafe extern "C" fn mag_render_client_worker_commit_scene_subgraph(
             {
                 return Err(-3);
             }
+            let timed = fifo_timing();
+            let mut timing = CallerTiming::default();
+            let pin_start = Instant::now();
             let bindings = unsafe { ImportPins::copy(bindings, count) }?;
-            let (status, receipt) = worker.call_serial(
+            timing.pin_ns = elapsed_ns(pin_start);
+            if timed {
+                worker.timing.reset();
+            }
+            let wait_start = Instant::now();
+            let result = worker.call_serial(
                 |reply| Command::Subgraph(admission, source, bindings, reply),
                 true,
-            )?;
+            );
+            timing.wait_ns = elapsed_ns(wait_start);
+            if timed {
+                report_timing(
+                    "commit-subgraph",
+                    source,
+                    result.as_ref().map_or_else(|&e| e, |r| r.0),
+                    &timing,
+                    worker.timing.read(),
+                    false,
+                );
+            }
+            let (status, receipt) = result?;
             unsafe { *out = receipt };
             Ok(status)
         },
@@ -1671,6 +1932,7 @@ mod tests {
         });
         let worker = Worker {
             commands,
+            timing: Arc::default(),
             serial: Mutex::new(()),
             join: Mutex::new(Some(join)),
             max_draws: 4,
@@ -1712,6 +1974,7 @@ mod tests {
             &mut self,
             worker: u64,
             packet: client::scene_packet::ScenePacket,
+            _prevalidated: Option<(usize, u64)>,
         ) -> Result<mag_render_abi::packet::Admission, i32> {
             assert_eq!(self.thread, thread::current().id());
             self.events.lock().unwrap().push("admit");
@@ -1818,15 +2081,18 @@ mod tests {
         )
         .unwrap()
     }
+    fn fixture_admit() -> AdmitInput {
+        AdmitInput {
+            worker: 23,
+            packet: Box::new(client::scene_packet::packet_tests::fixture()),
+            prevalidated: None,
+        }
+    }
     fn prepare_on(worker: &Worker) -> Result<mag_render_abi::packet::Admission, i32> {
         let (tx, rx) = mpsc::sync_channel(1);
         worker
             .commands
-            .send(Command::Admit(
-                23,
-                Box::new(client::scene_packet::packet_tests::fixture()),
-                tx,
-            ))
+            .send(Command::Admit(fixture_admit(), tx))
             .unwrap();
         rx.recv().unwrap()
     }
@@ -2004,6 +2270,102 @@ mod tests {
         );
     }
     #[test]
+    fn fused_admit_subgraph_keeps_order_cancels_definite_rejection_and_reports_busy() {
+        let status = Arc::new(AtomicI32::new(-4));
+        let events = Arc::new(Mutex::new(vec![]));
+        let worker = prepared_worker(status.clone(), events.clone());
+        with_input(|input, _, pins| {
+            let mut host = unsafe { *input.target };
+            host.image = std::ptr::dangling_mut::<u8>().cast();
+            let binding = mag_render_abi::packet::ImageBinding {
+                image: 0,
+                reserved: 0,
+                source_key: 99,
+                host,
+                validate_planes: None,
+            };
+            let own = || unsafe { ImportPins::copy(&binding, 1) }.unwrap();
+            let source = client::scene_packet::packet_tests::fixture().source;
+            let fused = |pins: ImportPins| {
+                worker
+                    .call(
+                        |r| Command::AdmitSubgraph(fixture_admit(), source, pins, r),
+                        true,
+                    )
+                    .unwrap()
+                    .0
+            };
+            // A definite commit rejection leaves nothing admitted or pinned.
+            assert_eq!(fused(own()), -4);
+            assert_eq!(pins.load(Ordering::SeqCst), 0);
+            assert_eq!(*events.lock().unwrap(), ["admit", "subgraph", "cancel"]);
+            assert_eq!(worker.call(Command::Close, false).unwrap().0, 0);
+        });
+        // Close succeeded above: the actor retired. Use a fresh one.
+        worker.join.lock().unwrap().take().unwrap().join().unwrap();
+        let events = Arc::new(Mutex::new(vec![]));
+        let worker = prepared_worker(status.clone(), events.clone());
+        status.store(0, Ordering::SeqCst);
+        with_input(|input, _, pins| {
+            let mut host = unsafe { *input.target };
+            host.image = std::ptr::dangling_mut::<u8>().cast();
+            let binding = mag_render_abi::packet::ImageBinding {
+                image: 0,
+                reserved: 0,
+                source_key: 99,
+                host,
+                validate_planes: None,
+            };
+            let own = || unsafe { ImportPins::copy(&binding, 1) }.unwrap();
+            let source = client::scene_packet::packet_tests::fixture().source;
+            let fused = |pins: ImportPins| {
+                worker
+                    .call(
+                        |r| Command::AdmitSubgraph(fixture_admit(), source, pins, r),
+                        true,
+                    )
+                    .unwrap()
+                    .0
+            };
+            assert_eq!(fused(own()), 0);
+            // Accepted work stays pending until its terminal: close is BUSY.
+            assert_eq!(worker.call(Command::Close, false).unwrap().0, -4);
+            // Fill the remaining admission slot; the next fused admission is a
+            // definite BUSY refusal that never reaches commit.
+            let held = prepare_on(&worker).unwrap();
+            assert_eq!(fused(own()), -4);
+            assert_eq!(pins.load(Ordering::SeqCst), 0);
+            assert_eq!(
+                worker.call(|r| Command::Cancel(held, r), false).unwrap().0,
+                0
+            );
+            worker.call(Command::Poll, false).unwrap();
+        });
+        assert_eq!(worker.call(Command::Close, false).unwrap().0, 0);
+        worker.join.lock().unwrap().take().unwrap().join().unwrap();
+        assert_eq!(
+            *events.lock().unwrap(),
+            ["admit", "subgraph", "admit", "admit", "cancel", "terminal"]
+        );
+    }
+    #[test]
+    fn actor_records_admit_and_commit_durations_before_replying() {
+        let status = Arc::new(AtomicI32::new(-4));
+        let events = Arc::new(Mutex::new(vec![]));
+        let worker = prepared_worker(status, events);
+        worker.timing.admit_ns.store(u64::MAX, Ordering::Relaxed);
+        worker.timing.reset();
+        assert_eq!(worker.timing.read(), (0, 0));
+        let token = prepare_on(&worker).unwrap();
+        assert_eq!(worker.timing.read().1, 0);
+        assert_eq!(
+            worker.call(|r| Command::Cancel(token, r), false).unwrap().0,
+            0
+        );
+        assert_eq!(worker.call(Command::Close, false).unwrap().0, 0);
+        worker.join.lock().unwrap().take().unwrap().join().unwrap();
+    }
+    #[test]
     fn lost_prepare_reply_cancels_only_uncommitted_state_on_actor() {
         let events = Arc::new(Mutex::new(vec![]));
         let worker = prepared_worker(Arc::new(AtomicI32::new(0)), events.clone());
@@ -2011,11 +2373,7 @@ mod tests {
         drop(rx);
         worker
             .commands
-            .send(Command::Admit(
-                23,
-                Box::new(client::scene_packet::packet_tests::fixture()),
-                tx,
-            ))
+            .send(Command::Admit(fixture_admit(), tx))
             .unwrap();
         assert_eq!(worker.call(Command::Close, false).unwrap().0, 0);
         worker.join.lock().unwrap().take().unwrap().join().unwrap();
