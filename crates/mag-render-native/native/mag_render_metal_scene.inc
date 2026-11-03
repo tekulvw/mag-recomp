@@ -369,6 +369,10 @@ static int metal_scene_owned(void *opaque, const mag_native_scene *scene, mag_na
             [blit copyFromTexture:source sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0,0,0) sourceSize:MTLSizeMake(source.width,source.height,1) toTexture:snapshot destinationSlice:0 destinationLevel:0 destinationOrigin:MTLOriginMake(0,0,0)];[blit endEncoding];
         }
         MTLRenderPassDescriptor *pd = [MTLRenderPassDescriptor renderPassDescriptor];
+        // Explicit render area, bounded by each attachment in common admission.
+        // Physical depth can be larger; no cropped view or identity is invented.
+        uint32_t area=p->color.image!=MAG_NATIVE_SCENE_NONE?p->color.image:p->depth.image;
+        pd.renderTargetWidth=scene->images[area].width;pd.renderTargetHeight=scene->images[area].height;
         if (p->color.image != MAG_NATIVE_SCENE_NONE) {
             pd.colorAttachments[0].texture = images[p->color.image];
             pd.colorAttachments[0].loadAction =

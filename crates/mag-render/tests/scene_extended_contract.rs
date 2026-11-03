@@ -474,3 +474,83 @@ fn missing_or_wrong_external_plane_facts_are_not_inferred_from_key_existence() {
         Err(SceneError::Uninitialized)
     ));
 }
+
+#[test]
+fn larger_initialized_depth_keeps_physical_extent_and_color_defines_render_area() {
+    let mut s = builder(1 << 20);
+    let color = s
+        .image(ImageDesc {
+            width: 2,
+            height: 2,
+            format: ImageFormat::Rgba8,
+        })
+        .unwrap();
+    let depth = s
+        .require_image(
+            ImageDesc {
+                width: 8,
+                height: 4,
+                format: ImageFormat::Depth32,
+            },
+            ExternalImage {
+                source_key: 9,
+                required_initialized_planes: 2,
+            },
+        )
+        .unwrap();
+    let pass = RenderPass {
+        color: Some(ColorAttachment {
+            image: color,
+            load: Load::Clear([0.; 4]),
+            store: Store::Store,
+        }),
+        depth: Some(DepthAttachment {
+            image: depth,
+            load: Load::Load(s.current(depth).unwrap()),
+            store: Store::Store,
+        }),
+        draws: vec![],
+    };
+    s.render_pass(pass).unwrap();
+    let prepared = s.prepare(&Catalog).unwrap();
+    assert_eq!(
+        (
+            prepared.images()[depth.index()].desc.width,
+            prepared.images()[depth.index()].desc.height
+        ),
+        (8, 4)
+    );
+    let mut s = builder(1 << 20);
+    let color = s
+        .image(ImageDesc {
+            width: 2,
+            height: 2,
+            format: ImageFormat::Rgba8,
+        })
+        .unwrap();
+    let depth = s
+        .image(ImageDesc {
+            width: 8,
+            height: 4,
+            format: ImageFormat::Depth32,
+        })
+        .unwrap();
+    assert!(
+        s.render_pass(RenderPass {
+            color: Some(ColorAttachment {
+                image: color,
+                load: Load::Clear([0.; 4]),
+                store: Store::Store
+            }),
+            depth: Some(DepthAttachment {
+                image: depth,
+                load: Load::Clear(1.),
+                store: Store::Store
+            }),
+            draws: vec![]
+        })
+        .is_err()
+    );
+    // Refused partial clear did not initialize the larger allocation.
+    assert!(s.current(depth).is_err());
+}

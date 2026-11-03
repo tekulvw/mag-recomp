@@ -5,7 +5,7 @@
 #include "mag_render_scene_validate.h"
 #include <assert.h>
 #include <stdio.h>
-static uint32_t available=7;static int wrong_extent,alias;static unsigned queries;
+static uint32_t available=7,depth_width=4,depth_height=4;static int wrong_extent,alias;static unsigned queries;
 static mag_native_raster_state raster;
 static mag_native_scene_texture_layout texture={1,0,1,MAG_NATIVE_SCENE_RGBA8,0,0};
 static mag_native_scene_graphics_desc graphics;
@@ -13,7 +13,7 @@ static int buffer(void *u,mag_native_buffer b,mag_native_scene_buffer_info *out)
 static int compute(void *u,mag_native_pipeline p,mag_native_scene_compute_info *out){(void)u;(void)p;(void)out;return MAG_NATIVE_STALE;}
 static int graphic(void *u,mag_native_pipeline p,const mag_native_scene_graphics_desc **out,uint32_t *model){(void)u;if(p.device_generation!=7)return MAG_NATIVE_STALE;*out=&graphics;*model=1;return 0;}
 static int state(void *u,mag_native_pipeline p,const mag_native_raster_state **out){(void)u;(void)p;*out=&raster;return 0;}
-static int image(void *u,mag_native_image ref,uint32_t required,mag_native_import_info *out){(void)u;++queries;if(ref.device_generation!=7||!ref.id)return MAG_NATIVE_STALE;if((required&available)!=required)return MAG_NATIVE_STALE;*out=(mag_native_import_info){ref.id==11?MAG_NATIVE_SCENE_D32S8:MAG_NATIVE_SCENE_RGBA8,wrong_extent?8:4,4,0,17,alias?99:ref.id,1};return 0;}
+static int image(void *u,mag_native_image ref,uint32_t required,mag_native_import_info *out){(void)u;++queries;if(ref.device_generation!=7||!ref.id)return MAG_NATIVE_STALE;if((required&available)!=required)return MAG_NATIVE_STALE;*out=(mag_native_import_info){ref.id==11?MAG_NATIVE_SCENE_D32S8:MAG_NATIVE_SCENE_RGBA8,wrong_extent?8:(ref.id==11?depth_width:4),ref.id==11?depth_height:4,0,17,alias?99:ref.id,1};return 0;}
 int main(void){
  graphics=(mag_native_scene_graphics_desc){.struct_size=sizeof(graphics),.abi_version=1,.vertex_stride=16,.color_format=MAG_NATIVE_SCENE_RGBA8,.fragment={.source_length=1},.textures=&texture,.texture_count=1};raster.known_fields=MAG_NATIVE_RASTER_KNOWN_ALL;raster.samples=1;
  mag_native_batch_resource resources[]={{{7,1,1},MAG_NATIVE_UPLOAD,0},{{7,2,1},MAG_NATIVE_UPLOAD,0}};
@@ -49,5 +49,12 @@ int main(void){
  raster.stencil_enabled=1;raster.front_stencil.compare=7;raster.back_stencil.compare=7;raster.front_stencil.write_mask=255;
  assert(mag_native_scene_validate_v5(&v,&r5,&usage)==MAG_NATIVE_UNSUPPORTED);raster.front_stencil.write_mask=0;
  assert(mag_native_scene_validate_v5(&v,&r5,&usage)==0);
+ /* Color4x4 render area on a distinct initialized8x8 physical depth. */
+ depth_width=depth_height=8;images[2].width=images[2].height=8;
+ assert(mag_native_scene_validate_v5(&v,&r5,&usage)==0);
+ pass.depth.load=MAG_NATIVE_SCENE_CLEAR;assert(mag_native_scene_validate_v5(&v,&r5,&usage)==MAG_NATIVE_UNSUPPORTED);pass.depth.load=MAG_NATIVE_SCENE_LOAD;
+ stencil.load=MAG_NATIVE_STENCIL_CLEAR;assert(mag_native_scene_validate_v5(&v,&r5,&usage)==MAG_NATIVE_UNSUPPORTED);stencil.load=MAG_NATIVE_STENCIL_LOAD;
+ depth_width=depth_height=2;images[2].width=images[2].height=2;
+ assert(mag_native_scene_validate_v5(&v,&r5,&usage)==MAG_NATIVE_INVALID);
  puts("PASS existing-image initialization certificates, exact extents/generation, alias and separate planes");
 }

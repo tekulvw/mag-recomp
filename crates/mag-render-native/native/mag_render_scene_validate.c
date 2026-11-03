@@ -274,10 +274,11 @@ static int scene_validate(const mag_native_scene *s, const mag_native_scene_regi
                 (a->load == MAG_NATIVE_SCENE_LOAD && !initialized[a->image]))
                 return MAG_NATIVE_INVALID;
             const mag_native_scene_image *im = &s->images[a->image];
-            if (width && (width != im->width || height != im->height))
-                return MAG_NATIVE_INVALID;
-            width = im->width;
-            height = im->height;
+            if(width){
+                if(im->width<width||im->height<height)return MAG_NATIVE_INVALID;
+                if((im->width!=width||im->height!=height)&&
+                   (a->load==MAG_NATIVE_SCENE_CLEAR||(v4&&v4->stencils[pass_index].load==MAG_NATIVE_STENCIL_CLEAR&&mag_native_image_has_stencil(im->format))))return MAG_NATIVE_UNSUPPORTED;
+            }else{width=im->width;height=im->height;}
             if (a->load == MAG_NATIVE_SCENE_CLEAR)
                 for (unsigned j = 0; j < (k ? 1u : 4u); ++j)
                     if (!isfinite(a->clear[j]) || ((k || im->format<11 || im->format>14) && (a->clear[j] < 0 || a->clear[j] > 1)))

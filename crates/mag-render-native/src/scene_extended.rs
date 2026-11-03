@@ -607,6 +607,34 @@ fn checked_v5_layout() -> Result<(), i32> {
 #[cfg(test)]
 mod v5_tests {
     #[test]
+    fn malformed_aux_constructor_clears_output_before_rejection() {
+        unsafe extern "C" {
+            fn mag_native_scene_graphics_create_aux(
+                device: *mut std::ffi::c_void,
+                desc: *const super::SceneGraphicsV3Desc,
+                flags: u32,
+                out: *mut super::Pipeline,
+            ) -> i32;
+        }
+        let mut out = super::Pipeline {
+            device_generation: 99,
+            id: 123,
+        };
+        assert_eq!(
+            unsafe {
+                mag_native_scene_graphics_create_aux(
+                    std::ptr::null_mut(),
+                    std::ptr::null(),
+                    0,
+                    &mut out,
+                )
+            },
+            -1
+        );
+        assert_eq!(out.device_generation, 0);
+        assert_eq!(out.id, 0);
+    }
+    #[test]
     fn imported_scene_fields_match_independent_c() {
         super::checked_v5_layout().unwrap();
     }

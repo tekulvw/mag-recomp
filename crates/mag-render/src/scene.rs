@@ -590,8 +590,20 @@ impl SceneBuilder {
                 return Err(SceneError::InvalidPass);
             }
             let desc = self.attachment(d.image, &d.load, format)?;
-            if extent.is_some_and(|c| c.width != desc.width || c.height != desc.height) {
-                return Err(SceneError::InvalidPass);
+            if let Some(color) = extent {
+                // The color allocation defines the render area; the depth image
+                // keeps its exact physical extent and must cover that whole area.
+                if desc.width < color.width || desc.height < color.height {
+                    return Err(SceneError::InvalidPass);
+                }
+                let larger = desc.width != color.width || desc.height != color.height;
+                // Partial clears cannot certify full depth/stencil initialization.
+                if larger
+                    && (matches!(d.load, Load::Clear(_))
+                        || stencil.is_some_and(|s| matches!(s.load, StencilLoad::Clear(_))))
+                {
+                    return Err(SceneError::InvalidPass);
+                }
             }
             attached.push((d.image, d.store, !matches!(d.load, Load::Discard)));
         }

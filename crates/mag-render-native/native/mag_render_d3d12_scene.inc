@@ -361,8 +361,14 @@ static int scene_prepare(Context *c, const mag_native_scene *scene,
   plan.extended=extended;plan.stencil=stencil;
   mag_native_scene_registry_v4 registry_v4={&registry_v2,scene_raster_info};
   int status = stencil?mag_native_scene_validate_v4(stencil,&registry_v4,&plan.usage):extended ? mag_native_scene_validate_v3(extended, &registry_v2, &plan.usage) : mag_native_scene_validate_v2(scene, &registry_v2, &plan.usage);
-  if (status)
-    return status;
+  if (status) {return status;}
+    /* Unequal attachment encoding is currently enabled only for Metal. */
+    for(uint32_t n=0;n<scene->pass_count;++n){const mag_native_scene_pass *p=&scene->passes[n];
+        if(p->color.image!=MAG_NATIVE_SCENE_NONE&&p->depth.image!=MAG_NATIVE_SCENE_NONE){
+            const mag_native_scene_image *color=&scene->images[p->color.image],*depth=&scene->images[p->depth.image];
+            if(color->width!=depth->width||color->height!=depth->height)return MAG_NATIVE_UNSUPPORTED;
+        }
+    }
   plan.buffers.buffers.resize(scene->resource_count);
   plan.buffers.roles.resize(scene->resource_count);
   plan.buffers.resources = scene->resource_count;

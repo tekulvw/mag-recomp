@@ -206,8 +206,9 @@ int mag_native_submit_scene_v5(mag_native_device *device,const mag_native_scene_
 }
 
 int mag_native_scene_graphics_create_aux(mag_native_device *device,const mag_native_scene_graphics_v3_desc *desc,uint32_t flags,mag_native_pipeline *out){
+ if(out){*out=(mag_native_pipeline){0};}
  if(!device||!desc||!out||flags!=MAG_NATIVE_PROGRAM_STORED_DEPTH_AUX)return MAG_NATIVE_INVALID;
- *out=(mag_native_pipeline){0};int status=mag_native_scene_graphics_v3_validate(desc);if(status)return status;
+ int status=mag_native_scene_graphics_v3_validate(desc);if(status)return status;
  if(!desc->raster.depth_bounds_enabled||desc->base.binding_model!=1||!desc->base.base.fragment.source_length)return MAG_NATIVE_INVALID;
  for(uint32_t i=0;i<desc->base.base.buffer_count;++i){const mag_native_scene_buffer_layout *b=&desc->base.base.buffers[i];if(b->stage==MAG_NATIVE_SCENE_FRAGMENT&&b->binding.slot==2)return MAG_NATIVE_INVALID;}
  for(uint32_t i=0;i<desc->base.base.texture_count;++i){const mag_native_scene_texture_layout *t=&desc->base.base.textures[i];if(t->stage==MAG_NATIVE_SCENE_FRAGMENT&&t->texture_slot==15)return MAG_NATIVE_INVALID;}

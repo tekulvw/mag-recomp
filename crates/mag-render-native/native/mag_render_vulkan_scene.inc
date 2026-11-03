@@ -722,6 +722,13 @@ static int submit_scene_owned(frontend_vk *c, const mag_native_scene *scene, mag
     int status = v4?mag_native_scene_validate_v4(v4,&registry_v4,&usage):v3?mag_native_scene_validate_v3(v3,&registry_v2,&usage):mag_native_scene_validate_v2(scene, &registry_v2, &usage);
     if (status)
         return status;
+    /* Unequal attachment encoding is currently enabled only for Metal. */
+    for(uint32_t n=0;n<scene->pass_count;++n){const mag_native_scene_pass *p=&scene->passes[n];
+        if(p->color.image!=MAG_NATIVE_SCENE_NONE&&p->depth.image!=MAG_NATIVE_SCENE_NONE){
+            const mag_native_scene_image *color=&scene->images[p->color.image],*depth=&scene->images[p->depth.image];
+            if(color->width!=depth->width||color->height!=depth->height)return MAG_NATIVE_UNSUPPORTED;
+        }
+    }
     status=scene_filter_capabilities(c,scene,v3,sampler_table);
     if(status)return status;
     status=scene_viewport_capabilities(c,scene,v3);
