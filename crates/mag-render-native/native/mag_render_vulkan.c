@@ -31,7 +31,13 @@ typedef struct frontend_vk_buffer {
     uint64_t id, version, length; uint32_t public_ref, readers, writers; int seed_zero,gpu_written;
     VkBuffer gpu; VkDeviceMemory memory; void *mapped; struct frontend_vk_buffer *next;
 } frontend_vk_buffer;
-typedef struct frontend_vk_scene_image {VkImage image;VkDeviceMemory memory;VkImageView view,sampled_view;VkImageLayout layout;VkImageAspectFlags aspect;uint32_t mip_count,layers;} frontend_vk_scene_image;
+typedef struct frontend_vk_imported_image {
+    uint64_t id;uint32_t public_ref,references;
+    MagRenderHostImage host;MagRenderVulkanImage metadata;
+    mag_native_validate_planes_fn validate_planes;
+    struct frontend_vk_imported_image *next;
+} frontend_vk_imported_image;
+typedef struct frontend_vk_scene_image {VkImage image;VkDeviceMemory memory;VkImageView view,sampled_view;VkImageLayout layout;VkImageAspectFlags aspect;uint32_t mip_count,layers;frontend_vk_imported_image *borrowed;} frontend_vk_scene_image;
 typedef struct frontend_vk_pipeline {
     uint64_t id; uint32_t public_ref, references, count; int graphics;VkRenderPass render_pass;
     mag_native_binding_layout bindings[16];
@@ -56,15 +62,18 @@ typedef struct frontend_vk_slot {
 typedef struct frontend_vk {
     mag_native_vulkan_owner owner;
     mag_native_sampler_registry samplers;
-    uint64_t generation, next_buffer, next_pipeline, next_submission;
+    uint64_t generation, next_buffer, next_pipeline, next_submission,next_image;
     uint64_t known_features,enabled_features;
     int failed;
     frontend_vk_family *families; frontend_vk_buffer *buffers; frontend_vk_pipeline *pipelines;
+    frontend_vk_imported_image *images;
     frontend_vk_slot slots[2];
 #define DECLARE(name) PFN_##name name;
     FRONTEND_VK_FUNCTIONS(DECLARE)
 #undef DECLARE
 } frontend_vk;
+static void imported_image_unpin(frontend_vk *,frontend_vk_imported_image *);
+static void imported_image_dispose(frontend_vk *,frontend_vk_imported_image *);
 
 static frontend_vk_buffer *buffer_find(frontend_vk *c, mag_native_buffer ref) {
     if (ref.device_generation != c->generation || !ref.id || !ref.version) return NULL;
@@ -115,7 +124,7 @@ static void scene_attachments_release(frontend_vk *c,frontend_vk_slot *slot){
  for(uint32_t i=0;i<slot->scene_pass_count;++i){if(slot->scene_framebuffers[i])c->vkDestroyFramebuffer(c->owner.device,slot->scene_framebuffers[i],NULL);if(slot->scene_renderpasses[i])c->vkDestroyRenderPass(c->owner.device,slot->scene_renderpasses[i],NULL);slot->scene_framebuffers[i]=VK_NULL_HANDLE;slot->scene_renderpasses[i]=VK_NULL_HANDLE;}slot->scene_pass_count=0;
  for(uint32_t i=0;i<slot->scene_view_count;++i)if(slot->scene_views[i])c->vkDestroyImageView(c->owner.device,slot->scene_views[i],NULL);
  slot->scene_view_count=0;free(slot->scene_views);slot->scene_views=NULL;
- for(uint32_t i=0;i<slot->scene_image_count;++i){frontend_vk_scene_image *im=&slot->scene_images[i];if(im->sampled_view)c->vkDestroyImageView(c->owner.device,im->sampled_view,NULL);if(im->view)c->vkDestroyImageView(c->owner.device,im->view,NULL);if(im->image)c->vkDestroyImage(c->owner.device,im->image,NULL);if(im->memory)c->vkFreeMemory(c->owner.device,im->memory,NULL);memset(im,0,sizeof(*im));}slot->scene_image_count=0;free(slot->scene_images);slot->scene_images=NULL;
+ for(uint32_t i=0;i<slot->scene_image_count;++i){frontend_vk_scene_image *im=&slot->scene_images[i];if(im->sampled_view)c->vkDestroyImageView(c->owner.device,im->sampled_view,NULL);if(im->view)c->vkDestroyImageView(c->owner.device,im->view,NULL);if(im->image&&!im->borrowed)c->vkDestroyImage(c->owner.device,im->image,NULL);if(im->memory&&!im->borrowed)c->vkFreeMemory(c->owner.device,im->memory,NULL);frontend_vk_imported_image *borrowed=im->borrowed;memset(im,0,sizeof(*im));if(borrowed)imported_image_unpin(c,borrowed);}slot->scene_image_count=0;free(slot->scene_images);slot->scene_images=NULL;
  for(unsigned i=0;i<3;++i){if(slot->scene_samplers[i])c->vkDestroySampler(c->owner.device,slot->scene_samplers[i],NULL);slot->scene_samplers[i]=VK_NULL_HANDLE;}
 }
 static void slot_release(frontend_vk *c, frontend_vk_slot *slot) {
@@ -391,6 +400,7 @@ static int close_context(void *opaque) {
     int sampler_status=mag_native_sampler_registry_close(&c->samplers);if(sampler_status)return sampler_status;
     while (c->buffers) buffer_dispose(c, c->buffers);
     while (c->pipelines) pipeline_dispose(c, c->pipelines);
+    while (c->images) imported_image_dispose(c,c->images);
     while (c->families) { frontend_vk_family *old = c->families; c->families = old->next; free(old); }
     MagRenderHostOwner host=c->owner.host;free(c);
     host.release(host.userdata,host.lifetime);return MAG_NATIVE_OK;
@@ -398,9 +408,10 @@ static int close_context(void *opaque) {
 
 #include "mag_render_vulkan_sampler.inc"
 #include "mag_render_vulkan_batch.inc"
+#include "mag_render_vulkan_import.inc"
 #include "mag_render_vulkan_scene.inc"
 static const mag_native_ops operations = {caps, buffer_create, buffer_release, buffer_read,
-    pipeline_create, pipeline_release, submit, poll, close_context, graphics_create, submit_batch, scene_graphics_create, submit_scene, NULL, NULL, NULL, NULL, scene_graphics_create_v2,scene_graphics_create_v3,sampler_create,sampler_release,submit_scene_v2,submit_scene_v3,submit_scene_v4,NULL,NULL,NULL};
+    pipeline_create, pipeline_release, submit, poll, close_context, graphics_create, submit_batch, scene_graphics_create, submit_scene, image_import, image_release, NULL, NULL, scene_graphics_create_v2,scene_graphics_create_v3,sampler_create,sampler_release,submit_scene_v2,submit_scene_v3,submit_scene_v4,image_import_certified,NULL,submit_scene_v5};
 static int vulkan_create(const MagRenderHostOwner *host,uint64_t known,uint64_t enabled,mag_native_device **out) {
     if (!host || !out || host->backend!=MAG_RENDER_HOST_VULKAN) return MAG_NATIVE_INVALID;
     *out=NULL;int status=host->retain(host->userdata,host->lifetime);

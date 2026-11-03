@@ -68,14 +68,17 @@ def check(args):
             NATIVE / "mag_render_scene_validate.c", NATIVE / "mag_render_stencil_validate.c", NATIVE / "mag_render_image_validate.c",
             NATIVE / "mag_render_raster_validate.c", NATIVE / "mag_render_sampler_validate.c",
             NATIVE / "mag_render_sampler_registry.c"]))
+        fixtures.append(("vulkan_image_contract", [FIXTURES / "test_vulkan_image_contract.c"]))
     results = {}
     sources = {Path(__file__).resolve(), *(NATIVE / name for name in (
         "mag_render_imported_image.h", "mag_render_stencil.h", "mag_render_stencil_validate.h", "mag_render_stencil_validate.c", "mag_render_image_format.h", "mag_render_image_validate.h", "mag_render_scene_extended.h", "mag_render_viewport.h", "mag_render_sampler.h", "mag_render_sampler_registry.h", "mag_render_raster.h", "mag_render_raster_validate.c", "mag_render_d3d12_limits.h", "mag_render_batch.h", "mag_render_native.h", "mag_render_host_owner.h", "mag_render_scene.h", "mag_render_scene_validate.h", "mag_render_host_image.h", "mag_render_host_frame.h"))}
     if windows:
         sources.update(NATIVE / name for name in ("mag_render_native_internal.h", "mag_render_dxc.h", "mag_render_scene.h", "mag_render_scene_validate.h", "mag_render_scene_validate.c", "mag_render_d3d12_scene.inc", "mag_render_d3d12_sampler.inc", "mag_render_host_image.h", "mag_render_host_frame.h"))
     if args.vulkan_include:
+        sources.add(FIXTURES / "test_vulkan_import_cpu.inc")
         sources.update(NATIVE / name for name in ("mag_render_vulkan.c", "mag_render_vulkan_scene.inc",
-            "mag_render_vulkan_sampler.inc", "mag_render_vulkan_batch.inc", "mag_render_vulkan.h", "mag_render_native_internal.h"))
+            "mag_render_vulkan_sampler.inc", "mag_render_vulkan_batch.inc", "mag_render_vulkan.h", "mag_render_native_internal.h",
+            "mag_render_vulkan_import.inc", "mag_render_vulkan_image.h", "mag_render_vulkan_image_validate.h"))
     for name, inputs in fixtures:
         binary = args.output_dir / (name + (".exe" if windows else ""))
         c_only = all(path.suffix == ".c" for path in inputs)
@@ -87,7 +90,7 @@ def check(args):
                        *inputs, f"/Fe{binary}"]
         else:
             command = [c_compiler if c_only else compiler, *( ["-x", "c", "-std=c11"] if c_only else ["-std=c++17"] ), "-Wall", "-Wextra", "-Werror", f"-I{NATIVE}", *inputs, "-o", binary]
-        if args.vulkan_include and name == "vulkan_scene_extended":
+        if args.vulkan_include and name in ("vulkan_scene_extended", "vulkan_image_contract"):
             command.insert(1, f"-I{args.vulkan_include}")
         if not windows:
             command.append("-lm")

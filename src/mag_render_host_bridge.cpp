@@ -8,6 +8,24 @@
 #else
 #include "rsx_vulkan_backend.h"
 #endif
+#if !defined(__APPLE__) && !defined(_WIN32) && defined(RSX_NATIVE_VULKAN_IMAGE_ABI)
+#include "mag_render_vulkan_image.h"
+static_assert(MAG_RENDER_VULKAN_IMAGE_ABI == RSX_NATIVE_VULKAN_IMAGE_ABI);
+static_assert(sizeof(MagRenderHostImage) == sizeof(rsx_native_image));
+static_assert(alignof(MagRenderHostImage) == alignof(rsx_native_image));
+static_assert(offsetof(MagRenderHostImage, resource_generation) == offsetof(rsx_native_image, resource_generation));
+static_assert(offsetof(MagRenderHostImage, image) == offsetof(rsx_native_image, image));
+static_assert(offsetof(MagRenderHostImage, retain) == offsetof(rsx_native_image, retain));
+static_assert(offsetof(MagRenderHostImage, validate) == offsetof(rsx_native_image, validate));
+static_assert(sizeof(MagRenderVulkanImage) == sizeof(rsx_native_vulkan_image));
+static_assert(alignof(MagRenderVulkanImage) == alignof(rsx_native_vulkan_image));
+#define VULKAN_IMAGE_FIELD(field) static_assert(offsetof(MagRenderVulkanImage, field) == offsetof(rsx_native_vulkan_image, field))
+VULKAN_IMAGE_FIELD(abi_version);VULKAN_IMAGE_FIELD(struct_size);VULKAN_IMAGE_FIELD(image_bits);
+VULKAN_IMAGE_FIELD(format);VULKAN_IMAGE_FIELD(usage);VULKAN_IMAGE_FIELD(aspect);
+VULKAN_IMAGE_FIELD(mip_count);VULKAN_IMAGE_FIELD(layers);VULKAN_IMAGE_FIELD(samples);
+VULKAN_IMAGE_FIELD(queue_family);VULKAN_IMAGE_FIELD(layout);
+#undef VULKAN_IMAGE_FIELD
+#endif
 #if !defined(_WIN32)
 static_assert(sizeof(MagRenderHostOwner) == sizeof(rsx_native_owner));
 static_assert(alignof(MagRenderHostOwner) == alignof(rsx_native_owner));
@@ -106,6 +124,14 @@ extern "C" int mag_render_frontend_borrow_image(uint64_t life, uint32_t surface,
     if (!status)
         std::memcpy(out, &image, sizeof(image));
     return status;
+#elif !defined(_WIN32) && defined(RSX_NATIVE_VULKAN_IMAGE_ABI)
+    rsx_native_image image = {};
+    image.abi_version = 1;
+    image.struct_size = sizeof(image);
+    int status = rsx_vulkan_backend_borrow_image(life, surface, &image);
+    if (!status)
+        std::memcpy(out, &image, sizeof(image));
+    return status;
 #else
     (void)life;
     (void)surface;
@@ -117,6 +143,8 @@ extern "C" int mag_render_frontend_validate_image_planes(void *user, uint64_t li
     uint64_t resource, uint64_t generation, uint32_t required) {
 #if defined(__APPLE__)
     return rsx_metal_backend_validate_image_planes(user, life, resource, generation, required);
+#elif !defined(_WIN32) && defined(RSX_NATIVE_VULKAN_IMAGE_ABI)
+    return rsx_vulkan_backend_validate_image_planes(user, life, resource, generation, required);
 #else
     (void)user; (void)life; (void)resource; (void)generation; (void)required;
     return -2;
@@ -180,6 +208,8 @@ extern "C" int mag_render_frontend_native_boundary(uint64_t *ticket) {
     *ticket = 0;
 #if defined(__APPLE__)
     return rsx_metal_backend_native_boundary(ticket);
+#elif !defined(_WIN32) && defined(RSX_NATIVE_VULKAN_IMAGE_ABI)
+    return rsx_vulkan_backend_native_boundary(ticket);
 #else
     return -2;
 #endif

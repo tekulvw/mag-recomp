@@ -6,6 +6,7 @@
 #define VK_NO_PROTOTYPES
 #include <vulkan/vulkan.h>
 #include "mag_render_native.h"
+#include "mag_render_vulkan_image.h"
 
 /* Native implementation state only; no SDK headers or pthread internals. */
 typedef struct mag_native_vulkan_owner {
