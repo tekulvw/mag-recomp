@@ -1,6 +1,6 @@
 use mag_render_programs::{
     HlslProgram, ProgramError, VertexProgram, vertex, vertex_constant_reads,
-    vertex_position_only_poc,
+    vertex_position_only_poc, vertex_position_source_poc,
 };
 const SETUP_END: &str = "    float4 cc[2]; cc[0] = (float4)0; cc[1] = (float4)0;\n";
 fn fixture(blocks: &str) -> HlslProgram {
@@ -194,4 +194,88 @@ fn mixed_stores_preserve_cc_read_before_its_update_and_rhs_self_reads() {
     assert!(sliced.source.contains(&initial));
     assert!(sliced.source.contains(&mixed));
     assert_eq!(vertex_constant_reads(&sliced).unwrap().rows, [8]);
+}
+
+fn two_source_inputs() -> Vec<u32> {
+    let input = 0x1b02;
+    [
+        [
+            (1 << 30) | (63 << 15),
+            (1 << 22) | (2 << 8) | (input >> 9),
+            (input & 511) << 23,
+            (15 << 13) | (11 << 2),
+        ],
+        [
+            (1 << 30) | (63 << 15),
+            (1 << 22) | (input >> 9),
+            (input & 511) << 23,
+            (15 << 13) | 1,
+        ],
+    ]
+    .into_iter()
+    .flatten()
+    .collect()
+}
+#[test]
+fn position_interface_requires_only_actual_live_inputs_after_symbolic_analysis() {
+    let words = two_source_inputs();
+    let controls = || VertexProgram {
+        words: &words,
+        start_slot: 0,
+        vertex_textures: 0,
+        enabled_arrays: 1,
+        known_current_attributes: 0,
+    };
+    assert!(matches!(vertex(controls()), Err(ProgramError::Invalid)));
+    let position = vertex_position_source_poc(controls()).unwrap();
+    assert_eq!(position.input_mask, 1);
+    assert_eq!(position.current_attribute_mask, 0);
+    assert_eq!(position.constant_buffer_bytes, 514 * 16);
+    assert!(position.source.contains("v[0]=input.a0;"));
+    assert!(!position.source.contains("v[2]="));
+    assert!(!position.source.contains("a2:LOC2"));
+    assert!(!position.source.contains("vp_current"));
+}
+#[test]
+fn unknown_live_current_still_refuses_and_known_current_binds_its_real_slot() {
+    let mut words = two_source_inputs();
+    words[5] |= 2 << 8; // Actual POSITION now reads input2.
+    let controls = |known| VertexProgram {
+        words: &words,
+        start_slot: 0,
+        vertex_textures: 0,
+        enabled_arrays: 1,
+        known_current_attributes: known,
+    };
+    assert!(matches!(
+        vertex_position_source_poc(controls(0)),
+        Err(ProgramError::Invalid)
+    ));
+    let position = vertex_position_source_poc(controls(4)).unwrap();
+    assert_eq!(position.input_mask, 4);
+    assert_eq!(position.current_attribute_mask, 4);
+    assert_eq!(position.constant_buffer_bytes, 530 * 16);
+    assert!(position.source.contains("v[2]=vp_current[2];"));
+    assert!(!position.source.contains("v[0]="));
+    assert!(position.source.contains("vertex_id:SV_VertexID"));
+}
+#[cfg(feature = "native-compiler")]
+#[test]
+fn live_input_interface_lowers_with_only_the_actual_live_vertex_location() {
+    let words = two_source_inputs();
+    let position = vertex_position_source_poc(VertexProgram {
+        words: &words,
+        start_slot: 0,
+        vertex_textures: 0,
+        enabled_arrays: 1,
+        known_current_attributes: 0,
+    })
+    .unwrap();
+    let native = mag_render_programs::native_compile::lower(
+        &position,
+        mag_render_programs::native_compile::Stage::Vertex,
+    )
+    .unwrap();
+    assert_eq!(native.vertex_locations, [0]);
+    assert_eq!(native.buffers[0].bytes, 514 * 16);
 }

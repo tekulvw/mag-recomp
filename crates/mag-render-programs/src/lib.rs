@@ -62,7 +62,9 @@ fn output(buffer: &[u8]) -> Result<String, ProgramError> {
     }
     Ok(text.to_owned())
 }
-pub fn vertex(program: VertexProgram<'_>) -> Result<HlslProgram, ProgramError> {
+// Emit symbolic source inputs before deciding whether each is a real stream
+// or a current value. This intermediate source is never lowered or submitted.
+fn vertex_unbound(program: &VertexProgram<'_>) -> Result<HlslProgram, ProgramError> {
     if program.words.is_empty()
         || !program.words.len().is_multiple_of(4)
         || program.words.len() > 512 * 4
@@ -114,17 +116,38 @@ pub fn vertex(program: VertexProgram<'_>) -> Result<HlslProgram, ProgramError> {
     if count < 0 {
         return Err(ProgramError::Compiler);
     }
-    let current = analysis.mask & !u32::from(program.enabled_arrays);
-    if current & !u32::from(program.known_current_attributes) != 0 {
+    let mut source = output(&buffer)?;
+    for unit in 0..4 {
+        source = source.replace(
+            &format!("register(t{})", 16 + unit),
+            &format!("register(t{unit})"),
+        );
+    }
+    Ok(HlslProgram {
+        source,
+        instructions: count as u32,
+        constant_slots: 512,
+        input_mask: analysis.mask,
+        current_attribute_mask: 0,
+        constant_buffer_bytes: 514 * 16,
+    })
+}
+fn bind_vertex_interface(
+    mut shader: HlslProgram,
+    enabled_arrays: u16,
+    known_current_attributes: u16,
+) -> Result<HlslProgram, ProgramError> {
+    let current = shader.input_mask & !u32::from(enabled_arrays);
+    if current & !u32::from(known_current_attributes) != 0 {
         return Err(ProgramError::Invalid);
     }
-    let mut source = output(&buffer)?;
+    let mut source = shader.source;
     let start = source
         .find("struct VSInput {\n")
         .ok_or(ProgramError::Compiler)?;
     let end = start + source[start..].find("};\n").ok_or(ProgramError::Compiler)? + 3;
     let mut declaration = String::from("struct VSInput {\n");
-    let enabled = analysis.mask & u32::from(program.enabled_arrays);
+    let enabled = shader.input_mask & u32::from(enabled_arrays);
     for i in 0..16 {
         if enabled & (1 << i) != 0 {
             declaration.push_str(&format!("    [[vk::location({i})]] float4 a{i}:LOC{i};\n"));
@@ -146,20 +169,31 @@ pub fn vertex(program: VertexProgram<'_>) -> Result<HlslProgram, ProgramError> {
             }
         }
     }
-    for unit in 0..4 {
-        source = source.replace(
-            &format!("register(t{})", 16 + unit),
-            &format!("register(t{unit})"),
-        );
-    }
-    Ok(HlslProgram {
-        source,
-        instructions: count as u32,
-        constant_slots: 512,
-        input_mask: analysis.mask,
-        current_attribute_mask: current,
-        constant_buffer_bytes: (514 + if current != 0 { 16 } else { 0 }) * 16,
-    })
+    shader.source = source;
+    shader.current_attribute_mask = current;
+    shader.constant_buffer_bytes = (514 + if current != 0 { 16 } else { 0 }) * 16;
+    Ok(shader)
+}
+/// Complete source VP with validation of every actual shader input.
+pub fn vertex(program: VertexProgram<'_>) -> Result<HlslProgram, ProgramError> {
+    bind_vertex_interface(
+        vertex_unbound(&program)?,
+        program.enabled_arrays,
+        program.known_current_attributes,
+    )
+}
+/// Explicit POC only: determine the source POSITION dependency graph before
+/// requiring its actual stream/current interface. Dead inputs get no value or
+/// binding; every live disabled input still requires a known current attribute.
+/// Unsupported slicing grammar returns Unsupported rather than assuming values.
+pub fn vertex_position_source_poc(program: VertexProgram<'_>) -> Result<HlslProgram, ProgramError> {
+    let symbolic = vertex_unbound(&program)?;
+    let live = position_poc::vertex_position_live_inputs_poc(&symbolic)?;
+    bind_vertex_interface(
+        live,
+        program.enabled_arrays,
+        program.known_current_attributes,
+    )
 }
 /// Conservative reads of the actual controlled emitter's VP constant bank.
 /// Indexed addressing requires all rows; static reads need only listed rows.

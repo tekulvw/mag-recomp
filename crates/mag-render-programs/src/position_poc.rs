@@ -69,12 +69,18 @@ struct Block<'a> {
     text: &'a str,
     writes: Vec<Write>,
     reads: Vec<Register>,
+    inputs: u16,
 }
-fn expression(text: &str) -> Result<Vec<Register>, ProgramError> {
+struct ExpressionReads {
+    registers: Vec<Register>,
+    inputs: u16,
+}
+fn expression(text: &str) -> Result<ExpressionReads, ProgramError> {
     let bytes = text.as_bytes();
     let mut at = 0;
     let mut depth = 0;
     let mut reads = Vec::new();
+    let mut inputs = 0u16;
     while at < bytes.len() {
         let byte = bytes[at];
         if byte.is_ascii_whitespace() {
@@ -120,6 +126,9 @@ fn expression(text: &str) -> Result<Vec<Register>, ProgramError> {
                         .map_err(|_| ProgramError::Unsupported)?;
                     if index >= if name == "v" { 16 } else { 512 } {
                         return unsupported();
+                    }
+                    if name == "v" {
+                        inputs |= 1 << index;
                     }
                     at = text.len() - tail.len();
                 }
@@ -179,7 +188,10 @@ fn expression(text: &str) -> Result<Vec<Register>, ProgramError> {
     if depth != 0 {
         return unsupported();
     }
-    Ok(reads)
+    Ok(ExpressionReads {
+        registers: reads,
+        inputs,
+    })
 }
 fn block(text: &str) -> Result<Block<'_>, ProgramError> {
     let mut lines = text.lines();
@@ -249,7 +261,8 @@ fn block(text: &str) -> Result<Block<'_>, ProgramError> {
     Ok(Block {
         text,
         writes,
-        reads,
+        reads: reads.registers,
+        inputs: reads.inputs,
     })
 }
 fn setup(text: &str) -> Result<(), ProgramError> {
@@ -276,6 +289,17 @@ fn setup(text: &str) -> Result<(), ProgramError> {
 /// output computations are omitted; unsupported grammar refuses specialization.
 /// This is conservative static liveness, not proof of executed instructions.
 pub fn vertex_position_only_poc(program: &HlslProgram) -> Result<HlslProgram, ProgramError> {
+    position_slice(program, false)
+}
+pub(crate) fn vertex_position_live_inputs_poc(
+    program: &HlslProgram,
+) -> Result<HlslProgram, ProgramError> {
+    position_slice(program, true)
+}
+fn position_slice(
+    program: &HlslProgram,
+    specialize_inputs: bool,
+) -> Result<HlslProgram, ProgramError> {
     if program.source.len() > 1024 * 1024 || program.instructions > 512 {
         return unsupported();
     }
@@ -342,7 +366,28 @@ pub fn vertex_position_only_poc(program: &HlslProgram) -> Result<HlslProgram, Pr
     source.push_str("struct VSOutput { float4 pos:SV_Position; };\n");
     source.push_str(&prefix[end..]);
     source.push_str("VSOutput main(VSInput input) {\n");
-    source.push_str(initial);
+    let live_inputs = blocks
+        .iter()
+        .zip(&keep)
+        .filter(|(_, keep)| **keep)
+        .fold(0u16, |mask, (block, _)| mask | block.inputs);
+    if u32::from(live_inputs) & !program.input_mask != 0 {
+        return unsupported();
+    }
+    if specialize_inputs {
+        for line in initial.split_inclusive('\n') {
+            let dead_assignment = (0..16).any(|i| {
+                live_inputs & (1 << i) == 0
+                    && (line == format!("    v[{i}]=input.a{i};\n")
+                        || line == format!("    v[{i}]=vp_current[{i}];\n"))
+            });
+            if !dead_assignment {
+                source.push_str(line);
+            }
+        }
+    } else {
+        source.push_str(initial);
+    }
     source.push_str(SETUP_END);
     for (b, keep) in blocks.iter().zip(keep) {
         if keep {
@@ -354,7 +399,11 @@ pub fn vertex_position_only_poc(program: &HlslProgram) -> Result<HlslProgram, Pr
         source,
         instructions: program.instructions,
         constant_slots: program.constant_slots,
-        input_mask: program.input_mask,
+        input_mask: if specialize_inputs {
+            u32::from(live_inputs)
+        } else {
+            program.input_mask
+        },
         current_attribute_mask: program.current_attribute_mask,
         constant_buffer_bytes: program.constant_buffer_bytes,
     })
