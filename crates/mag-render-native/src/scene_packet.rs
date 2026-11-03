@@ -3241,6 +3241,8 @@ pub(crate) fn commit_subgraph_reserved(
             receipt: failed,
             identities: vec![],
         });
+        // Make the FAILED terminal visible to the host at once.
+        let _ = s.publish_ready();
     };
     let _ = ffi(|| {
         with_session(id, |s| {

@@ -270,6 +270,21 @@ struct Session {
     /// A reserved submission already acknowledged to the caller failed while
     /// encoding: its failed terminal receipt was queued; nothing more is admitted.
     acknowledged_failure: bool,
+    /// Worker sessions only: terminal receipts published for the host, which
+    /// drains them without an actor round trip (so a busy actor never hides
+    /// receipts that are already terminal). `ready` is then only staging.
+    outbox: Option<Outbox>,
+}
+/// Terminal receipts shared between a worker session (producer, actor thread)
+/// and its host poll (consumer, any thread). In order; bounded by MAX_READY
+/// together with the session's staging queue.
+pub(crate) type Outbox = std::sync::Arc<std::sync::Mutex<VecDeque<Receipt>>>;
+/// Route this session's terminal receipts to `outbox` from now on.
+pub(crate) fn set_session_outbox(id: u64, outbox: Outbox) -> Result<(), i32> {
+    with_session(id, |s| {
+        s.outbox = Some(outbox);
+        s.publish_ready()
+    })
 }
 /// GPU work admitted or submitted and not yet terminal, per session.
 const MAX_IN_FLIGHT: usize = 2;
@@ -308,10 +323,29 @@ impl Session {
                 self.ready.push_back(p);
             }
         }
+        // Receipts already terminal are published even if the poll failed.
+        self.publish_ready()?;
         if !poll.errors.is_empty() {
             return Err(-6);
         }
         Ok(())
+    }
+    /// Move staged terminal receipts to the host outbox, if this session has one.
+    pub(crate) fn publish_ready(&mut self) -> Result<(), i32> {
+        let Some(outbox) = &self.outbox else {
+            return Ok(());
+        };
+        let mut queue = outbox.lock().map_err(|_| -6)?;
+        queue.extend(self.ready.drain(..).map(|p| p.receipt));
+        Ok(())
+    }
+    /// Terminal receipts not yet taken by the host (staged and published).
+    fn host_held(&self) -> Result<usize, i32> {
+        let published = match &self.outbox {
+            Some(o) => o.lock().map_err(|_| -6)?.len(),
+            None => 0,
+        };
+        Ok(self.ready.len() + published)
     }
     fn in_flight(&self) -> usize {
         self.admissions.len() + self.pending.len()
@@ -328,7 +362,7 @@ impl Session {
                 self.collect_terminals()?;
             }
             first = false;
-            Ok((self.in_flight(), self.ready.len()))
+            Ok((self.in_flight(), self.host_held()?))
         });
         let (result, waited) = match outcome {
             Ok(None) => return Ok(()),
@@ -336,6 +370,16 @@ impl Session {
             Err((code, waited)) => (Err(code), waited),
         };
         let Some(waited) = waited else {
+            if let Err(code) = result {
+                // Immediate: the host has not taken MAX_READY terminal
+                // receipts. Waiting cannot help while the caller is the one
+                // serialized ahead of the host's poll.
+                eprintln!(
+                    "[mag native backpressure] refused reason=receipts-full in_flight={} host_held={} status={code}",
+                    self.in_flight(),
+                    self.host_held().unwrap_or(usize::MAX)
+                );
+            }
             return result;
         };
         let waits = BACKPRESSURE_WAITS.fetch_add(1, Ordering::Relaxed) + 1;
@@ -353,7 +397,7 @@ impl Session {
                 total as f64 / 1e6,
                 max as f64 / 1e6,
                 self.in_flight(),
-                self.ready.len(),
+                self.host_held().unwrap_or(usize::MAX),
                 result.err().unwrap_or(0)
             );
         }
@@ -635,6 +679,7 @@ fn create_session(
                 pending: BTreeMap::new(),
                 ready: VecDeque::new(),
                 acknowledged_failure: false,
+                outbox: None,
             },
         )
     });
@@ -903,6 +948,20 @@ pub unsafe extern "C" fn mag_render_client_poll(id: u64, out: *mut Receipt) -> i
     }
     ffi(|| {
         with_session(id, |s| {
+            if let Some(outbox) = s.outbox.clone() {
+                // Published receipts first (in order), then newly terminal ones.
+                s.publish_ready()?;
+                let take = || outbox.lock().map_err(|_| -6).map(|mut q| q.pop_front());
+                let receipt = match take()? {
+                    Some(r) => r,
+                    None => {
+                        s.collect_terminals()?;
+                        take()?.ok_or(-4)?
+                    }
+                };
+                unsafe { *out = receipt };
+                return Ok(());
+            }
             if let Some(p) = s.ready.pop_front() {
                 unsafe { *out = p.receipt };
                 return Ok(());
