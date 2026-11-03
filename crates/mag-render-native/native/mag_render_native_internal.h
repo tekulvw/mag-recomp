@@ -40,6 +40,8 @@ typedef struct mag_native_ops {
     int (*abandon_scene_reservation)(void *);
     /* Optional; NULL reports UNSUPPORTED so callers keep create-per-frame. */
     int (*buffer_write)(void *, mag_native_buffer, uint64_t, const void *, uint64_t);
+    /* Optional diagnostic; NULL reports UNSUPPORTED. */
+    int (*scene_chunk_stats)(void *, uint64_t *, uint32_t);
 } mag_native_ops;
 mag_native_device *mag_native_wrap(const mag_native_ops *, void *);
 int mag_native_close(mag_native_device *);

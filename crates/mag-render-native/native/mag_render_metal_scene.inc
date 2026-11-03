@@ -315,8 +315,33 @@ static void metal_resident_insert(MagRenderMetal *c,uint64_t hash,NSData *shape,
  * queue position never blocks later work. Any encoders were already ended. */
 static void metal_reservation_release(MagRenderMetal *c){
     if(!c->reserved)return;
+    /* In queue order; already committed chunks are left as they are. */
     if(c->reserved.status<MTLCommandBufferStatusCommitted)[c->reserved commit];
+    for(id<MTLCommandBuffer> chunk in c->reserved_chunks)if(chunk.status<MTLCommandBufferStatusCommitted)[chunk commit];
+    [c->reserved_chunks removeAllObjects];
     c->reserved=nil;c->reserved_count=0;c->reserved_ticket=(mag_native_ticket){0};
+}
+/* Make a submission visible to poll/close with its ticket and buffer uses.
+ * The chunked path does this before its first early commit, so GPU work that
+ * is already queued is always tracked, even if later encoding fails. */
+static void metal_scene_register(MagRenderMetal *c,MagRenderSubmission *s,NSArray<id<MTLCommandBuffer>> *slots,mag_native_ticket *out){
+    if(c->reserved_encoding)s->ticket=c->reserved_ticket;
+    else s->ticket=(mag_native_ticket){c->generation,++c->next_submission};
+    if(slots)s->chunks=[slots subarrayWithRange:NSMakeRange(0,slots.count-1)];
+    for(MagRenderUse *use in s->uses){
+        if(use->write){++use->buffer->writers;use->buffer->gpu_written=1;}
+        else ++use->buffer->readers;
+    }
+    [c->pending addObject:s];
+    *out=s->ticket;
+}
+static void metal_scene_mark_incomplete(MagRenderMetal *c,mag_native_ticket ticket){
+    for(MagRenderSubmission *s in c->pending)
+        if(s->ticket.device_generation==ticket.device_generation&&s->ticket.submission_id==ticket.submission_id)s->incomplete=1;
+}
+static int metal_scene_chunk_stats(void *opaque,uint64_t *out,uint32_t count){
+    MagRenderMetal *c=context(opaque);if(count!=3)return MAG_NATIVE_INVALID;
+    memcpy(out,c->chunk_stats,sizeof(c->chunk_stats));return MAG_NATIVE_OK;
 }
 static int metal_reserve_scene(void *opaque,const mag_native_scene_import *imports,uint32_t count,mag_native_ticket *out){
     MagRenderMetal *c=context(opaque);
@@ -336,7 +361,16 @@ static int metal_reserve_scene(void *opaque,const mag_native_scene_import *impor
         /* Fixes this submission's place in queue order now, at the genuine
          * native boundary; later queue work executes after it. */
         [command enqueue];
-        c->reserved=command;c->reserved_count=count;
+        c->reserved=command;
+        /* Chunked mode: the follow-on chunks take their queue positions now,
+         * directly behind the first, so later queue work still runs after
+         * the whole submission. */
+        for(uint32_t k=1;k<c->chunk_slots;++k){
+            id<MTLCommandBuffer> next=[c->queue commandBuffer];
+            if(!next){metal_reservation_release(c);return MAG_NATIVE_DEVICE_FAILED;}
+            [next enqueue];[c->reserved_chunks addObject:next];
+        }
+        c->reserved_count=count;
         memcpy(c->reserved_imports,imports,count*sizeof(*imports));memcpy(c->reserved_info,info,count*sizeof(*info));
         c->reserved_ticket=(mag_native_ticket){c->generation,++c->next_submission};
         *out=c->reserved_ticket;
@@ -492,10 +526,50 @@ static int metal_scene_owned(void *opaque, const mag_native_scene *scene, mag_na
     MagRenderSubmission *submission = [MagRenderSubmission new];
     submission->uses = uses;
     submission->retained = retained;
+    if (scene->diagnostic_readback.id) {
+        const mag_native_scene_image *im = &scene->images[scene->output_image];
+        uint32_t pitch = (im->width * 4 + 255) & ~255u;
+        id<MTLBuffer> padded = [c->device newBufferWithLength:(NSUInteger)pitch * im->height
+                                                      options:MTLResourceStorageModeShared];
+        if (!padded)
+            return MAG_NATIVE_ALLOCATION_FAILED;
+        submission->packed_source = padded;
+        submission->packed_destination = find_buffer(c, scene->diagnostic_readback);
+        submission->packed_width = im->width;
+        submission->packed_height = im->height;
+        submission->packed_pitch = pitch;
+    }
     // All images, pipeline references and buffers are validated before any queue effect.
     submission->command = c->reserved_encoding ? c->reserved : [c->queue commandBuffer];
     if (!submission->command)
         return MAG_NATIVE_DEVICE_FAILED;
+    /* Opt-in chunked reserved encoding (MAG_RENDER_MAIN_CHUNKED_COMMIT=1).
+     * The reservation holds slot_count command buffers already enqueued in
+     * order. Passes are assigned to slots in order, balanced by draw count
+     * (each pass weighs its draws plus one), and a slot is committed as soon
+     * as encoding moves past it, so the GPU starts the early passes while the
+     * later ones are still being encoded. Every pass keeps its own render
+     * pass with its own load/store/clear actions, and same-queue execution
+     * order keeps each image write ahead of later loads and samples, so the
+     * GPU work and its order are those of the single-buffer encoding. The
+     * compute prefix stays in the first slot and the readback in the last;
+     * the last slot carries completion, and poll waits for every slot. */
+    NSArray<id<MTLCommandBuffer>> *slots=c->reserved_encoding&&c->reserved_chunks.count?[@[c->reserved] arrayByAddingObjectsFromArray:c->reserved_chunks]:nil;
+    const uint32_t slot_count=slots?(uint32_t)slots.count:1u;
+    uint32_t slot=0,used_mask=scene->dispatch_count?1u:0u;
+    uint64_t weight_total=0,weight_prefix=0;
+    for(uint32_t n=0;n<scene->pass_count;++n)weight_total+=(uint64_t)scene->passes[n].draw_count+1;
+    const uint64_t encode_start=slots&&c->resident_report?clock_gettime_nsec_np(CLOCK_UPTIME_RAW):0;uint64_t first_commit=0;
+#define MAG_METAL_ADVANCE_SLOT(want) do{ \
+        if((want)>slot){ \
+            if(!out->submission_id)metal_scene_register(c,submission,slots,out); \
+            for(;slot<(want);++slot)[slots[slot] commit]; \
+            submission->command=slots[slot]; \
+            if(encode_start&&!first_commit)first_commit=clock_gettime_nsec_np(CLOCK_UPTIME_RAW); \
+        } }while(0)
+    /* After an early commit the submission is tracked: a later failure marks
+     * it incomplete (its terminal event fails) and reports INDETERMINATE. */
+#define MAG_METAL_ENCODE_FAIL(code) do{if(out->submission_id){submission->incomplete=1;return MAG_NATIVE_INDETERMINATE;}return (code);}while(0)
     for (uint32_t node = 0; node < scene->dispatch_count; ++node) {
         const mag_native_frame *f = &scene->dispatches[node];
         MagRenderPipeline *p = find_pipeline(c, f->pipeline);
@@ -532,8 +606,14 @@ static int metal_scene_owned(void *opaque, const mag_native_scene *scene, mag_na
     for (uint32_t n = 0; n < scene->pass_count; ++n) {
         const mag_native_scene_pass *p = &scene->passes[n];
         id<MTLTexture> snapshot=snapshots[n]==[NSNull null]?nil:snapshots[n];
+        if(slots){
+            uint64_t want=weight_prefix*slot_count/weight_total;if(want>=slot_count)want=slot_count-1;
+            weight_prefix+=(uint64_t)p->draw_count+1;
+            MAG_METAL_ADVANCE_SLOT((uint32_t)want);
+            used_mask|=1u<<slot;
+        }
         if(snapshot){
-            id<MTLTexture> source=images[p->depth.image];id<MTLBlitCommandEncoder> blit=[submission->command blitCommandEncoder];if(!blit)return MAG_NATIVE_DEVICE_FAILED;
+            id<MTLTexture> source=images[p->depth.image];id<MTLBlitCommandEncoder> blit=[submission->command blitCommandEncoder];if(!blit)MAG_METAL_ENCODE_FAIL(MAG_NATIVE_DEVICE_FAILED);
             [blit copyFromTexture:source sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0,0,0) sourceSize:MTLSizeMake(source.width,source.height,1) toTexture:snapshot destinationSlice:0 destinationLevel:0 destinationOrigin:MTLOriginMake(0,0,0)];[blit endEncoding];
         }
         MTLRenderPassDescriptor *pd = [MTLRenderPassDescriptor renderPassDescriptor];
@@ -566,7 +646,7 @@ static int metal_scene_owned(void *opaque, const mag_native_scene *scene, mag_na
         }
         id<MTLRenderCommandEncoder> e = [submission->command renderCommandEncoderWithDescriptor:pd];
         if (!e)
-            return MAG_NATIVE_DEVICE_FAILED;
+            MAG_METAL_ENCODE_FAIL(MAG_NATIVE_DEVICE_FAILED);
         [e setCullMode:MTLCullModeNone];
         if(v3&&v3->viewport_count){const mag_native_viewport *v=&v3->viewports[n];
             [e setViewport:(MTLViewport){v->x,v->y,v->width,v->height,v->min_depth,v->max_depth}];
@@ -629,21 +709,16 @@ static int metal_scene_owned(void *opaque, const mag_native_scene *scene, mag_na
         [e endEncoding];
         flattened+=p->draw_count;
     }
+    /* The last slot carries the readback and the submission's completion. */
+    if(slots)MAG_METAL_ADVANCE_SLOT(slot_count-1);
     if (scene->diagnostic_readback.id) {
         const mag_native_scene_image *im = &scene->images[scene->output_image];
-        uint32_t pitch = (im->width * 4 + 255) & ~255u;
-        id<MTLBuffer> padded = [c->device newBufferWithLength:(NSUInteger)pitch * im->height
-                                                      options:MTLResourceStorageModeShared];
-        if (!padded)
-            return MAG_NATIVE_ALLOCATION_FAILED;
-        submission->packed_source = padded;
-        submission->packed_destination = find_buffer(c, scene->diagnostic_readback);
-        submission->packed_width = im->width;
-        submission->packed_height = im->height;
-        submission->packed_pitch = pitch;
+        id<MTLBuffer> padded = submission->packed_source;
+        const uint32_t pitch = submission->packed_pitch;
         id<MTLBlitCommandEncoder> blit = [submission->command blitCommandEncoder];
         if (!blit)
-            return MAG_NATIVE_DEVICE_FAILED;
+            MAG_METAL_ENCODE_FAIL(MAG_NATIVE_DEVICE_FAILED);
+        if(slots)used_mask|=1u<<slot;
         [blit copyFromTexture:images[scene->output_image]
                          sourceSlice:0
                          sourceLevel:0
@@ -655,27 +730,34 @@ static int metal_scene_owned(void *opaque, const mag_native_scene *scene, mag_na
             destinationBytesPerImage:(NSUInteger)pitch * im->height];
         [blit endEncoding];
     }
-    if(c->reserved_encoding){submission->ticket=c->reserved_ticket;c->reserved=nil;c->reserved_count=0;}
-    else submission->ticket = (mag_native_ticket){c->generation, ++c->next_submission};
+#undef MAG_METAL_ENCODE_FAIL
+#undef MAG_METAL_ADVANCE_SLOT
+    if(!out->submission_id)metal_scene_register(c,submission,slots,out);
+    if(c->reserved_encoding){c->reserved=nil;[c->reserved_chunks removeAllObjects];c->reserved_count=0;}
+    if(slots){
+        c->chunk_stats[0]++;c->chunk_stats[1]=slot_count;c->chunk_stats[2]=(uint64_t)__builtin_popcount(used_mask);
+        if(encode_start&&(c->chunk_stats[0]<=4||c->chunk_stats[0]%120==0)){
+            const uint64_t now=clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+            fprintf(stderr,"[mag native chunked commit] submissions=%llu ticket=%llu slots=%u used=%llu passes=%u draws=%llu first_commit_ms=%.3f encode_ms=%.3f\n",
+                (unsigned long long)c->chunk_stats[0],(unsigned long long)submission->ticket.submission_id,slot_count,(unsigned long long)c->chunk_stats[2],
+                scene->pass_count,(unsigned long long)(weight_total-scene->pass_count),first_commit?(double)(first_commit-encode_start)/1e6:-1.0,(double)(now-encode_start)/1e6);
+        }
+    }
     if(c->resident_enabled&&c->resident_report&&(c->next_submission<=4||c->next_submission%120==0))
         fprintf(stderr,"[mag native resident images] submission=%llu hits=%llu misses=%llu entries=%u bytes=%llu evictions=%llu\n",
             (unsigned long long)c->next_submission,(unsigned long long)c->resident_hits,(unsigned long long)c->resident_misses,
             c->resident_entries,(unsigned long long)c->resident_bytes,(unsigned long long)c->resident_evictions);
-    for (MagRenderUse *use in uses) {
-        if (use->write) {
-            ++use->buffer->writers;
-            use->buffer->gpu_written = 1;
-        } else
-            ++use->buffer->readers;
-    }
-    [c->pending addObject:submission];
-    *out = submission->ticket;
     @try {
         [submission->command commit];
     } @catch (NSException *e) {
         (void)e;
         if (submission->command.status >= MTLCommandBufferStatusCommitted)
             return MAG_NATIVE_INDETERMINATE;
+        if (submission->chunks.count) {
+            /* Earlier chunks already run on the GPU: stay tracked, fail. */
+            submission->incomplete = 1;
+            return MAG_NATIVE_INDETERMINATE;
+        }
         release_uses(submission);
         [c->pending removeObjectIdenticalTo:submission];
         memset(out, 0, sizeof(*out));
@@ -694,6 +776,8 @@ static int metal_submit_scene_impl(void *opaque, const mag_native_scene *scene, 
             result = v5 ? metal_scene_owned(opaque, scene, out, nil, sampler_table, sampler_count, v3, v4, v5) : MAG_NATIVE_INVALID;
         } @catch (NSException *e) {
             (void)e;
+            /* A chunked encoding may have registered after an early commit. */
+            if (out->submission_id) metal_scene_mark_incomplete(c, *out);
             result = out->submission_id ? MAG_NATIVE_INDETERMINATE : MAG_NATIVE_DEVICE_FAILED;
         }
         c->reserved_encoding = 0;

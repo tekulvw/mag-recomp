@@ -39,6 +39,7 @@ fn make_scene(
     pipes: [u64; 7],
     leases: &[ResourceLease],
     diagnostic: bool,
+    external: Option<ExternalImage>,
 ) -> Result<PreparedScene, i32> {
     let (mut b, v, i) = compute_prefix(
         device.owner_generation(),
@@ -73,13 +74,16 @@ fn make_scene(
             format: ImageFormat::Depth32,
         })
         .map_err(|_| -1)?;
-    let color = s
-        .image(ImageDesc {
-            width: 64,
-            height: 64,
-            format: ImageFormat::Rgba8,
-        })
-        .map_err(|_| -1)?;
+    let color_desc = ImageDesc {
+        width: 64,
+        height: 64,
+        format: ImageFormat::Rgba8,
+    };
+    let color = match external {
+        Some(requirement) => s.require_image(color_desc, requirement),
+        None => s.image(color_desc),
+    }
+    .map_err(|_| -1)?;
     let depth = s
         .image(ImageDesc {
             width: 64,
@@ -262,6 +266,39 @@ fn make_scene(
     s.output(out[0], diagnostic).map_err(|_| -1)?;
     s.prepare(device).map_err(|_| -1)
 }
+/// The probe's authored vertex, constant and texture bytes, in lease order.
+fn probe_data() -> Vec<Vec<u8>> {
+    let mut data = vec![
+        words(&[-2.8, -0.8, 0.5, 1., -1.2, -0.8, 0.5, 1., -2., 0.8, 0.5, 1.]),
+        parameter_bytes(1., 2.),
+        parameter_bytes(0.75, 0.),
+    ];
+    for (scale, x, y, z) in [
+        (1., 0., 0., -0.125),
+        (1., 0., 0., -0.025),
+        (1., 0., 0., -0.175),
+        (1., 0., 0., 0.425),
+        (1., 0., 0., -0.275),
+        (0.25, 0.65, 0.65, -0.375),
+    ] {
+        data.push(words(&[scale, scale, 1., 1., x, y, z, 0.]));
+    }
+    for (tint, cutoff, shadow) in [
+        ([0., 1., 0., 1.], 0., 1.),
+        ([1., 0., 0., 1.], 0., 0.),
+        ([1., 0., 1., 1.], 0.5, 0.),
+        ([0., 0., 1., 0.5], 0., 0.),
+        ([1., 0., 0., 1.], 0., 0.),
+    ] {
+        let mut material = tint.to_vec();
+        material.extend([cutoff, 0.5, shadow, 0.]);
+        data.push(words(&material));
+    }
+    data.push([128, 255, 128, 255].repeat(4));
+    data.push(vec![0; 16]);
+    data.push([255, 255, 255, 255, 255, 255, 255, 0].repeat(2));
+    data
+}
 /// # Safety
 /// Genuine retained host descriptor and synchronous readable native pipeline
 /// descriptors/report. Signal must release only this fixture's actual queue gate.
@@ -312,35 +349,7 @@ pub unsafe extern "C" fn mag_render_native_scene_probe_target(
         for (i, d) in descriptors.iter().enumerate() {
             pipes[i + 2] = unsafe { device.graphics_pipeline(d) }?;
         }
-        let mut data = vec![
-            words(&[-2.8, -0.8, 0.5, 1., -1.2, -0.8, 0.5, 1., -2., 0.8, 0.5, 1.]),
-            parameter_bytes(1., 2.),
-            parameter_bytes(0.75, 0.),
-        ];
-        for (scale, x, y, z) in [
-            (1., 0., 0., -0.125),
-            (1., 0., 0., -0.025),
-            (1., 0., 0., -0.175),
-            (1., 0., 0., 0.425),
-            (1., 0., 0., -0.275),
-            (0.25, 0.65, 0.65, -0.375),
-        ] {
-            data.push(words(&[scale, scale, 1., 1., x, y, z, 0.]));
-        }
-        for (tint, cutoff, shadow) in [
-            ([0., 1., 0., 1.], 0., 1.),
-            ([1., 0., 0., 1.], 0., 0.),
-            ([1., 0., 1., 1.], 0.5, 0.),
-            ([0., 0., 1., 0.5], 0., 0.),
-            ([1., 0., 0., 1.], 0., 0.),
-        ] {
-            let mut material = tint.to_vec();
-            material.extend([cutoff, 0.5, shadow, 0.]);
-            data.push(words(&material));
-        }
-        data.push([128, 255, 128, 255].repeat(4));
-        data.push(vec![0; 16]);
-        data.push([255, 255, 255, 255, 255, 255, 255, 0].repeat(2));
+        let data = probe_data();
         let mut store = ResourceStore::new(ResourceLimits {
             max_resources: 17,
             max_bytes: 608,
@@ -359,8 +368,8 @@ pub unsafe extern "C" fn mag_render_native_scene_probe_target(
             .iter()
             .map(|v| store.lease(*v).map_err(|_| -1))
             .collect::<Result<_, _>>()?;
-        let first = make_scene(&device, pipes, &leases, diagnostic == 1)?;
-        let second = make_scene(&device, pipes, &leases, diagnostic == 1)?;
+        let first = make_scene(&device, pipes, &leases, diagnostic == 1, None)?;
+        let second = make_scene(&device, pipes, &leases, diagnostic == 1, None)?;
         drop(leases);
         let mut backend = RenderBackend::new(
             device,
@@ -479,7 +488,7 @@ pub unsafe extern "C" fn mag_render_native_scene_probe_target(
                     third_store.lease(v).map_err(|_| -1)
                 })
                 .collect::<Result<_, i32>>()?;
-            let scene = make_scene(backend.device(), pipes, &leases, diagnostic == 1)?;
+            let scene = make_scene(backend.device(), pipes, &leases, diagnostic == 1, None)?;
             drop(leases);
             let (commands, leases) = scene.into_submission();
             let frame = FrameIdentity {
@@ -583,4 +592,229 @@ pub unsafe extern "C" fn mag_render_native_scene_probe(
             report,
         )
     }
+}
+
+/// Result of [`mag_render_native_scene_probe_reserved`].
+#[repr(C)]
+#[derive(Default)]
+pub struct ReservedProbeReport {
+    pub abi_version: u32,
+    pub struct_size: u32,
+    pub status: i32,
+    /// 1 when the reserved submission's readback equals the reference's.
+    pub identical: u32,
+    pub differing_bytes: u64,
+    /// Native chunked-commit counters after the reserved submission.
+    pub chunked_submissions: u64,
+    pub chunk_slots: u64,
+    pub chunks_used: u64,
+}
+/// Lets the probe reach the device (imports, reservation, readback) while the
+/// backend owns it, as the packet client's driver does.
+struct Shared<'a>(std::cell::RefCell<SceneDevice<'a>>);
+impl RenderDevice for Shared<'_> {
+    type Commands = SceneCommands;
+    fn submit(
+        &mut self,
+        ticket: SubmissionTicket,
+        commands: &SceneCommands,
+        leases: &[ResourceLease],
+    ) -> SubmitDisposition {
+        self.0.get_mut().submit(ticket, commands, leases)
+    }
+    fn poll(&mut self, capacity: usize) -> Result<Vec<BackendEvent>, DevicePollError> {
+        self.0.get_mut().poll(capacity)
+    }
+}
+fn drain(backend: &mut RenderBackend<Shared<'_>>) -> Result<(), i32> {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while backend.pending_count() > 0 {
+        if Instant::now() > deadline {
+            return Err(-4);
+        }
+        let poll = backend.poll().map_err(|_| -6)?;
+        if !poll.errors.is_empty()
+            || poll.events.iter().any(|e| {
+                matches!(e, BackendEvent::Terminal { status, .. } if *status != TerminalStatus::Succeeded)
+            })
+        {
+            eprintln!("[reserved probe] drain {:?} {:?}", poll.errors, poll.events);
+            return Err(-6);
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    Ok(())
+}
+/// Reserved-order encoding against the ordinary encoding of the same
+/// multi-pass scene on the real queue: both render the probe scene into the
+/// same imported color target (bound as an external requirement); the
+/// reference is submitted directly, the candidate through a reservation
+/// (chunked when the device was created with `MAG_RENDER_MAIN_CHUNKED_COMMIT=1`).
+/// The full diagnostic readbacks must be byte-identical. Run with the owner
+/// queue ungated.
+/// # Safety
+/// Genuine retained host owner/image descriptors, readable pipeline
+/// descriptors and a writable report with matching abi_version/struct_size.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mag_render_native_scene_probe_reserved(
+    owner: *const HostOwner,
+    first: *const PipelineDesc,
+    second: *const PipelineDesc,
+    graphics: *const SceneGraphicsDesc,
+    image: *const crate::host_image::HostImage,
+    report: *mut ReservedProbeReport,
+) -> i32 {
+    if owner.is_null()
+        || first.is_null()
+        || second.is_null()
+        || graphics.is_null()
+        || image.is_null()
+        || report.is_null()
+        || unsafe {
+            (*report).abi_version != 1
+                || (*report).struct_size != size_of::<ReservedProbeReport>() as u32
+        }
+    {
+        return -1;
+    }
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<(), i32> {
+        // Imports need the device to own its context, as the packet client's does.
+        let context = unsafe { NativeContext::from_host(&*owner) }?;
+        let mut device = SceneDevice::from_owned_context(
+            context,
+            BatchDeviceLimits {
+                max_bytes: 1024 * 1024,
+                max_pipelines: 8,
+                diagnostic_readback: true,
+            },
+        )?;
+        let descriptors = unsafe { std::slice::from_raw_parts(graphics, 5) };
+        let mut pipes = [0u64; 7];
+        pipes[0] = unsafe { device.compute_pipeline(&*first) }?;
+        pipes[1] = unsafe { device.compute_pipeline(&*second) }?;
+        for (i, d) in descriptors.iter().enumerate() {
+            pipes[i + 2] = unsafe { device.graphics_pipeline(d) }?;
+        }
+        let mut store = ResourceStore::new(ResourceLimits {
+            max_resources: 17,
+            max_bytes: 608,
+        })
+        .map_err(|_| -5)?;
+        let versions: Vec<_> = probe_data()
+            .into_iter()
+            .map(|bytes| store.apply(ResourceDelta::Create { bytes }).map_err(|_| -5))
+            .collect::<Result<_, _>>()?;
+        let leases: Vec<_> = versions
+            .iter()
+            .map(|v| store.lease(*v).map_err(|_| -1))
+            .collect::<Result<_, _>>()?;
+        const SOURCE: u64 = 0x5eed;
+        let external = ExternalImage {
+            source_key: SOURCE,
+            required_initialized_planes: 0,
+        };
+        let reference = make_scene(&device, pipes, &leases, true, Some(external))?;
+        let candidate = make_scene(&device, pipes, &leases, true, Some(external))?;
+        drop(leases);
+        // The color target is the scene's third image (shadow, shadow, color).
+        let binding = mag_render_abi::packet::ImageBinding {
+            image: 2,
+            reserved: 0,
+            source_key: SOURCE,
+            host: unsafe { *image },
+            validate_planes: None,
+        };
+        let requirement = mag_render_abi::packet::ImageRequirement {
+            image: 2,
+            required_initialized_planes: 0,
+            source_key: SOURCE,
+        };
+        let mut backend = RenderBackend::new(
+            Shared(std::cell::RefCell::new(device)),
+            BackendLimits {
+                max_leases_per_submission: 17,
+                max_bytes_per_submission: 608,
+            },
+        )
+        .map_err(|_| -1)?;
+        let frame = |id| FrameIdentity {
+            frame_id: FrameId(id),
+            world_update_id: WorldUpdateId(1),
+            source_publication: 1,
+            camera_publication: 1,
+        };
+        let bind = |backend: &RenderBackend<Shared<'_>>| unsafe {
+            backend
+                .device()
+                .0
+                .borrow_mut()
+                .bind_imports(&[binding], &[requirement])
+        };
+        bind(&backend)?;
+        let (commands, l) = reference.into_submission();
+        let submitted = backend.submit(frame(1), commands, l);
+        backend.device().0.borrow_mut().release_imports()?;
+        let reference = submitted.map_err(|e| {
+            eprintln!("[reserved probe] reference submit {e:?}");
+            -6
+        })?;
+        drain(&mut backend)?;
+        bind(&backend)?;
+        let reserved = backend.device().0.borrow_mut().reserve_submission();
+        let (generation, native) = match reserved {
+            Ok(v) => v,
+            Err(e) => {
+                let _ = backend.device().0.borrow_mut().release_imports();
+                return Err(e);
+            }
+        };
+        let (commands, l) = candidate.into_submission();
+        let submitted = backend.submit(frame(2), commands, l);
+        let abandoned = backend.device().0.borrow_mut().abandon_reservation();
+        backend.device().0.borrow_mut().release_imports()?;
+        let candidate = submitted.map_err(|e| {
+            eprintln!("[reserved probe] candidate submit {e:?}");
+            -6
+        })?;
+        // The reservation was consumed by exactly this submission.
+        if abandoned != Err(-3)
+            || backend.device().0.borrow().native_ticket(candidate) != Some((generation, native))
+        {
+            eprintln!(
+                "[reserved probe] abandoned {abandoned:?} native {:?} vs {:?}",
+                backend.device().0.borrow().native_ticket(candidate),
+                (generation, native)
+            );
+            return Err(-6);
+        }
+        drain(&mut backend)?;
+        for v in versions {
+            store.retire(v).map_err(|_| -1)?;
+        }
+        let expected = backend.device().0.borrow().readback(reference)?;
+        let actual = backend.device().0.borrow().readback(candidate)?;
+        let stats = backend.device().0.borrow().chunk_stats()?;
+        let differing = expected.iter().zip(&actual).filter(|(a, b)| a != b).count() as u64
+            + expected.len().abs_diff(actual.len()) as u64;
+        unsafe {
+            (*report).identical = u32::from(differing == 0 && expected.len() == 64 * 64 * 4);
+            (*report).differing_bytes = differing;
+            (*report).chunked_submissions = stats[0];
+            (*report).chunk_slots = stats[1];
+            (*report).chunks_used = stats[2];
+        }
+        if differing != 0 || store.stats().resident_bytes != 0 {
+            return Err(-6);
+        }
+        backend.try_shutdown().map_err(|_| -4)?;
+        drop(backend);
+        Ok(())
+    }));
+    let status = match result {
+        Ok(Ok(())) => 0,
+        Ok(Err(c)) => c,
+        Err(_) => -6,
+    };
+    unsafe { (*report).status = status };
+    status
 }

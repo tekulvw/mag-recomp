@@ -36,6 +36,10 @@ int mag_native_submit_scene_v5(mag_native_device *,const mag_native_scene_v5 *,c
  * Backends without reservations return UNSUPPORTED. */
 int mag_native_reserve_scene_v5(mag_native_device *,const mag_native_scene_import *,uint32_t,mag_native_ticket *);
 int mag_native_abandon_scene_reservation(mag_native_device *);
+/* Diagnostic for the opt-in chunked reserved encoding: out[0] chunked
+ * submissions so far, out[1] command buffers reserved for the last one and
+ * out[2] how many of those carried work. count must be 3. */
+int mag_native_scene_chunk_stats(mag_native_device *,uint64_t *out,uint32_t count);
 int mag_native_scene_v5_layout(uint32_t *,uint32_t);
 #ifdef __cplusplus
 }

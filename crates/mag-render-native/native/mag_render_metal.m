@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <math.h>
 #include <string.h>
+#include <time.h>
 
 @interface MagRenderBuffer : NSObject {
 @public id<MTLBuffer> gpu; uint64_t identifier, version; uint32_t readers, writers; int seed_zero,gpu_written;
@@ -45,6 +46,11 @@
     id<MTLBuffer> sizes; NSArray<MagRenderUse *> *uses; mag_native_ticket ticket;
     NSArray *retained;id<MTLBuffer> packed_source;MagRenderBuffer *packed_destination;
     uint32_t packed_width,packed_height,packed_pitch;
+    /* Chunked reserved encoding: the earlier, already committed command
+     * buffers of this one submission, in queue order (command is the last).
+     * incomplete marks a submission whose encoding failed after an earlier
+     * chunk was committed; its terminal event always reports failure. */
+    NSArray<id<MTLCommandBuffer>> *chunks;int incomplete;
 }
 @end
 @implementation MagRenderSubmission @end
@@ -64,6 +70,12 @@
     id<MTLCommandBuffer> reserved;mag_native_ticket reserved_ticket;int reserved_encoding;
     mag_native_scene_import reserved_imports[MAG_NATIVE_SCENE_MAX_IMAGES];
     mag_native_import_info reserved_info[MAG_NATIVE_SCENE_MAX_IMAGES];uint32_t reserved_count;
+    /* Opt-in (MAG_RENDER_MAIN_CHUNKED_COMMIT=1): a reservation enqueues
+     * chunk_slots command buffers in order so encoding can commit earlier
+     * passes while later ones are still being encoded. reserved is the first;
+     * reserved_chunks are the rest. chunk_stats: chunked submissions, slots
+     * and non-empty slots of the last one. */
+    NSMutableArray<id<MTLCommandBuffer>> *reserved_chunks;uint32_t chunk_slots;uint64_t chunk_stats[3];
     NSMutableDictionary<NSNumber *, NSNumber *> *versions;
     NSMutableDictionary<NSNumber *, MagRenderPipeline *> *pipelines;
     NSMutableArray<MagRenderSubmission *> *pending;
@@ -283,15 +295,22 @@ static int metal_poll(void *opaque, mag_native_event *events, uint32_t capacity,
         MagRenderSubmission *submission = c->pending[i];
         MTLCommandBufferStatus status = submission->command.status;
         if (status != MTLCommandBufferStatusCompleted && status != MTLCommandBufferStatusError) { ++i; continue; }
-        if(status==MTLCommandBufferStatusCompleted && !submission->command.error && submission->packed_source){
+        /* A chunked submission is terminal only when every one of its command
+         * buffers is; any failed chunk (or a failed encoding) fails it. */
+        int failed=status!=MTLCommandBufferStatusCompleted||submission->command.error||submission->incomplete,waiting=0;
+        for(id<MTLCommandBuffer> chunk in submission->chunks){MTLCommandBufferStatus s=chunk.status;
+            if(s!=MTLCommandBufferStatusCompleted&&s!=MTLCommandBufferStatusError)waiting=1;
+            else if(s==MTLCommandBufferStatusError||chunk.error){failed=1;status=MTLCommandBufferStatusError;}}
+        if(waiting){++i;continue;}
+        if(!failed && submission->packed_source){
             for(uint32_t y=0;y<submission->packed_height;++y)
                 memcpy((char*)submission->packed_destination->gpu.contents+(size_t)y*submission->packed_width*4,
                     (const char*)submission->packed_source.contents+(size_t)y*submission->packed_pitch,(size_t)submission->packed_width*4);
         }
         if(c->timing_enabled && c->timing_samples<256) {
             ++c->timing_samples;
-            const double start=submission->command.GPUStartTime,end=submission->command.GPUEndTime;
-            const int available=status==MTLCommandBufferStatusCompleted && !submission->command.error &&
+            const double start=submission->chunks.count?submission->chunks[0].GPUStartTime:submission->command.GPUStartTime,end=submission->command.GPUEndTime;
+            const int available=!failed &&
                 isfinite(start) && isfinite(end) && start>0 && end>=start;
             fprintf(stderr,"[mag native gpu timing] generation=%llu ticket=%llu status=%u available=%d gpu_start_seconds=%.9f gpu_end_seconds=%.9f gpu_ms=%.6f\n",
                 (unsigned long long)submission->ticket.device_generation,
@@ -299,7 +318,7 @@ static int metal_poll(void *opaque, mag_native_event *events, uint32_t capacity,
                 available?(end-start)*1000.0:-1.0);
         }
         events[(*count)++] = (mag_native_event){sizeof(*events), MAG_NATIVE_ABI_VERSION, submission->ticket,
-            status == MTLCommandBufferStatusCompleted && !submission->command.error, 1, (uint32_t)status, 0};
+            !failed, 1, (uint32_t)status, 0};
         release_uses(submission); [c->pending removeObjectAtIndex:i];
     }
     return MAG_NATIVE_OK;
@@ -328,7 +347,7 @@ static int metal_buffer_write(void *opaque, mag_native_buffer ref, uint64_t offs
     return MAG_NATIVE_OK;
 }
 static const mag_native_ops metal_ops = {metal_caps, metal_buffer_create, metal_buffer_release,
-    metal_buffer_read, metal_pipeline_create, metal_pipeline_release, metal_submit, metal_poll, metal_close,metal_graphics_create,metal_submit_batch,metal_scene_graphics_create,metal_submit_scene,metal_image_import,metal_image_release,metal_submit_scene_target,metal_submit_scene_frame,metal_scene_graphics_create_v2,metal_scene_graphics_create_v3,metal_sampler_create,metal_sampler_release,metal_submit_scene_v2,metal_submit_scene_v3,metal_submit_scene_v4,metal_image_import_certified,metal_scene_graphics_create_aux,metal_submit_scene_v5,metal_reserve_scene,metal_abandon_scene_reservation,metal_buffer_write};
+    metal_buffer_read, metal_pipeline_create, metal_pipeline_release, metal_submit, metal_poll, metal_close,metal_graphics_create,metal_submit_batch,metal_scene_graphics_create,metal_submit_scene,metal_image_import,metal_image_release,metal_submit_scene_target,metal_submit_scene_frame,metal_scene_graphics_create_v2,metal_scene_graphics_create_v3,metal_sampler_create,metal_sampler_release,metal_submit_scene_v2,metal_submit_scene_v3,metal_submit_scene_v4,metal_image_import_certified,metal_scene_graphics_create_aux,metal_submit_scene_v5,metal_reserve_scene,metal_abandon_scene_reservation,metal_buffer_write,metal_scene_chunk_stats};
 int mag_native_metal_create(const MagRenderHostOwner *owner,mag_native_device **out) {
     if (!owner || !out || owner->backend!=MAG_RENDER_HOST_METAL) return MAG_NATIVE_INVALID;
     *out=NULL;int status=owner->retain(owner->userdata,owner->lifetime);
@@ -345,6 +364,9 @@ int mag_native_metal_create(const MagRenderHostOwner *owner,mag_native_device **
     c->buffers=[NSMutableDictionary new];c->versions=[NSMutableDictionary new];c->resident=[NSMutableDictionary new];c->resident_by_upload=[NSMutableDictionary new];
     const char *resident=getenv("MAG_RENDER_METAL_RESIDENT_IMAGES");c->resident_enabled=!(resident&&!strcmp(resident,"0"));
     const char *report=getenv("MAG_RENDER_FIFO_TIMING");c->resident_report=report&&!strcmp(report,"1");
+    c->reserved_chunks=[NSMutableArray new];
+    const char *chunked=getenv("MAG_RENDER_MAIN_CHUNKED_COMMIT");
+    if(chunked&&!strcmp(chunked,"1")){const char *n=getenv("MAG_RENDER_MAIN_CHUNKS");long slots=n?strtol(n,NULL,10):4;c->chunk_slots=(uint32_t)(slots<2?2:slots>8?8:slots);}
     c->pipelines=[NSMutableDictionary new];c->pending=[NSMutableArray new];c->images=[NSMutableDictionary new];
     void *opaque=(__bridge_retained void *)c;
     *out=mag_native_wrap(&metal_ops,opaque);

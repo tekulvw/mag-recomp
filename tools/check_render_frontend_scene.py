@@ -75,6 +75,15 @@ def check(args):
             raise RuntimeError(f"unexpected scene result: {receipt}")
         if "Apple" not in receipt.get("device", ""):
             raise RuntimeError("required real Apple GPU missing")
+        if args.target and not mode.endswith("no-readback"):
+            # Reserved encoding, unchunked and chunked (>=2 non-empty command
+            # buffers), must reproduce the direct encoding's pixels exactly.
+            for key in ("reserved_unchunked", "reserved_chunked"):
+                row = receipt.get(key) or {}
+                if row.get("status") != 0 or row.get("identical") is not True:
+                    raise RuntimeError(f"reserved pixel identity not proven: {receipt}")
+            if receipt["reserved_chunked"].get("chunks_used", 0) < 2:
+                raise RuntimeError(f"chunked commit used fewer than two command buffers: {receipt}")
         if os.environ.get("MAG_RENDER_RESIDENT_ARENAS") == "1":
             # Ring reuse: none while both frames are in flight, some after
             # their terminals, no refused in-place write, identical pixels.

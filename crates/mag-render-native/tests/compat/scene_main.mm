@@ -3,6 +3,7 @@
 #include <cassert>
 #include <cmath>
 #include <cstdio>
+#include <string>
 #include <vector>
 #include <unistd.h>
 #include "mag_render_imported_image.h"
@@ -24,6 +25,16 @@ extern "C" int mag_render_native_scene_probe_target(const MagRenderHostOwner *, 
                                              const mag_native_pipeline_desc *,
                                              const mag_native_scene_graphics_desc *, const MagRenderHostImage*,uint32_t,
                                              void (*)(void *), void *, SceneProbeReport *);
+struct ReservedProbeReport {
+    uint32_t abi_version, struct_size;
+    int32_t status;
+    uint32_t identical;
+    uint64_t differing_bytes, chunked_submissions, chunk_slots, chunks_used;
+};
+extern "C" int mag_render_native_scene_probe_reserved(const MagRenderHostOwner *, const mag_native_pipeline_desc *,
+                                                      const mag_native_pipeline_desc *,
+                                                      const mag_native_scene_graphics_desc *, const MagRenderHostImage *,
+                                                      ReservedProbeReport *);
 static std::vector<mag_native_scene_buffer_layout> buffers(Shader &shader, uint32_t stage) {
     std::vector<mag_native_scene_buffer_layout> out;
     for (NSDictionary *b in shader.manifest[@"buffers"]) {
@@ -133,6 +144,33 @@ static void check_reserved_submission(const MagRenderHostOwner *owner,const MagR
     fprintf(stderr,"[reserved submission] reserve=%llu abandoned busy/close then encoded=%llu completed\n",
         (unsigned long long)first.submission_id,(unsigned long long)encoded.submission_id);
 }
+/* Reserved encoding of the six-pass probe scene must equal its direct
+ * encoding byte for byte: once unchunked, then with the opt-in chunked commit
+ * (three slots, so shadow maps written in the first chunk are sampled in
+ * later ones and color/depth stored in one chunk are loaded in the next). */
+static int check_reserved_identity(const MagRenderHostOwner *owner,const mag_native_pipeline_desc *first,
+                                   const mag_native_pipeline_desc *second,const mag_native_scene_graphics_desc *graphics,
+                                   const MagRenderHostImage *target,NSMutableDictionary *result){
+    const char *names[2]={"MAG_RENDER_MAIN_CHUNKED_COMMIT","MAG_RENDER_MAIN_CHUNKS"};
+    std::string saved[2];bool had[2];
+    for(int i=0;i<2;++i){const char *v=getenv(names[i]);had[i]=v!=NULL;if(v)saved[i]=v;}
+    int status=0;
+    for(int chunked=0;chunked<2&&!status;++chunked){
+        if(chunked){setenv(names[0],"1",1);setenv(names[1],"3",1);check_reserved_submission(owner,target);}
+        else{unsetenv(names[0]);unsetenv(names[1]);}
+        ReservedProbeReport r={};r.abi_version=1;r.struct_size=sizeof(r);
+        status=mag_render_native_scene_probe_reserved(owner,first,second,graphics,target,&r);
+        fprintf(stderr,"[reserved identity] chunked=%d status=%d identical=%u differing=%llu chunked_submissions=%llu slots=%llu used=%llu\n",
+            chunked,status,r.identical,(unsigned long long)r.differing_bytes,(unsigned long long)r.chunked_submissions,
+            (unsigned long long)r.chunk_slots,(unsigned long long)r.chunks_used);
+        const bool shape=chunked?r.chunked_submissions==1&&r.chunk_slots==3&&r.chunks_used>=2:r.chunked_submissions==0;
+        if(!status&&(!r.identical||!shape))status=-6;
+        result[chunked?@"reserved_chunked":@"reserved_unchunked"]=@{@"status":@(status),@"identical":@(r.identical!=0),
+            @"chunk_slots":@(r.chunk_slots),@"chunks_used":@(r.chunks_used)};
+    }
+    for(int i=0;i<2;++i){if(had[i])setenv(names[i],saved[i].c_str(),1);else unsetenv(names[i]);}
+    return status;
+}
 int mag_render_scene_target_main(const char *directory, bool diagnostic,bool imported) {
     @autoreleasepool {
         NSString *root = [NSString stringWithUTF8String:directory];
@@ -220,9 +258,14 @@ int mag_render_scene_target_main(const char *directory, bool diagnostic,bool imp
             mag_render_native_scene_probe_target(&owner, &first.compute, &second.compute, graphics,imported?&target:NULL,
                                           diagnostic ? 1 : 0, mag_render_test_owner_signal, NULL, &report);
         mag_render_test_owner_signal(NULL);
+        // Before the target readback, which leaves the owner at a dirty boundary;
+        // the reserved runs render the same pixels into the same target.
+        NSMutableDictionary *reserved=[NSMutableDictionary new];
+        if(status==0&&imported&&diagnostic)
+            status=check_reserved_identity(&owner,&first.compute,&second.compute,graphics,&target,reserved);
         if(status==0&&imported&&diagnostic)status=mag_render_test_owner_image_check();
         mag_render_test_owner_close(report.pending == 0);
-        NSDictionary *result = @{
+        NSMutableDictionary *result = [@{
             @"device" : name,
             @"status" : @(status),
             @"submitted" : @(report.submitted),
@@ -240,7 +283,8 @@ int mag_render_scene_target_main(const char *directory, bool diagnostic,bool imp
             @"physical_presentation" : @NO,
             @"imported_original_target":@(imported),
             @"native_rejection_cases" : @7
-        };
+        } mutableCopy];
+        [result addEntriesFromDictionary:reserved];
         NSData *encoded = [NSJSONSerialization dataWithJSONObject:result
                                                           options:NSJSONWritingSortedKeys
                                                             error:NULL];

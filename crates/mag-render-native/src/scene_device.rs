@@ -319,6 +319,16 @@ impl SceneDevice<'_> {
         }
         Ok((native.device_generation, native.submission_id))
     }
+    /// Diagnostic counters of the opt-in chunked reserved encoding
+    /// (`MAG_RENDER_MAIN_CHUNKED_COMMIT=1`): chunked submissions so far, and
+    /// the reserved and non-empty command buffers of the last one.
+    pub(crate) fn chunk_stats(&self) -> Result<[u64; 3], i32> {
+        let mut out = [0; 3];
+        match unsafe { scene_extended::Plan::chunk_stats(self.inner.api.device, &mut out) } {
+            0 => Ok(out),
+            s => Err(s),
+        }
+    }
     /// Release an unconsumed reservation's queue position (no GPU work).
     pub(crate) fn abandon_reservation(&mut self) -> Result<(), i32> {
         match unsafe { scene_extended::Plan::abandon_reservation(self.inner.api.device) } {

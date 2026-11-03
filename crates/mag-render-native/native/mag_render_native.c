@@ -220,6 +220,11 @@ int mag_native_abandon_scene_reservation(mag_native_device *device){
  if(!device)return MAG_NATIVE_INVALID;
  return device->ops->abandon_scene_reservation?device->ops->abandon_scene_reservation(device->context):MAG_NATIVE_UNSUPPORTED;
 }
+int mag_native_scene_chunk_stats(mag_native_device *device,uint64_t *out,uint32_t count){
+ if(out)memset(out,0,(size_t)count*sizeof(*out));
+ if(!device||!out||count!=3)return MAG_NATIVE_INVALID;
+ return device->ops->scene_chunk_stats?device->ops->scene_chunk_stats(device->context,out,count):MAG_NATIVE_UNSUPPORTED;
+}
 int mag_native_scene_graphics_create_aux(mag_native_device *device,const mag_native_scene_graphics_v3_desc *desc,uint32_t flags,mag_native_pipeline *out){
  if(out){*out=(mag_native_pipeline){0};}
  if(!device||!desc||!out||flags!=MAG_NATIVE_PROGRAM_STORED_DEPTH_AUX)return MAG_NATIVE_INVALID;
