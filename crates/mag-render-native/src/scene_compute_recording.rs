@@ -131,7 +131,7 @@ unsafe extern "C" fn poll(p: *mut c_void, out: *mut Event, capacity: u32, count:
                 abi_version: 1,
                 ticket: Ticket {
                     device_generation: 42,
-                    submission_id: 1,
+                    submission_id: s.records.len() as u64,
                 },
                 succeeded: 1,
                 no_further_gpu_access: 1,
@@ -178,9 +178,10 @@ unsafe extern "C" fn record(p: *mut c_void, input: *const Scene, out: *mut Ticke
         return -1;
     }
     unsafe {
+        s.sent = false;
         *out = Ticket {
             device_generation: 42,
-            submission_id: 1,
+            submission_id: s.records.len() as u64,
         }
     };
     0
@@ -269,7 +270,9 @@ fn setup(state: &mut Owner) -> (SceneDevice<'static>, scene_packet::ScenePacket)
 #[test]
 fn packet_reaches_real_scene_device_encoder_and_retains_to_recorded_terminal() {
     let mut state = Box::<Owner>::default();
-    let (device, packet) = setup(&mut state);
+    let (mut device, packet) = setup(&mut state);
+    // This test covers single-use uploads: pin resident uploads off.
+    device.set_resident_uploads(false);
     let prepared = packet.prepare(&device, &[1, 2], 32, 1 << 20).unwrap();
     let (commands, leases) = prepared.into_submission();
     let mut backend = RenderBackend::new(
@@ -311,7 +314,8 @@ fn packet_reaches_real_scene_device_encoder_and_retains_to_recorded_terminal() {
 fn rejected_native_encoding_releases_allocations_without_terminal_or_pending_lease() {
     let mut state = Box::<Owner>::default();
     state.fail = true;
-    let (device, packet) = setup(&mut state);
+    let (mut device, packet) = setup(&mut state);
+    device.set_resident_uploads(false);
     let prepared = packet.prepare(&device, &[1, 2], 32, 1 << 20).unwrap();
     let (commands, leases) = prepared.into_submission();
     let mut backend = RenderBackend::new(
@@ -333,4 +337,43 @@ fn rejected_native_encoding_releases_allocations_without_terminal_or_pending_lea
     assert_eq!(state.reads, 0);
     backend.try_shutdown().unwrap();
     drop(backend);
+}
+
+#[test]
+fn resident_texture_uploads_survive_terminal_until_device_drop() {
+    let mut state = Box::<Owner>::default();
+    let (mut device, packet) = setup(&mut state);
+    device.set_resident_uploads(true);
+    let mut backend = RenderBackend::new(
+        device,
+        BackendLimits {
+            max_leases_per_submission: 16,
+            max_bytes_per_submission: 1 << 20,
+        },
+    )
+    .unwrap();
+    let mut cache = crate::client::scene_upload_cache::UploadCache::new(16, 1 << 20).unwrap();
+    for round in 0..2u64 {
+        let prepared = packet
+            .prepare_with(backend.device(), &[1, 2], 32, 1 << 20, Some(&mut cache))
+            .unwrap();
+        let (commands, leases) = prepared.into_submission();
+        backend
+            .submit_diagnostic(3 + round, commands, leases)
+            .unwrap();
+        state.done = true;
+        backend.poll().unwrap();
+        assert_eq!(backend.pending_count(), 0);
+        state.done = false;
+        let stats = backend.device().resident_buffer_stats();
+        assert!(stats.entries > 0, "{stats:?}");
+        assert_eq!(stats.pinned_bytes, 0); // terminal unpinned every use
+        // Only resident texture uploads outlive the terminal.
+        assert_eq!(state.buffers.len(), stats.entries);
+        assert_eq!((stats.hits > 0), round == 1, "{stats:?}");
+    }
+    assert!(cache.stats().hits > 0);
+    backend.try_shutdown().unwrap();
+    drop(backend);
+    assert!(state.buffers.is_empty());
 }

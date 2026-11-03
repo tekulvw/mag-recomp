@@ -5,6 +5,7 @@ Offscreen Metal now; Vulkan/D3D/presentation remain explicit pending. No game,
 original assets, mandatory normal readback, or replacement-removal claims.
 """
 import argparse
+import re
 import json
 import os
 from pathlib import Path
@@ -74,6 +75,14 @@ def check(args):
             raise RuntimeError(f"unexpected scene result: {receipt}")
         if "Apple" not in receipt.get("device", ""):
             raise RuntimeError("required real Apple GPU missing")
+        if os.environ.get("MAG_RENDER_RESIDENT_ARENAS") == "1":
+            # Ring reuse: none while both frames are in flight, some after
+            # their terminals, no refused in-place write, identical pixels.
+            probe = re.search(r"in_flight_reuses=(\d+) creates_before=(\d+) reuses_after_terminal=(\d+) "
+                              r"write_refusals=(\d+) same_pixels=(\d+)", child.stderr)
+            if not probe or probe.group(1) != "0" or probe.group(2) == "0" or probe.group(3) == "0" \
+                    or probe.group(4) != "0" or probe.group(5) != "1":
+                raise RuntimeError(f"resident arena reuse not proven: {child.stderr}")
         results[mode] = dict(receipt=receipt, stderr=child.stderr)
     after = sources(args.sdk_source)
     if any(after.get(k) != v for k, v in before.items()):

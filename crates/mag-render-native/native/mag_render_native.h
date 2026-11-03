@@ -64,6 +64,13 @@ int mag_native_buffer_create(mag_native_device *, const mag_native_buffer_desc *
 int mag_native_buffer_update(mag_native_device *, mag_native_buffer previous,
     const mag_native_buffer_desc *, mag_native_buffer *);
 int mag_native_buffer_release(mag_native_device *, mag_native_buffer);
+/* Overwrite part of an idle upload buffer in place (opt-in arena reuse).
+ * Refuses BUSY while any submission that used the buffer is not terminal and
+ * polled, INVALID for a GPU-written buffer or an out-of-range span, and
+ * UNSUPPORTED on backends without an in-place path. After success the buffer
+ * is an initialized upload: it can never be bound for GPU writes. */
+int mag_native_buffer_write(mag_native_device *, mag_native_buffer, uint64_t offset,
+    const void *source, uint64_t length);
 /* Diagnostic/readback only; returns BUSY until all uses are terminal and polled. */
 int mag_native_buffer_read(mag_native_device *, mag_native_buffer, uint64_t offset,
     void *destination, uint64_t length);

@@ -2106,7 +2106,12 @@ impl ScenePacket {
         })
         .map_err(|error| packet_failure(self.source, "scene/resource-store", None, error, -5))?;
         let mut lease = |b: &[u8], kind: &str, index: usize| -> Result<ResourceLease, i32> {
-            if let Some(cache) = resident.as_deref_mut()
+            // Only texture image uploads are kept: those are the uploads the
+            // device keeps resident, and they are stable across frames. The
+            // concatenated per-frame vertex/index/uniform arenas change every
+            // frame and would only evict the textures.
+            if kind == "image"
+                && let Some(cache) = resident.as_deref_mut()
                 && let Some(lease) = cache.lease(b)
             {
                 return Ok(lease);
@@ -3044,10 +3049,12 @@ pub(crate) fn admit(
             .map_err(|status| {
                 packet_failure(packet.source, "admit/prepare", None, "owned-scene", status)
             })?;
-        if let Some(cache) = &s.upload_cache {
+        if s.upload_cache.is_some() || crate::batch_device::resident_arenas_enabled() {
+            let device = s.backend.device().0.borrow();
             log_resident_buffers(
-                cache.stats(),
-                s.backend.device().0.borrow().resident_buffer_stats(),
+                s.upload_cache.as_ref().map(|c| c.stats()),
+                device.resident_buffer_stats(),
+                device.arena_stats(),
             );
         }
         let generation = s.backend.device().0.borrow().owner_generation();
@@ -3496,10 +3503,12 @@ pub(crate) fn submit(
                 s.max_bytes,
                 s.upload_cache.as_mut(),
             )?;
-            if let Some(cache) = &s.upload_cache {
+            if s.upload_cache.is_some() || crate::batch_device::resident_arenas_enabled() {
+                let device = s.backend.device().0.borrow();
                 log_resident_buffers(
-                    cache.stats(),
-                    s.backend.device().0.borrow().resident_buffer_stats(),
+                    s.upload_cache.as_ref().map(|c| c.stats()),
+                    device.resident_buffer_stats(),
+                    device.arena_stats(),
                 );
             }
             let mut admitted = BTreeSet::new();
@@ -4848,9 +4857,11 @@ fn checked_v3_layout() -> Result<(), i32> {
 
 /// Rate-limited `[mag native resident buffers]` line; only with the switch on.
 fn log_resident_buffers(
-    uploads: super::scene_upload_cache::UploadCacheStats,
+    uploads: Option<super::scene_upload_cache::UploadCacheStats>,
     buffers: crate::batch_device::scene_buffer_cache::ResidentBufferStats,
+    arenas: crate::batch_device::scene_arena_pool::ArenaStats,
 ) {
+    let uploads = uploads.unwrap_or_default();
     use std::sync::atomic::{AtomicU64, Ordering};
     static N: AtomicU64 = AtomicU64::new(0);
     let n = N.fetch_add(1, Ordering::Relaxed) + 1;
@@ -4858,7 +4869,7 @@ fn log_resident_buffers(
         return;
     }
     eprintln!(
-        "[mag native resident buffers] submission={n} upload_hits={} upload_misses={} upload_hit_bytes={} upload_evictions={} upload_entries={} upload_bytes={} gpu_hits={} gpu_misses={} gpu_hit_bytes={} gpu_retired={} gpu_entries={} gpu_bytes={} gpu_pinned_bytes={}",
+        "[mag native resident buffers] submission={n} upload_hits={} upload_misses={} upload_hit_bytes={} upload_evictions={} upload_entries={} upload_bytes={} gpu_hits={} gpu_misses={} gpu_hit_bytes={} gpu_retired={} gpu_entries={} gpu_bytes={} gpu_pinned_bytes={} arena_reuses={} arena_creates={} arena_written_bytes={} arena_write_refusals={} arena_retired={} arena_free={} arena_free_bytes={} arena_owned={}",
         uploads.hits,
         uploads.misses,
         uploads.hit_bytes,
@@ -4871,6 +4882,14 @@ fn log_resident_buffers(
         buffers.retired,
         buffers.entries,
         buffers.resident_bytes,
-        buffers.pinned_bytes
+        buffers.pinned_bytes,
+        arenas.reuses,
+        arenas.creates,
+        arenas.written_bytes,
+        arenas.write_refusals,
+        arenas.retired,
+        arenas.free,
+        arenas.free_bytes,
+        arenas.owned
     );
 }

@@ -79,6 +79,12 @@ int mag_native_buffer_read(mag_native_device *device, mag_native_buffer ref,
     uint64_t offset, void *out, uint64_t length) {
     return device && out && length ? device->ops->buffer_read(device->context, ref, offset, out, length) : MAG_NATIVE_INVALID;
 }
+int mag_native_buffer_write(mag_native_device *device, mag_native_buffer ref,
+    uint64_t offset, const void *source, uint64_t length) {
+    if (!device || !source || !length) return MAG_NATIVE_INVALID;
+    return device->ops->buffer_write ? device->ops->buffer_write(device->context, ref, offset, source, length)
+                                     : MAG_NATIVE_UNSUPPORTED;
+}
 int mag_native_pipeline_create(mag_native_device *device, const mag_native_pipeline_desc *desc, mag_native_pipeline *out) {
     if (out) memset(out, 0, sizeof(*out));
     return device && VALID(desc) && out ? device->ops->pipeline_create(device->context, desc, out) : MAG_NATIVE_INVALID;

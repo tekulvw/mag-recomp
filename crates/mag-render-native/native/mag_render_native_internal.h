@@ -38,6 +38,8 @@ typedef struct mag_native_ops {
     int (*submit_scene_v5)(void *,const mag_native_scene_v5 *,const mag_native_image *,const MagRenderHostFrame *,mag_native_ticket *);
     int (*reserve_scene)(void *,const mag_native_scene_import *,uint32_t,mag_native_ticket *);
     int (*abandon_scene_reservation)(void *);
+    /* Optional; NULL reports UNSUPPORTED so callers keep create-per-frame. */
+    int (*buffer_write)(void *, mag_native_buffer, uint64_t, const void *, uint64_t);
 } mag_native_ops;
 mag_native_device *mag_native_wrap(const mag_native_ops *, void *);
 int mag_native_close(mag_native_device *);

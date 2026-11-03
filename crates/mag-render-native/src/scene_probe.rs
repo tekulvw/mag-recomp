@@ -346,6 +346,11 @@ pub unsafe extern "C" fn mag_render_native_scene_probe_target(
             max_bytes: 608,
         })
         .map_err(|_| -5)?;
+        // Opt-in arena reuse: a third scene submitted only after both earlier
+        // submissions are terminal must rewrite their released ring buffers.
+        // It owns a separate store so the original retention checks hold.
+        let arenas = crate::batch_device::resident_arenas_enabled();
+        let third_data = arenas.then(|| data.clone());
         let versions: Vec<_> = data
             .into_iter()
             .map(|bytes| store.apply(ResourceDelta::Create { bytes }).map_err(|_| -5))
@@ -387,6 +392,11 @@ pub unsafe extern "C" fn mag_render_native_scene_probe_target(
             (*report).retained_before_terminal = store.stats().resident_bytes as u64;
             (*report).pass_count = 6;
             (*report).draw_count = 7;
+        }
+        let in_flight = backend.device().arena_stats();
+        if arenas && (in_flight.reuses != 0 || in_flight.creates == 0) {
+            eprintln!("[mag native resident arenas] probe reused while in flight: {in_flight:?}");
+            return Err(-6);
         }
         let early = backend.poll().map_err(|_| -6)?;
         if !early.events.is_empty() || !early.errors.is_empty() || backend.pending_count() != 2 {
@@ -452,6 +462,77 @@ pub unsafe extern "C" fn mag_render_native_scene_probe_target(
                 {
                     return Err(-6);
                 }
+            }
+        }
+        if let Some(data) = third_data {
+            let mut third_store = ResourceStore::new(ResourceLimits {
+                max_resources: 17,
+                max_bytes: 608,
+            })
+            .map_err(|_| -5)?;
+            let leases: Vec<_> = data
+                .into_iter()
+                .map(|bytes| {
+                    let v = third_store
+                        .apply(ResourceDelta::Create { bytes })
+                        .map_err(|_| -5)?;
+                    third_store.lease(v).map_err(|_| -1)
+                })
+                .collect::<Result<_, i32>>()?;
+            let scene = make_scene(backend.device(), pipes, &leases, diagnostic == 1)?;
+            drop(leases);
+            let (commands, leases) = scene.into_submission();
+            let frame = FrameIdentity {
+                frame_id: FrameId(3),
+                world_update_id: WorldUpdateId(1),
+                source_publication: 1,
+                camera_publication: 1,
+            };
+            let ticket = backend.submit(frame, commands, leases).map_err(|_| -6)?;
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while backend.pending_count() > 0 {
+                if Instant::now() > deadline {
+                    return Err(-4);
+                }
+                let poll = backend.poll().map_err(|_| -6)?;
+                if !poll.errors.is_empty()
+                    || poll.events.iter().any(|e| {
+                        matches!(e, BackendEvent::Terminal { status, .. } if *status != TerminalStatus::Succeeded)
+                    })
+                {
+                    return Err(-6);
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            let after = backend.device().arena_stats();
+            let same_pixels = if diagnostic == 1 {
+                let pixels = backend.device().readback(ticket)?;
+                let at = |x: usize, y: usize| {
+                    u32::from_le_bytes(
+                        pixels[(y * 64 + x) * 4..(y * 64 + x) * 4 + 4]
+                            .try_into()
+                            .unwrap(),
+                    )
+                };
+                unsafe {
+                    at(32, 32) == (*report).center_rgba
+                        && at(52, 11) == (*report).ui_rgba
+                        && at(24, 32) == (*report).shadow_rgba
+                        && at(0, 0) == (*report).outside_rgba
+                }
+            } else {
+                true
+            };
+            eprintln!(
+                "[mag native resident arenas] probe in_flight_reuses={} creates_before={} reuses_after_terminal={} write_refusals={} same_pixels={}",
+                in_flight.reuses,
+                in_flight.creates,
+                after.reuses,
+                after.write_refusals,
+                u8::from(same_pixels)
+            );
+            if after.reuses == 0 || after.write_refusals != 0 || !same_pixels {
+                return Err(-6);
             }
         }
         if store.stats().resident_bytes != 0 {

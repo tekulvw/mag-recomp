@@ -67,6 +67,13 @@ struct Batch {
 }
 unsafe extern "C" {
     fn mag_native_batch_layout(out: *mut u32, words: u32) -> i32;
+    fn mag_native_buffer_write(
+        device: *mut c_void,
+        buffer: Buffer,
+        offset: u64,
+        source: *const c_void,
+        length: u64,
+    ) -> i32;
     fn mag_native_graphics_create(
         context: *mut c_void,
         desc: *const GraphicsDesc,
@@ -110,6 +117,7 @@ pub struct BatchDevice<'owner> {
     completed: VecDeque<Completed>,
     ready: VecDeque<BackendEvent>,
     resident: std::cell::RefCell<scene_buffer_cache::Cache>,
+    arenas: std::cell::RefCell<scene_arena_pool::Pool>,
     _owner: PhantomData<&'owner mut NativeContext>,
     // An owned driver keeps the native context alive without a self-reference.
     owned_context: Option<NativeContext>,
@@ -185,16 +193,27 @@ impl<'owner> BatchDevice<'owner> {
                     scene_buffer_cache::Cache::new(caps.device_generation, 0, 0)
                 },
             ),
+            arenas: std::cell::RefCell::new(scene_arena_pool::Pool::new(
+                byte_cap == scene_device::MAX_SCENE_BYTES && resident_arenas_enabled(),
+            )),
             _owner: PhantomData,
             owned_context,
         })
     }
 }
-/// `MAG_RENDER_RESIDENT_BUFFERS=1`: reuse immutable scene upload buffers by
-/// exact content across submissions (default off).
+const NATIVE_UNSUPPORTED: i32 = -2;
+/// `MAG_RENDER_RESIDENT_ARENAS=1`: rewrite completion-released upload arena
+/// buffers in place instead of creating new ones every frame (default off).
+pub(crate) fn resident_arenas_enabled() -> bool {
+    static F: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *F.get_or_init(|| std::env::var_os("MAG_RENDER_RESIDENT_ARENAS").is_some_and(|v| v == "1"))
+}
+/// Reuse immutable scene texture upload buffers by exact content across
+/// submissions (default on; `MAG_RENDER_RESIDENT_BUFFERS=0` disables).
 pub(crate) fn resident_buffers_enabled() -> bool {
     static F: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *F.get_or_init(|| std::env::var_os("MAG_RENDER_RESIDENT_BUFFERS").is_some_and(|v| v == "1"))
+    // Default on; `MAG_RENDER_RESIDENT_BUFFERS=0` restores per-frame uploads.
+    *F.get_or_init(|| std::env::var_os("MAG_RENDER_RESIDENT_BUFFERS").is_none_or(|v| v != "0"))
 }
 impl BatchDevice<'_> {
     /// # Safety
@@ -263,6 +282,9 @@ impl BatchDevice<'_> {
             if self.resident.borrow_mut().unpin(*buffer) {
                 continue;
             }
+            if self.arenas.borrow_mut().released(*buffer) == Some(true) {
+                continue;
+            }
             unsafe {
                 self.api.buffer_release.unwrap()(self.api.device, *buffer);
             }
@@ -288,6 +310,66 @@ impl BatchDevice<'_> {
             Some(result) => result,
             None => self.allocate(bytes, initial),
         }
+    }
+    /// A read-only upload buffer holding `lease`'s bytes for one submission:
+    /// a completion-released ring buffer rewritten in place when enabled and
+    /// accepted by the backend, else a newly created one.
+    fn allocate_arena(&self, lease: &ResourceLease) -> Result<Buffer, i32> {
+        let bytes = lease.bytes().len() as u64;
+        let initial = lease.bytes().as_ptr().cast();
+        let mut pool = self.arenas.borrow_mut();
+        if !pool.enabled() || bytes == 0 {
+            drop(pool);
+            return self.allocate(bytes, initial);
+        }
+        let write =
+            |b: Buffer| unsafe { mag_native_buffer_write(self.api.device, b, 0, initial, bytes) };
+        while let Some((buffer, _)) = pool.take(bytes) {
+            if write(buffer) == 0 {
+                pool.reused(bytes);
+                return Ok(buffer);
+            }
+            // Never reuse a buffer the backend would not rewrite safely.
+            pool.refused();
+            pool.forget(buffer);
+            unsafe {
+                self.api.buffer_release.unwrap()(self.api.device, buffer);
+            }
+        }
+        let cap = scene_arena_pool::capacity(bytes).ok_or(-5)?;
+        let buffer = self.allocate(cap, std::ptr::null())?;
+        let status = write(buffer);
+        if status != 0 {
+            pool.refused();
+            if status == NATIVE_UNSUPPORTED {
+                // No in-place path on this backend: stop trying every frame.
+                pool.disable();
+            }
+            unsafe {
+                self.api.buffer_release.unwrap()(self.api.device, buffer);
+            }
+            drop(pool);
+            return self.allocate(bytes, initial);
+        }
+        pool.adopt(buffer, cap);
+        pool.written(bytes);
+        Ok(buffer)
+    }
+    #[cfg(test)]
+    pub(crate) fn set_resident_uploads(&mut self, enabled: bool) {
+        assert_eq!(self.resident.borrow().stats().entries, 0);
+        *self.resident.get_mut() = if enabled {
+            scene_buffer_cache::Cache::new(
+                self.generation,
+                scene_device::MAX_SCENE_RESOURCES,
+                512 * 1024 * 1024,
+            )
+        } else {
+            scene_buffer_cache::Cache::new(self.generation, 0, 0)
+        };
+    }
+    pub fn arena_stats(&self) -> scene_arena_pool::ArenaStats {
+        self.arenas.borrow().stats()
     }
     pub fn resident_buffer_stats(&self) -> scene_buffer_cache::ResidentBufferStats {
         self.resident.borrow().stats()
@@ -399,7 +481,7 @@ impl BatchDevice<'_> {
         resources.try_reserve_exact(count).map_err(|_| -5)?;
         let result = (|| {
             for lease in leases {
-                let b = self.allocate(lease.bytes().len() as u64, lease.bytes().as_ptr().cast())?;
+                let b = self.allocate_arena(lease)?;
                 buffers.push(b);
                 resources.push(Resource {
                     buffer: b,
@@ -692,6 +774,11 @@ impl Drop for BatchDevice<'_> {
         self.resident.borrow_mut().clear(|b| unsafe {
             api.buffer_release.unwrap()(api.device, b);
         });
+        for b in self.arenas.borrow_mut().drain() {
+            unsafe {
+                api.buffer_release.unwrap()(api.device, b);
+            }
+        }
         for pipeline in self.pipelines.values() {
             unsafe {
                 self.api.pipeline_release.unwrap()(self.api.device, pipeline.handle);
@@ -759,6 +846,8 @@ mod abi_tests {
     }
 }
 
+#[path = "scene_arena_pool.rs"]
+pub mod scene_arena_pool;
 #[path = "scene_buffer_cache.rs"]
 pub mod scene_buffer_cache;
 #[path = "scene_device.rs"]

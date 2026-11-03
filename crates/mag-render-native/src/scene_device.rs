@@ -233,6 +233,15 @@ impl SceneDevice<'_> {
     ) -> crate::batch_device::scene_buffer_cache::ResidentBufferStats {
         self.inner.resident_buffer_stats()
     }
+    pub fn arena_stats(&self) -> crate::batch_device::scene_arena_pool::ArenaStats {
+        self.inner.arena_stats()
+    }
+    /// Test hook: pin resident uploads on/off regardless of the process
+    /// switch. Only valid before the first submission.
+    #[cfg(test)]
+    pub(crate) fn set_resident_uploads(&mut self, enabled: bool) {
+        self.inner.set_resident_uploads(enabled);
+    }
     /// Bind exact external requirements for this next submission only. Native
     /// leases are retained independently once accepted; no final-frame assertion.
     /// # Safety

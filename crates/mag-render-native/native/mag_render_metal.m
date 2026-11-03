@@ -314,8 +314,21 @@ static int metal_close(void *opaque) {
     (void)CFBridgingRelease(opaque);
     host.release(host.userdata,host.lifetime);return MAG_NATIVE_OK;
 }
+/* In-place upload rewrite for opt-in arena reuse. Gated exactly like
+ * readback: no submission that used this buffer may still be pending or
+ * unpolled, so the GPU can never observe a partially rewritten buffer. */
+static int metal_buffer_write(void *opaque, mag_native_buffer ref, uint64_t offset, const void *source, uint64_t length) {
+    MagRenderBuffer *record = find_buffer(context(opaque), ref);
+    if (!record) return MAG_NATIVE_STALE;
+    if (record->readers || record->writers) return MAG_NATIVE_BUSY;
+    if (record->gpu_written || offset > record->gpu.length || length > record->gpu.length - offset)
+        return MAG_NATIVE_INVALID;
+    memcpy((char *)record->gpu.contents + offset, source, (size_t)length);
+    record->seed_zero = 0;
+    return MAG_NATIVE_OK;
+}
 static const mag_native_ops metal_ops = {metal_caps, metal_buffer_create, metal_buffer_release,
-    metal_buffer_read, metal_pipeline_create, metal_pipeline_release, metal_submit, metal_poll, metal_close,metal_graphics_create,metal_submit_batch,metal_scene_graphics_create,metal_submit_scene,metal_image_import,metal_image_release,metal_submit_scene_target,metal_submit_scene_frame,metal_scene_graphics_create_v2,metal_scene_graphics_create_v3,metal_sampler_create,metal_sampler_release,metal_submit_scene_v2,metal_submit_scene_v3,metal_submit_scene_v4,metal_image_import_certified,metal_scene_graphics_create_aux,metal_submit_scene_v5,metal_reserve_scene,metal_abandon_scene_reservation};
+    metal_buffer_read, metal_pipeline_create, metal_pipeline_release, metal_submit, metal_poll, metal_close,metal_graphics_create,metal_submit_batch,metal_scene_graphics_create,metal_submit_scene,metal_image_import,metal_image_release,metal_submit_scene_target,metal_submit_scene_frame,metal_scene_graphics_create_v2,metal_scene_graphics_create_v3,metal_sampler_create,metal_sampler_release,metal_submit_scene_v2,metal_submit_scene_v3,metal_submit_scene_v4,metal_image_import_certified,metal_scene_graphics_create_aux,metal_submit_scene_v5,metal_reserve_scene,metal_abandon_scene_reservation,metal_buffer_write};
 int mag_native_metal_create(const MagRenderHostOwner *owner,mag_native_device **out) {
     if (!owner || !out || owner->backend!=MAG_RENDER_HOST_METAL) return MAG_NATIVE_INVALID;
     *out=NULL;int status=owner->retain(owner->userdata,owner->lifetime);

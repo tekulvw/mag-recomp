@@ -1094,4 +1094,4 @@ pub mod scene_packet;
 pub(crate) mod scene_admission;
 
 #[path = "scene_upload_cache.rs"]
-mod scene_upload_cache;
+pub(crate) mod scene_upload_cache;
