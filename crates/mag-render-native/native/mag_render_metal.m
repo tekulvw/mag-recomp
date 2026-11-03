@@ -6,6 +6,7 @@
 #include "mag_render_native_internal.h"
 #include "mag_render_sampler_registry.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <math.h>
 #include <string.h>
 
@@ -54,6 +55,7 @@
     NSMutableArray<MagRenderSubmission *> *pending;
     NSMutableDictionary<NSNumber*,MagRenderImportedImage*> *images;uint64_t next_image;
     uint64_t generation, next_buffer, next_pipeline, next_submission;
+    int timing_enabled;uint32_t timing_samples;
     mag_native_sampler_registry samplers;
     MagRenderHostOwner host;
 }
@@ -274,6 +276,16 @@ static int metal_poll(void *opaque, mag_native_event *events, uint32_t capacity,
                 memcpy((char*)submission->packed_destination->gpu.contents+(size_t)y*submission->packed_width*4,
                     (const char*)submission->packed_source.contents+(size_t)y*submission->packed_pitch,(size_t)submission->packed_width*4);
         }
+        if(c->timing_enabled && c->timing_samples<256) {
+            ++c->timing_samples;
+            const double start=submission->command.GPUStartTime,end=submission->command.GPUEndTime;
+            const int available=status==MTLCommandBufferStatusCompleted && !submission->command.error &&
+                isfinite(start) && isfinite(end) && start>0 && end>=start;
+            fprintf(stderr,"[mag native gpu timing] generation=%llu ticket=%llu status=%u available=%d gpu_start_seconds=%.9f gpu_end_seconds=%.9f gpu_ms=%.6f\n",
+                (unsigned long long)submission->ticket.device_generation,
+                (unsigned long long)submission->ticket.submission_id,(unsigned)status,available,start,end,
+                available?(end-start)*1000.0:-1.0);
+        }
         events[(*count)++] = (mag_native_event){sizeof(*events), MAG_NATIVE_ABI_VERSION, submission->ticket,
             status == MTLCommandBufferStatusCompleted && !submission->command.error, 1, (uint32_t)status, 0};
         release_uses(submission); [c->pending removeObjectAtIndex:i];
@@ -301,6 +313,7 @@ int mag_native_metal_create(const MagRenderHostOwner *owner,mag_native_device **
     id<MTLCommandQueue> queue=(__bridge id<MTLCommandQueue>)owner->queue;
     if (!device || !queue || queue.device!=device) {owner->release(owner->userdata,owner->lifetime);return MAG_NATIVE_INVALID;}
     MagRenderMetal *c=[MagRenderMetal new];c->device=device;c->queue=queue;c->host=*owner;
+    const char *timing=getenv("MAG_RENDER_NATIVE_GPU_TIMING");c->timing_enabled=timing && !strcmp(timing,"1");
     c->generation=mag_native_next_generation();
     if (!c->generation) {owner->release(owner->userdata,owner->lifetime);return MAG_NATIVE_ALLOCATION_FAILED;}
     mag_native_sampler_registry_init(&c->samplers,c->generation,NULL,metal_sampler_destroy);
