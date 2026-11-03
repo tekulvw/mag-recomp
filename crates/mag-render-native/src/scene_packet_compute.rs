@@ -395,4 +395,40 @@ pub(crate) mod tests {
         assert!(compiler.released.is_empty());
         cache.unpin(&first).unwrap();
     }
+
+    #[test]
+    fn runtime_array_metadata_and_ordered_produced_reads_are_checked_before_preparation() {
+        let mut packet = copied_fixture();
+        packet.programs[2].buffers[0].runtime_array_stride = 16;
+        packet.programs[2].buffers[0].runtime_size_index = 0;
+        packet.programs[2].buffers[1].minimum_bytes = 4;
+        packet.programs[2].buffers[1].runtime_array_stride = 4;
+        packet.programs[2].buffers[1].runtime_size_index = 1;
+        packet.validate(32, 1 << 20).unwrap();
+        let mut bad = packet.clone();
+        bad.programs[2].buffers[1].runtime_size_index = 3;
+        assert_eq!(bad.validate(32, 1 << 20), Err(-1));
+        let mut bad = packet.clone();
+        bad.programs[2].buffers[1].minimum_bytes = 8;
+        assert_eq!(bad.validate(32, 1 << 20), Err(-1));
+        let mut bad = packet.clone();
+        bad.programs[2].buffers[0].binding_kind = 1;
+        assert_eq!(bad.validate(32, 1 << 20), Err(-1));
+        let mut bad = packet.clone();
+        bad.produced.insert(0, 74);
+        bad.dispatches[0].bindings[1].view.length = 74;
+        assert_eq!(bad.validate(32, 1 << 20), Err(-1));
+        packet.buffers.push(Vec::new());
+        packet.produced.insert(4, 72);
+        let mut next = packet.dispatches[0].clone();
+        next.bindings[0].view.buffer = 0;
+        next.bindings[0].view.length = 64;
+        next.bindings[1].view.buffer = 4;
+        packet.dispatches.push(next);
+        packet.passes[0].draws[0].vertices.buffer = 4;
+        packet.validate(32, 1 << 20).unwrap();
+        let mut bad = packet.clone();
+        bad.dispatches.swap(0, 1);
+        assert_eq!(bad.validate(32, 1 << 20), Err(-1));
+    }
 }
