@@ -54,6 +54,25 @@ typedef struct MagRenderHostOwnerV2 {
     MagRenderHostOwner base;
     uint64_t known_features,enabled_features;
 } MagRenderHostOwnerV2;
+/* Optional Vulkan reserved queue order (the SDK's rsx_native_queue_order,
+ * layout-identical). reserve, under the lease at the native boundary, fixes
+ * the next native submission's place: original submissions made after it
+ * reach the queue only after that one. submit, once per reservation, from any
+ * thread and without the lease, submits `submit_info` (a VkSubmitInfo) with
+ * `fence` and then the held original work; NULL abandons the reservation with
+ * the same release. Returns the native submit's VkResult, or a negative host
+ * status. A host provides it through mag_render_host_vulkan_queue_order, a
+ * weak symbol the Vulkan backend looks up when the device is created; without
+ * it reservations are UNSUPPORTED. */
+#define MAG_RENDER_HOST_QUEUE_ORDER_ABI 1u
+typedef struct MagRenderVulkanQueueOrder {
+    uint32_t abi_version,struct_size;
+    uint64_t lifetime;
+    void *userdata;
+    int (*reserve)(void *userdata,uint64_t lifetime,uint64_t *token);
+    int (*submit)(void *userdata,uint64_t lifetime,uint64_t token,const void *submit_info,void *fence);
+} MagRenderVulkanQueueOrder;
+int mag_render_host_vulkan_queue_order(MagRenderVulkanQueueOrder *out);
 
 #ifdef __cplusplus
 }

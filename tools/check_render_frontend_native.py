@@ -133,7 +133,7 @@ def check(args):
                      "draw": ["--draw", args.shader_root], "draw-no-readback": ["--draw-no-readback", args.shader_root]}[mode]
         if args.backend == "vulkan": arguments = [mode, str(args.vendor_id), str(args.device_id)]
         result = run([executable, *arguments], timeout=20, env=environment)
-        if any(marker in result.stdout + result.stderr for marker in ("VUID-", "SYNC-HAZARD")): raise RuntimeError("Vulkan validation rejected native execution:\n" + result.stdout + result.stderr)
+        if any(marker in result.stdout + result.stderr for marker in ("VUID-", "SYNC-HAZARD", "THREADING ERROR")): raise RuntimeError("Vulkan validation rejected native execution:\n" + result.stdout + result.stderr)
         return result
     owner, native = execute("owner"), execute("compute")
     receipt = json.loads(native.stdout)

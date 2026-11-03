@@ -182,6 +182,19 @@ static int scene_import_info(void *opaque, mag_native_image ref,
   frontend_vk_imported_image *image = imported_image_find(c, ref);
   if (!image)
     return MAG_NATIVE_STALE;
+  /* Encoding a reservation runs without the owner lease: only the exact
+   * imports validated under the lease when it was reserved are admitted. */
+  if (c->reserved_encoding) {
+    for (uint32_t k = 0; k < c->reserved_count; ++k) {
+      const mag_native_scene_import *r = &c->reserved_imports[k];
+      if (r->ref.device_generation == ref.device_generation && r->ref.id == ref.id &&
+          r->required_initialized_planes == required) {
+        *out = c->reserved_info[k];
+        return MAG_NATIVE_OK;
+      }
+    }
+    return MAG_NATIVE_STALE;
+  }
   const MagRenderHostImage *h = &image->host;
   int status = h->validate(h->userdata, h->owner_lifetime, h->resource_id,
                            h->resource_generation);

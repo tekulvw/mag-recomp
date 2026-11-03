@@ -716,6 +716,8 @@ static int scene_raster_info(void *opaque,mag_native_pipeline ref,const mag_nati
 static int submit_scene_owned(frontend_vk *c, const mag_native_scene *scene, mag_native_ticket *out,const mag_native_sampler *sampler_table,uint32_t sampler_count,const mag_native_scene_v3 *v3,const mag_native_scene_v4 *v4,const mag_native_scene_v5 *v5) {
     if (c->failed || c->next_submission == UINT64_MAX)
         return MAG_NATIVE_DEVICE_FAILED;
+    if (c->reserved && !c->reserved_encoding)
+        return MAG_NATIVE_BUSY;           /* the reservation is the next submission */
     frontend_vk_slot *slot = NULL;
     for (unsigned i = 0; i < 2; ++i)
         if (!c->slots[i].occupied) {
@@ -1052,10 +1054,18 @@ static int submit_scene_owned(frontend_vk *c, const mag_native_scene *scene, mag
         ++used[i]->references;
     }
     slot->occupied = 1;
-    slot->ticket = (mag_native_ticket){c->generation, ++c->next_submission};
+    slot->ticket = c->reserved_encoding ? c->reserved_ticket : (mag_native_ticket){c->generation, ++c->next_submission};
     VkSubmitInfo submit = {
         .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO, .commandBufferCount = 1, .pCommandBuffers = &slot->command};
-    VkResult result = c->vkQueueSubmit(c->owner.queue, 1, &submit, slot->fence);
+    VkResult result;
+    if (c->reserved_encoding) {
+        /* Into the reserved position: the host submits it, then the original
+         * work it held behind the reservation. */
+        const int submitted = c->order.submit(c->order.userdata, c->order.lifetime, c->reserved_token, &submit, (void *)slot->fence);
+        c->reserved = 0;
+        result = submitted < 0 ? VK_ERROR_DEVICE_LOST : (VkResult)submitted;
+    } else
+        result = c->vkQueueSubmit(c->owner.queue, 1, &submit, slot->fence);
     if (result == VK_ERROR_OUT_OF_HOST_MEMORY || result == VK_ERROR_OUT_OF_DEVICE_MEMORY) {
         slot_release(c, slot);
         return MAG_NATIVE_ALLOCATION_FAILED;
@@ -1104,9 +1114,57 @@ static int submit_scene_v4(void *opaque,const mag_native_scene_v4 *desc,const ma
  int result=submit_scene_owned(c,desc->base.base.scene,out,desc->base.base.samplers,desc->base.base.sampler_count,&desc->base,desc,NULL);
  c->owner.host.end(c->owner.host.userdata,c->owner.host.lifetime);return result;
 }
+/* Release a reservation that will not be encoded, so the original work held
+ * behind it reaches the queue. */
+static void reservation_release(frontend_vk *c){
+ if(!c->reserved)return;
+ (void)c->order.submit(c->order.userdata,c->order.lifetime,c->reserved_token,NULL,NULL);
+ c->reserved=0;c->reserved_count=0;c->reserved_token=0;c->reserved_ticket=(mag_native_ticket){0};
+}
+/* Fix the next submission's queue position at the genuine native boundary,
+ * validating its imports under the owner lease; encoding happens later,
+ * without the lease, in submit_scene_v5. */
+static int reserve_scene(void *opaque,const mag_native_scene_import *imports,uint32_t count,mag_native_ticket *out){
+ frontend_vk *c=opaque;
+ if(!c->order_ok)return MAG_NATIVE_UNSUPPORTED;
+ if(c->failed||c->next_submission==UINT64_MAX)return MAG_NATIVE_DEVICE_FAILED;
+ if(c->reserved||(c->slots[0].occupied&&c->slots[1].occupied))return MAG_NATIVE_BUSY;
+ for(uint32_t i=0;i<count;++i)for(uint32_t j=0;j<i;++j)if(imports[j].image==imports[i].image)return MAG_NATIVE_INVALID;
+ int status=c->owner.host.try_begin(c->owner.host.userdata,c->owner.host.lifetime);
+ if(status)return status<0?status:MAG_NATIVE_DEVICE_FAILED;
+ mag_native_import_info info[MAG_NATIVE_SCENE_MAX_IMAGES];
+ for(uint32_t i=0;i<count&&!status;++i)status=scene_import_info(c,imports[i].ref,imports[i].required_initialized_planes,&info[i]);
+ uint64_t token=0;
+ if(!status){
+  status=c->order.reserve(c->order.userdata,c->order.lifetime,&token);
+  if(status||!token)status=status<0?status:MAG_NATIVE_DEVICE_FAILED;
+ }
+ c->owner.host.end(c->owner.host.userdata,c->owner.host.lifetime);
+ if(status)return status;
+ c->reserved=1;c->reserved_token=token;c->reserved_count=count;
+ memcpy(c->reserved_imports,imports,count*sizeof(*imports));memcpy(c->reserved_info,info,count*sizeof(*info));
+ c->reserved_ticket=(mag_native_ticket){c->generation,++c->next_submission};
+ *out=c->reserved_ticket;
+ return MAG_NATIVE_OK;
+}
+static int abandon_scene_reservation(void *opaque){
+ frontend_vk *c=opaque;if(!c->reserved)return MAG_NATIVE_STALE;
+ reservation_release(c);return MAG_NATIVE_OK;
+}
 static int submit_scene_v5(void *opaque,const mag_native_scene_v5 *desc,const mag_native_image *target,const MagRenderHostFrame *frame,mag_native_ticket *out){
  if(target||frame)return MAG_NATIVE_UNSUPPORTED;
- frontend_vk *c=opaque;int status=c->owner.host.try_begin(c->owner.host.userdata,c->owner.host.lifetime);
+ frontend_vk *c=opaque;
+ if(c->reserved){
+  /* Encode the reservation; on any failure before it was submitted, release
+   * the position so the held original work proceeds. */
+  const mag_native_scene_v3 *v3=&desc->base.base;
+  c->reserved_encoding=1;
+  int result=submit_scene_owned(c,v3->base.scene,out,v3->base.samplers,v3->base.sampler_count,v3,&desc->base,desc);
+  c->reserved_encoding=0;
+  if(c->reserved)reservation_release(c);
+  return result;
+ }
+ int status=c->owner.host.try_begin(c->owner.host.userdata,c->owner.host.lifetime);
  if(status)return status<0?status:MAG_NATIVE_DEVICE_FAILED;
  const mag_native_scene_v3 *v3=&desc->base.base;
  int result=submit_scene_owned(c,v3->base.scene,out,v3->base.samplers,v3->base.sampler_count,v3,&desc->base,desc);

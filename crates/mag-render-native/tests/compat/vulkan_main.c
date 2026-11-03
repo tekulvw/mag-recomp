@@ -1,6 +1,14 @@
 #include "mag_render_batch.h"
 #include "mag_render_native_api.h"
 #include "mag_render_imported_image.h"
+#include "mag_render_scene.h"
+#include "mag_render_stencil.h"
+#include <pthread.h>
+#include <time.h>
+#include <unistd.h>
+int mag_render_test_owner_image(MagRenderHostImage *);
+uint32_t mag_render_test_owner_pixel(void);
+void mag_render_test_owner_clear(const float rgba[4]);
 #include MAG_RENDER_SHADER_FIXTURE
 #include <assert.h>
 #include <stdio.h>
@@ -97,9 +105,7 @@ static void check_rejected_batches(const MagRenderHostOwner *owner, const mag_na
     assert(mag_native_pipeline_release(device, pipeline) == 0);
     assert(mag_native_close(device) == 0);
 }
-/* In-place upload rewrite (arena reuse) and the memory census, which this
- * backend now has; the reserved-order commit stays UNSUPPORTED (counted
- * synchronous fallback in the worker). */
+/* In-place upload rewrite (arena reuse) and the memory census. */
 static void check_buffer_write_and_census(const MagRenderHostOwner *owner) {
     mag_native_device *device = NULL;
     assert(mag_native_create(owner, &device) == 0);
@@ -122,10 +128,83 @@ static void check_buffer_write_and_census(const MagRenderHostOwner *owner) {
     assert(mag_native_memory_stats(device, census, 3) == MAG_NATIVE_INVALID);
     mag_native_ticket ticket = {0};
     mag_native_scene_import import = {0};
-    assert(mag_native_reserve_scene_v5(device, &import, 1, &ticket) == MAG_NATIVE_UNSUPPORTED && !ticket.submission_id);
+    /* With the host's queue order a reservation validates its imports. */
+    assert(mag_native_reserve_scene_v5(device, &import, 1, &ticket) == MAG_NATIVE_STALE && !ticket.submission_id);
     assert(mag_native_buffer_release(device, buffer) == 0);
     assert(mag_native_memory_stats(device, census, MAG_NATIVE_MEMORY_STATS) == 0 && census[0] == 0 && census[1] == 0);
     assert(mag_native_close(device) == 0);
+}
+/* Reserved submission order on the real queue (as the Metal fixture checks):
+ * reservation validates the import under the owner lease, a second
+ * reservation or close is BUSY, an abandoned reservation releases its
+ * position, and an imported clear-only scene encodes into its reservation,
+ * from another thread, with the reserved ticket. Original work recorded
+ * after the reservation -- a blue clear of the same target -- must land
+ * after the native clear although that is submitted ~100 ms later. */
+typedef struct { mag_native_device *device; const mag_native_scene_v5 *v5; mag_native_ticket ticket; int status; } reserved_job;
+static void *reserved_encode(void *arg) {
+    reserved_job *j = arg;
+    struct timespec d = {0, 100 * 1000 * 1000};
+    nanosleep(&d, NULL);
+    j->status = mag_native_submit_scene_v5(j->device, j->v5, NULL, NULL, &j->ticket);
+    return NULL;
+}
+static void check_reserved_submission(const MagRenderHostOwner *owner, const MagRenderHostImage *target) {
+    mag_native_device *device = NULL;
+    assert(mag_native_create(owner, &device) == 0);
+    mag_native_image_certificate certificate = {*target, NULL};
+    mag_native_image ref = {0};
+    assert(mag_native_image_import_certified(device, &certificate, &ref) == 0);
+    mag_native_scene_import import = {0, 0, ref};
+    mag_native_ticket first = {0}, busy = {0}, second = {0};
+    assert(mag_native_reserve_scene_v5(device, &import, 1, &first) == 0 && first.device_generation && first.submission_id);
+    assert(mag_native_reserve_scene_v5(device, &import, 1, &busy) == MAG_NATIVE_BUSY && !busy.submission_id);
+    assert(mag_native_close(device) == MAG_NATIVE_BUSY);
+    assert(mag_native_abandon_scene_reservation(device) == 0);
+    assert(mag_native_abandon_scene_reservation(device) == MAG_NATIVE_STALE);
+    assert(mag_native_reserve_scene_v5(device, &import, 1, &second) == 0 && second.submission_id > first.submission_id);
+    mag_native_scene_image image = {MAG_NATIVE_SCENE_RGBA8, target->width, target->height, 0, {0}};
+    mag_native_scene_pass pass = {0};
+    pass.color.image = 0; pass.color.load = MAG_NATIVE_SCENE_CLEAR; pass.color.store = 1;
+    pass.color.clear[0] = 0.25f; pass.color.clear[3] = 1; pass.depth.image = MAG_NATIVE_SCENE_NONE;
+    mag_native_scene scene = {0};
+    scene.struct_size = sizeof(scene); scene.abi_version = 1;
+    scene.images = &image; scene.image_count = 1; scene.passes = &pass; scene.pass_count = 1;
+    scene.output_image = MAG_NATIVE_SCENE_NONE;
+    mag_native_stencil_attachment stencil = {MAG_NATIVE_SCENE_NONE, 0, 0, 0, 0, 0};
+    mag_native_scene_v5 v5 = {0};
+    v5.struct_size = sizeof(v5); v5.abi_version = 5;
+    v5.base.struct_size = sizeof(v5.base); v5.base.abi_version = 4; v5.base.stencils = &stencil; v5.base.stencil_count = 1;
+    v5.base.base.struct_size = sizeof(v5.base.base); v5.base.base.abi_version = 3;
+    v5.base.base.base.struct_size = sizeof(v5.base.base.base); v5.base.base.base.abi_version = 2;
+    v5.base.base.base.scene = &scene;
+    v5.imports = &import; v5.import_count = 1;
+    reserved_job job = {device, &v5, {0}, -99};
+    pthread_t worker;
+    assert(pthread_create(&worker, NULL, reserved_encode, &job) == 0);
+    const float blue[4] = {0, 0, 1, 1};
+    mag_render_test_owner_clear(blue);                 /* original work after the reservation */
+    const uint32_t pixel = mag_render_test_owner_pixel();
+    pthread_join(worker, NULL);
+    if (job.status) fprintf(stderr, "[reserved submission] encode status=%d\n", job.status);
+    assert(job.status == 0);
+    assert(job.ticket.device_generation == second.device_generation && job.ticket.submission_id == second.submission_id);
+    fprintf(stderr, "[reserved submission] original clear after the reservation reads %08x (bytes R,G,B,A; blue = ffff0000)\n", pixel);
+    assert(pixel == 0xffff0000u);                     /* blue: the native 0.25 red clear ran first */
+    assert(mag_native_abandon_scene_reservation(device) == MAG_NATIVE_STALE);
+    int completed = 0;
+    for (int i = 0; i < 2000 && !completed; ++i) {
+        mag_native_event event = {0};
+        uint32_t count = 0;
+        assert(mag_native_poll(device, &event, 1, &count) == 0);
+        if (count) { assert(event.ticket.submission_id == second.submission_id && event.succeeded); completed = 1; }
+        else usleep(1000);
+    }
+    assert(completed);
+    assert(mag_native_image_release(device, ref) == 0);
+    assert(mag_native_close(device) == 0);
+    fprintf(stderr, "[reserved submission] reserve=%llu abandoned, busy/close refused, encoded=%llu from another thread, completed\n",
+            (unsigned long long)first.submission_id, (unsigned long long)second.submission_id);
 }
 int main(int argc, char **argv) {
     if (argc != 4) {
@@ -133,6 +212,7 @@ int main(int argc, char **argv) {
         return 2;
     }
     uint32_t vendor = (uint32_t)strtoul(argv[2], NULL, 0), device = (uint32_t)strtoul(argv[3], NULL, 0);
+    setenv("MAG_RENDER_VULKAN_RESERVED_COMMIT", "1", 1);   /* opt-in; checked by check_reserved_submission */
     mag_render_test_owner_require_hardware(vendor, device);
     if (!strcmp(argv[1], "owner"))
         return mag_render_test_owner_contract();
@@ -140,7 +220,17 @@ int main(int argc, char **argv) {
                              first = compute(&scene_transform_fixture),
                              second = compute(&scene_prepare_fixture);
     MagRenderHostOwner owner = {0};
-    if (mag_render_test_owner_open(&owner) || mag_render_test_owner_gate()) {
+    if (mag_render_test_owner_open(&owner)) {
+        mag_render_test_owner_close(1);
+        return 3;
+    }
+    /* Before the deliberate queue gate below: this check needs completion. */
+    if (!strcmp(argv[1], "draw")) {
+        MagRenderHostImage target = {.abi_version = 1, .struct_size = sizeof(target)};
+        assert(mag_render_test_owner_image(&target) == 0);
+        check_reserved_submission(&owner, &target);
+    }
+    if (mag_render_test_owner_gate()) {
         mag_render_test_owner_close(1);
         return 3;
     }
