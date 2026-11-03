@@ -135,7 +135,7 @@ static int scene_image_create(frontend_vk *c,const mag_native_scene_image *desc,
            (c->owner.memory.memoryTypes[type].propertyFlags&VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT))break;
     if(type==c->owner.memory.memoryTypeCount)return MAG_NATIVE_UNSUPPORTED;
     VkMemoryAllocateInfo allocation={.sType=VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,.allocationSize=requirements.size,.memoryTypeIndex=type};
-    if(c->vkAllocateMemory(c->owner.device,&allocation,NULL,&im->memory)!=VK_SUCCESS||
+    if(native_memory_allocate(c,&allocation,&im->memory,&im->memory_bytes)!=VK_SUCCESS||
        c->vkBindImageMemory(c->owner.device,im->image,im->memory,0)!=VK_SUCCESS)return MAG_NATIVE_ALLOCATION_FAILED;
     return scene_image_views(c,desc,shape,im);
 }
@@ -1065,6 +1065,7 @@ static int submit_scene_owned(frontend_vk *c, const mag_native_scene *scene, mag
         c->failed = 1;
         return MAG_NATIVE_INDETERMINATE;
     }
+    memory_report(c);
     return MAG_NATIVE_OK;
 fail:
     free(draw_sets);
