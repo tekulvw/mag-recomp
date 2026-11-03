@@ -56,6 +56,7 @@
     /* Default-on (MAG_RENDER_METAL_RESIDENT_IMAGES=0 disables) content-verified reuse of
      * read-only uploaded scene textures across submissions. */
     NSMutableDictionary<NSNumber *, NSMutableArray *> *resident;
+    NSMutableDictionary<NSNumber *, id> *resident_by_upload; /* upload buffer id -> entry */
     uint64_t resident_bytes, resident_hits, resident_misses, resident_evictions;
     uint32_t resident_entries;int resident_enabled,resident_report;
     /* One reserved scene submission: enqueued command buffer, its ticket and
@@ -308,7 +309,7 @@ static int metal_close(void *opaque) {
     if (c->pending.count || c->reserved) return MAG_NATIVE_BUSY;
     MagRenderHostOwner host=c->host;
     int sampler_status=mag_native_sampler_registry_close(&c->samplers);if(sampler_status)return sampler_status;
-    [c->buffers removeAllObjects];[c->resident removeAllObjects];[c->pipelines removeAllObjects];[c->versions removeAllObjects];[c->images removeAllObjects];
+    [c->buffers removeAllObjects];[c->resident removeAllObjects];[c->resident_by_upload removeAllObjects];[c->pipelines removeAllObjects];[c->versions removeAllObjects];[c->images removeAllObjects];
     c->queue=nil;c->device=nil;
     (void)CFBridgingRelease(opaque);
     host.release(host.userdata,host.lifetime);return MAG_NATIVE_OK;
@@ -328,7 +329,7 @@ int mag_native_metal_create(const MagRenderHostOwner *owner,mag_native_device **
     c->generation=mag_native_next_generation();
     if (!c->generation) {owner->release(owner->userdata,owner->lifetime);return MAG_NATIVE_ALLOCATION_FAILED;}
     mag_native_sampler_registry_init(&c->samplers,c->generation,NULL,metal_sampler_destroy);
-    c->buffers=[NSMutableDictionary new];c->versions=[NSMutableDictionary new];c->resident=[NSMutableDictionary new];
+    c->buffers=[NSMutableDictionary new];c->versions=[NSMutableDictionary new];c->resident=[NSMutableDictionary new];c->resident_by_upload=[NSMutableDictionary new];
     const char *resident=getenv("MAG_RENDER_METAL_RESIDENT_IMAGES");c->resident_enabled=!(resident&&!strcmp(resident,"0"));
     const char *report=getenv("MAG_RENDER_FIFO_TIMING");c->resident_report=report&&!strcmp(report,"1");
     c->pipelines=[NSMutableDictionary new];c->pending=[NSMutableArray new];c->images=[NSMutableDictionary new];

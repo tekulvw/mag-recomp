@@ -238,6 +238,7 @@ static int metal_scene_import_info(void *opaque,mag_native_image ref,uint32_t re
  * evicted texture keep it alive through their retained array. */
 @interface MagRenderResidentImage : NSObject {
 @public id<MTLTexture> texture; NSData *shape; NSData *bytes; uint64_t used;
+    uint64_t upload_id,upload_version; /* the immutable upload buffer it was made from */
 }
 @end
 @implementation MagRenderResidentImage @end
@@ -267,13 +268,30 @@ static uint64_t metal_resident_hash(NSData *shape,const uint8_t *bytes,uint64_t 
     for(uint64_t i=words*8;i<length;++i){h^=bytes[i];h*=1099511628211ull;}
     return h;
 }
-static id<MTLTexture> metal_resident_find(MagRenderMetal *c,uint64_t hash,NSData *shape,const uint8_t *bytes,uint64_t length){
-    for(MagRenderResidentImage *e in c->resident[@(hash)])
-        if(e->bytes.length==length&&[e->shape isEqualToData:shape]&&!memcmp(e->bytes.bytes,bytes,(size_t)length)){
-            e->used=c->next_submission;return e->texture;}
+/* An upload buffer (id, version) never changes contents unless the GPU wrote
+ * it, so the same buffer and shape name the same texture without hashing or
+ * comparing bytes. Reached when upload buffers persist across submissions. */
+static id<MTLTexture> metal_resident_find_upload(MagRenderMetal *c,MagRenderBuffer *upload,NSData *shape){
+    if(upload->gpu_written)return nil;
+    MagRenderResidentImage *e=c->resident_by_upload[@(upload->identifier)];
+    if(e&&e->upload_id==upload->identifier&&e->upload_version==upload->version&&[e->shape isEqualToData:shape]){
+        e->used=c->next_submission;return e->texture;}
     return nil;
 }
-static void metal_resident_insert(MagRenderMetal *c,uint64_t hash,NSData *shape,const uint8_t *bytes,uint64_t length,id<MTLTexture> texture){
+static id<MTLTexture> metal_resident_find(MagRenderMetal *c,uint64_t hash,NSData *shape,const uint8_t *bytes,uint64_t length,MagRenderBuffer *upload){
+    for(MagRenderResidentImage *e in c->resident[@(hash)])
+        if(e->bytes.length==length&&[e->shape isEqualToData:shape]&&!memcmp(e->bytes.bytes,bytes,(size_t)length)){
+            e->used=c->next_submission;
+            /* Content proven equal: later submissions of this same immutable
+             * upload buffer may take the identity path. */
+            if(!upload->gpu_written){
+                if(e->upload_id&&c->resident_by_upload[@(e->upload_id)]==e)[c->resident_by_upload removeObjectForKey:@(e->upload_id)];
+                e->upload_id=upload->identifier;e->upload_version=upload->version;c->resident_by_upload[@(e->upload_id)]=e;
+            }
+            return e->texture;}
+    return nil;
+}
+static void metal_resident_insert(MagRenderMetal *c,uint64_t hash,NSData *shape,const uint8_t *bytes,uint64_t length,id<MTLTexture> texture,MagRenderBuffer *upload){
     if(length>metal_resident_max_bytes/4)return;
     while(c->resident_entries&&(c->resident_entries>=metal_resident_max_entries||c->resident_bytes+length>metal_resident_max_bytes)){
         NSNumber *oldest_key=nil;NSUInteger oldest_index=0;uint64_t oldest=UINT64_MAX;
@@ -282,13 +300,16 @@ static void metal_resident_insert(MagRenderMetal *c,uint64_t hash,NSData *shape,
         if(!oldest_key)break;
         NSMutableArray *bucket=c->resident[oldest_key];MagRenderResidentImage *e=bucket[oldest_index];
         c->resident_bytes-=e->bytes.length;--c->resident_entries;++c->resident_evictions;
+        if(e->upload_id&&c->resident_by_upload[@(e->upload_id)]==e)[c->resident_by_upload removeObjectForKey:@(e->upload_id)];
         [bucket removeObjectAtIndex:oldest_index];if(!bucket.count)[c->resident removeObjectForKey:oldest_key];
     }
     MagRenderResidentImage *e=[MagRenderResidentImage new];e->texture=texture;e->shape=shape;
+    e->upload_id=upload->gpu_written?0:upload->identifier;e->upload_version=upload->version;
     e->bytes=[NSData dataWithBytes:bytes length:(NSUInteger)length];e->used=c->next_submission;
     if(!e->bytes)return;
     NSMutableArray *bucket=c->resident[@(hash)];if(!bucket){bucket=[NSMutableArray new];c->resident[@(hash)]=bucket;}
     [bucket addObject:e];c->resident_bytes+=length;++c->resident_entries;
+    if(e->upload_id)c->resident_by_upload[@(e->upload_id)]=e;
 }
 /* Commit a reservation that will not be (or could not be) encoded so its
  * queue position never blocks later work. Any encoders were already ended. */
@@ -388,8 +409,11 @@ static int metal_scene_owned(void *opaque, const mag_native_scene *scene, mag_na
             resident_upload=find_buffer(c,im->upload);
             if(resident_upload){
                 resident_shape=metal_resident_shape(im,shape,resident_upload->gpu.length);
-                resident_hash=metal_resident_hash(resident_shape,resident_upload->gpu.contents,resident_upload->gpu.length);
-                id<MTLTexture> hit=metal_resident_find(c,resident_hash,resident_shape,resident_upload->gpu.contents,resident_upload->gpu.length);
+                id<MTLTexture> hit=metal_resident_find_upload(c,resident_upload,resident_shape);
+                if(!hit){
+                    resident_hash=metal_resident_hash(resident_shape,resident_upload->gpu.contents,resident_upload->gpu.length);
+                    hit=metal_resident_find(c,resident_hash,resident_shape,resident_upload->gpu.contents,resident_upload->gpu.length,resident_upload);
+                }
                 if(hit){++c->resident_hits;[images addObject:hit];[retained addObject:hit];continue;}
                 ++c->resident_misses;
             }
@@ -413,7 +437,7 @@ static int metal_scene_owned(void *opaque, const mag_native_scene *scene, mag_na
                         withBytes:(const uint8_t*)b->gpu.contents+level->offset bytesPerRow:level->row_bytes bytesPerImage:level->length];
                 }
             }else [texture replaceRegion:MTLRegionMake2D(0,0,im->width,im->height) mipmapLevel:0 withBytes:b->gpu.contents bytesPerRow:im->width*4];
-            if(resident_shape)metal_resident_insert(c,resident_hash,resident_shape,resident_upload->gpu.contents,resident_upload->gpu.length,texture);
+            if(resident_shape)metal_resident_insert(c,resident_hash,resident_shape,resident_upload->gpu.contents,resident_upload->gpu.length,texture,resident_upload);
         }
         [images addObject:texture];
         [retained addObject:texture];
