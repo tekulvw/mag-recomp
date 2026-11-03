@@ -236,9 +236,8 @@ impl SceneDevice<'_> {
     pub fn arena_stats(&self) -> crate::batch_device::scene_arena_pool::ArenaStats {
         self.inner.arena_stats()
     }
-    /// Test hook: pin resident uploads on/off regardless of the process
-    /// switch. Only valid before the first submission.
-    #[cfg(test)]
+    /// Test and probe hook: pin resident uploads on/off regardless of the
+    /// process switch. Only valid before the first submission.
     pub(crate) fn set_resident_uploads(&mut self, enabled: bool) {
         self.inner.set_resident_uploads(enabled);
     }
@@ -325,6 +324,17 @@ impl SceneDevice<'_> {
     pub(crate) fn chunk_stats(&self) -> Result<[u64; 3], i32> {
         let mut out = [0; 3];
         match unsafe { scene_extended::Plan::chunk_stats(self.inner.api.device, &mut out) } {
+            0 => Ok(out),
+            s => Err(s),
+        }
+    }
+    /// Native GPU memory census (see `mag_native_memory_stats`): allocated
+    /// bytes, buffer versions, pipelines, imported images, resident textures,
+    /// pending submissions, samplers, retired command buffers still alive and
+    /// scene submissions.
+    pub(crate) fn memory_stats(&self) -> Result<[u64; 9], i32> {
+        let mut out = [0; 9];
+        match unsafe { scene_extended::Plan::memory_stats(self.inner.api.device, &mut out) } {
             0 => Ok(out),
             s => Err(s),
         }

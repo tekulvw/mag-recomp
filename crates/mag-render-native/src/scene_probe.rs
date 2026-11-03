@@ -818,3 +818,153 @@ pub unsafe extern "C" fn mag_render_native_scene_probe_reserved(
     unsafe { (*report).status = status };
     status
 }
+
+/// Result of [`mag_render_native_scene_probe_memory`].
+#[repr(C)]
+#[derive(Default)]
+pub struct MemoryProbeReport {
+    pub abi_version: u32,
+    pub struct_size: u32,
+    pub status: i32,
+    pub frames: u32,
+    /// Native census (see `mag_native_memory_stats`) after the warm-up
+    /// frames and after the last frame.
+    pub warm: [u64; 9],
+    pub last: [u64; 9],
+}
+/// Long-running GPU memory check: `frames` sequential submissions of the
+/// probe scene, each with distinct per-frame constants and texture bytes in
+/// its own store, each drained to its terminal. Finished submissions must not
+/// stay alive and native object counts must stay flat; the caller judges the
+/// device allocation growth between the census after `warm` frames and the
+/// last one.
+/// # Safety
+/// Genuine retained host owner, readable pipeline descriptors and a writable
+/// report with matching abi_version/struct_size.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mag_render_native_scene_probe_memory(
+    owner: *const HostOwner,
+    first: *const PipelineDesc,
+    second: *const PipelineDesc,
+    graphics: *const SceneGraphicsDesc,
+    frames: u32,
+    warm: u32,
+    report: *mut MemoryProbeReport,
+) -> i32 {
+    if owner.is_null()
+        || first.is_null()
+        || second.is_null()
+        || graphics.is_null()
+        || report.is_null()
+        || warm == 0
+        || frames <= warm
+        || unsafe {
+            (*report).abi_version != 1
+                || (*report).struct_size != size_of::<MemoryProbeReport>() as u32
+        }
+    {
+        return -1;
+    }
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<(), i32> {
+        let context = unsafe { NativeContext::from_host(&*owner) }?;
+        let mut device = SceneDevice::from_owned_context(
+            context,
+            BatchDeviceLimits {
+                max_bytes: 1024 * 1024,
+                max_pipelines: 8,
+                diagnostic_readback: false,
+            },
+        )?;
+        // The content-keyed upload cache is bounded on its own (entries and
+        // bytes) and would legitimately grow here; without it every frame's
+        // distinct uploads must be released once the frame is terminal.
+        device.set_resident_uploads(false);
+        let descriptors = unsafe { std::slice::from_raw_parts(graphics, 5) };
+        let mut pipes = [0u64; 7];
+        pipes[0] = unsafe { device.compute_pipeline(&*first) }?;
+        pipes[1] = unsafe { device.compute_pipeline(&*second) }?;
+        for (i, d) in descriptors.iter().enumerate() {
+            pipes[i + 2] = unsafe { device.graphics_pipeline(d) }?;
+        }
+        let mut backend = RenderBackend::new(
+            Shared(std::cell::RefCell::new(device)),
+            BackendLimits {
+                max_leases_per_submission: 17,
+                max_bytes_per_submission: 608,
+            },
+        )
+        .map_err(|_| -1)?;
+        for frame in 0..frames {
+            // Distinct constants every frame (no upload is reused) and four
+            // rotating texture variants (the bounded resident texture cache
+            // settles, so any growth is per-frame retention, not caching).
+            let mut data = probe_data();
+            let shift = frame as f32 * 1e-5;
+            for constants in &mut data[3..9] {
+                let mut x = f32::from_ne_bytes(constants[16..20].try_into().map_err(|_| -1)?);
+                x += shift;
+                constants[16..20].copy_from_slice(&x.to_ne_bytes());
+            }
+            for texture in &mut data[14..17] {
+                texture[0] = (frame % 4) as u8;
+            }
+            let mut store = ResourceStore::new(ResourceLimits {
+                max_resources: 17,
+                max_bytes: 608,
+            })
+            .map_err(|_| -5)?;
+            let versions: Vec<_> = data
+                .into_iter()
+                .map(|bytes| store.apply(ResourceDelta::Create { bytes }).map_err(|_| -5))
+                .collect::<Result<_, _>>()?;
+            let leases: Vec<_> = versions
+                .iter()
+                .map(|v| store.lease(*v).map_err(|_| -1))
+                .collect::<Result<_, _>>()?;
+            let scene = {
+                let device = backend.device().0.borrow();
+                make_scene(&device, pipes, &leases, false, None)?
+            };
+            drop(leases);
+            let (commands, l) = scene.into_submission();
+            let identity = FrameIdentity {
+                frame_id: FrameId(u64::from(frame) + 1),
+                world_update_id: WorldUpdateId(1),
+                source_publication: 1,
+                camera_publication: 1,
+            };
+            backend.submit(identity, commands, l).map_err(|e| {
+                eprintln!("[memory probe] frame={frame} submit {e:?}");
+                -6
+            })?;
+            drain(&mut backend)?;
+            for v in versions {
+                store.retire(v).map_err(|_| -1)?;
+            }
+            if store.stats().resident_bytes != 0 {
+                return Err(-6);
+            }
+            if frame + 1 == warm || frame + 1 == frames {
+                let census = backend.device().0.borrow().memory_stats()?;
+                unsafe {
+                    if frame + 1 == warm {
+                        (*report).warm = census;
+                    } else {
+                        (*report).last = census;
+                    }
+                    (*report).frames = frame + 1;
+                }
+            }
+        }
+        backend.try_shutdown().map_err(|_| -4)?;
+        drop(backend);
+        Ok(())
+    }));
+    let status = match result {
+        Ok(Ok(())) => 0,
+        Ok(Err(c)) => c,
+        Err(_) => -6,
+    };
+    unsafe { (*report).status = status };
+    status
+}

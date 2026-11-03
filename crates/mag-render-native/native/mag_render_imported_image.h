@@ -40,6 +40,15 @@ int mag_native_abandon_scene_reservation(mag_native_device *);
  * submissions so far, out[1] command buffers reserved for the last one and
  * out[2] how many of those carried work. count must be 3. */
 int mag_native_scene_chunk_stats(mag_native_device *,uint64_t *out,uint32_t count);
+/* Diagnostic GPU memory census; count must be MAG_NATIVE_MEMORY_STATS:
+ * out[0] device allocated bytes (Metal currentAllocatedSize), out[1] live
+ * buffer versions, out[2] pipelines, out[3] imported images, out[4] resident
+ * texture entries, out[5] pending submissions, out[6] samplers, out[7]
+ * retired command buffers still alive (finished work something still
+ * retains; process-wide scene command buffers alive minus this device's
+ * pending ones), out[8] scene submissions. */
+#define MAG_NATIVE_MEMORY_STATS 9u
+int mag_native_memory_stats(mag_native_device *,uint64_t *out,uint32_t count);
 int mag_native_scene_v5_layout(uint32_t *,uint32_t);
 #ifdef __cplusplus
 }

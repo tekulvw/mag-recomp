@@ -112,6 +112,7 @@ unsafe extern "C" {
     ) -> i32;
     fn mag_native_abandon_scene_reservation(device: *mut c_void) -> i32;
     fn mag_native_scene_chunk_stats(device: *mut c_void, out: *mut u64, count: u32) -> i32;
+    fn mag_native_memory_stats(device: *mut c_void, out: *mut u64, count: u32) -> i32;
     fn mag_native_scene_v5_layout(out: *mut u32, words: u32) -> i32;
     fn mag_native_submit_scene_v5(
         device: *mut c_void,
@@ -484,6 +485,11 @@ impl Plan {
     /// `device` is the live native device.
     pub(super) unsafe fn chunk_stats(device: *mut c_void, out: &mut [u64; 3]) -> i32 {
         unsafe { mag_native_scene_chunk_stats(device, out.as_mut_ptr(), 3) }
+    }
+    /// # Safety
+    /// `device` is the live native device.
+    pub(super) unsafe fn memory_stats(device: *mut c_void, out: &mut [u64; 9]) -> i32 {
+        unsafe { mag_native_memory_stats(device, out.as_mut_ptr(), 9) }
     }
     pub(super) unsafe fn submit(
         &self,

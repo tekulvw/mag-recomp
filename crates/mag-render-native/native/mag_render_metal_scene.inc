@@ -328,6 +328,7 @@ static void metal_scene_register(MagRenderMetal *c,MagRenderSubmission *s,NSArra
     if(c->reserved_encoding)s->ticket=c->reserved_ticket;
     else s->ticket=(mag_native_ticket){c->generation,++c->next_submission};
     if(slots)s->chunks=[slots subarrayWithRange:NSMakeRange(0,slots.count-1)];
+    if(slots){for(id<MTLCommandBuffer> b in slots)metal_witness(b);}else metal_witness(s->command);
     for(MagRenderUse *use in s->uses){
         if(use->write){++use->buffer->writers;use->buffer->gpu_written=1;}
         else ++use->buffer->readers;
@@ -743,6 +744,7 @@ static int metal_scene_owned(void *opaque, const mag_native_scene *scene, mag_na
                 scene->pass_count,(unsigned long long)(weight_total-scene->pass_count),first_commit?(double)(first_commit-encode_start)/1e6:-1.0,(double)(now-encode_start)/1e6);
         }
     }
+    metal_memory_report(c);
     if(c->resident_enabled&&c->resident_report&&(c->next_submission<=4||c->next_submission%120==0))
         fprintf(stderr,"[mag native resident images] submission=%llu hits=%llu misses=%llu entries=%u bytes=%llu evictions=%llu\n",
             (unsigned long long)c->next_submission,(unsigned long long)c->resident_hits,(unsigned long long)c->resident_misses,

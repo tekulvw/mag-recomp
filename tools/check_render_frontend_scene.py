@@ -75,6 +75,14 @@ def check(args):
             raise RuntimeError(f"unexpected scene result: {receipt}")
         if "Apple" not in receipt.get("device", ""):
             raise RuntimeError("required real Apple GPU missing")
+        if not args.target and not mode.endswith("no-readback"):
+            # Long run with distinct per-frame content: finished work is
+            # released and GPU memory does not grow with the frame count.
+            memory = receipt.get("memory") or {}
+            if memory.get("status") != 0 or memory.get("retired_alive") != 0 \
+                    or not all(memory.get(k) is True for k in ("buffers_flat", "pipelines_flat", "images_flat")) \
+                    or not memory.get("allocated_growth_mb", 1e9) < 4.0:
+                raise RuntimeError(f"GPU memory not flat over a long run: {receipt}")
         if args.target and not mode.endswith("no-readback"):
             # Reserved encoding, unchunked and chunked (>=2 non-empty command
             # buffers), must reproduce the direct encoding's pixels exactly.

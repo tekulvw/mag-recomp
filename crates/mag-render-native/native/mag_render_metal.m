@@ -54,6 +54,22 @@
 }
 @end
 @implementation MagRenderSubmission @end
+/* Lifetime witness attached to every scene command buffer: counts command
+ * buffers not yet deallocated (process-wide), so finished GPU work that
+ * something still retains (with every resource it referenced) is visible. */
+#include <objc/runtime.h>
+#include <stdatomic.h>
+static _Atomic uint64_t metal_live_scene_commands;
+@interface MagRenderCommandWitness : NSObject @end
+@implementation MagRenderCommandWitness
+- (void)dealloc { atomic_fetch_sub(&metal_live_scene_commands, 1); }
+@end
+static const char metal_witness_key = 0;
+static void metal_witness(id<MTLCommandBuffer> command) {
+    if (!command || objc_getAssociatedObject(command, &metal_witness_key)) return;
+    atomic_fetch_add(&metal_live_scene_commands, 1);
+    objc_setAssociatedObject(command, &metal_witness_key, [MagRenderCommandWitness new], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
 @interface MagRenderMetal : NSObject {
 @public id<MTLDevice> device; id<MTLCommandQueue> queue;
     /* id -> version -> buffer. Small integer NSNumbers are tagged pointers,
@@ -76,6 +92,8 @@
      * reserved_chunks are the rest. chunk_stats: chunked submissions, slots
      * and non-empty slots of the last one. */
     NSMutableArray<id<MTLCommandBuffer>> *reserved_chunks;uint32_t chunk_slots;uint64_t chunk_stats[3];
+    /* GPU memory diagnostics: scene submission count and report period (0 = off). */
+    uint64_t scene_submissions;uint32_t memory_report_every;
     NSMutableDictionary<NSNumber *, NSNumber *> *versions;
     NSMutableDictionary<NSNumber *, MagRenderPipeline *> *pipelines;
     NSMutableArray<MagRenderSubmission *> *pending;
@@ -286,6 +304,7 @@ static int metal_submit(void *opaque,const mag_native_frame *frame,mag_native_ti
     @catch (NSException *error) { (void)error;return out->submission_id?MAG_NATIVE_INDETERMINATE:MAG_NATIVE_DEVICE_FAILED; }
     @finally { c->host.end(c->host.userdata,c->host.lifetime); }
 }
+static void metal_memory_report(MagRenderMetal *c);
 #include "mag_render_metal_sampler.inc"
 #include "mag_render_metal_batch.inc"
 #include "mag_render_metal_scene.inc"
@@ -346,8 +365,97 @@ static int metal_buffer_write(void *opaque, mag_native_buffer ref, uint64_t offs
     record->seed_zero = 0;
     return MAG_NATIVE_OK;
 }
-static const mag_native_ops metal_ops = {metal_caps, metal_buffer_create, metal_buffer_release,
-    metal_buffer_read, metal_pipeline_create, metal_pipeline_release, metal_submit, metal_poll, metal_close,metal_graphics_create,metal_submit_batch,metal_scene_graphics_create,metal_submit_scene,metal_image_import,metal_image_release,metal_submit_scene_target,metal_submit_scene_frame,metal_scene_graphics_create_v2,metal_scene_graphics_create_v3,metal_sampler_create,metal_sampler_release,metal_submit_scene_v2,metal_submit_scene_v3,metal_submit_scene_v4,metal_image_import_certified,metal_scene_graphics_create_aux,metal_submit_scene_v5,metal_reserve_scene,metal_abandon_scene_reservation,metal_buffer_write,metal_scene_chunk_stats};
+static void metal_memory_census(MagRenderMetal *c,uint64_t out[MAG_NATIVE_MEMORY_STATS]){
+    uint64_t buffers=0;for(NSNumber *id in c->buffers)buffers+=c->buffers[id].count;
+    uint64_t queued=0;for(MagRenderSubmission *s in c->pending)queued+=1+s->chunks.count;
+    const uint64_t live=atomic_load(&metal_live_scene_commands);
+    out[0]=(uint64_t)c->device.currentAllocatedSize;out[1]=buffers;out[2]=c->pipelines.count;out[3]=c->images.count;
+    out[4]=c->resident_entries;out[5]=c->pending.count;out[6]=c->samplers.count;out[7]=live>queued?live-queued:0;out[8]=c->scene_submissions;
+}
+static int metal_memory_stats(void *opaque,uint64_t *out,uint32_t count){
+    if(count!=MAG_NATIVE_MEMORY_STATS)return MAG_NATIVE_INVALID;
+    metal_memory_census(context(opaque),out);return MAG_NATIVE_OK;
+}
+/* Periodic census line, default on (MAG_RENDER_GPU_MEMORY_REPORT=0 disables):
+ * the first two scene submissions, then every 120th. */
+static void metal_memory_report(MagRenderMetal *c){
+    const uint64_t n=++c->scene_submissions;
+    if(!c->memory_report_every||(n>2&&n%c->memory_report_every))return;
+    uint64_t m[MAG_NATIVE_MEMORY_STATS];metal_memory_census(c,m);
+    fprintf(stderr,"[mag native gpu memory] submission=%llu allocated_mb=%.1f buffers=%llu pipelines=%llu images=%llu resident=%llu resident_mb=%.1f pending=%llu samplers=%llu retired_alive=%llu\n",
+        (unsigned long long)n,(double)m[0]/1048576.0,(unsigned long long)m[1],(unsigned long long)m[2],(unsigned long long)m[3],
+        (unsigned long long)m[4],(double)c->resident_bytes/1048576.0,(unsigned long long)m[5],(unsigned long long)m[6],(unsigned long long)m[7]);
+}
+/* Every operation runs in its own autorelease pool. Callers are plain
+ * threads (the Rust worker, FIFO or host threads) with no pool of their own,
+ * so Metal's autoreleased command buffers, encoders and descriptors would
+ * otherwise live until the thread exits, keeping every resource each
+ * finished submission referenced. */
+static int metal_pooled_caps(void *a0, mag_native_caps_desc *a1){@autoreleasepool{return metal_caps(a0,a1);}}
+static int metal_pooled_buffer_create(void *a0, mag_native_buffer a1, const mag_native_buffer_desc *a2, mag_native_buffer *a3){@autoreleasepool{return metal_buffer_create(a0,a1,a2,a3);}}
+static int metal_pooled_buffer_release(void *a0, mag_native_buffer a1){@autoreleasepool{return metal_buffer_release(a0,a1);}}
+static int metal_pooled_buffer_read(void *a0, mag_native_buffer a1, uint64_t a2, void *a3, uint64_t a4){@autoreleasepool{return metal_buffer_read(a0,a1,a2,a3,a4);}}
+static int metal_pooled_pipeline_create(void *a0, const mag_native_pipeline_desc *a1, mag_native_pipeline *a2){@autoreleasepool{return metal_pipeline_create(a0,a1,a2);}}
+static int metal_pooled_pipeline_release(void *a0, mag_native_pipeline a1){@autoreleasepool{return metal_pipeline_release(a0,a1);}}
+static int metal_pooled_submit(void *a0, const mag_native_frame *a1, mag_native_ticket *a2){@autoreleasepool{return metal_submit(a0,a1,a2);}}
+static int metal_pooled_poll(void *a0, mag_native_event *a1, uint32_t a2, uint32_t *a3){@autoreleasepool{return metal_poll(a0,a1,a2,a3);}}
+static int metal_pooled_close(void *a0){@autoreleasepool{return metal_close(a0);}}
+static int metal_pooled_graphics_create(void *a0, const mag_native_graphics_desc *a1, mag_native_pipeline *a2){@autoreleasepool{return metal_graphics_create(a0,a1,a2);}}
+static int metal_pooled_submit_batch(void *a0, const mag_native_batch *a1, mag_native_ticket *a2){@autoreleasepool{return metal_submit_batch(a0,a1,a2);}}
+static int metal_pooled_scene_graphics_create(void *a0, const mag_native_scene_graphics_desc *a1, mag_native_pipeline *a2){@autoreleasepool{return metal_scene_graphics_create(a0,a1,a2);}}
+static int metal_pooled_submit_scene(void *a0, const mag_native_scene *a1, mag_native_ticket *a2){@autoreleasepool{return metal_submit_scene(a0,a1,a2);}}
+static int metal_pooled_image_import(void *a0, const MagRenderHostImage *a1, mag_native_image *a2){@autoreleasepool{return metal_image_import(a0,a1,a2);}}
+static int metal_pooled_image_release(void *a0, mag_native_image a1){@autoreleasepool{return metal_image_release(a0,a1);}}
+static int metal_pooled_submit_scene_target(void *a0, const mag_native_scene *a1, mag_native_image a2, mag_native_ticket *a3){@autoreleasepool{return metal_submit_scene_target(a0,a1,a2,a3);}}
+static int metal_pooled_submit_scene_frame(void *a0, const mag_native_scene *a1, mag_native_image a2, const MagRenderHostFrame *a3, mag_native_ticket *a4){@autoreleasepool{return metal_submit_scene_frame(a0,a1,a2,a3,a4);}}
+static int metal_pooled_scene_graphics_create_v2(void *a0, const mag_native_scene_graphics_v2_desc *a1, mag_native_pipeline *a2){@autoreleasepool{return metal_scene_graphics_create_v2(a0,a1,a2);}}
+static int metal_pooled_scene_graphics_create_v3(void *a0, const mag_native_scene_graphics_v3_desc *a1, mag_native_pipeline *a2){@autoreleasepool{return metal_scene_graphics_create_v3(a0,a1,a2);}}
+static int metal_pooled_sampler_create(void *a0, const mag_native_sampler_desc *a1, mag_native_sampler *a2){@autoreleasepool{return metal_sampler_create(a0,a1,a2);}}
+static int metal_pooled_sampler_release(void *a0, mag_native_sampler a1){@autoreleasepool{return metal_sampler_release(a0,a1);}}
+static int metal_pooled_submit_scene_v2(void *a0, const mag_native_scene_v2 *a1, const mag_native_image *a2, const MagRenderHostFrame *a3, mag_native_ticket *a4){@autoreleasepool{return metal_submit_scene_v2(a0,a1,a2,a3,a4);}}
+static int metal_pooled_submit_scene_v3(void *a0, const mag_native_scene_v3 *a1, const mag_native_image *a2, const MagRenderHostFrame *a3, mag_native_ticket *a4){@autoreleasepool{return metal_submit_scene_v3(a0,a1,a2,a3,a4);}}
+static int metal_pooled_submit_scene_v4(void *a0, const mag_native_scene_v4 *a1, const mag_native_image *a2, const MagRenderHostFrame *a3, mag_native_ticket *a4){@autoreleasepool{return metal_submit_scene_v4(a0,a1,a2,a3,a4);}}
+static int metal_pooled_image_import_certified(void *a0, const mag_native_image_certificate *a1, mag_native_image *a2){@autoreleasepool{return metal_image_import_certified(a0,a1,a2);}}
+static int metal_pooled_scene_graphics_create_aux(void *a0, const mag_native_scene_graphics_v3_desc *a1, uint32_t a2, mag_native_pipeline *a3){@autoreleasepool{return metal_scene_graphics_create_aux(a0,a1,a2,a3);}}
+static int metal_pooled_submit_scene_v5(void *a0, const mag_native_scene_v5 *a1, const mag_native_image *a2, const MagRenderHostFrame *a3, mag_native_ticket *a4){@autoreleasepool{return metal_submit_scene_v5(a0,a1,a2,a3,a4);}}
+static int metal_pooled_reserve_scene(void *a0, const mag_native_scene_import *a1, uint32_t a2, mag_native_ticket *a3){@autoreleasepool{return metal_reserve_scene(a0,a1,a2,a3);}}
+static int metal_pooled_abandon_scene_reservation(void *a0){@autoreleasepool{return metal_abandon_scene_reservation(a0);}}
+static int metal_pooled_buffer_write(void *a0, mag_native_buffer a1, uint64_t a2, const void *a3, uint64_t a4){@autoreleasepool{return metal_buffer_write(a0,a1,a2,a3,a4);}}
+static int metal_pooled_scene_chunk_stats(void *a0, uint64_t *a1, uint32_t a2){@autoreleasepool{return metal_scene_chunk_stats(a0,a1,a2);}}
+static int metal_pooled_memory_stats(void *a0, uint64_t *a1, uint32_t a2){@autoreleasepool{return metal_memory_stats(a0,a1,a2);}}
+static const mag_native_ops metal_ops = {
+    metal_pooled_caps,
+    metal_pooled_buffer_create,
+    metal_pooled_buffer_release,
+    metal_pooled_buffer_read,
+    metal_pooled_pipeline_create,
+    metal_pooled_pipeline_release,
+    metal_pooled_submit,
+    metal_pooled_poll,
+    metal_pooled_close,
+    metal_pooled_graphics_create,
+    metal_pooled_submit_batch,
+    metal_pooled_scene_graphics_create,
+    metal_pooled_submit_scene,
+    metal_pooled_image_import,
+    metal_pooled_image_release,
+    metal_pooled_submit_scene_target,
+    metal_pooled_submit_scene_frame,
+    metal_pooled_scene_graphics_create_v2,
+    metal_pooled_scene_graphics_create_v3,
+    metal_pooled_sampler_create,
+    metal_pooled_sampler_release,
+    metal_pooled_submit_scene_v2,
+    metal_pooled_submit_scene_v3,
+    metal_pooled_submit_scene_v4,
+    metal_pooled_image_import_certified,
+    metal_pooled_scene_graphics_create_aux,
+    metal_pooled_submit_scene_v5,
+    metal_pooled_reserve_scene,
+    metal_pooled_abandon_scene_reservation,
+    metal_pooled_buffer_write,
+    metal_pooled_scene_chunk_stats,
+    metal_pooled_memory_stats};
 int mag_native_metal_create(const MagRenderHostOwner *owner,mag_native_device **out) {
     if (!owner || !out || owner->backend!=MAG_RENDER_HOST_METAL) return MAG_NATIVE_INVALID;
     *out=NULL;int status=owner->retain(owner->userdata,owner->lifetime);
@@ -365,6 +473,7 @@ int mag_native_metal_create(const MagRenderHostOwner *owner,mag_native_device **
     const char *resident=getenv("MAG_RENDER_METAL_RESIDENT_IMAGES");c->resident_enabled=!(resident&&!strcmp(resident,"0"));
     const char *report=getenv("MAG_RENDER_FIFO_TIMING");c->resident_report=report&&!strcmp(report,"1");
     c->reserved_chunks=[NSMutableArray new];
+    const char *memory=getenv("MAG_RENDER_GPU_MEMORY_REPORT");c->memory_report_every=memory&&!strcmp(memory,"0")?0u:120u;
     const char *chunked=getenv("MAG_RENDER_MAIN_CHUNKED_COMMIT");
     if(chunked&&!strcmp(chunked,"1")){const char *n=getenv("MAG_RENDER_MAIN_CHUNKS");long slots=n?strtol(n,NULL,10):4;c->chunk_slots=(uint32_t)(slots<2?2:slots>8?8:slots);}
     c->pipelines=[NSMutableDictionary new];c->pending=[NSMutableArray new];c->images=[NSMutableDictionary new];

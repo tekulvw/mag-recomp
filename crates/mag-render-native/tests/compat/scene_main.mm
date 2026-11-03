@@ -35,6 +35,36 @@ extern "C" int mag_render_native_scene_probe_reserved(const MagRenderHostOwner *
                                                       const mag_native_pipeline_desc *,
                                                       const mag_native_scene_graphics_desc *, const MagRenderHostImage *,
                                                       ReservedProbeReport *);
+struct MemoryProbeReport {
+    uint32_t abi_version, struct_size;
+    int32_t status;
+    uint32_t frames;
+    uint64_t warm[9], last[9];
+};
+extern "C" int mag_render_native_scene_probe_memory(const MagRenderHostOwner *, const mag_native_pipeline_desc *,
+                                                    const mag_native_pipeline_desc *,
+                                                    const mag_native_scene_graphics_desc *, uint32_t, uint32_t,
+                                                    MemoryProbeReport *);
+/* Many sequential submissions with distinct per-frame content on the real
+ * queue: finished submissions must be released, native object counts must
+ * stay flat and the device allocation must not grow with the frame count. */
+static int check_memory_flat(const MagRenderHostOwner *owner,const mag_native_pipeline_desc *first,
+                             const mag_native_pipeline_desc *second,const mag_native_scene_graphics_desc *graphics,
+                             NSMutableDictionary *result){
+    MemoryProbeReport r={};r.abi_version=1;r.struct_size=sizeof(r);
+    const uint32_t frames=240,warm=40;
+    const int status=mag_render_native_scene_probe_memory(owner,first,second,graphics,frames,warm,&r);
+    const double growth=((double)r.last[0]-(double)r.warm[0])/1048576.0;
+    fprintf(stderr,"[memory flat] status=%d frames=%u allocated_mb warm=%.2f last=%.2f growth=%.2f buffers=%llu/%llu pipelines=%llu/%llu images=%llu/%llu retired_alive=%llu/%llu\n",
+        status,r.frames,(double)r.warm[0]/1048576.0,(double)r.last[0]/1048576.0,growth,
+        (unsigned long long)r.warm[1],(unsigned long long)r.last[1],(unsigned long long)r.warm[2],(unsigned long long)r.last[2],
+        (unsigned long long)r.warm[3],(unsigned long long)r.last[3],(unsigned long long)r.warm[7],(unsigned long long)r.last[7]);
+    result[@"memory"]=@{@"status":@(status),@"frames":@(r.frames),@"allocated_growth_mb":@(growth),
+        @"retired_alive":@(r.last[7]),@"buffers_flat":@(r.warm[1]==r.last[1]),@"pipelines_flat":@(r.warm[2]==r.last[2]),
+        @"images_flat":@(r.warm[3]==r.last[3])};
+    if(status)return status;
+    return r.last[7]==0&&r.warm[1]==r.last[1]&&r.warm[2]==r.last[2]&&r.warm[3]==r.last[3]&&growth<4.0?0:-6;
+}
 static std::vector<mag_native_scene_buffer_layout> buffers(Shader &shader, uint32_t stage) {
     std::vector<mag_native_scene_buffer_layout> out;
     for (NSDictionary *b in shader.manifest[@"buffers"]) {
@@ -261,6 +291,8 @@ int mag_render_scene_target_main(const char *directory, bool diagnostic,bool imp
         // Before the target readback, which leaves the owner at a dirty boundary;
         // the reserved runs render the same pixels into the same target.
         NSMutableDictionary *reserved=[NSMutableDictionary new];
+        if(status==0&&!imported&&diagnostic)
+            status=check_memory_flat(&owner,&first.compute,&second.compute,graphics,reserved);
         if(status==0&&imported&&diagnostic)
             status=check_reserved_identity(&owner,&first.compute,&second.compute,graphics,&target,reserved);
         if(status==0&&imported&&diagnostic)status=mag_render_test_owner_image_check();

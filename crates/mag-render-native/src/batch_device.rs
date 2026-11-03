@@ -355,7 +355,6 @@ impl BatchDevice<'_> {
         pool.written(bytes);
         Ok(buffer)
     }
-    #[cfg(test)]
     pub(crate) fn set_resident_uploads(&mut self, enabled: bool) {
         assert_eq!(self.resident.borrow().stats().entries, 0);
         *self.resident.get_mut() = if enabled {
