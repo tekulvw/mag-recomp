@@ -338,6 +338,7 @@ static void queue_push_trace(ppu_context* ctx) {
 #ifdef MAG_LAUNCHER_HOOKS
 #include "retail_handoff.h"
 #include <stdlib.h>
+#include <string.h>
 #include <cstring>
 #include "retail_network_policy.h"
 static unsigned ticket_config() {
