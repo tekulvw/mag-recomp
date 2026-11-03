@@ -113,6 +113,16 @@ extern "C" int mag_render_frontend_borrow_image(uint64_t life, uint32_t surface,
 #endif
 }
 
+extern "C" int mag_render_frontend_validate_image_planes(void *user, uint64_t life,
+    uint64_t resource, uint64_t generation, uint32_t required) {
+#if defined(__APPLE__)
+    return rsx_metal_backend_validate_image_planes(user, life, resource, generation, required);
+#else
+    (void)user; (void)life; (void)resource; (void)generation; (void)required;
+    return -2;
+#endif
+}
+
 extern "C" int mag_render_frontend_reserve_frame(const MagRenderHostImage *image,
                                                  const MagRenderFrameSource *source,
                                                  MagRenderHostFrame *out) {

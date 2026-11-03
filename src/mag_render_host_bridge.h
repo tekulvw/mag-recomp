@@ -16,6 +16,11 @@ int mag_render_frontend_retry_shutdown(uint64_t owner_lifetime);
 int mag_render_frontend_borrow_owner(MagRenderHostOwner *);
 int mag_render_frontend_borrow_owner_v2(MagRenderHostOwnerV2 *);
 int mag_render_frontend_borrow_image(uint64_t owner_lifetime, uint32_t backend_surface, MagRenderHostImage *);
+/* Plane initialization callback uses the retained image's existing identity and
+ * userdata. Call under its native owner lease after the original boundary.
+ * COLOR1/DEPTH2/STENCIL4 are actual full clears, not GPU completion evidence. */
+int mag_render_frontend_validate_image_planes(void *, uint64_t owner_lifetime,
+    uint64_t resource_id, uint64_t resource_generation, uint32_t required_planes);
 int mag_render_frontend_reserve_frame(const MagRenderHostImage *, const MagRenderFrameSource *,
                                       MagRenderHostFrame *);
 int mag_render_frontend_cancel_frame(uint64_t owner_lifetime, uint64_t reservation);
