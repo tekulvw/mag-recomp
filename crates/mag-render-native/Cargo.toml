@@ -1,0 +1,30 @@
+[package]
+name = "mag-render-native"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99"
+license = "MIT"
+description = "Frontend-owned native backend on a narrowly borrowed GPU owner"
+
+[lib]
+name = "mag_render_native"
+crate-type = ["rlib", "staticlib"]
+
+[features]
+default = []
+metal = []
+vulkan = []
+d3d12 = []
+
+[dependencies]
+mag-render-abi = { path = "../mag-render-abi" }
+mag-render = { path = "../mag-render", features = ["sdk-compute"] }
+
+[build-dependencies]
+mag-render-shaders = { path = "../mag-render-shaders" }
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[profile.release]
+panic = "unwind"

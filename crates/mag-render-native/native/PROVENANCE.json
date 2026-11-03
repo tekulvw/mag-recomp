@@ -1,0 +1,12 @@
+{
+  "repository": "https://github.com/tekulvw/ps3recomp",
+  "commit": "6e0fcc2e026cddc02fb94f23050ac8429a03306a",
+  "sha256": {
+    "rsx_frontend.h": "b9b4c33e80992e34c0fc73d893f3f8dc1c26e12c4f04fde2cc77bcaf4b5c8eed",
+    "rsx_frontend.c": "a724496fe970a8d011c0766acab479a0eaf80742ebd10a014fdac8ca2f1e5f98",
+    "rsx_frontend_internal.h": "f3d3015d8ec94c44c0faa2fd147f1b061ce0ddc33ceeb32c8dad9245e3060242",
+    "rsx_frontend_metal.m": "1c14ca30dc77d316617222f1ed2a746b850018c9db6cec11da0aab690549ba5b",
+    "rsx_frontend_vulkan.h": "a51f1b3ad318473ecd8d638f857ed24af6f44d3be70853ea01c30abc2a8c7ebb",
+    "rsx_frontend_vulkan.c": "12829ea5fec94d838c3257a26222a4bb97e4b014406519075652e142e0daee0c"
+  }
+}

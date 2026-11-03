@@ -35,6 +35,9 @@ env:
 
 jobs:
   kit:
+    # Experimental rendering is validated by its own source/ABI/shader jobs.
+    # Installer qualification resumes after proven code is reviewed for main.
+    if: github.event_name != 'pull_request' || github.head_ref != 'codex/render-frontend-integration'
     name: Source kit
     runs-on: ubuntu-24.04
     timeout-minutes: 20

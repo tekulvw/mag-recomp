@@ -17,6 +17,7 @@ if(NOT MAG_WORKSPACE STREQUAL CMAKE_CURRENT_SOURCE_DIR AND EXISTS "${MAG_WORKSPA
 endif()
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/MagExtensions.cmake")
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/MagInput.cmake")
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/MagRender.cmake")
 
 # ---------------------------------------------------------------------------
 # Standards
@@ -92,6 +93,22 @@ option(PORT_ENABLE_SPU "Compile and register the title's lifted SPU images" ON)
 
 # Fail before compiling if the selected executable and lifted sources disagree.
 find_package(Python3 3.11 COMPONENTS Interpreter REQUIRED)
+set(MAG_RUNTIME_CANDIDATE_MANIFEST "" CACHE FILEPATH
+    "Explicit experimental SDK revision/tree manifest; leaves normal framework pins unchanged")
+set(MAG_RUNTIME_CANDIDATE_ARGS "")
+if(MAG_RUNTIME_CANDIDATE_MANIFEST)
+    if(NOT MAG_RENDER_FRONTEND_RUST)
+        message(FATAL_ERROR "A candidate SDK requires the explicit non-default Rust frontend build")
+    endif()
+    list(APPEND MAG_RUNTIME_CANDIDATE_ARGS --runtime-candidate "${MAG_RUNTIME_CANDIDATE_MANIFEST}")
+    execute_process(
+        COMMAND ${MAG_TOOL_ENV} "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/provenance.py"
+            --validate-runtime --sdk "${PS3RECOMP_DIR}" --recomp "${RECOMP_DIR}" ${MAG_RUNTIME_CANDIDATE_ARGS}
+        RESULT_VARIABLE MAG_RUNTIME_CANDIDATE_RESULT ERROR_VARIABLE MAG_RUNTIME_CANDIDATE_ERROR)
+    if(NOT MAG_RUNTIME_CANDIDATE_RESULT EQUAL 0)
+        message(FATAL_ERROR "Candidate SDK validation failed: ${MAG_RUNTIME_CANDIDATE_ERROR}")
+    endif()
+endif()
 set(MAG_MODULE_VALIDATION_ARGS "")
 if(MAG_FIRMWARE_DIR)
     list(APPEND MAG_MODULE_VALIDATION_ARGS --firmware "${MAG_FIRMWARE_DIR}")
@@ -450,8 +467,13 @@ if(MAG_FIRMWARE_SOURCES)
         "${CMAKE_CURRENT_SOURCE_DIR}/profiles/retail-v1.0-firmware.json")
 endif()
 mag_enable_input(${PROJECT_NAME})
+mag_enable_render_frontend(${PROJECT_NAME})
 mag_apply_extensions(${PROJECT_NAME})
+if(MAG_RUNTIME_CANDIDATE_MANIFEST)
+    set_property(TARGET ${PROJECT_NAME} APPEND PROPERTY LINK_DEPENDS "${MAG_RUNTIME_CANDIDATE_MANIFEST}")
+endif()
 list(APPEND MAG_RECEIPT_EXTRA ${MAG_INPUT_RECEIPT_EXTRA})
+list(APPEND MAG_RECEIPT_EXTRA ${MAG_RENDER_RECEIPT_EXTRA})
 set(MAG_EXTENSION_RECEIPT_ARGS "")
 foreach(extra IN LISTS MAG_RECEIPT_EXTRA)
     list(APPEND MAG_EXTENSION_RECEIPT_ARGS --receipt-extra "${extra}")
@@ -460,7 +482,7 @@ add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
     COMMAND ${MAG_TOOL_ENV} "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/provenance.py"
             --binary "$<TARGET_FILE:${PROJECT_NAME}>"
             --sdk "${PS3RECOMP_DIR}" --recomp "${RECOMP_DIR}"
-            --image "${MAG_IMAGE}" ${MAG_SPU_RECEIPT_ARGS} ${MAG_EXTENSION_RECEIPT_ARGS}
+            --image "${MAG_IMAGE}" ${MAG_SPU_RECEIPT_ARGS} ${MAG_EXTENSION_RECEIPT_ARGS} ${MAG_RUNTIME_CANDIDATE_ARGS}
     VERBATIM)
 
 if(APPLE)

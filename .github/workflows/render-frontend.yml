@@ -1,0 +1,356 @@
+name: Rust rendering frontend
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# The integration branch has a draft PR: run it once via pull_request, not
+# once per push plus once per PR update. Cancel superseded source checks.
+concurrency:
+  group: render-frontend-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+# Synthetic checks only. This workflow cannot publish releases or installers.
+permissions:
+  contents: read
+
+jobs:
+  native:
+    name: Rust rendering (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    env:
+      MAG_RENDER_REQUIRE_TOOLS: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: MSVC host environment
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+      - name: Build tools
+        run: python -m pip install cmake ninja
+      - name: Pinned Rust toolchain
+        run: rustup toolchain install 1.99.0 --profile minimal --component rustfmt --component clippy
+      - name: Fetch locked Rust dependencies
+        run: cargo fetch --manifest-path crates/mag-render/Cargo.toml --locked
+      - name: Format
+        working-directory: crates/mag-render
+        run: cargo fmt --all --check
+      - name: Clippy
+        working-directory: crates/mag-render
+        run: cargo clippy --all-features --locked --offline --all-targets -- -D warnings
+      - name: Unit, SDK ABI and accounting tests
+        working-directory: crates/mag-render
+        run: cargo test --all-features --locked --offline
+      - name: Real static library C++ linkage and rebuild
+        run: python -m unittest tests.test_rust_render_build -v
+      - name: Fetch isolated game-program compiler dependencies
+        run: cargo fetch --manifest-path crates/mag-render-programs/Cargo.toml --locked
+      - name: Check isolated game-program compiler
+        run: |
+          cargo fmt --manifest-path crates/mag-render-programs/Cargo.toml --check
+          cargo clippy --manifest-path crates/mag-render-programs/Cargo.toml --locked --offline --all-targets -- -D warnings
+          cargo test --manifest-path crates/mag-render-programs/Cargo.toml --locked --offline
+      - name: Fetch locked shader translator dependencies
+        run: cargo fetch --manifest-path crates/mag-render-shaders/Cargo.toml --locked
+      - name: Shader translator format
+        run: cargo fmt --manifest-path crates/mag-render-shaders/Cargo.toml --check
+      - name: Shader translator Clippy
+        run: cargo clippy --manifest-path crates/mag-render-shaders/Cargo.toml --all-targets --locked --offline -- -D warnings
+      - name: Shader translator tests and output reflection
+        run: cargo test --manifest-path crates/mag-render-shaders/Cargo.toml --locked --offline
+      - name: Build shader compiler CLI
+        run: cargo build --manifest-path crates/mag-render-shaders/Cargo.toml --locked --offline
+      - name: Independent shader validators
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends spirv-tools glslang-tools
+      - name: Compile owned game-program outputs with independent tools
+        if: runner.os == 'Linux'
+        run: cargo test --manifest-path crates/mag-render-programs/Cargo.toml --locked --offline --test toolchain -- --ignored
+      - name: Validate emitted SPIR-V and HLSL with independent compilers
+        if: runner.os == 'Linux'
+        run: python crates/mag-render-shaders/tests/test_generated_validation.py -v
+      - name: Generate portable shader artifacts and validation report
+        run: python tools/check_render_frontend_shaders.py --output-dir build/shader-translation
+      - name: Pinned DXC library and typed compiler-only regression
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $kit = Join-Path $env:RUNNER_TEMP 'mag-dxc-1.9.2609'
+          $archive = Join-Path $env:RUNNER_TEMP 'mag-dxc-1.9.2609.zip'
+          Invoke-WebRequest -Uri 'https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.9.2609/dxc_2026_09_29.zip' -OutFile $archive
+          $expected = 'ad31b1fc8443175d204f77a611fdb3ef2ec42759bdc2f1167368de24a4a7e7f1'
+          if ((Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne $expected) { throw 'DXC archive hash mismatch' }
+          Expand-Archive -Path $archive -DestinationPath $kit
+          $header = Get-ChildItem $kit -Recurse -File -Filter dxcapi.h | Select-Object -First 1
+          $library = Join-Path $kit 'bin/x64/dxcompiler.dll'
+          $compiler = Join-Path $kit 'bin/x64/dxc.exe'
+          if (!$header -or !(Test-Path $library) -or !(Test-Path $compiler)) { throw 'Pinned x64 DXC package layout missing' }
+          "MAG_RENDER_DXC_INCLUDE_DIR=$($header.Directory.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
+          $binary = Join-Path $env:RUNNER_TEMP 'mag-native-dxc-test.exe'
+          clang-cl /nologo /std:c++17 /EHsc /W4 /WX "/I$($header.Directory.FullName)" crates/mag-render-native/tests/native/test_dxc.cpp crates/mag-render-native/native/mag_render_dxc.cpp "/Fe$binary"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $binary $library build/shader-translation/copy_transform/shader.hlsl build/shader-translation/compact/shader.hlsl build/shader-translation/scene_vertex/shader.hlsl build/shader-translation/scene_fragment/shader.hlsl
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/check_render_frontend_shaders.py --output-dir build/shader-translation --dxc $compiler --require-hlsl-compiler
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/test_render_frontend_d3d12_cpu.py --output-dir build/native-d3d12-cpu --compiler clang-cl --dxc-include $header.Directory.FullName
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Exact candidate SDK for Windows CPU interop only
+        if: >-
+          runner.os == 'Windows' &&
+          ((github.event_name == 'pull_request' &&
+            github.head_ref == 'codex/render-frontend-integration' &&
+            github.event.pull_request.head.repo.full_name == github.repository) ||
+           (github.event_name == 'workflow_dispatch' &&
+            github.ref == 'refs/heads/codex/render-frontend-integration'))
+        uses: actions/checkout@v4
+        with:
+          repository: tekulvw/ps3recomp
+          ref: 0c1c978945e41593dbfb355c2a519f5dc955b1ca
+          fetch-depth: 2
+          path: build/d3d12-sdk-source
+          persist-credentials: false
+      - name: Actual Windows SDK provider, checked boundary and guarded bridge (CPU only)
+        if: >-
+          runner.os == 'Windows' &&
+          ((github.event_name == 'pull_request' &&
+            github.head_ref == 'codex/render-frontend-integration' &&
+            github.event.pull_request.head.repo.full_name == github.repository) ||
+           (github.event_name == 'workflow_dispatch' &&
+            github.ref == 'refs/heads/codex/render-frontend-integration'))
+        shell: pwsh
+        run: |
+          python tools/test_render_frontend_d3d12_cpu.py --sdk-only --sdk-root build/d3d12-sdk-source --sdk-revision 0c1c978945e41593dbfb355c2a519f5dc955b1ca --output-dir build/native-d3d12-sdk-cpu --compiler clang-cl --dxc-include $env:MAG_RENDER_DXC_INCLUDE_DIR
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Windows SDK CPU fixture receipt (no GPU execution)
+        if: always() && runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: render-frontend-d3d12-sdk-cpu
+          path: build/native-d3d12-sdk-cpu/report.json
+          if-no-files-found: ignore
+      - name: Frontend-owned D3D12 feature compile and CPU contracts (no GPU execution)
+        if: runner.os == 'Windows'
+        env:
+          CC: clang-cl
+          CXX: clang-cl
+          CMAKE_GENERATOR: Ninja
+        run: |
+          cargo fetch --manifest-path crates/mag-render-native/Cargo.toml --locked
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --manifest-path crates/mag-render-native/Cargo.toml --features d3d12 --locked --offline
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo clippy --manifest-path crates/mag-render-native/Cargo.toml --features d3d12 --all-targets --locked --offline -- -D warnings
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: D3D12 CPU fixture receipt (no GPU execution)
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: render-frontend-d3d12-cpu
+          path: build/native-d3d12-cpu/report.json
+          if-no-files-found: error
+      - name: Retain synthetic shader artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: render-frontend-shaders-${{ runner.os }}
+          path: build/shader-translation
+          if-no-files-found: error
+
+  frontend-native:
+    name: Frontend native (${{ matrix.os }}, ${{ matrix.backend }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            backend: Metal compile and contract tests
+            feature_args: --features metal
+          - os: ubuntu-latest
+            backend: Vulkan compile and contract tests
+            feature_args: --features vulkan
+          - os: windows-latest
+            backend: portable ABI, D3D12 compile in Rust job
+            feature_args: ''
+    env:
+      CMAKE_GENERATOR: Ninja
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Windows compiler environment
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+      - name: Select supported Windows C11 compiler
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          'CC=clang-cl' | Out-File -FilePath $env:GITHUB_ENV -Append
+          'CXX=clang-cl' | Out-File -FilePath $env:GITHUB_ENV -Append
+          Write-Output 'Portable ABI here; D3D12 feature/CPU compile is in the pinned-DXC Rust job. GPU acceptance remains pending.'
+      - name: Native build tools
+        run: python -m pip install cmake ninja
+      - name: Vulkan headers and metadata
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config libvulkan-dev
+      - name: Pinned Rust toolchain
+        run: rustup toolchain install 1.99.0 --profile minimal --component rustfmt --component clippy
+      - name: Locked native crate dependencies
+        run: cargo fetch --manifest-path crates/mag-render-native/Cargo.toml --locked
+      - name: Native Rust format
+        run: |
+          cargo fmt --manifest-path crates/mag-render-native/Cargo.toml --check
+          cargo fmt --manifest-path crates/mag-render-abi/Cargo.toml --check
+      - name: Pure ABI dependency check
+        run: cargo clippy --manifest-path crates/mag-render-abi/Cargo.toml --locked --offline -- -D warnings
+      - name: D3D12 portable allocation and view preflight
+        if: runner.os != 'Windows'
+        run: python tools/test_render_frontend_d3d12_cpu.py --output-dir build/native-d3d12-cpu ${{ runner.os == 'Linux' && '--vulkan-include /usr/include' || '' }}
+      - name: Portable native ABI build and tests
+        run: cargo test --manifest-path crates/mag-render-native/Cargo.toml --locked --offline
+      - name: Selected native backend compile and contract tests
+        if: runner.os != 'Windows'
+        run: cargo test --manifest-path crates/mag-render-native/Cargo.toml ${{ matrix.feature_args }} --locked --offline
+      - name: Native backend Clippy
+        run: cargo clippy --manifest-path crates/mag-render-native/Cargo.toml ${{ matrix.feature_args }} --all-targets --locked --offline -- -D warnings
+
+  owned-program-targets:
+    name: Owned program compiler (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest, windows-latest]
+    env:
+      CMAKE_GENERATOR: Ninja
+      CMAKE_PREFIX_PATH: ${{ github.workspace }}/build/program-compiler-install
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Windows compiler environment
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+      - name: Build tools
+        run: python -m pip install cmake ninja
+      - name: Reuse pinned compiler libraries
+        id: program-compiler-cache
+        uses: actions/cache@v4
+        with:
+          path: build/program-compiler-install
+          key: render-program-compiler-v1-${{ runner.os }}-${{ runner.arch }}-e1b562a8bed273a02f30b59b66a5d499793cede5
+      # glslang 16.6.0 and its exact known_good.json SPIRV-Tools/Header pins.
+      # Build libraries only: no graphics device, client or release publication.
+      - uses: actions/checkout@v4
+        if: steps.program-compiler-cache.outputs.cache-hit != 'true'
+        with:
+          repository: KhronosGroup/glslang
+          ref: e1b562a8bed273a02f30b59b66a5d499793cede5
+          path: build/program-compiler-source
+      - uses: actions/checkout@v4
+        if: steps.program-compiler-cache.outputs.cache-hit != 'true'
+        with:
+          repository: KhronosGroup/SPIRV-Tools
+          ref: ef96ed763b43b59b33b31b362f09a02b729fa1c9
+          path: build/program-compiler-source/External/spirv-tools
+      - uses: actions/checkout@v4
+        if: steps.program-compiler-cache.outputs.cache-hit != 'true'
+        with:
+          repository: KhronosGroup/SPIRV-Headers
+          ref: 496543121ce6419f23d6fa5d7194ba66c36212d2
+          path: build/program-compiler-source/External/spirv-tools/external/spirv-headers
+      - name: Configure pinned compiler libraries
+        if: steps.program-compiler-cache.outputs.cache-hit != 'true'
+        run: cmake -S build/program-compiler-source -B build/program-compiler-build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/build/program-compiler-install -DBUILD_SHARED_LIBS=OFF -DENABLE_PCH=OFF -DGLSLANG_TESTS=OFF -DENABLE_GLSLANG_BINARIES=OFF -DSPIRV_SKIP_TESTS=ON -DSPIRV_SKIP_EXECUTABLES=ON
+      - name: Build pinned compiler libraries
+        if: steps.program-compiler-cache.outputs.cache-hit != 'true'
+        run: cmake --build build/program-compiler-build --config Release --parallel 4
+      - name: Install compiler into owned build directory
+        if: steps.program-compiler-cache.outputs.cache-hit != 'true'
+        run: cmake --install build/program-compiler-build --config Release
+      - name: Pinned Rust toolchain
+        run: rustup toolchain install 1.99.0 --profile minimal --component rustfmt --component clippy
+      - name: Fetch locked compiler dependencies
+        run: cargo fetch --manifest-path crates/mag-render-programs/Cargo.toml --locked
+      - name: In-process native translation and binding tests
+        run: cargo test --manifest-path crates/mag-render-programs/Cargo.toml --features native-compiler --locked --offline
+      - name: Compiler Clippy
+        run: cargo clippy --manifest-path crates/mag-render-programs/Cargo.toml --features native-compiler --all-targets --locked --offline -- -D warnings
+      - name: Independent Vulkan validator
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends spirv-tools
+          cargo test --manifest-path crates/mag-render-programs/Cargo.toml --features native-compiler --locked --offline --test native_compile -- --ignored
+
+  vulkan-sdk-cpu:
+    name: Vulkan SDK provider and bridge (CPU only)
+    # Explicit candidate-SDK override for this integration, never a normal
+    # framework pin or a release job. No fork-supplied SDK ref is consumed.
+    if: >-
+      (github.event_name == 'pull_request' &&
+       github.head_ref == 'codex/render-frontend-integration' &&
+       github.event.pull_request.head.repo.full_name == github.repository) ||
+      (github.event_name == 'workflow_dispatch' &&
+       github.ref == 'refs/heads/codex/render-frontend-integration')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: tekulvw/ps3recomp
+          ref: 204b8fa6fbff35efa972cd9012c12fd4ee7c0226
+          # Also retain its exact pre-image-ABI parent for guarded fallback.
+          fetch-depth: 2
+          path: build/vulkan-sdk-source
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: CPU compilers and Vulkan/SDL headers (no runtime execution)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc g++ binutils libvulkan-dev libsdl2-dev
+      - name: Runner failure receipts
+        run: python -m unittest tests.test_render_frontend_vulkan_sdk_cpu -v
+      - name: Existing native cases, actual SDK provider, ABI and guarded bridge
+        run: >-
+          python tools/test_render_frontend_vulkan_sdk_cpu.py
+          --sdk-root build/vulkan-sdk-source
+          --sdk-revision 204b8fa6fbff35efa972cd9012c12fd4ee7c0226
+          --old-sdk-revision 27ecb554cd39b394d362d8719555d1c4d3a8ca75
+          --vulkan-include /usr/include
+          --sdl-include /usr/include
+          --output-dir build/vulkan-sdk-cpu
+      - name: CPU-only receipt and failure logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: render-frontend-vulkan-sdk-cpu
+          path: |
+            build/vulkan-sdk-cpu/report.json
+            build/vulkan-sdk-cpu/*.log
+            build/vulkan-sdk-cpu/native/report.json
+          if-no-files-found: error

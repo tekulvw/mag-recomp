@@ -1,0 +1,12 @@
+[package]
+name = "mag-render-shaders"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99"
+license = "MIT"
+description = "Validated portable compute shader translation and layout manifests"
+
+[dependencies]
+naga = { version = "=30.0.1", features = ["wgsl-in", "msl-out", "hlsl-out", "spv-out", "spv-in"] }
+serde = { version = "=1.0.228", features = ["derive"] }
+serde_json = "=1.0.149"
