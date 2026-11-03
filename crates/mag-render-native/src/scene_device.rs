@@ -228,6 +228,11 @@ impl SceneDevice<'static> {
     }
 }
 impl SceneDevice<'_> {
+    pub fn resident_buffer_stats(
+        &self,
+    ) -> crate::batch_device::scene_buffer_cache::ResidentBufferStats {
+        self.inner.resident_buffer_stats()
+    }
     /// Bind exact external requirements for this next submission only. Native
     /// leases are retained independently once accepted; no final-frame assertion.
     /// # Safety
@@ -656,9 +661,18 @@ impl SceneDevice<'_> {
         )?;
         let result = (|| {
             for lease in &leases[compute_count..] {
-                let b = self
-                    .inner
-                    .allocate(lease.bytes().len() as u64, lease.bytes().as_ptr().cast())?;
+                // A submission may not name one buffer twice: byte-identical
+                // uploads within one scene get their own single-use buffer.
+                let mut b = self.inner.allocate_upload(lease)?;
+                if buffers
+                    .iter()
+                    .any(|o: &Buffer| (o.id, o.version) == (b.id, b.version))
+                {
+                    self.inner.release(&[b]);
+                    b = self
+                        .inner
+                        .allocate(lease.bytes().len() as u64, lease.bytes().as_ptr().cast())?;
+                }
                 buffers.push(b);
                 resources.push(Resource {
                     buffer: b,
