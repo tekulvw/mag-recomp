@@ -1,4 +1,4 @@
-//! Explicit POC position-only specialization of the controlled VP emitter.
+//! Explicit POC source-output specialization of the controlled VP emitter.
 use crate::{HlslProgram, ProgramError};
 const SETUP_END: &str = "    float4 cc[2]; cc[0] = (float4)0; cc[1] = (float4)0;\n";
 const EPILOGUE: &str = "    VSOutput Out;\n    float4 _p = o[0];\n    Out.pos = float4(_p.xyz * vp_posscale.xyz + _p.w * vp_posoffset.xyz, _p.w);\n    Out.col0 = o[1]; Out.col1 = o[2]; Out.fog = o[5].xxxx;\n    Out.t0=o[7];  Out.t1=o[8];  Out.t2=o[9];  Out.t3=o[10];\n    Out.t4=o[11]; Out.t5=o[12]; Out.t6=o[13]; Out.t7=o[14];\n    Out.t8=o[15]; Out.t9=o[6];\n    return Out;\n}\n";
@@ -289,17 +289,59 @@ fn setup(text: &str) -> Result<(), ProgramError> {
 /// output computations are omitted; unsupported grammar refuses specialization.
 /// This is conservative static liveness, not proof of executed instructions.
 pub fn vertex_position_only_poc(program: &HlslProgram) -> Result<HlslProgram, ProgramError> {
-    position_slice(program, false)
+    output_slice(program, false, position_roots())
 }
 pub(crate) fn vertex_position_live_inputs_poc(
     program: &HlslProgram,
 ) -> Result<HlslProgram, ProgramError> {
-    position_slice(program, true)
+    output_slice(program, true, position_roots())
 }
-fn position_slice(
+fn position_roots() -> [u8; 16] {
+    let mut roots = [0; 16];
+    roots[0] = 15;
+    roots
+}
+pub(crate) fn validate_output_roots(roots: &[u8; 16]) -> Result<(), ProgramError> {
+    if roots[0] != 15
+        || roots[3] != 0
+        || roots[4] != 0
+        || roots[5] & !1 != 0
+        || roots.iter().any(|&mask| mask & !15 != 0)
+    {
+        return Err(ProgramError::Invalid);
+    }
+    Ok(())
+}
+pub(crate) fn vertex_outputs_live_inputs_poc(
+    program: &HlslProgram,
+    roots: [u8; 16],
+) -> Result<HlslProgram, ProgramError> {
+    output_slice(program, true, roots)
+}
+// These are the existing controlled emitter's export names/semantics. A root
+// selects source bank lanes; the float4 interface preserves the existing ABI.
+// Unconsumed lanes retain source-bank initialization or retained source writes.
+const VARYINGS: [(usize, &str, &str, &str); 13] = [
+    (1, "col0", "COLOR0", "o[1]"),
+    (2, "col1", "COLOR1", "o[2]"),
+    (5, "fog", "FOG", "o[5].xxxx"),
+    (6, "t9", "TEXCOORD9", "o[6]"),
+    (7, "t0", "TEXCOORD0", "o[7]"),
+    (8, "t1", "TEXCOORD1", "o[8]"),
+    (9, "t2", "TEXCOORD2", "o[9]"),
+    (10, "t3", "TEXCOORD3", "o[10]"),
+    (11, "t4", "TEXCOORD4", "o[11]"),
+    (12, "t5", "TEXCOORD5", "o[12]"),
+    (13, "t6", "TEXCOORD6", "o[13]"),
+    (14, "t7", "TEXCOORD7", "o[14]"),
+    (15, "t8", "TEXCOORD8", "o[15]"),
+];
+fn output_slice(
     program: &HlslProgram,
     specialize_inputs: bool,
+    required_outputs: [u8; 16],
 ) -> Result<HlslProgram, ProgramError> {
+    validate_output_roots(&required_outputs)?;
     if program.source.len() > 1024 * 1024 || program.instructions > 512 {
         return unsupported();
     }
@@ -325,7 +367,7 @@ fn position_slice(
         remaining = &remaining[end..];
     }
     let mut live = [[0u8; 32]; 3];
-    live[1][0] = 15;
+    live[1][..16].copy_from_slice(&required_outputs);
     let mut keep = vec![false; blocks.len()];
     for (i, b) in blocks.iter().enumerate().rev() {
         if b.writes
@@ -363,7 +405,13 @@ fn position_slice(
         + 3;
     let mut source = String::with_capacity(program.source.len());
     source.push_str(&prefix[..start]);
-    source.push_str("struct VSOutput { float4 pos:SV_Position; };\n");
+    source.push_str("struct VSOutput { float4 pos:SV_Position;");
+    for (index, name, semantic, _) in VARYINGS {
+        if required_outputs[index] != 0 {
+            source.push_str(&format!(" float4 {name}:{semantic};"));
+        }
+    }
+    source.push_str(" };\n");
     source.push_str(&prefix[end..]);
     source.push_str("VSOutput main(VSInput input) {\n");
     let live_inputs = blocks
@@ -394,7 +442,17 @@ fn position_slice(
             source.push_str(b.text);
         }
     }
-    source.push_str(POSITION_END);
+    if required_outputs == position_roots() {
+        source.push_str(POSITION_END);
+    } else {
+        source.push_str(POSITION_END.strip_suffix("    return Out;\n}\n").unwrap());
+        for (index, name, _, value) in VARYINGS {
+            if required_outputs[index] != 0 {
+                source.push_str(&format!("    Out.{name} = {value};\n"));
+            }
+        }
+        source.push_str("    return Out;\n}\n");
+    }
     Ok(HlslProgram {
         source,
         instructions: program.instructions,

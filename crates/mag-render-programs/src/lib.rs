@@ -195,6 +195,25 @@ pub fn vertex_position_source_poc(program: VertexProgram<'_>) -> Result<HlslProg
         program.known_current_attributes,
     )
 }
+/// Explicit POC source-output specialization. Roots use the controlled
+/// emitter's output-bank indices and xyzw lane bits (1,2,4,8). POSITION o0
+/// must require all lanes. Mapped varying roots are o1/o2, fog o5.x, and
+/// o6..o15. Unmapped outputs and malformed masks refuse. Only proven-dead
+/// stores/inputs are removed; live stream/current bindings are checked after
+/// slicing, and the source arithmetic and viewport transform remain intact.
+pub fn vertex_outputs_source_poc(
+    program: VertexProgram<'_>,
+    required_outputs: [u8; 16],
+) -> Result<HlslProgram, ProgramError> {
+    position_poc::validate_output_roots(&required_outputs)?;
+    let symbolic = vertex_unbound(&program)?;
+    let live = position_poc::vertex_outputs_live_inputs_poc(&symbolic, required_outputs)?;
+    bind_vertex_interface(
+        live,
+        program.enabled_arrays,
+        program.known_current_attributes,
+    )
+}
 /// Conservative reads of the actual controlled emitter's VP constant bank.
 /// Indexed addressing requires all rows; static reads need only listed rows.
 #[derive(Debug, PartialEq, Eq)]
