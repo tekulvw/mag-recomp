@@ -6,6 +6,7 @@
 #include "mag_render_sampler_registry.h"
 #include <math.h>
 #include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
 
 #define FRONTEND_VK_FUNCTIONS(X) \
@@ -29,7 +30,7 @@ typedef struct frontend_vk_family {
 } frontend_vk_family;
 typedef struct frontend_vk_buffer {
     uint64_t id, version, length; uint32_t public_ref, readers, writers; int seed_zero,gpu_written;
-    VkBuffer gpu; VkDeviceMemory memory; void *mapped; struct frontend_vk_buffer *next;
+    VkBuffer gpu; VkDeviceMemory memory; VkDeviceSize memory_bytes; void *mapped; struct frontend_vk_buffer *next;
 } frontend_vk_buffer;
 typedef struct frontend_vk_imported_image {
     uint64_t id;uint32_t public_ref,references;
@@ -37,7 +38,7 @@ typedef struct frontend_vk_imported_image {
     mag_native_validate_planes_fn validate_planes;
     struct frontend_vk_imported_image *next;
 } frontend_vk_imported_image;
-typedef struct frontend_vk_scene_image {VkImage image;VkDeviceMemory memory;VkImageView view,sampled_view;VkImageLayout layout;VkImageAspectFlags aspect;uint32_t mip_count,layers;frontend_vk_imported_image *borrowed;} frontend_vk_scene_image;
+typedef struct frontend_vk_scene_image {VkImage image;VkDeviceMemory memory;VkDeviceSize memory_bytes;VkImageView view,sampled_view;VkImageLayout layout;VkImageAspectFlags aspect;uint32_t mip_count,layers;frontend_vk_imported_image *borrowed;} frontend_vk_scene_image;
 typedef struct frontend_vk_pipeline {
     uint64_t id; uint32_t public_ref, references, count; int graphics;VkRenderPass render_pass;
     mag_native_binding_layout bindings[16];
@@ -56,7 +57,7 @@ typedef struct frontend_vk_slot {
     VkImageView *scene_views;uint32_t scene_view_count;
     VkFramebuffer scene_framebuffers[16];VkRenderPass scene_renderpasses[16];VkSampler scene_samplers[3];
     mag_native_sampler_entry *sampler_entries[MAG_NATIVE_MAX_SAMPLERS];uint32_t sampler_count;
-    VkImage color,depth;VkDeviceMemory color_memory,depth_memory;
+    VkImage color,depth;VkDeviceMemory color_memory,depth_memory;VkDeviceSize color_bytes,depth_bytes;
     VkImageView color_view,depth_view;VkFramebuffer framebuffer;
 } frontend_vk_slot;
 typedef struct frontend_vk {
@@ -68,12 +69,28 @@ typedef struct frontend_vk {
     frontend_vk_family *families; frontend_vk_buffer *buffers; frontend_vk_pipeline *pipelines;
     frontend_vk_imported_image *images;
     frontend_vk_slot slots[2];
+    /* Memory census (mag_native_memory_stats): bytes this context allocated
+     * and still holds, and scene submissions for the periodic report. */
+    uint64_t allocated_bytes, scene_submissions;
+    uint32_t memory_report_every;
 #define DECLARE(name) PFN_##name name;
     FRONTEND_VK_FUNCTIONS(DECLARE)
 #undef DECLARE
 } frontend_vk;
 static void imported_image_unpin(frontend_vk *,frontend_vk_imported_image *);
 static void imported_image_dispose(frontend_vk *,frontend_vk_imported_image *);
+/* Every device allocation of this context goes through these two, so the
+ * census holds exactly what it still owns. */
+static VkResult native_memory_allocate(frontend_vk *c,const VkMemoryAllocateInfo *info,VkDeviceMemory *memory,VkDeviceSize *bytes){
+    VkResult result=c->vkAllocateMemory(c->owner.device,info,NULL,memory);
+    if(result==VK_SUCCESS){c->allocated_bytes+=info->allocationSize;*bytes=info->allocationSize;}
+    return result;
+}
+static void native_memory_free(frontend_vk *c,VkDeviceMemory memory,VkDeviceSize *bytes){
+    if(!memory)return;
+    c->vkFreeMemory(c->owner.device,memory,NULL);
+    c->allocated_bytes-=*bytes<=c->allocated_bytes?*bytes:c->allocated_bytes;*bytes=0;
+}
 
 static frontend_vk_buffer *buffer_find(frontend_vk *c, mag_native_buffer ref) {
     if (ref.device_generation != c->generation || !ref.id || !ref.version) return NULL;
@@ -93,7 +110,7 @@ static void buffer_dispose(frontend_vk *c, frontend_vk_buffer *b) {
     if (*link) *link = b->next;
     if (b->mapped) c->vkUnmapMemory(c->owner.device, b->memory);
     if (b->gpu) c->vkDestroyBuffer(c->owner.device, b->gpu, NULL);
-    if (b->memory) c->vkFreeMemory(c->owner.device, b->memory, NULL);
+    native_memory_free(c, b->memory, &b->memory_bytes);
     free(b);
 }
 static void pipeline_dispose(frontend_vk *c, frontend_vk_pipeline *p) {
@@ -113,8 +130,8 @@ static void batch_attachments_release(frontend_vk *c,frontend_vk_slot *slot){
     if(slot->depth_view)c->vkDestroyImageView(c->owner.device,slot->depth_view,NULL);
     if(slot->color)c->vkDestroyImage(c->owner.device,slot->color,NULL);
     if(slot->depth)c->vkDestroyImage(c->owner.device,slot->depth,NULL);
-    if(slot->color_memory)c->vkFreeMemory(c->owner.device,slot->color_memory,NULL);
-    if(slot->depth_memory)c->vkFreeMemory(c->owner.device,slot->depth_memory,NULL);
+    native_memory_free(c,slot->color_memory,&slot->color_bytes);
+    native_memory_free(c,slot->depth_memory,&slot->depth_bytes);
     slot->framebuffer=VK_NULL_HANDLE;slot->color_view=slot->depth_view=VK_NULL_HANDLE;
     slot->color=slot->depth=VK_NULL_HANDLE;slot->color_memory=slot->depth_memory=VK_NULL_HANDLE;
 }
@@ -124,7 +141,7 @@ static void scene_attachments_release(frontend_vk *c,frontend_vk_slot *slot){
  for(uint32_t i=0;i<slot->scene_pass_count;++i){if(slot->scene_framebuffers[i])c->vkDestroyFramebuffer(c->owner.device,slot->scene_framebuffers[i],NULL);if(slot->scene_renderpasses[i])c->vkDestroyRenderPass(c->owner.device,slot->scene_renderpasses[i],NULL);slot->scene_framebuffers[i]=VK_NULL_HANDLE;slot->scene_renderpasses[i]=VK_NULL_HANDLE;}slot->scene_pass_count=0;
  for(uint32_t i=0;i<slot->scene_view_count;++i)if(slot->scene_views[i])c->vkDestroyImageView(c->owner.device,slot->scene_views[i],NULL);
  slot->scene_view_count=0;free(slot->scene_views);slot->scene_views=NULL;
- for(uint32_t i=0;i<slot->scene_image_count;++i){frontend_vk_scene_image *im=&slot->scene_images[i];if(im->sampled_view)c->vkDestroyImageView(c->owner.device,im->sampled_view,NULL);if(im->view)c->vkDestroyImageView(c->owner.device,im->view,NULL);if(im->image&&!im->borrowed)c->vkDestroyImage(c->owner.device,im->image,NULL);if(im->memory&&!im->borrowed)c->vkFreeMemory(c->owner.device,im->memory,NULL);frontend_vk_imported_image *borrowed=im->borrowed;memset(im,0,sizeof(*im));if(borrowed)imported_image_unpin(c,borrowed);}slot->scene_image_count=0;free(slot->scene_images);slot->scene_images=NULL;
+ for(uint32_t i=0;i<slot->scene_image_count;++i){frontend_vk_scene_image *im=&slot->scene_images[i];if(im->sampled_view)c->vkDestroyImageView(c->owner.device,im->sampled_view,NULL);if(im->view)c->vkDestroyImageView(c->owner.device,im->view,NULL);if(im->image&&!im->borrowed)c->vkDestroyImage(c->owner.device,im->image,NULL);if(im->memory&&!im->borrowed)native_memory_free(c,im->memory,&im->memory_bytes);frontend_vk_imported_image *borrowed=im->borrowed;memset(im,0,sizeof(*im));if(borrowed)imported_image_unpin(c,borrowed);}slot->scene_image_count=0;free(slot->scene_images);slot->scene_images=NULL;
  for(unsigned i=0;i<3;++i){if(slot->scene_samplers[i])c->vkDestroySampler(c->owner.device,slot->scene_samplers[i],NULL);slot->scene_samplers[i]=VK_NULL_HANDLE;}
 }
 static void slot_release(frontend_vk *c, frontend_vk_slot *slot) {
@@ -173,7 +190,7 @@ static int buffer_create(void *opaque, mag_native_buffer previous,
     if (type == c->owner.memory.memoryTypeCount) { buffer_dispose(c, b); return MAG_NATIVE_UNSUPPORTED; }
     VkMemoryAllocateInfo allocation = {.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
         .allocationSize = requirements.size, .memoryTypeIndex = type};
-    if (c->vkAllocateMemory(c->owner.device, &allocation, NULL, &b->memory) != VK_SUCCESS ||
+    if (native_memory_allocate(c, &allocation, &b->memory, &b->memory_bytes) != VK_SUCCESS ||
         c->vkBindBufferMemory(c->owner.device, b->gpu, b->memory, 0) != VK_SUCCESS ||
         c->vkMapMemory(c->owner.device, b->memory, 0, VK_WHOLE_SIZE, 0, &b->mapped) != VK_SUCCESS) goto fail;
     if (desc->initial_bytes) memcpy(b->mapped, desc->initial_bytes, (size_t)b->length);
@@ -205,6 +222,50 @@ static int buffer_read(void *opaque, mag_native_buffer ref, uint64_t offset, voi
     if (b->readers || b->writers) return MAG_NATIVE_BUSY;
     if (c->failed) return MAG_NATIVE_DEVICE_FAILED;
     memcpy(out, (const char *)b->mapped + offset, (size_t)length); return MAG_NATIVE_OK;
+}
+/* In-place upload rewrite for opt-in arena reuse (MAG_RENDER_RESIDENT_ARENAS=1),
+ * gated exactly like readback: no submission that used this buffer may still
+ * be pending or unpolled, so the GPU never observes a partial rewrite. Every
+ * buffer here is host-visible and coherent, so the write needs no flush; the
+ * next submission's host-write barrier orders it before GPU reads. */
+static int buffer_write(void *opaque, mag_native_buffer ref, uint64_t offset, const void *source, uint64_t length) {
+    frontend_vk *c = opaque; frontend_vk_buffer *b = buffer_find(c, ref);
+    if (!b) return MAG_NATIVE_STALE;
+    if (c->failed) return MAG_NATIVE_DEVICE_FAILED;
+    if (b->readers || b->writers) return MAG_NATIVE_BUSY;
+    if (b->gpu_written || !source || offset > b->length || length > b->length - offset) return MAG_NATIVE_INVALID;
+    memcpy((char *)b->mapped + offset, source, (size_t)length);
+    b->seed_zero = 0;
+    return MAG_NATIVE_OK;
+}
+/* Census in the shared layout (mag_render_imported_image.h). out[0] is the
+ * device memory this context allocated and still holds -- Metal reports its
+ * whole device's currentAllocatedSize instead, which also counts the SDK's
+ * resources. There is no resident texture cache (out[4]) and nothing outlives
+ * its slot (out[7]). */
+static void memory_census(frontend_vk *c, uint64_t out[MAG_NATIVE_MEMORY_STATS]) {
+    uint64_t buffers = 0, pipelines = 0, images = 0, pending = 0;
+    for (frontend_vk_buffer *b = c->buffers; b; b = b->next) ++buffers;
+    for (frontend_vk_pipeline *p = c->pipelines; p; p = p->next) ++pipelines;
+    for (frontend_vk_imported_image *i = c->images; i; i = i->next) ++images;
+    for (unsigned i = 0; i < 2; ++i) pending += c->slots[i].occupied != 0;
+    out[0] = c->allocated_bytes; out[1] = buffers; out[2] = pipelines; out[3] = images;
+    out[4] = 0; out[5] = pending; out[6] = c->samplers.count; out[7] = 0; out[8] = c->scene_submissions;
+}
+static int memory_stats(void *opaque, uint64_t *out, uint32_t count) {
+    if (count != MAG_NATIVE_MEMORY_STATS || !out) return MAG_NATIVE_INVALID;
+    memory_census(opaque, out); return MAG_NATIVE_OK;
+}
+/* The same periodic line as Metal, default on (MAG_RENDER_GPU_MEMORY_REPORT=0
+ * disables): the first two scene submissions, then every 120th. */
+static void memory_report(frontend_vk *c) {
+    const uint64_t n = ++c->scene_submissions;
+    if (!c->memory_report_every || (n > 2 && n % c->memory_report_every)) return;
+    uint64_t m[MAG_NATIVE_MEMORY_STATS]; memory_census(c, m);
+    fprintf(stderr, "[mag native gpu memory] submission=%llu allocated_mb=%.1f buffers=%llu pipelines=%llu images=%llu resident=%llu resident_mb=%.1f pending=%llu samplers=%llu retired_alive=%llu backend=vulkan\n",
+        (unsigned long long)n, (double)m[0] / 1048576.0, (unsigned long long)m[1], (unsigned long long)m[2],
+        (unsigned long long)m[3], (unsigned long long)m[4], 0.0, (unsigned long long)m[5],
+        (unsigned long long)m[6], (unsigned long long)m[7]);
 }
 
 /* Source-bound modules use a literal compute LocalSize. Reject mismatches rather
@@ -410,8 +471,22 @@ static int close_context(void *opaque) {
 #include "mag_render_vulkan_batch.inc"
 #include "mag_render_vulkan_import.inc"
 #include "mag_render_vulkan_scene.inc"
-static const mag_native_ops operations = {caps, buffer_create, buffer_release, buffer_read,
-    pipeline_create, pipeline_release, submit, poll, close_context, graphics_create, submit_batch, scene_graphics_create, submit_scene, image_import, image_release, NULL, NULL, scene_graphics_create_v2,scene_graphics_create_v3,sampler_create,sampler_release,submit_scene_v2,submit_scene_v3,submit_scene_v4,image_import_certified,NULL,submit_scene_v5};
+/* Designated: every operation this backend lacks is an explicit NULL, which
+ * the wrapper reports as UNSUPPORTED (reserve_scene: the reserved-order
+ * commit then falls back to the synchronous one; scene_chunk_stats: Metal's
+ * chunked encoding only). */
+static const mag_native_ops operations = {
+    .caps = caps, .buffer_create = buffer_create, .buffer_release = buffer_release, .buffer_read = buffer_read,
+    .pipeline_create = pipeline_create, .pipeline_release = pipeline_release, .submit = submit, .poll = poll,
+    .close = close_context, .graphics_create = graphics_create, .submit_batch = submit_batch,
+    .scene_graphics_create = scene_graphics_create, .submit_scene = submit_scene, .image_import = image_import,
+    .image_release = image_release, .submit_scene_target = NULL, .submit_scene_frame = NULL,
+    .scene_graphics_create_v2 = scene_graphics_create_v2, .scene_graphics_create_v3 = scene_graphics_create_v3,
+    .sampler_create = sampler_create, .sampler_release = sampler_release, .submit_scene_v2 = submit_scene_v2,
+    .submit_scene_v3 = submit_scene_v3, .submit_scene_v4 = submit_scene_v4,
+    .image_import_certified = image_import_certified, .scene_graphics_create_aux = NULL,
+    .submit_scene_v5 = submit_scene_v5, .reserve_scene = NULL, .abandon_scene_reservation = NULL,
+    .buffer_write = buffer_write, .scene_chunk_stats = NULL, .memory_stats = memory_stats};
 static int vulkan_create(const MagRenderHostOwner *host,uint64_t known,uint64_t enabled,mag_native_device **out) {
     if (!host || !out || host->backend!=MAG_RENDER_HOST_VULKAN) return MAG_NATIVE_INVALID;
     *out=NULL;int status=host->retain(host->userdata,host->lifetime);
@@ -422,6 +497,7 @@ static int vulkan_create(const MagRenderHostOwner *host,uint64_t known,uint64_t 
     if (!properties || !memory) {host->release(host->userdata,host->lifetime);return MAG_NATIVE_UNSUPPORTED;}
     frontend_vk *c=calloc(1,sizeof(*c));if (!c) {host->release(host->userdata,host->lifetime);return MAG_NATIVE_ALLOCATION_FAILED;}
     c->known_features=known;c->enabled_features=enabled;
+    { const char *memory=getenv("MAG_RENDER_GPU_MEMORY_REPORT"); c->memory_report_every=memory&&!strcmp(memory,"0")?0u:120u; }
     c->owner.host=*host;c->owner.device=(VkDevice)host->device;c->owner.queue=(VkQueue)host->queue;c->owner.queue_family=host->queue_family;
     properties((VkPhysicalDevice)host->physical_device,&c->owner.properties);memory((VkPhysicalDevice)host->physical_device,&c->owner.memory);
     if (c->owner.properties.apiVersion<VK_API_VERSION_1_1) {close_context(c);return MAG_NATIVE_UNSUPPORTED;}

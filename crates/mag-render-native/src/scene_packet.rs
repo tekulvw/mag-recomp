@@ -3151,6 +3151,22 @@ pub(crate) fn commit_subgraph(
 ) -> (i32, Receipt) {
     commit_impl(id, admission, source, None, bindings)
 }
+/// Reserved-order commits that fell back to the synchronous commit. The first
+/// fallback and then every 1000th are printed with the refusal status.
+static RESERVE_FALLBACKS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+fn note_reserve_fallback(status: i32) {
+    let n = RESERVE_FALLBACKS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+    if n == 1 || n.is_multiple_of(1000) {
+        let why = if status == -2 {
+            ", backend has no reservations"
+        } else {
+            ""
+        };
+        eprintln!(
+            "[mag native worker] reserved-order commit unavailable (status {status}{why}); committed synchronously, fallbacks={n}"
+        );
+    }
+}
 /// Reserved-order subgraph commit. Under the owner lease (the caller waits):
 /// bind and validate the imports and reserve the native queue position and
 /// ticket. `acknowledge` then receives exactly the receipt the synchronous
@@ -3202,7 +3218,9 @@ pub(crate) fn commit_subgraph_reserved(
     });
     let Some(receipt) = early.filter(|_| reserved == 0) else {
         // Nothing reserved: identical to the synchronous commit (imports were
-        // released above; commit_impl binds them again).
+        // released above; commit_impl binds them again). Counted and said, so
+        // a backend without reservations (Vulkan, D3D12) is visibly synchronous.
+        note_reserve_fallback(reserved);
         let reply = commit_subgraph(id, admission, source, bindings);
         if let Some(ack) = acknowledge.take() {
             ack(reply);

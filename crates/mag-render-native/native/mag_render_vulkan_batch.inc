@@ -210,7 +210,7 @@ done:
 }
 static int batch_image(frontend_vk *c, uint32_t width, uint32_t height, VkFormat format,
                        VkImageAspectFlags aspect, VkImageUsageFlags usage, VkImage *image,
-                       VkDeviceMemory *memory, VkImageView *view) {
+                       VkDeviceMemory *memory, VkDeviceSize *memory_bytes, VkImageView *view) {
     VkImageCreateInfo info = {.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
                               .imageType = VK_IMAGE_TYPE_2D,
                               .format = format,
@@ -236,7 +236,7 @@ static int batch_image(frontend_vk *c, uint32_t width, uint32_t height, VkFormat
     VkMemoryAllocateInfo allocation = {.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
                                        .allocationSize = required.size,
                                        .memoryTypeIndex = type};
-    if (c->vkAllocateMemory(c->owner.device, &allocation, NULL, memory) != VK_SUCCESS ||
+    if (native_memory_allocate(c, &allocation, memory, memory_bytes) != VK_SUCCESS ||
         c->vkBindImageMemory(c->owner.device, *image, *memory, 0) != VK_SUCCESS)
         return MAG_NATIVE_ALLOCATION_FAILED;
     VkImageViewCreateInfo vi = {.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
@@ -430,12 +430,12 @@ static int submit_batch_owned(frontend_vk *c, const mag_native_batch *batch, mag
         status =
             batch_image(c, draw->width, draw->height, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_ASPECT_COLOR_BIT,
                         VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, &slot->color,
-                        &slot->color_memory, &slot->color_view);
+                        &slot->color_memory, &slot->color_bytes, &slot->color_view);
         if (status)
             goto fail;
         status = batch_image(c, draw->width, draw->height, VK_FORMAT_D32_SFLOAT, VK_IMAGE_ASPECT_DEPTH_BIT,
                              VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, &slot->depth, &slot->depth_memory,
-                             &slot->depth_view);
+                             &slot->depth_bytes, &slot->depth_view);
         if (status)
             goto fail;
         VkImageView views[2] = {slot->color_view, slot->depth_view};

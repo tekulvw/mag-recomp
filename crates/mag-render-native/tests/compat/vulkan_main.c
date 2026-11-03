@@ -1,5 +1,6 @@
 #include "mag_render_batch.h"
 #include "mag_render_native_api.h"
+#include "mag_render_imported_image.h"
 #include MAG_RENDER_SHADER_FIXTURE
 #include <assert.h>
 #include <stdio.h>
@@ -96,6 +97,36 @@ static void check_rejected_batches(const MagRenderHostOwner *owner, const mag_na
     assert(mag_native_pipeline_release(device, pipeline) == 0);
     assert(mag_native_close(device) == 0);
 }
+/* In-place upload rewrite (arena reuse) and the memory census, which this
+ * backend now has; the reserved-order commit stays UNSUPPORTED (counted
+ * synchronous fallback in the worker). */
+static void check_buffer_write_and_census(const MagRenderHostOwner *owner) {
+    mag_native_device *device = NULL;
+    assert(mag_native_create(owner, &device) == 0);
+    uint64_t census[MAG_NATIVE_MEMORY_STATS] = {0};
+    assert(mag_native_memory_stats(device, census, MAG_NATIVE_MEMORY_STATS) == 0 && census[0] == 0 && census[1] == 0);
+    uint8_t seed[64], patch[16], back[64];
+    for (unsigned i = 0; i < sizeof seed; ++i) seed[i] = (uint8_t)i;
+    for (unsigned i = 0; i < sizeof patch; ++i) patch[i] = (uint8_t)(0xA0 + i);
+    mag_native_buffer_desc desc = {sizeof(desc), 1, sizeof seed, seed};
+    mag_native_buffer buffer = {0};
+    assert(mag_native_buffer_create(device, &desc, &buffer) == 0);
+    assert(mag_native_memory_stats(device, census, MAG_NATIVE_MEMORY_STATS) == 0 && census[0] >= sizeof seed && census[1] == 1);
+    assert(mag_native_buffer_write(device, buffer, 8, patch, sizeof patch) == 0);
+    assert(mag_native_buffer_read(device, buffer, 0, back, sizeof back) == 0);
+    for (unsigned i = 0; i < sizeof back; ++i) assert(back[i] == (i >= 8 && i < 24 ? patch[i - 8] : seed[i]));
+    assert(mag_native_buffer_write(device, buffer, 56, patch, sizeof patch) == MAG_NATIVE_INVALID);
+    assert(mag_native_buffer_write(device, buffer, UINT64_MAX, patch, 1) == MAG_NATIVE_INVALID);
+    mag_native_buffer stale = buffer; ++stale.version;
+    assert(mag_native_buffer_write(device, stale, 0, patch, 4) == MAG_NATIVE_STALE);
+    assert(mag_native_memory_stats(device, census, 3) == MAG_NATIVE_INVALID);
+    mag_native_ticket ticket = {0};
+    mag_native_scene_import import = {0};
+    assert(mag_native_reserve_scene_v5(device, &import, 1, &ticket) == MAG_NATIVE_UNSUPPORTED && !ticket.submission_id);
+    assert(mag_native_buffer_release(device, buffer) == 0);
+    assert(mag_native_memory_stats(device, census, MAG_NATIVE_MEMORY_STATS) == 0 && census[0] == 0 && census[1] == 0);
+    assert(mag_native_close(device) == 0);
+}
 int main(int argc, char **argv) {
     if (argc != 4) {
         fprintf(stderr, "usage: native_regression owner|compute|draw|draw-no-readback VENDOR DEVICE\n");
@@ -139,6 +170,7 @@ int main(int argc, char **argv) {
             return 2;
         }
         check_rejected_batches(&owner, &legacy);
+        check_buffer_write_and_census(&owner);
         mag_native_graphics_desc graphics = {
             sizeof(graphics), 1, stage(&scene_vertex_fixture), stage(&scene_fragment_fixture), 16, 0};
         DrawProbeReport report = {.abi_version = 1, .struct_size = sizeof(report)};
