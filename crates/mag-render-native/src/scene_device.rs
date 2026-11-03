@@ -281,6 +281,37 @@ impl SceneDevice<'_> {
         }
         Ok(())
     }
+    /// Reserve the next submission's native queue position for the imports
+    /// bound above and validate them under the owner lease. Returns the native
+    /// (generation, ticket) the next submit will carry. Requires bound imports
+    /// and no target/frame; UNSUPPORTED backends leave nothing reserved.
+    pub(crate) fn reserve_submission(&mut self) -> Result<(u64, u64), i32> {
+        if self.imports.is_empty() || self.target.is_some() || self.frame.is_some() {
+            return Err(-1);
+        }
+        if self.inner.pending.len() + self.inner.ready.len() >= 2 {
+            return Err(-4);
+        }
+        let mut native = Ticket::default();
+        let status = unsafe {
+            scene_extended::Plan::reserve(self.inner.api.device, &self.imports, &mut native)
+        };
+        if status != 0 {
+            return Err(if status < 0 { status } else { -6 });
+        }
+        if native.device_generation == 0 || native.submission_id == 0 {
+            let _ = self.abandon_reservation();
+            return Err(-6);
+        }
+        Ok((native.device_generation, native.submission_id))
+    }
+    /// Release an unconsumed reservation's queue position (no GPU work).
+    pub(crate) fn abandon_reservation(&mut self) -> Result<(), i32> {
+        match unsafe { scene_extended::Plan::abandon_reservation(self.inner.api.device) } {
+            0 => Ok(()),
+            s => Err(s),
+        }
+    }
     pub(crate) fn release_imports(&mut self) -> Result<(), i32> {
         let mut error = None;
         for import in std::mem::take(&mut self.imports) {

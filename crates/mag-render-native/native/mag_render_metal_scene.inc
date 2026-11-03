@@ -217,6 +217,13 @@ static int metal_scene_raster_info(void *opaque,mag_native_pipeline ref,const ma
 static MagRenderImportedImage *metal_imported(MagRenderMetal *c,mag_native_image ref){return ref.device_generation==c->generation&&ref.id?c->images[@(ref.id)]:nil;}
 static int metal_scene_import_info(void *opaque,mag_native_image ref,uint32_t required,mag_native_import_info *out){
  MagRenderMetal *c=context(opaque);MagRenderImportedImage *image=metal_imported(c,ref);if(!image)return MAG_NATIVE_STALE;
+ /* Encoding a reservation runs without the owner lease: only the exact imports
+  * validated under the lease at reservation time are admitted, unchanged. */
+ if(c->reserved_encoding){
+  for(uint32_t k=0;k<c->reserved_count;++k){const mag_native_scene_import *r=&c->reserved_imports[k];
+   if(r->ref.device_generation==ref.device_generation&&r->ref.id==ref.id&&r->required_initialized_planes==required){*out=c->reserved_info[k];return MAG_NATIVE_OK;}}
+  return MAG_NATIVE_STALE;
+ }
  int status=image->host.validate(image->host.userdata,image->host.owner_lifetime,image->host.resource_id,image->host.resource_generation);if(status)return status<0?status:MAG_NATIVE_DEVICE_FAILED;
  if(required){if(!image->validate_planes)return MAG_NATIVE_UNSUPPORTED;status=image->validate_planes(image->host.userdata,image->host.owner_lifetime,image->host.resource_id,image->host.resource_generation,required);if(status)return status<0?status:MAG_NATIVE_DEVICE_FAILED;}
  *out=(mag_native_import_info){image->host.format,image->host.width,image->host.height,0,image->host.owner_lifetime,image->host.resource_id,image->host.resource_generation};return MAG_NATIVE_OK;
@@ -282,6 +289,43 @@ static void metal_resident_insert(MagRenderMetal *c,uint64_t hash,NSData *shape,
     if(!e->bytes)return;
     NSMutableArray *bucket=c->resident[@(hash)];if(!bucket){bucket=[NSMutableArray new];c->resident[@(hash)]=bucket;}
     [bucket addObject:e];c->resident_bytes+=length;++c->resident_entries;
+}
+/* Commit a reservation that will not be (or could not be) encoded so its
+ * queue position never blocks later work. Any encoders were already ended. */
+static void metal_reservation_release(MagRenderMetal *c){
+    if(!c->reserved)return;
+    if(c->reserved.status<MTLCommandBufferStatusCommitted)[c->reserved commit];
+    c->reserved=nil;c->reserved_count=0;c->reserved_ticket=(mag_native_ticket){0};
+}
+static int metal_reserve_scene(void *opaque,const mag_native_scene_import *imports,uint32_t count,mag_native_ticket *out){
+    MagRenderMetal *c=context(opaque);
+    if(c->reserved||c->pending.count>=2)return MAG_NATIVE_BUSY;
+    if(c->next_submission==UINT64_MAX)return MAG_NATIVE_DEVICE_FAILED;
+    int status=c->host.try_begin(c->host.userdata,c->host.lifetime);
+    if(status)return status<0?status:MAG_NATIVE_DEVICE_FAILED;
+    @try{
+        mag_native_import_info info[MAG_NATIVE_SCENE_MAX_IMAGES];
+        for(uint32_t i=0;i<count;++i){
+            for(uint32_t j=0;j<i;++j)if(imports[j].image==imports[i].image)return MAG_NATIVE_INVALID;
+            status=metal_scene_import_info(opaque,imports[i].ref,imports[i].required_initialized_planes,&info[i]);
+            if(status)return status;
+        }
+        id<MTLCommandBuffer> command=[c->queue commandBuffer];
+        if(!command)return MAG_NATIVE_DEVICE_FAILED;
+        /* Fixes this submission's place in queue order now, at the genuine
+         * native boundary; later queue work executes after it. */
+        [command enqueue];
+        c->reserved=command;c->reserved_count=count;
+        memcpy(c->reserved_imports,imports,count*sizeof(*imports));memcpy(c->reserved_info,info,count*sizeof(*info));
+        c->reserved_ticket=(mag_native_ticket){c->generation,++c->next_submission};
+        *out=c->reserved_ticket;
+        return MAG_NATIVE_OK;
+    }@catch(NSException *e){(void)e;metal_reservation_release(c);return MAG_NATIVE_DEVICE_FAILED;}
+    @finally{c->host.end(c->host.userdata,c->host.lifetime);}
+}
+static int metal_abandon_scene_reservation(void *opaque){
+    MagRenderMetal *c=context(opaque);if(!c->reserved)return MAG_NATIVE_STALE;
+    metal_reservation_release(c);return MAG_NATIVE_OK;
 }
 static int metal_scene_owned(void *opaque, const mag_native_scene *scene, mag_native_ticket *out,MagRenderImportedImage *target,const mag_native_sampler *sampler_table,uint32_t sampler_count,const mag_native_scene_v3 *v3,const mag_native_scene_v4 *v4,const mag_native_scene_v5 *v5) {
     MagRenderMetal *c = context(opaque);
@@ -425,7 +469,7 @@ static int metal_scene_owned(void *opaque, const mag_native_scene *scene, mag_na
     submission->uses = uses;
     submission->retained = retained;
     // All images, pipeline references and buffers are validated before any queue effect.
-    submission->command = [c->queue commandBuffer];
+    submission->command = c->reserved_encoding ? c->reserved : [c->queue commandBuffer];
     if (!submission->command)
         return MAG_NATIVE_DEVICE_FAILED;
     for (uint32_t node = 0; node < scene->dispatch_count; ++node) {
@@ -587,7 +631,8 @@ static int metal_scene_owned(void *opaque, const mag_native_scene *scene, mag_na
             destinationBytesPerImage:(NSUInteger)pitch * im->height];
         [blit endEncoding];
     }
-    submission->ticket = (mag_native_ticket){c->generation, ++c->next_submission};
+    if(c->reserved_encoding){submission->ticket=c->reserved_ticket;c->reserved=nil;c->reserved_count=0;}
+    else submission->ticket = (mag_native_ticket){c->generation, ++c->next_submission};
     if(c->resident_enabled&&c->resident_report&&(c->next_submission<=4||c->next_submission%120==0))
         fprintf(stderr,"[mag native resident images] submission=%llu hits=%llu misses=%llu entries=%u bytes=%llu evictions=%llu\n",
             (unsigned long long)c->next_submission,(unsigned long long)c->resident_hits,(unsigned long long)c->resident_misses,
@@ -616,6 +661,21 @@ static int metal_scene_owned(void *opaque, const mag_native_scene *scene, mag_na
 }
 static int metal_submit_scene_impl(void *opaque, const mag_native_scene *scene, mag_native_ticket *out,const mag_native_sampler *sampler_table,uint32_t sampler_count,const mag_native_scene_v3 *v3,const mag_native_scene_v4 *v4,const mag_native_scene_v5 *v5) {
     MagRenderMetal *c = context(opaque);
+    if (c->reserved) {
+        /* Encode the reservation: queue order, ticket and import validation
+         * were fixed under the lease when it was reserved. */
+        int result;
+        c->reserved_encoding = 1;
+        @try {
+            result = v5 ? metal_scene_owned(opaque, scene, out, nil, sampler_table, sampler_count, v3, v4, v5) : MAG_NATIVE_INVALID;
+        } @catch (NSException *e) {
+            (void)e;
+            result = out->submission_id ? MAG_NATIVE_INDETERMINATE : MAG_NATIVE_DEVICE_FAILED;
+        }
+        c->reserved_encoding = 0;
+        if (c->reserved) metal_reservation_release(c);
+        return result;
+    }
     int status = c->host.try_begin(c->host.userdata, c->host.lifetime);
     if (status)
         return status < 0 ? status : MAG_NATIVE_DEVICE_FAILED;
@@ -646,7 +706,7 @@ static int metal_image_release(void *opaque,mag_native_image ref){
  MagRenderMetal *c=context(opaque);if(ref.device_generation!=c->generation||!ref.id||!c->images[@(ref.id)])return MAG_NATIVE_STALE;[c->images removeObjectForKey:@(ref.id)];return MAG_NATIVE_OK;
 }
 static int metal_submit_scene_target_impl(void *opaque,const mag_native_scene *scene,mag_native_image ref,mag_native_ticket *out,const mag_native_sampler *sampler_table,uint32_t sampler_count,const mag_native_scene_v3 *v3,const mag_native_scene_v4 *v4,const mag_native_scene_v5 *v5){
- MagRenderMetal *c=context(opaque);if(ref.device_generation!=c->generation||!ref.id)return MAG_NATIVE_STALE;
+ MagRenderMetal *c=context(opaque);if(c->reserved)return MAG_NATIVE_BUSY;if(ref.device_generation!=c->generation||!ref.id)return MAG_NATIVE_STALE;
  MagRenderImportedImage *target=c->images[@(ref.id)];if(!target)return MAG_NATIVE_STALE;
  int status=c->host.try_begin(c->host.userdata,c->host.lifetime);if(status)return status<0?status:MAG_NATIVE_DEVICE_FAILED;
  @try{
@@ -658,7 +718,7 @@ static int metal_submit_scene_target_impl(void *opaque,const mag_native_scene *s
 }
 
 static int metal_submit_scene_frame_impl(void *opaque,const mag_native_scene *scene,mag_native_image ref,const MagRenderHostFrame *frame,mag_native_ticket *out,const mag_native_sampler *sampler_table,uint32_t sampler_count,const mag_native_scene_v3 *v3,const mag_native_scene_v4 *v4,const mag_native_scene_v5 *v5){
- MagRenderMetal *c=context(opaque);if(frame->owner_lifetime!=c->host.lifetime||ref.device_generation!=c->generation||!ref.id)return MAG_NATIVE_STALE;
+ MagRenderMetal *c=context(opaque);if(c->reserved)return MAG_NATIVE_BUSY;if(frame->owner_lifetime!=c->host.lifetime||ref.device_generation!=c->generation||!ref.id)return MAG_NATIVE_STALE;
  MagRenderImportedImage *target=c->images[@(ref.id)];if(!target)return MAG_NATIVE_STALE;
  int status=c->host.try_begin(c->host.userdata,c->host.lifetime);if(status)return status<0?status:MAG_NATIVE_DEVICE_FAILED;
  int reserved=0;

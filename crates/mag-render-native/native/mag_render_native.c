@@ -205,6 +205,15 @@ int mag_native_submit_scene_v5(mag_native_device *device,const mag_native_scene_
  return device->ops->submit_scene_v5?device->ops->submit_scene_v5(device->context,desc,target,frame,out):MAG_NATIVE_UNSUPPORTED;
 }
 
+int mag_native_reserve_scene_v5(mag_native_device *device,const mag_native_scene_import *imports,uint32_t count,mag_native_ticket *out){
+ if(out)memset(out,0,sizeof(*out));
+ if(!device||!out||!imports||!count||count>MAG_NATIVE_SCENE_MAX_IMAGES)return MAG_NATIVE_INVALID;
+ return device->ops->reserve_scene?device->ops->reserve_scene(device->context,imports,count,out):MAG_NATIVE_UNSUPPORTED;
+}
+int mag_native_abandon_scene_reservation(mag_native_device *device){
+ if(!device)return MAG_NATIVE_INVALID;
+ return device->ops->abandon_scene_reservation?device->ops->abandon_scene_reservation(device->context):MAG_NATIVE_UNSUPPORTED;
+}
 int mag_native_scene_graphics_create_aux(mag_native_device *device,const mag_native_scene_graphics_v3_desc *desc,uint32_t flags,mag_native_pipeline *out){
  if(out){*out=(mag_native_pipeline){0};}
  if(!device||!desc||!out||flags!=MAG_NATIVE_PROGRAM_STORED_DEPTH_AUX)return MAG_NATIVE_INVALID;

@@ -28,6 +28,14 @@ typedef struct mag_native_scene_v5 {
 int mag_native_scene_graphics_create_aux(mag_native_device *,const mag_native_scene_graphics_v3_desc *,uint32_t fragment_flags,mag_native_pipeline *);
 int mag_native_image_import_certified(mag_native_device *,const mag_native_image_certificate *,mag_native_image *);
 int mag_native_submit_scene_v5(mag_native_device *,const mag_native_scene_v5 *,const mag_native_image *,const MagRenderHostFrame *,mag_native_ticket *);
+/* Reserve the queue position and ticket of the NEXT imported (no target/frame)
+ * scene submission under the owner lease, validating exactly these imports
+ * there. The next submit_scene_v5 then encodes into that reserved position
+ * without the lease, using those validated imports; a failed or abandoned
+ * reservation still releases its queue position (never blocks the queue).
+ * Backends without reservations return UNSUPPORTED. */
+int mag_native_reserve_scene_v5(mag_native_device *,const mag_native_scene_import *,uint32_t,mag_native_ticket *);
+int mag_native_abandon_scene_reservation(mag_native_device *);
 int mag_native_scene_v5_layout(uint32_t *,uint32_t);
 #ifdef __cplusplus
 }

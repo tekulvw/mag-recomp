@@ -104,6 +104,13 @@ struct SceneV5 {
     reserved1: u32,
 }
 unsafe extern "C" {
+    fn mag_native_reserve_scene_v5(
+        device: *mut c_void,
+        imports: *const ImportWire,
+        count: u32,
+        out: *mut Ticket,
+    ) -> i32;
+    fn mag_native_abandon_scene_reservation(device: *mut c_void) -> i32;
     fn mag_native_scene_v5_layout(out: *mut u32, words: u32) -> i32;
     fn mag_native_submit_scene_v5(
         device: *mut c_void,
@@ -451,6 +458,26 @@ impl Plan {
             },
             texture_codes: codes,
         }))
+    }
+    /// Reserve the next imported submission's native queue position/ticket
+    /// and validate exactly these imports under the owner lease.
+    /// # Safety
+    /// `device` is the live native device owning every import handle.
+    pub(super) unsafe fn reserve(device: *mut c_void, imports: &[Import], out: &mut Ticket) -> i32 {
+        let rows = imports
+            .iter()
+            .map(|i| ImportWire {
+                image: i.image,
+                required_initialized_planes: i.required_initialized_planes,
+                reference: i.handle.raw,
+            })
+            .collect::<Vec<_>>();
+        unsafe { mag_native_reserve_scene_v5(device, rows.as_ptr(), rows.len() as u32, out) }
+    }
+    /// # Safety
+    /// `device` is the live native device.
+    pub(super) unsafe fn abandon_reservation(device: *mut c_void) -> i32 {
+        unsafe { mag_native_abandon_scene_reservation(device) }
     }
     pub(super) unsafe fn submit(
         &self,
