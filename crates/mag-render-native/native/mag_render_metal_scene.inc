@@ -221,6 +221,67 @@ static int metal_scene_import_info(void *opaque,mag_native_image ref,uint32_t re
  if(required){if(!image->validate_planes)return MAG_NATIVE_UNSUPPORTED;status=image->validate_planes(image->host.userdata,image->host.owner_lifetime,image->host.resource_id,image->host.resource_generation,required);if(status)return status<0?status:MAG_NATIVE_DEVICE_FAILED;}
  *out=(mag_native_import_info){image->host.format,image->host.width,image->host.height,0,image->host.owner_lifetime,image->host.resource_id,image->host.resource_generation};return MAG_NATIVE_OK;
 }
+/* Opt-in resident uploaded images (MAG_RENDER_METAL_RESIDENT_IMAGES=1).
+ * An uploaded image that no pass of this scene attaches (writes) is only
+ * sampled, so its texture contents are exactly its upload bytes. Such a
+ * texture is kept and reused by a later scene whose image has the same shape
+ * and byte-identical upload contents (compared in full; the hash only picks a
+ * bucket). Reused textures are never written again; submissions that used an
+ * evicted texture keep it alive through their retained array. */
+@interface MagRenderResidentImage : NSObject {
+@public id<MTLTexture> texture; NSData *shape; NSData *bytes; uint64_t used;
+}
+@end
+@implementation MagRenderResidentImage @end
+static const uint64_t metal_resident_max_bytes=256ull*1024*1024;
+static const uint32_t metal_resident_max_entries=4096;
+static int metal_scene_image_attached(const mag_native_scene *scene,uint32_t image){
+    if(image==scene->output_image)return 1;
+    for(uint32_t n=0;n<scene->pass_count;++n){const mag_native_scene_pass *p=&scene->passes[n];
+        if(p->color.image==image||p->depth.image==image)return 1;}
+    return 0;
+}
+static NSData *metal_resident_shape(const mag_native_scene_image *im,const mag_native_scene_image_layout *shape,uint64_t length){
+    NSMutableData *d=[NSMutableData data];
+    uint32_t head[4]={im->format,im->width,im->height,shape?1u:0u};[d appendBytes:head length:sizeof head];
+    [d appendBytes:&length length:sizeof length];
+    if(shape){uint32_t s[6]={shape->dimension,shape->depth,shape->layers,shape->mip_count,shape->samples,shape->subresource_count};
+        [d appendBytes:s length:sizeof s];
+        if(shape->subresource_count)[d appendBytes:shape->subresources length:shape->subresource_count*sizeof(*shape->subresources)];}
+    return d;
+}
+static uint64_t metal_resident_hash(NSData *shape,const uint8_t *bytes,uint64_t length){
+    uint64_t h=1469598103934665603ull;const uint8_t *k=shape.bytes;
+    for(NSUInteger i=0;i<shape.length;++i){h^=k[i];h*=1099511628211ull;}
+    /* Bounded sample of the content; equality is always a full compare. */
+    uint64_t words=length/8,step=words>512?words/512:1;
+    for(uint64_t w=0;w<words;w+=step){uint64_t v;memcpy(&v,bytes+w*8,8);h^=v;h*=1099511628211ull;}
+    for(uint64_t i=words*8;i<length;++i){h^=bytes[i];h*=1099511628211ull;}
+    return h;
+}
+static id<MTLTexture> metal_resident_find(MagRenderMetal *c,uint64_t hash,NSData *shape,const uint8_t *bytes,uint64_t length){
+    for(MagRenderResidentImage *e in c->resident[@(hash)])
+        if(e->bytes.length==length&&[e->shape isEqualToData:shape]&&!memcmp(e->bytes.bytes,bytes,(size_t)length)){
+            e->used=c->next_submission;return e->texture;}
+    return nil;
+}
+static void metal_resident_insert(MagRenderMetal *c,uint64_t hash,NSData *shape,const uint8_t *bytes,uint64_t length,id<MTLTexture> texture){
+    if(length>metal_resident_max_bytes/4)return;
+    while(c->resident_entries&&(c->resident_entries>=metal_resident_max_entries||c->resident_bytes+length>metal_resident_max_bytes)){
+        NSNumber *oldest_key=nil;NSUInteger oldest_index=0;uint64_t oldest=UINT64_MAX;
+        for(NSNumber *key in c->resident){NSMutableArray *bucket=c->resident[key];
+            for(NSUInteger i=0;i<bucket.count;++i){MagRenderResidentImage *e=bucket[i];if(e->used<oldest){oldest=e->used;oldest_key=key;oldest_index=i;}}}
+        if(!oldest_key)break;
+        NSMutableArray *bucket=c->resident[oldest_key];MagRenderResidentImage *e=bucket[oldest_index];
+        c->resident_bytes-=e->bytes.length;--c->resident_entries;++c->resident_evictions;
+        [bucket removeObjectAtIndex:oldest_index];if(!bucket.count)[c->resident removeObjectForKey:oldest_key];
+    }
+    MagRenderResidentImage *e=[MagRenderResidentImage new];e->texture=texture;e->shape=shape;
+    e->bytes=[NSData dataWithBytes:bytes length:(NSUInteger)length];e->used=c->next_submission;
+    if(!e->bytes)return;
+    NSMutableArray *bucket=c->resident[@(hash)];if(!bucket){bucket=[NSMutableArray new];c->resident[@(hash)]=bucket;}
+    [bucket addObject:e];c->resident_bytes+=length;++c->resident_entries;
+}
 static int metal_scene_owned(void *opaque, const mag_native_scene *scene, mag_native_ticket *out,MagRenderImportedImage *target,const mag_native_sampler *sampler_table,uint32_t sampler_count,const mag_native_scene_v3 *v3,const mag_native_scene_v4 *v4,const mag_native_scene_v5 *v5) {
     MagRenderMetal *c = context(opaque);
     if (c->pending.count >= 2)
@@ -277,6 +338,17 @@ static int metal_scene_owned(void *opaque, const mag_native_scene *scene, mag_na
         // Source depth images are native render targets. Uploading host depth
         // requires a separate private-texture staging path, not replaceRegion.
         if((im->format==MAG_NATIVE_SCENE_D32||mag_native_image_has_stencil(im->format))&&im->upload.id)return MAG_NATIVE_UNSUPPORTED;
+        NSData *resident_shape=nil;uint64_t resident_hash=0;MagRenderBuffer *resident_upload=nil;
+        if(c->resident_enabled&&im->upload.id&&!metal_scene_image_attached(scene,i)){
+            resident_upload=find_buffer(c,im->upload);
+            if(resident_upload){
+                resident_shape=metal_resident_shape(im,shape,resident_upload->gpu.length);
+                resident_hash=metal_resident_hash(resident_shape,resident_upload->gpu.contents,resident_upload->gpu.length);
+                id<MTLTexture> hit=metal_resident_find(c,resident_hash,resident_shape,resident_upload->gpu.contents,resident_upload->gpu.length);
+                if(hit){++c->resident_hits;[images addObject:hit];[retained addObject:hit];continue;}
+                ++c->resident_misses;
+            }
+        }
         MTLTextureDescriptor *d=[MTLTextureDescriptor new];
         if(im->format==MAG_NATIVE_SCENE_D24S8&&![c->device isDepth24Stencil8PixelFormatSupported])return MAG_NATIVE_UNSUPPORTED;
         d.pixelFormat=metal_scene_format(im->format);d.width=im->width;d.height=im->height;d.depth=1;
@@ -296,6 +368,7 @@ static int metal_scene_owned(void *opaque, const mag_native_scene *scene, mag_na
                         withBytes:(const uint8_t*)b->gpu.contents+level->offset bytesPerRow:level->row_bytes bytesPerImage:level->length];
                 }
             }else [texture replaceRegion:MTLRegionMake2D(0,0,im->width,im->height) mipmapLevel:0 withBytes:b->gpu.contents bytesPerRow:im->width*4];
+            if(resident_shape)metal_resident_insert(c,resident_hash,resident_shape,resident_upload->gpu.contents,resident_upload->gpu.length,texture);
         }
         [images addObject:texture];
         [retained addObject:texture];
@@ -514,6 +587,10 @@ static int metal_scene_owned(void *opaque, const mag_native_scene *scene, mag_na
         [blit endEncoding];
     }
     submission->ticket = (mag_native_ticket){c->generation, ++c->next_submission};
+    if(c->resident_enabled&&c->resident_report&&(c->next_submission<=4||c->next_submission%120==0))
+        fprintf(stderr,"[mag native resident images] submission=%llu hits=%llu misses=%llu entries=%u bytes=%llu evictions=%llu\n",
+            (unsigned long long)c->next_submission,(unsigned long long)c->resident_hits,(unsigned long long)c->resident_misses,
+            c->resident_entries,(unsigned long long)c->resident_bytes,(unsigned long long)c->resident_evictions);
     for (MagRenderUse *use in uses) {
         if (use->write) {
             ++use->buffer->writers;

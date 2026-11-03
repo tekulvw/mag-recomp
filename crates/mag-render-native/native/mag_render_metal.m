@@ -49,7 +49,14 @@
 @implementation MagRenderSubmission @end
 @interface MagRenderMetal : NSObject {
 @public id<MTLDevice> device; id<MTLCommandQueue> queue;
-    NSMutableDictionary<NSString *, MagRenderBuffer *> *buffers;
+    /* id -> version -> buffer. Small integer NSNumbers are tagged pointers,
+     * so lookups allocate nothing (a formatted string key did, per lookup). */
+    NSMutableDictionary<NSNumber *, NSMutableDictionary<NSNumber *, MagRenderBuffer *> *> *buffers;
+    /* Opt-in (MAG_RENDER_METAL_RESIDENT_IMAGES=1) content-verified reuse of
+     * read-only uploaded scene textures across submissions. */
+    NSMutableDictionary<NSNumber *, NSMutableArray *> *resident;
+    uint64_t resident_bytes, resident_hits, resident_misses, resident_evictions;
+    uint32_t resident_entries;int resident_enabled,resident_report;
     NSMutableDictionary<NSNumber *, NSNumber *> *versions;
     NSMutableDictionary<NSNumber *, MagRenderPipeline *> *pipelines;
     NSMutableArray<MagRenderSubmission *> *pending;
@@ -63,12 +70,9 @@
 @implementation MagRenderMetal @end
 
 static MagRenderMetal *context(void *opaque) { return (__bridge MagRenderMetal *)opaque; }
-static NSString *buffer_key(uint64_t id, uint64_t version) {
-    return [NSString stringWithFormat:@"%llu:%llu", (unsigned long long)id, (unsigned long long)version];
-}
 static MagRenderBuffer *find_buffer(MagRenderMetal *c, mag_native_buffer ref) {
     return ref.device_generation == c->generation && ref.id && ref.version ?
-        c->buffers[buffer_key(ref.id, ref.version)] : nil;
+        c->buffers[@(ref.id)][@(ref.version)] : nil;
 }
 static MagRenderPipeline *find_pipeline(MagRenderMetal *c, mag_native_pipeline ref) {
     return ref.device_generation == c->generation && ref.id ? c->pipelines[@(ref.id)] : nil;
@@ -101,18 +105,19 @@ static int metal_buffer_create(void *opaque, mag_native_buffer previous,
     else memset(gpu.contents, 0, (size_t)desc->byte_length);
     MagRenderBuffer *record = [MagRenderBuffer new]; record->gpu = gpu;
     record->identifier = buffer_id; record->version = version;record->seed_zero=!desc->initial_bytes;
-    c->buffers[buffer_key(buffer_id, version)] = record; c->versions[@(buffer_id)] = @(version);
+    NSMutableDictionary<NSNumber *, MagRenderBuffer *> *live = c->buffers[@(buffer_id)];
+    if (!live) { live = [NSMutableDictionary new]; c->buffers[@(buffer_id)] = live; }
+    live[@(version)] = record; c->versions[@(buffer_id)] = @(version);
     *out = (mag_native_buffer){c->generation, buffer_id, version};
     return MAG_NATIVE_OK;
 }
 static int metal_buffer_release(void *opaque, mag_native_buffer ref) {
     MagRenderMetal *c = context(opaque);
     if (!find_buffer(c, ref)) return MAG_NATIVE_STALE;
-    [c->buffers removeObjectForKey:buffer_key(ref.id, ref.version)];
-    int addressable = 0;
-    for (MagRenderBuffer *other in c->buffers.objectEnumerator)
-        if (other->identifier == ref.id) { addressable = 1; break; }
-    if (!addressable) [c->versions removeObjectForKey:@(ref.id)];
+    NSMutableDictionary<NSNumber *, MagRenderBuffer *> *live = c->buffers[@(ref.id)];
+    [live removeObjectForKey:@(ref.version)];
+    /* Same rule as before: the id stays addressable while any version lives. */
+    if (!live.count) { [c->buffers removeObjectForKey:@(ref.id)]; [c->versions removeObjectForKey:@(ref.id)]; }
     return MAG_NATIVE_OK;
 }
 static int metal_buffer_read(void *opaque, mag_native_buffer ref, uint64_t offset, void *out, uint64_t length) {
@@ -297,7 +302,7 @@ static int metal_close(void *opaque) {
     if (c->pending.count) return MAG_NATIVE_BUSY;
     MagRenderHostOwner host=c->host;
     int sampler_status=mag_native_sampler_registry_close(&c->samplers);if(sampler_status)return sampler_status;
-    [c->buffers removeAllObjects];[c->pipelines removeAllObjects];[c->versions removeAllObjects];[c->images removeAllObjects];
+    [c->buffers removeAllObjects];[c->resident removeAllObjects];[c->pipelines removeAllObjects];[c->versions removeAllObjects];[c->images removeAllObjects];
     c->queue=nil;c->device=nil;
     (void)CFBridgingRelease(opaque);
     host.release(host.userdata,host.lifetime);return MAG_NATIVE_OK;
@@ -317,7 +322,9 @@ int mag_native_metal_create(const MagRenderHostOwner *owner,mag_native_device **
     c->generation=mag_native_next_generation();
     if (!c->generation) {owner->release(owner->userdata,owner->lifetime);return MAG_NATIVE_ALLOCATION_FAILED;}
     mag_native_sampler_registry_init(&c->samplers,c->generation,NULL,metal_sampler_destroy);
-    c->buffers=[NSMutableDictionary new];c->versions=[NSMutableDictionary new];
+    c->buffers=[NSMutableDictionary new];c->versions=[NSMutableDictionary new];c->resident=[NSMutableDictionary new];
+    const char *resident=getenv("MAG_RENDER_METAL_RESIDENT_IMAGES");c->resident_enabled=resident&&!strcmp(resident,"1");
+    const char *report=getenv("MAG_RENDER_FIFO_TIMING");c->resident_report=report&&!strcmp(report,"1");
     c->pipelines=[NSMutableDictionary new];c->pending=[NSMutableArray new];c->images=[NSMutableDictionary new];
     void *opaque=(__bridge_retained void *)c;
     *out=mag_native_wrap(&metal_ops,opaque);
