@@ -52,7 +52,7 @@
     /* id -> version -> buffer. Small integer NSNumbers are tagged pointers,
      * so lookups allocate nothing (a formatted string key did, per lookup). */
     NSMutableDictionary<NSNumber *, NSMutableDictionary<NSNumber *, MagRenderBuffer *> *> *buffers;
-    /* Opt-in (MAG_RENDER_METAL_RESIDENT_IMAGES=1) content-verified reuse of
+    /* Default-on (MAG_RENDER_METAL_RESIDENT_IMAGES=0 disables) content-verified reuse of
      * read-only uploaded scene textures across submissions. */
     NSMutableDictionary<NSNumber *, NSMutableArray *> *resident;
     uint64_t resident_bytes, resident_hits, resident_misses, resident_evictions;
@@ -323,7 +323,7 @@ int mag_native_metal_create(const MagRenderHostOwner *owner,mag_native_device **
     if (!c->generation) {owner->release(owner->userdata,owner->lifetime);return MAG_NATIVE_ALLOCATION_FAILED;}
     mag_native_sampler_registry_init(&c->samplers,c->generation,NULL,metal_sampler_destroy);
     c->buffers=[NSMutableDictionary new];c->versions=[NSMutableDictionary new];c->resident=[NSMutableDictionary new];
-    const char *resident=getenv("MAG_RENDER_METAL_RESIDENT_IMAGES");c->resident_enabled=resident&&!strcmp(resident,"1");
+    const char *resident=getenv("MAG_RENDER_METAL_RESIDENT_IMAGES");c->resident_enabled=!(resident&&!strcmp(resident,"0"));
     const char *report=getenv("MAG_RENDER_FIFO_TIMING");c->resident_report=report&&!strcmp(report,"1");
     c->pipelines=[NSMutableDictionary new];c->pending=[NSMutableArray new];c->images=[NSMutableDictionary new];
     void *opaque=(__bridge_retained void *)c;

@@ -221,7 +221,8 @@ static int metal_scene_import_info(void *opaque,mag_native_image ref,uint32_t re
  if(required){if(!image->validate_planes)return MAG_NATIVE_UNSUPPORTED;status=image->validate_planes(image->host.userdata,image->host.owner_lifetime,image->host.resource_id,image->host.resource_generation,required);if(status)return status<0?status:MAG_NATIVE_DEVICE_FAILED;}
  *out=(mag_native_import_info){image->host.format,image->host.width,image->host.height,0,image->host.owner_lifetime,image->host.resource_id,image->host.resource_generation};return MAG_NATIVE_OK;
 }
-/* Opt-in resident uploaded images (MAG_RENDER_METAL_RESIDENT_IMAGES=1).
+/* Resident uploaded images: on by default, MAG_RENDER_METAL_RESIDENT_IMAGES=0
+ * restores per-submission texture creation and upload.
  * An uploaded image that no pass of this scene attaches (writes) is only
  * sampled, so its texture contents are exactly its upload bytes. Such a
  * texture is kept and reused by a later scene whose image has the same shape
