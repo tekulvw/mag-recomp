@@ -300,6 +300,7 @@ struct SceneDrawPlan {
 };
 struct ScenePlan {
   const mag_native_scene_v4 *stencil=nullptr;
+  const mag_native_scene_v5 *imported=nullptr;
   const mag_native_scene_v3 *extended=nullptr;
   const mag_native_sampler *sampler_table=nullptr;uint32_t sampler_count=0;
   Plan buffers;
@@ -345,7 +346,7 @@ static int scene_raster_info(void *opaque,mag_native_pipeline ref,const mag_nati
  auto p=pipeline(static_cast<Context*>(opaque),ref);if(!p)return MAG_NATIVE_STALE;if(!p->scene)return MAG_NATIVE_INVALID;*out=p->explicit_raster?&p->raster:nullptr;return MAG_NATIVE_OK;
 }
 static int scene_prepare(Context *c, const mag_native_scene *scene,
-                         ScenePlan &plan,const mag_native_sampler *sampler_table=nullptr,uint32_t sampler_count=0,const mag_native_scene_v3 *extended=nullptr,const mag_native_scene_v4 *stencil=nullptr) {
+                         ScenePlan &plan,const mag_native_sampler *sampler_table=nullptr,uint32_t sampler_count=0,const mag_native_scene_v3 *extended=nullptr,const mag_native_scene_v4 *stencil=nullptr,const mag_native_scene_v5 *imported=nullptr) {
   if (c->failed)
     return MAG_NATIVE_DEVICE_FAILED;
   mag_native_scene_registry registry = {c,
@@ -358,17 +359,26 @@ static int scene_prepare(Context *c, const mag_native_scene *scene,
                                         UINT32_MAX};
   plan.sampler_table=sampler_table;plan.sampler_count=sampler_count;
   mag_native_scene_registry_v2 registry_v2={&registry,sampler_table,sampler_count,sampler_info};
-  plan.extended=extended;plan.stencil=stencil;
+  plan.extended=extended;plan.stencil=stencil;plan.imported=imported;
   mag_native_scene_registry_v4 registry_v4={&registry_v2,scene_raster_info};
-  int status = stencil?mag_native_scene_validate_v4(stencil,&registry_v4,&plan.usage):extended ? mag_native_scene_validate_v3(extended, &registry_v2, &plan.usage) : mag_native_scene_validate_v2(scene, &registry_v2, &plan.usage);
+  mag_native_scene_registry_v5 registry_v5={&registry_v4,scene_import_info};
+  int status = imported?mag_native_scene_validate_v5(imported,&registry_v5,&plan.usage):stencil?mag_native_scene_validate_v4(stencil,&registry_v4,&plan.usage):extended ? mag_native_scene_validate_v3(extended, &registry_v2, &plan.usage) : mag_native_scene_validate_v2(scene, &registry_v2, &plan.usage);
   if (status) {return status;}
-    /* Unequal attachment encoding is currently enabled only for Metal. */
+  if(imported){
+    ID3D12Resource *seen[MAG_NATIVE_SCENE_MAX_IMAGES];
+    for(uint32_t i=0;i<imported->import_count;++i){auto image=imported_image(c,imported->imports[i].ref);
+      for(uint32_t j=0;j<i;++j)if(seen[j]==image->gpu.p)return MAG_NATIVE_INVALID;
+      seen[i]=image->gpu.p;
+    }
+  }
+    /* D3D12 unequal attachment encoding remains explicitly unsupported. */
     for(uint32_t n=0;n<scene->pass_count;++n){const mag_native_scene_pass *p=&scene->passes[n];
         if(p->color.image!=MAG_NATIVE_SCENE_NONE&&p->depth.image!=MAG_NATIVE_SCENE_NONE){
             const mag_native_scene_image *color=&scene->images[p->color.image],*depth=&scene->images[p->depth.image];
             if(color->width!=depth->width||color->height!=depth->height)return MAG_NATIVE_UNSUPPORTED;
         }
     }
+  if(imported)for(uint32_t i=0;i<imported->bounds_count;++i)if(imported->bounds[i].enabled)return MAG_NATIVE_UNSUPPORTED;
   plan.buffers.buffers.resize(scene->resource_count);
   plan.buffers.roles.resize(scene->resource_count);
   plan.buffers.resources = scene->resource_count;
@@ -644,7 +654,17 @@ static int scene_reserve(Context *c, Slot &slot, const mag_native_scene *scene,
   slot.writes.resize((std::max)(scene->resource_count,MaxResources));
   slot.scene_images.resize(scene->image_count);
   for (uint32_t i = 0; i < scene->image_count; ++i) {
-    status = scene_image(c, scene->images[i], plan.extended && plan.extended->image_layout_count ? &plan.extended->image_layouts[i] : nullptr, slot.scene_images[i]);
+    std::shared_ptr<ImportedImage> borrowed;
+    if(plan.imported)for(uint32_t k=0;k<plan.imported->import_count;++k)
+      if(plan.imported->imports[k].image==i)borrowed=imported_image(c,plan.imported->imports[k].ref);
+    if(borrowed){
+      const auto *shape=plan.extended&&plan.extended->image_layout_count?&plan.extended->image_layouts[i]:nullptr;
+      if(shape&&(shape->dimension!=2||shape->mip_count!=1||shape->layers!=1))return MAG_NATIVE_UNSUPPORTED;
+      auto &image=slot.scene_images[i];image.borrowed=borrowed;image.gpu=borrowed->gpu;
+      image.format=scene_format(scene->images[i].format);
+      image.state=static_cast<D3D12_RESOURCE_STATES>(borrowed->metadata.acquire_state);
+      status=scene_import_usage(c,scene,plan.extended,i,borrowed->gpu->GetDesc());
+    }else status = scene_image(c, scene->images[i], plan.extended && plan.extended->image_layout_count ? &plan.extended->image_layouts[i] : nullptr, slot.scene_images[i]);
     if (status)
       return status;
   }
@@ -697,7 +717,7 @@ static int scene_reserve(Context *c, Slot &slot, const mag_native_scene *scene,
   return MAG_NATIVE_OK;
 }
 static int scene_execute(Context *c, const mag_native_scene *scene,
-                         ScenePlan &plan, mag_native_ticket *out) {
+                         ScenePlan &plan, mag_native_ticket *out,bool owner_held=false) {
   Slot *slot = nullptr;
   for (auto &candidate : c->slots)
     if (!candidate.occupied) {
@@ -716,12 +736,11 @@ static int scene_execute(Context *c, const mag_native_scene *scene,
       return status;
     }
     Lease lease;
-    status = c->owner.try_begin(c->owner.userdata, c->owner.lifetime);
-    if (status) {
-      clear_slot(*slot);
-      return status < 0 ? status : MAG_NATIVE_DEVICE_FAILED;
+    if(!owner_held){
+      status = c->owner.try_begin(c->owner.userdata, c->owner.lifetime);
+      if (status) {clear_slot(*slot);return status < 0 ? status : MAG_NATIVE_DEVICE_FAILED;}
+      lease.context = c;
     }
-    lease.context = c;
     HRESULT result = slot->allocator->Reset();
     if (SUCCEEDED(result))
       result = slot->list->Reset(slot->allocator.p, nullptr);
@@ -970,6 +989,10 @@ static int scene_execute(Context *c, const mag_native_scene *scene,
           static_cast<UINT>(slot->scene_readback->pitch)};
       list->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
     }
+    for(auto &image:slot->scene_images)if(image.borrowed){
+      auto final_state=static_cast<D3D12_RESOURCE_STATES>(image.borrowed->metadata.handback_state);
+      transition(list,image.gpu.p,image.state,final_state);image.state=final_state;
+    }
     result = list->Close();
     if (FAILED(result)) {
       clear_slot(*slot);
@@ -1037,4 +1060,27 @@ static int submit_scene_v3(void *opaque,const mag_native_scene_v3 *desc,const ma
 static int submit_scene_v4(void *opaque,const mag_native_scene_v4 *desc,const mag_native_image *target,const MagRenderHostFrame *frame,mag_native_ticket *out){
  if(target||frame)return MAG_NATIVE_UNSUPPORTED;
  return submit_scene_impl(opaque,desc->base.base.scene,out,desc->base.base.samplers,desc->base.base.sampler_count,&desc->base,desc);
+}
+
+static int submit_scene_v5(void *opaque, const mag_native_scene_v5 *desc,
+                           const mag_native_image *target,
+                           const MagRenderHostFrame *frame,
+                           mag_native_ticket *out) {
+  if (target || frame)
+    return MAG_NATIVE_UNSUPPORTED;
+  auto *c = static_cast<Context *>(opaque);
+  Lease lease;
+  int status = c->owner.try_begin(c->owner.userdata, c->owner.lifetime);
+  if (status)
+    return status < 0 ? status : MAG_NATIVE_DEVICE_FAILED;
+  lease.context = c;
+  try {
+    ScenePlan plan;
+    const auto *v3 = &desc->base.base;
+    status = scene_prepare(c, v3->base.scene, plan, v3->base.samplers,
+                           v3->base.sampler_count, v3, &desc->base, desc);
+    return status ? status : scene_execute(c, v3->base.scene, plan, out, true);
+  } catch (const std::bad_alloc &) {
+    return MAG_NATIVE_ALLOCATION_FAILED;
+  }
 }

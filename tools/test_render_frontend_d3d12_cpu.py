@@ -9,6 +9,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -37,9 +38,23 @@ def check(args):
         raise RuntimeError(f"required C compiler is unavailable: {c_compiler}")
     if windows and (not args.dxc_include or not (args.dxc_include / "dxcapi.h").is_file()):
         raise RuntimeError("Windows fixture requires --dxc-include containing the pinned dxcapi.h")
+    sdk_result = None
+    if args.sdk_only and not args.sdk_root:
+        raise RuntimeError("--sdk-only requires --sdk-root and --sdk-revision")
+    if args.sdk_root:
+        if not windows:
+            raise RuntimeError("--sdk-root actual D3D12 provider fixture requires a Windows CPU host")
+        if not args.sdk_revision or not re.fullmatch(r"[0-9a-f]{40}", args.sdk_revision):
+            raise RuntimeError("--sdk-root requires an explicit immutable --sdk-revision")
+        args.sdk_root = args.sdk_root.resolve()
+        sdk_head = run(["git", "-C", args.sdk_root, "rev-parse", "HEAD"])
+        if sdk_head != args.sdk_revision or run(["git", "-C", args.sdk_root, "status", "--porcelain", "--untracked-files=no"]):
+            raise RuntimeError("SDK checkout does not match the clean exact --sdk-revision")
+        sdk_result = {"revision": sdk_head, "runtime_executed": False, "device_created": False, "queue_executed": False, "gpu_executed": False, "dispatch_model": "injected CPU COM only"}
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    fixtures = [("limits", [FIXTURES / "test_d3d12_limits.cpp"])]
-    if windows:
+    fixtures = [] if args.sdk_only else [("limits", [FIXTURES / "test_d3d12_limits.cpp"]),
+                ("d3d12_image_contract", [FIXTURES / "test_d3d12_image_contract.c"])]
+    if windows and not args.sdk_only:
         # Compile the real shared C admission separately, rather than apply a
         # C++ language flag to C input in the strict clang-cl build.
         validator = args.output_dir / "scene_validate.obj"
@@ -59,9 +74,10 @@ def check(args):
         fixtures.append(("draw_preflight", [FIXTURES / "test_d3d12_draw_preflight.cpp",
                                            NATIVE / "mag_render_dxc.cpp",validator,image_validator,stencil_validator,raster,sampler,sampler_registry]))
         fixtures.append(("scene_preflight", [FIXTURES / "test_d3d12_scene_preflight.cpp",NATIVE / "mag_render_dxc.cpp",validator,image_validator,stencil_validator,raster,sampler,sampler_registry]))
-    for name in ("vertex_layout", "bgra_scene", "binding_scene", "scene_capacity", "raster_state", "sampler_lifetime", "sampler_scene", "image_format", "image_layout", "viewport", "extended_scene", "stencil", "scene_imports"):
+        fixtures.append(("image_import", [FIXTURES / "test_d3d12_image_import.cpp", NATIVE / "mag_render_dxc.cpp",validator,image_validator,stencil_validator,raster,sampler,sampler_registry]))
+    for name in (() if args.sdk_only else ("vertex_layout", "bgra_scene", "binding_scene", "scene_capacity", "raster_state", "sampler_lifetime", "sampler_scene", "image_format", "image_layout", "viewport", "extended_scene", "stencil", "scene_imports")):
         fixtures.append((name, [FIXTURES / f"test_{name}.c", NATIVE / "mag_render_scene_validate.c", NATIVE / "mag_render_stencil_validate.c", NATIVE / "mag_render_image_validate.c", NATIVE / "mag_render_raster_validate.c", NATIVE / "mag_render_sampler_validate.c", NATIVE / "mag_render_sampler_registry.c"]))
-    if args.vulkan_include:
+    if args.vulkan_include and not args.sdk_only:
         if not (args.vulkan_include / "vulkan/vulkan.h").is_file():
             raise RuntimeError("--vulkan-include must contain vulkan/vulkan.h")
         fixtures.append(("vulkan_scene_extended", [FIXTURES / "test_vulkan_scene_extended.c",
@@ -71,10 +87,10 @@ def check(args):
         fixtures.append(("vulkan_image_contract", [FIXTURES / "test_vulkan_image_contract.c"]))
     results = {}
     sources = {Path(__file__).resolve(), *(NATIVE / name for name in (
-        "mag_render_imported_image.h", "mag_render_stencil.h", "mag_render_stencil_validate.h", "mag_render_stencil_validate.c", "mag_render_image_format.h", "mag_render_image_validate.h", "mag_render_scene_extended.h", "mag_render_viewport.h", "mag_render_sampler.h", "mag_render_sampler_registry.h", "mag_render_raster.h", "mag_render_raster_validate.c", "mag_render_d3d12_limits.h", "mag_render_batch.h", "mag_render_native.h", "mag_render_host_owner.h", "mag_render_scene.h", "mag_render_scene_validate.h", "mag_render_host_image.h", "mag_render_host_frame.h"))}
+        "mag_render_imported_image.h", "mag_render_stencil.h", "mag_render_stencil_validate.h", "mag_render_stencil_validate.c", "mag_render_image_format.h", "mag_render_image_validate.h", "mag_render_scene_extended.h", "mag_render_viewport.h", "mag_render_sampler.h", "mag_render_sampler_registry.h", "mag_render_raster.h", "mag_render_raster_validate.c", "mag_render_d3d12_limits.h", "mag_render_d3d12_image.h", "mag_render_batch.h", "mag_render_native.h", "mag_render_host_owner.h", "mag_render_scene.h", "mag_render_scene_validate.h", "mag_render_host_image.h", "mag_render_host_frame.h"))}
     if windows:
-        sources.update(NATIVE / name for name in ("mag_render_native_internal.h", "mag_render_dxc.h", "mag_render_scene.h", "mag_render_scene_validate.h", "mag_render_scene_validate.c", "mag_render_d3d12_scene.inc", "mag_render_d3d12_sampler.inc", "mag_render_host_image.h", "mag_render_host_frame.h"))
-    if args.vulkan_include:
+        sources.update(NATIVE / name for name in ("mag_render_native_internal.h", "mag_render_dxc.h", "mag_render_scene.h", "mag_render_scene_validate.h", "mag_render_scene_validate.c", "mag_render_d3d12_scene.inc", "mag_render_d3d12_sampler.inc", "mag_render_d3d12_import.inc", "mag_render_d3d12_image.h", "mag_render_host_image.h", "mag_render_host_frame.h"))
+    if args.vulkan_include and not args.sdk_only:
         sources.add(FIXTURES / "test_vulkan_import_cpu.inc")
         sources.update(NATIVE / name for name in ("mag_render_vulkan.c", "mag_render_vulkan_scene.inc",
             "mag_render_vulkan_sampler.inc", "mag_render_vulkan_batch.inc", "mag_render_vulkan.h", "mag_render_native_internal.h",
@@ -97,10 +113,54 @@ def check(args):
         run(command)
         results[name] = {"status": "passed", "output": run([binary])}
         sources.update(path for path in inputs if path.suffix != ".obj")
+    if args.sdk_root:
+        sdk = args.sdk_root
+        abi = args.output_dir / "sdk_d3d12_image_abi.exe"
+        run([compiler, "/nologo", "/std:c17", "/TC", "/W4", "/WX", f"/I{NATIVE}",
+             f"/I{sdk / 'libs/video'}", "/DMAG_RENDER_TEST_SDK_IMAGE_ABI=1",
+             FIXTURES / "test_d3d12_image_contract.c", f"/Fo{args.output_dir}{os.sep}", f"/Fe{abi}"])
+        results["sdk_d3d12_image_abi"] = {"status": "passed", "output": run([abi])}
+        provider = args.output_dir / "sdk_d3d12_image_owner_cpu.exe"
+        fixture = ROOT / "crates/mag-render-native/tests/compat/test_d3d12_image_owner_cpu.c"
+        # Whole original SDK translation unit, injected CPU COM dispatch only.
+        # Function/data sections remove unrelated title, window and shader paths.
+        run([compiler, "/nologo", "/std:c17", "/TC", "/O2", "/Gy", "/Gw", "/W3",
+             f"/I{sdk / 'include'}", f"/I{sdk / 'libs/video'}", fixture,
+             f"/Fo{args.output_dir}{os.sep}", f"/Fe{provider}", "/link", "/OPT:REF",
+             "d3d12.lib", "dxgi.lib", "d3dcompiler.lib"])
+        results["sdk_d3d12_provider"] = {"status": "passed", "output": run([provider])}
+        results["sdk_d3d12_boundary_failure"] = {"status": "passed", "output": run([provider, "fence-failure"])}
+        old = args.output_dir / "old-sdk-headers"
+        old.mkdir(exist_ok=True)
+        old_revision = "204b8fa6fbff35efa972cd9012c12fd4ee7c0226"
+        old_header = run(["git", "-C", sdk, "show", old_revision + ":libs/video/rsx_live_draw_owner.h"])
+        if "RSX_NATIVE_D3D12_IMAGE_ABI" in old_header:
+            raise RuntimeError("old Windows SDK header unexpectedly enables image ABI")
+        (old / "rsx_live_draw_owner.h").write_text(old_header + "\n")
+        sdk_result["old_sdk_revision"] = old_revision
+        sdk_result["old_header_sha256"] = hashlib.sha256((old / "rsx_live_draw_owner.h").read_bytes()).hexdigest()
+        for kind, extra in (("new", []), ("old", [f"/I{old}"])):
+            obj = args.output_dir / ("bridge-" + kind + ".obj")
+            run([compiler, "/nologo", "/std:c++17", "/W4", "/WX", *extra,
+                 f"/I{NATIVE}", f"/I{ROOT / 'src'}", f"/I{sdk / 'include'}", f"/I{sdk / 'libs/video'}",
+                 "/c", ROOT / "src/mag_render_host_bridge.cpp", f"/Fo{obj}"])
+            undefined = "\n".join(line for line in run(["dumpbin", "/symbols", obj]).splitlines() if "UNDEF" in line)
+            for symbol in ("rsx_live_draw_borrow_image", "rsx_live_draw_validate_image_planes", "rsx_live_draw_native_boundary"):
+                if (symbol in undefined) != (kind == "new"):
+                    raise RuntimeError(f"{kind} SDK bridge forwarding mismatch: {symbol}")
+            results["sdk_d3d12_bridge_" + kind] = {"status": "passed", "output": "strict Windows object + guarded undefined symbols"}
+        sources.add(ROOT / "src/mag_render_host_bridge.cpp")
+        sources.add(ROOT / "src/mag_render_host_bridge.h")
+        sources.add(fixture)
+        sdk_result["source_sha256"] = {str(p): hashlib.sha256((sdk / p).read_bytes()).hexdigest()
+            for p in map(Path, ("libs/video/rsx_live_draw.c", "libs/video/rsx_live_draw_owner.h",
+                               "libs/video/rsx_live_draw_native_image.inc", "libs/video/rsx_native_d3d12_image.h",
+                               "libs/video/rsx_native_image.h", "libs/video/rsx_native_owner_gate.h",
+                               "libs/video/rsx_d3d12_checked_fence.h", "libs/video/rsx_picture_identity.inc"))}
     return {"schema_version": 1, "host": sys.platform, "compiler": compiler,
             "compiler_version": run([compiler, "--version"]),
             "c_compiler": c_compiler, "c_compiler_version": run([c_compiler, "--version"]),
-            "checks": results, "gpu_execution": "pending",
+            "checks": results, "gpu_execution": "pending", "sdk_compat": sdk_result, "sdk_only": args.sdk_only,
             "source_sha256": {str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest()
                               for path in sorted(sources)}}
 
@@ -111,6 +171,9 @@ def main():
     parser.add_argument("--c-compiler")
     parser.add_argument("--vulkan-include", type=Path)
     parser.add_argument("--dxc-include", type=Path)
+    parser.add_argument("--sdk-root", type=Path)
+    parser.add_argument("--sdk-revision")
+    parser.add_argument("--sdk-only", action="store_true")
     parser.add_argument("--output-dir", type=Path, required=True)
     args = parser.parse_args()
     args.output_dir = args.output_dir.resolve()

@@ -26,6 +26,19 @@ VULKAN_IMAGE_FIELD(mip_count);VULKAN_IMAGE_FIELD(layers);VULKAN_IMAGE_FIELD(samp
 VULKAN_IMAGE_FIELD(queue_family);VULKAN_IMAGE_FIELD(layout);
 #undef VULKAN_IMAGE_FIELD
 #endif
+#if defined(_WIN32) && defined(RSX_NATIVE_D3D12_IMAGE_ABI)
+#include "mag_render_d3d12_image.h"
+static_assert(MAG_RENDER_D3D12_IMAGE_ABI==RSX_NATIVE_D3D12_IMAGE_ABI);
+static_assert(sizeof(MagRenderD3D12Image)==sizeof(rsx_native_d3d12_image));
+static_assert(alignof(MagRenderD3D12Image)==alignof(rsx_native_d3d12_image));
+static_assert(sizeof(MagRenderHostImage)==sizeof(rsx_native_image));
+#define D3D_IMAGE_FIELD(field) static_assert(offsetof(MagRenderD3D12Image,field)==offsetof(rsx_native_d3d12_image,field))
+D3D_IMAGE_FIELD(abi_version);D3D_IMAGE_FIELD(struct_size);D3D_IMAGE_FIELD(resource);D3D_IMAGE_FIELD(acquire_state);D3D_IMAGE_FIELD(handback_state);
+#undef D3D_IMAGE_FIELD
+static_assert(offsetof(MagRenderHostImage,image)==offsetof(rsx_native_image,image));
+static_assert(offsetof(MagRenderHostImage,retain)==offsetof(rsx_native_image,retain));
+static_assert(offsetof(MagRenderHostImage,validate)==offsetof(rsx_native_image,validate));
+#endif
 #if !defined(_WIN32)
 static_assert(sizeof(MagRenderHostOwner) == sizeof(rsx_native_owner));
 static_assert(alignof(MagRenderHostOwner) == alignof(rsx_native_owner));
@@ -124,6 +137,11 @@ extern "C" int mag_render_frontend_borrow_image(uint64_t life, uint32_t surface,
     if (!status)
         std::memcpy(out, &image, sizeof(image));
     return status;
+#elif defined(_WIN32) && defined(RSX_NATIVE_D3D12_IMAGE_ABI)
+    rsx_native_image image={};image.abi_version=1;image.struct_size=sizeof(image);
+    int status=rsx_live_draw_borrow_image(life,surface,&image);
+    if(!status)std::memcpy(out,&image,sizeof(image));
+    return status;
 #elif !defined(_WIN32) && defined(RSX_NATIVE_VULKAN_IMAGE_ABI)
     rsx_native_image image = {};
     image.abi_version = 1;
@@ -143,6 +161,8 @@ extern "C" int mag_render_frontend_validate_image_planes(void *user, uint64_t li
     uint64_t resource, uint64_t generation, uint32_t required) {
 #if defined(__APPLE__)
     return rsx_metal_backend_validate_image_planes(user, life, resource, generation, required);
+#elif defined(_WIN32) && defined(RSX_NATIVE_D3D12_IMAGE_ABI)
+    return rsx_live_draw_validate_image_planes(user,life,resource,generation,required);
 #elif !defined(_WIN32) && defined(RSX_NATIVE_VULKAN_IMAGE_ABI)
     return rsx_vulkan_backend_validate_image_planes(user, life, resource, generation, required);
 #else
@@ -208,6 +228,8 @@ extern "C" int mag_render_frontend_native_boundary(uint64_t *ticket) {
     *ticket = 0;
 #if defined(__APPLE__)
     return rsx_metal_backend_native_boundary(ticket);
+#elif defined(_WIN32) && defined(RSX_NATIVE_D3D12_IMAGE_ABI)
+    return rsx_live_draw_native_boundary(ticket);
 #elif !defined(_WIN32) && defined(RSX_NATIVE_VULKAN_IMAGE_ABI)
     return rsx_vulkan_backend_native_boundary(ticket);
 #else

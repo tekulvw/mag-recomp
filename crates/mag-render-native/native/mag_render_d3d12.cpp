@@ -6,6 +6,7 @@ extern "C" {
 #include "mag_render_scene_validate.h"
 }
 #include "mag_render_d3d12_limits.h"
+#include "mag_render_d3d12_image.h"
 #include "mag_render_dxc.h"
 #define WIN32_LEAN_AND_MEAN
 #include <array>
@@ -95,7 +96,13 @@ struct Attachment {
   Resource color, depth;
   std::shared_ptr<ImageReadback> readback;
 };
-struct SceneImage {Resource gpu,upload;DXGI_FORMAT format=DXGI_FORMAT_UNKNOWN;std::vector<D3D12_PLACED_SUBRESOURCE_FOOTPRINT> footprints;std::vector<UINT> rows;std::vector<UINT64> row_bytes;
+struct ImportedImage {
+  MagRenderHostImage host={};MagRenderD3D12Image metadata={};
+  mag_native_validate_planes_fn validate_planes=nullptr;
+  Resource gpu;
+  ~ImportedImage(){if(host.release)host.release(host.userdata,host.owner_lifetime,host.resource_id,host.resource_generation);}
+};
+struct SceneImage {Resource gpu,upload;std::shared_ptr<ImportedImage> borrowed;DXGI_FORMAT format=DXGI_FORMAT_UNKNOWN;std::vector<D3D12_PLACED_SUBRESOURCE_FOOTPRINT> footprints;std::vector<UINT> rows;std::vector<UINT64> row_bytes;
     D3D12_RESOURCE_STATES state=D3D12_RESOURCE_STATE_COMMON;};
 struct Slot {
   mag_native_sampler_registry *sampler_registry=nullptr;
@@ -135,7 +142,7 @@ struct Context {
   MagRenderHostOwner owner = {};
   bool pinned = false, failed = false;
   uint64_t generation = 0, next_buffer = 0, next_pipeline = 0, next_ticket = 0,
-           next_fence = 0;
+           next_fence = 0, next_image = 0;
   Ref<ID3D12Device> device;
   Ref<ID3D12CommandQueue> queue;
   Ref<ID3D12Fence> fence;
@@ -145,6 +152,7 @@ struct Context {
   std::map<std::pair<uint64_t, uint64_t>, std::shared_ptr<Buffer>> buffers;
   std::map<uint64_t, std::shared_ptr<Family>> families;
   std::map<uint64_t, std::shared_ptr<Pipeline>> pipelines;
+  std::map<uint64_t, std::shared_ptr<ImportedImage>> images;
   std::array<Slot, 2> slots;
   Read read;
   UINT descriptor_step = 0, rtv_step = 0, dsv_step = 0,sampler_step=0;
@@ -261,6 +269,7 @@ static void destroy(Context *c) {
   c->buffers.clear();
   c->families.clear();
   c->pipelines.clear();
+  c->images.clear();
   c->fence = {};
   c->queue = {};
   c->device = {};
@@ -1304,9 +1313,10 @@ static int buffer_read(void *opaque, mag_native_buffer ref, uint64_t offset,
   return MAG_NATIVE_OK;
 }
 #include "mag_render_d3d12_sampler.inc"
+#include "mag_render_d3d12_import.inc"
 #include "mag_render_d3d12_scene.inc"
 static const mag_native_ops operations={caps,buffer_create,buffer_release,buffer_read,pipeline_create,pipeline_release,
- submit,poll,close,graphics_create,submit_batch,scene_graphics_create,submit_scene,nullptr,nullptr,nullptr,nullptr,scene_graphics_create_v2,scene_graphics_create_v3,sampler_create,sampler_release,submit_scene_v2,submit_scene_v3,submit_scene_v4,nullptr,nullptr,nullptr};
+ submit,poll,close,graphics_create,submit_batch,scene_graphics_create,submit_scene,image_import,image_release,nullptr,nullptr,scene_graphics_create_v2,scene_graphics_create_v3,sampler_create,sampler_release,submit_scene_v2,submit_scene_v3,submit_scene_v4,image_import_certified,nullptr,submit_scene_v5};
 static int compiler_path(std::string &out) {
   DWORD count = GetEnvironmentVariableW(L"PS3RECOMP_DXC_LIBRARY", nullptr, 0);
   if (!count)
