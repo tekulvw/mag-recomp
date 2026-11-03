@@ -1369,7 +1369,7 @@ impl ScenePacket {
         }
         let mut item_set = BTreeSet::new();
         for (index, i) in self.items.iter().enumerate() {
-            if i.reserved != 0
+            if i.reserved > raw::ITEM_POC_OMITTED_PRODUCER
                 || i.pass as usize >= self.passes.len()
                 || !item_set.insert((i.pass, i.source_item))
             {
@@ -1381,6 +1381,20 @@ impl ScenePacket {
                     i.source_item,
                     i.reserved,
                     self.passes.len()
+                ));
+            }
+            if i.reserved != raw::ITEM_DRAW_REQUIRED
+                && (i.unresolved_obligations != 0
+                    || (i.source_item & (1 << 63) != 0)
+                        != (i.reserved == raw::ITEM_POC_OMITTED_PRODUCER))
+            {
+                return Err(invalid!(
+                    "no-draw-kind-domain",
+                    Some(index),
+                    "kind={} item={} obligations={}",
+                    i.reserved,
+                    i.source_item,
+                    i.unresolved_obligations
                 ));
             }
             if i.unresolved_obligations != 0 && self.flags & 1 == 0 {
@@ -1754,12 +1768,23 @@ impl ScenePacket {
                 }
             }
         }
-        // Every omitted item is represented explicitly. A packet with only omissions
-        // cannot erase a live target while reporting a geometry submission.
+        // Typed source-complete items and explicit POC omissions have no GPU
+        // draw. Unclassified missing draws retain the original strict refusal.
         for i in &self.items {
-            if !seen
+            let drawn = seen
                 .iter()
-                .any(|&(p, n, _)| p == i.pass && n == i.source_item)
+                .any(|&(p, n, _)| p == i.pass && n == i.source_item);
+            if i.reserved != raw::ITEM_DRAW_REQUIRED && drawn {
+                return Err(invalid!(
+                    "no-draw-kind-has-draw",
+                    Some(i.pass as usize),
+                    "kind={} item={}",
+                    i.reserved,
+                    i.source_item
+                ));
+            }
+            if i.reserved == raw::ITEM_DRAW_REQUIRED
+                && !drawn
                 && (i.unresolved_obligations == 0 || self.flags & 1 == 0)
             {
                 return Err(invalid!(
@@ -1784,6 +1809,47 @@ impl ScenePacket {
             return Err(-5);
         }
         Ok(())
+    }
+    fn account_source_no_draw(&self, admitted: &mut BTreeSet<(u32, u64)>, actual_draws: usize) {
+        let draw_items = admitted.len();
+        let mut counts = [0u64; 5];
+        for item in &self.items {
+            match item.reserved {
+                raw::ITEM_SOURCE_REPEATED
+                | raw::ITEM_SOURCE_UPDATE_ONLY
+                | raw::ITEM_SOURCE_LISTS_DISABLED => {
+                    counts[item.reserved as usize] += 1;
+                    admitted.insert((item.pass, item.source_item));
+                }
+                raw::ITEM_POC_OMITTED_PRODUCER => counts[4] += 1,
+                _ => {}
+            }
+        }
+        if counts.iter().any(|&n| n != 0) {
+            use std::sync::atomic::{AtomicUsize, Ordering};
+            static REPORTED: AtomicUsize = AtomicUsize::new(0);
+            if REPORTED
+                .try_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
+                    if n < 8 { Some(n + 1) } else { None }
+                })
+                .is_ok()
+            {
+                eprintln!(
+                    "[mag native item accounting] source={}/{}/{}/{} intended={} draw_items={draw_items} actual_draws={actual_draws} source_repeated={} source_update_only={} source_lists_disabled={} poc_omitted_producer={} admitted_logical={} omitted_logical={}",
+                    self.source.engine_update,
+                    self.source.cohort,
+                    self.source.publication,
+                    self.source.pass_occurrence,
+                    self.intended,
+                    counts[1],
+                    counts[2],
+                    counts[3],
+                    counts[4],
+                    admitted.len(),
+                    self.intended - admitted.len() as u64
+                );
+            }
+        }
     }
     fn prepare(
         &self,
@@ -2392,6 +2458,7 @@ pub(crate) fn admit(id: u64, worker: u64, packet: ScenePacket) -> Result<raw::Ad
                 });
             }
         }
+        packet.account_source_no_draw(&mut admitted, identities.len());
         let receipt = Receipt {
             abi_version: 1,
             struct_size: size_of::<Receipt>() as u32,
@@ -2713,6 +2780,7 @@ pub(crate) fn submit(
             for i in &packet.items {
                 obligations |= i.unresolved_obligations
             }
+            packet.account_source_no_draw(&mut admitted, identities.len());
             let image = unsafe { s.backend.device().0.borrow_mut().import_target(target) }?;
             if let Err(e) = unsafe { s.backend.device().0.borrow_mut().frame_context(frame) } {
                 s.backend.device().0.borrow_mut().release_target(image)?;
@@ -3053,6 +3121,99 @@ pub(crate) mod packet_tests {
             self.released.push(id);
             Ok(())
         }
+    }
+    #[test]
+    fn source_complete_no_draw_kinds_preserve_population_without_fabricating_draws() {
+        let mut packet = fixture();
+        for kind in [
+            raw::ITEM_SOURCE_REPEATED,
+            raw::ITEM_SOURCE_UPDATE_ONLY,
+            raw::ITEM_SOURCE_LISTS_DISABLED,
+        ] {
+            packet.items.push(raw::Item {
+                pass: 0,
+                reserved: kind,
+                source_item: u64::from(kind),
+                unresolved_obligations: 0,
+            });
+        }
+        packet.intended = 4;
+        packet.validate(32, 1 << 20).unwrap();
+        assert_eq!(packet.passes[0].draws.len(), 1);
+        let mut admitted = BTreeSet::from([(0, 0)]);
+        packet.account_source_no_draw(&mut admitted, 1);
+        assert_eq!(admitted.len(), 4);
+        packet.items.push(raw::Item {
+            pass: 0,
+            reserved: raw::ITEM_POC_OMITTED_PRODUCER,
+            source_item: 1 << 63,
+            unresolved_obligations: 0,
+        });
+        packet.intended = 5;
+        packet.validate(32, 1 << 20).unwrap();
+        let mut admitted = BTreeSet::from([(0, 0)]);
+        packet.account_source_no_draw(&mut admitted, 1);
+        assert_eq!(admitted.len(), 4);
+        assert_eq!(packet.intended - admitted.len() as u64, 1);
+        assert_eq!(packet.passes[0].draws.len(), 1);
+    }
+    #[test]
+    fn no_draw_reason_rejects_unknown_conflicting_or_unqualified_items() {
+        for kind in [
+            raw::ITEM_SOURCE_REPEATED,
+            raw::ITEM_SOURCE_UPDATE_ONLY,
+            raw::ITEM_SOURCE_LISTS_DISABLED,
+            raw::ITEM_POC_OMITTED_PRODUCER,
+            5,
+            u32::MAX,
+        ] {
+            let mut packet = fixture();
+            packet.items[0].reserved = kind;
+            if kind == raw::ITEM_POC_OMITTED_PRODUCER {
+                packet.items[0].source_item = 1 << 63;
+                packet.passes[0].draws[0].item = 1 << 63;
+            }
+            assert_eq!(packet.validate(32, 1 << 20), Err(-1));
+        }
+        for (kind, item) in [
+            (raw::ITEM_SOURCE_REPEATED, 1),
+            (raw::ITEM_SOURCE_UPDATE_ONLY, 2),
+            (raw::ITEM_SOURCE_LISTS_DISABLED, 3),
+            (raw::ITEM_POC_OMITTED_PRODUCER, 1 << 63),
+        ] {
+            let mut packet = fixture();
+            packet.flags = 1;
+            packet.items.push(raw::Item {
+                pass: 0,
+                reserved: kind,
+                source_item: item,
+                unresolved_obligations: 16,
+            });
+            packet.intended = 2;
+            assert_eq!(packet.validate(32, 1 << 20), Err(-1));
+        }
+        for (kind, item) in [
+            (raw::ITEM_SOURCE_REPEATED, 1 << 63),
+            (raw::ITEM_POC_OMITTED_PRODUCER, 1),
+        ] {
+            let mut packet = fixture();
+            packet.items.push(raw::Item {
+                pass: 0,
+                reserved: kind,
+                source_item: item,
+                unresolved_obligations: 0,
+            });
+            packet.intended = 2;
+            assert_eq!(packet.validate(32, 1 << 20), Err(-1));
+        }
+        let mut packet = fixture();
+        packet.items[0].reserved = raw::ITEM_SOURCE_REPEATED;
+        packet.passes[0].draws.clear();
+        assert_eq!(
+            packet.validate(32, 1 << 20),
+            Err(-5),
+            "all-no-draw guard remains"
+        );
     }
     #[test]
     fn pruned_vertex_interface_still_refuses_extra_pipeline_attributes() {

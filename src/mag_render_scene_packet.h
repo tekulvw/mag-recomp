@@ -171,8 +171,23 @@ typedef struct MagRenderPacketPass {
     const MagRenderPacketDraw *draws;
     uint32_t draw_count, reserved;
 } MagRenderPacketPass;
+/* Item.reserved is now this named kind; unknown values reject. Wire layout
+ * remains unchanged. SOURCE_* kinds identify completed logical source items,
+ * never fabricated GPU draws. Their source_item is a low-bit cohort ordinal.
+ * POC_OMITTED_PRODUCER uses the high-bit producer domain and is unadmitted.
+ * Kinds1..4 require zero obligations and no draw with the same pass/item.
+ * DRAW_REQUIRED still needs an actual draw, except the existing explicit
+ * diagnostic unresolved-obligation mode. All-no-draw packets still refuse. */
+enum MagRenderPacketItemKind {
+    MAG_RENDER_PACKET_ITEM_DRAW_REQUIRED = 0,
+    MAG_RENDER_PACKET_ITEM_SOURCE_REPEATED = 1,
+    MAG_RENDER_PACKET_ITEM_SOURCE_UPDATE_ONLY = 2,
+    MAG_RENDER_PACKET_ITEM_SOURCE_LISTS_DISABLED = 3,
+    MAG_RENDER_PACKET_ITEM_POC_OMITTED_PRODUCER = 4
+};
 /* One entry for every source item/pass occurrence, in actual source order.
- * Explicit omissions remain represented and cannot qualify as removed work. */
+ * Receipt admitted_items counts draw-bearing plus SOURCE_* logical items;
+ * draws remains actual GPU draw identities; POC omissions stay omitted. */
 typedef struct MagRenderPacketItem {
     uint32_t pass, reserved;
     uint64_t source_item, unresolved_obligations;

@@ -221,10 +221,18 @@ pub struct Pass {
     pub draw_count: u32,
     pub reserved: u32,
 }
+/// Named extension of Item.reserved; the wire layout is unchanged.
+pub const ITEM_DRAW_REQUIRED: u32 = 0;
+pub const ITEM_SOURCE_REPEATED: u32 = 1;
+pub const ITEM_SOURCE_UPDATE_ONLY: u32 = 2;
+pub const ITEM_SOURCE_LISTS_DISABLED: u32 = 3;
+pub const ITEM_POC_OMITTED_PRODUCER: u32 = 4;
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct Item {
     pub pass: u32,
+    /// ITEM_* kind. Source-complete no-draw items remain logical admissions;
+    /// explicit POC producer omissions never become admitted items or draws.
     pub reserved: u32,
     pub source_item: u64,
     pub unresolved_obligations: u64,
