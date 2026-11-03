@@ -257,6 +257,8 @@ struct Pending {
 struct Session {
     native_backend: u32,
     packet_cache: scene_packet::PipelineCache,
+    /// Some only with `MAG_RENDER_RESIDENT_BUFFERS=1`.
+    upload_cache: Option<scene_upload_cache::UploadCache>,
     admissions: scene_admission::Transactions<scene_admission::Prepared>,
     backend: RenderBackend<Driver>,
     pipeline: Option<u64>,
@@ -480,12 +482,24 @@ fn create_session(
     let id = NEXT_SESSION
         .try_update(Ordering::Relaxed, Ordering::Relaxed, |v| v.checked_add(1))
         .map_err(|_| -5)?;
+    // A cache that cannot be created only leaves the session on the
+    // ordinary per-submission uploads.
+    let upload_cache = crate::batch_device::resident_buffers_enabled()
+        .then(|| {
+            scene_upload_cache::UploadCache::new(
+                crate::batch_device::scene_device::MAX_SCENE_RESOURCES,
+                512 * 1024 * 1024,
+            )
+            .ok()
+        })
+        .flatten();
     SESSIONS.with(|s| {
         s.borrow_mut().insert(
             id,
             Session {
                 native_backend,
                 packet_cache: scene_packet::PipelineCache::default(),
+                upload_cache,
                 admissions: scene_admission::Transactions::default(),
                 backend,
                 pipeline,
@@ -1078,3 +1092,6 @@ pub mod scene_packet;
 
 #[path = "scene_admission.rs"]
 pub(crate) mod scene_admission;
+
+#[path = "scene_upload_cache.rs"]
+mod scene_upload_cache;

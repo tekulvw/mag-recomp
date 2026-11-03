@@ -2078,6 +2078,7 @@ impl ScenePacket {
             }
         }
     }
+    #[cfg(test)]
     pub(crate) fn prepare(
         &self,
         device: &impl SceneCatalog,
@@ -2085,12 +2086,31 @@ impl ScenePacket {
         max_draws: usize,
         max_bytes: u64,
     ) -> Result<PreparedScene, i32> {
+        self.prepare_with(device, ids, max_draws, max_bytes, None)
+    }
+    /// `resident`: the session's content-bound upload cache
+    /// (`MAG_RENDER_RESIDENT_BUFFERS=1`). Byte-identical uploads then keep one
+    /// immutable identity across submissions; anything it cannot keep uses
+    /// the ordinary single-use snapshot below.
+    pub(crate) fn prepare_with(
+        &self,
+        device: &impl SceneCatalog,
+        ids: &[u64],
+        max_draws: usize,
+        max_bytes: u64,
+        mut resident: Option<&mut super::scene_upload_cache::UploadCache>,
+    ) -> Result<PreparedScene, i32> {
         let mut store = ResourceStore::new(ResourceLimits {
             max_resources: self.buffers.len() + self.images.len(),
             max_bytes: max_bytes as usize,
         })
         .map_err(|error| packet_failure(self.source, "scene/resource-store", None, error, -5))?;
         let mut lease = |b: &[u8], kind: &str, index: usize| -> Result<ResourceLease, i32> {
+            if let Some(cache) = resident.as_deref_mut()
+                && let Some(lease) = cache.lease(b)
+            {
+                return Ok(lease);
+            }
             let v = store
                 .apply(ResourceDelta::Create { bytes: b.to_vec() })
                 .map_err(|error| {
@@ -3014,15 +3034,22 @@ pub(crate) fn admit(
                 )
             })?;
         let scene = packet
-            .prepare(
+            .prepare_with(
                 &*s.backend.device().0.borrow(),
                 &ids,
                 s.max_draws,
                 s.max_bytes,
+                s.upload_cache.as_mut(),
             )
             .map_err(|status| {
                 packet_failure(packet.source, "admit/prepare", None, "owned-scene", status)
             })?;
+        if let Some(cache) = &s.upload_cache {
+            log_resident_buffers(
+                cache.stats(),
+                s.backend.device().0.borrow().resident_buffer_stats(),
+            );
+        }
         let generation = s.backend.device().0.borrow().owner_generation();
         let mut admitted = BTreeSet::new();
         let mut identities = Vec::new();
@@ -3462,12 +3489,19 @@ pub(crate) fn submit(
                         status,
                     )
                 })?;
-            let scene = packet.prepare(
+            let scene = packet.prepare_with(
                 &*s.backend.device().0.borrow(),
                 &ids,
                 s.max_draws,
                 s.max_bytes,
+                s.upload_cache.as_mut(),
             )?;
+            if let Some(cache) = &s.upload_cache {
+                log_resident_buffers(
+                    cache.stats(),
+                    s.backend.device().0.borrow().resident_buffer_stats(),
+                );
+            }
             let mut admitted = BTreeSet::new();
             let mut identities = Vec::new();
             let mut obligations = 0;
@@ -4810,4 +4844,33 @@ fn checked_v3_layout() -> Result<(), i32> {
         return Err(-1);
     }
     Ok(())
+}
+
+/// Rate-limited `[mag native resident buffers]` line; only with the switch on.
+fn log_resident_buffers(
+    uploads: super::scene_upload_cache::UploadCacheStats,
+    buffers: crate::batch_device::scene_buffer_cache::ResidentBufferStats,
+) {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static N: AtomicU64 = AtomicU64::new(0);
+    let n = N.fetch_add(1, Ordering::Relaxed) + 1;
+    if n > 8 && !n.is_multiple_of(120) {
+        return;
+    }
+    eprintln!(
+        "[mag native resident buffers] submission={n} upload_hits={} upload_misses={} upload_hit_bytes={} upload_evictions={} upload_entries={} upload_bytes={} gpu_hits={} gpu_misses={} gpu_hit_bytes={} gpu_retired={} gpu_entries={} gpu_bytes={} gpu_pinned_bytes={}",
+        uploads.hits,
+        uploads.misses,
+        uploads.hit_bytes,
+        uploads.evictions,
+        uploads.entries,
+        uploads.resident_bytes,
+        buffers.hits,
+        buffers.misses,
+        buffers.hit_bytes,
+        buffers.retired,
+        buffers.entries,
+        buffers.resident_bytes,
+        buffers.pinned_bytes
+    );
 }

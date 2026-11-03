@@ -143,7 +143,12 @@ static int scene_validate(const mag_native_scene *s, const mag_native_scene_regi
         int status = r->buffer(r->context, b->buffer, &infos[i]);
         if (status)
             return status;
-        if (infos[i].busy)
+        /* An initialized upload (created with bytes, never GPU-written) can
+         * only ever be read: no role may write it. Concurrent read-only use by
+         * another pending submission is therefore not a hazard. Any other
+         * busy buffer still refuses. */
+        if (infos[i].busy &&
+            !(b->role == MAG_NATIVE_UPLOAD && !infos[i].seed_zero && !infos[i].gpu_written))
             return MAG_NATIVE_BUSY;
         if (b->role == MAG_NATIVE_UPLOAD && infos[i].gpu_written)
             return MAG_NATIVE_INVALID;

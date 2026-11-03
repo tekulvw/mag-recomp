@@ -109,6 +109,7 @@ pub struct BatchDevice<'owner> {
     pending: Vec<Pending>,
     completed: VecDeque<Completed>,
     ready: VecDeque<BackendEvent>,
+    resident: std::cell::RefCell<scene_buffer_cache::Cache>,
     _owner: PhantomData<&'owner mut NativeContext>,
     // An owned driver keeps the native context alive without a self-reference.
     owned_context: Option<NativeContext>,
@@ -171,10 +172,29 @@ impl<'owner> BatchDevice<'owner> {
             pending,
             completed,
             ready,
+            // Only scene devices keep resident immutable uploads, and only
+            // when explicitly enabled; zero capacity is the inert default.
+            resident: std::cell::RefCell::new(
+                if byte_cap == scene_device::MAX_SCENE_BYTES && resident_buffers_enabled() {
+                    scene_buffer_cache::Cache::new(
+                        caps.device_generation,
+                        scene_device::MAX_SCENE_RESOURCES,
+                        512 * 1024 * 1024,
+                    )
+                } else {
+                    scene_buffer_cache::Cache::new(caps.device_generation, 0, 0)
+                },
+            ),
             _owner: PhantomData,
             owned_context,
         })
     }
+}
+/// `MAG_RENDER_RESIDENT_BUFFERS=1`: reuse immutable scene upload buffers by
+/// exact content across submissions (default off).
+pub(crate) fn resident_buffers_enabled() -> bool {
+    static F: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *F.get_or_init(|| std::env::var_os("MAG_RENDER_RESIDENT_BUFFERS").is_some_and(|v| v == "1"))
 }
 impl BatchDevice<'_> {
     /// # Safety
@@ -238,10 +258,39 @@ impl BatchDevice<'_> {
     }
     fn release(&self, buffers: &[Buffer]) {
         for buffer in buffers {
+            // A resident buffer only loses this submission's pin; the cache
+            // owns its native handle until it is unpinned and evicted.
+            if self.resident.borrow_mut().unpin(*buffer) {
+                continue;
+            }
             unsafe {
                 self.api.buffer_release.unwrap()(self.api.device, *buffer);
             }
         }
+    }
+    /// An immutable GPU buffer holding exactly the lease bytes: a resident one
+    /// for an already-seen identity when enabled, else a new single-use one.
+    /// Only for uploads no GPU stage can write (scene texture uploads): batch
+    /// and compute uploads may be bound read-write and stay single-use.
+    pub(crate) fn allocate_upload(&self, lease: &ResourceLease) -> Result<Buffer, i32> {
+        let bytes = lease.bytes().len() as u64;
+        let initial = lease.bytes().as_ptr().cast();
+        let api = self.api;
+        let resident = self.resident.borrow_mut().acquire(
+            lease.cache_key(),
+            bytes,
+            || self.allocate(bytes, initial),
+            |b| unsafe {
+                api.buffer_release.unwrap()(api.device, b);
+            },
+        );
+        match resident {
+            Some(result) => result,
+            None => self.allocate(bytes, initial),
+        }
+    }
+    pub fn resident_buffer_stats(&self) -> scene_buffer_cache::ResidentBufferStats {
+        self.resident.borrow().stats()
     }
     fn allocate(&self, bytes: u64, initial: *const c_void) -> Result<Buffer, i32> {
         let desc = BufferDesc {
@@ -637,6 +686,12 @@ impl Drop for BatchDevice<'_> {
         for complete in &self.completed {
             self.release(&[complete.readback]);
         }
+        // Native pending submissions retain their own GPU references; dropping
+        // the resident public handles never certifies GPU completion.
+        let api = self.api;
+        self.resident.borrow_mut().clear(|b| unsafe {
+            api.buffer_release.unwrap()(api.device, b);
+        });
         for pipeline in self.pipelines.values() {
             unsafe {
                 self.api.pipeline_release.unwrap()(self.api.device, pipeline.handle);
@@ -704,5 +759,7 @@ mod abi_tests {
     }
 }
 
+#[path = "scene_buffer_cache.rs"]
+pub mod scene_buffer_cache;
 #[path = "scene_device.rs"]
 pub mod scene_device;
