@@ -96,7 +96,8 @@ static int scene_image_create(frontend_vk *c,const mag_native_scene_image *desc,
        desc->width>properties.maxExtent.width||desc->height>properties.maxExtent.height||
        shape->mip_count>properties.maxMipLevels||shape->layers>properties.maxArrayLayers||
        !(properties.sampleCounts&VK_SAMPLE_COUNT_1_BIT))return MAG_NATIVE_UNSUPPORTED;
-    mag_native_image_format metadata;mag_native_image_format_info(desc->format,&metadata);
+    mag_native_image_format metadata;
+    if(!mag_native_image_format_info(desc->format,&metadata))return MAG_NATIVE_UNSUPPORTED;
     im->aspect=metadata.depth_attachment?VK_IMAGE_ASPECT_DEPTH_BIT:VK_IMAGE_ASPECT_COLOR_BIT;
     if(mag_native_image_has_stencil(desc->format))im->aspect|=VK_IMAGE_ASPECT_STENCIL_BIT;
     im->mip_count=shape->mip_count;im->layers=shape->layers;
