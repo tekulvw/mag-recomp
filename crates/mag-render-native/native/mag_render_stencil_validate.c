@@ -8,7 +8,7 @@ static int face_prior(const mag_native_stencil_face *f) {
          (f->fail >= 3 || f->depth_fail >= 3 || f->pass >= 3);
 }
 static int face_full(const mag_native_stencil_face *f) {
-  return (f->write_mask & 255u) == 255u && (f->read_mask & 255u) == 0 &&
+  return (f->write_mask & 255u) == 255u &&
          (f->compare == MAG_NATIVE_COMPARE_ALWAYS ||
           f->compare == MAG_NATIVE_COMPARE_NEVER) &&
          (f->fail == 1 || f->fail == 2) &&

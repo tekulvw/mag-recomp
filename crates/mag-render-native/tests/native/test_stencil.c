@@ -56,6 +56,7 @@ int main(void) {
                                 .depth_fail = 2,
                                 .pass = 2,
                                 .reference = 0x81,
+                                .read_mask = 255,
                                 .write_mask = 255};
   mag_native_batch_resource resource = {{7, 1, 1}, MAG_NATIVE_UPLOAD, 0};
   mag_native_scene_draw draw = {.pipeline = {7, 1},
@@ -120,6 +121,11 @@ int main(void) {
          MAG_NATIVE_INVALID); /* triangle is not full coverage proof */
   stencils[0].flags = MAG_NATIVE_STENCIL_SOURCE_FULL_WRITE;
   assert(mag_native_scene_validate_v4(&v, &registry4, &usage) == 0);
+  /* ALWAYS/NEVER do not read old stencil, even with all read-mask bits set. */
+  raster.front_stencil.compare = MAG_NATIVE_COMPARE_LESS;
+  assert(mag_native_scene_validate_v4(&v, &registry4, &usage) ==
+         MAG_NATIVE_INVALID);
+  raster.front_stencil.compare = MAG_NATIVE_COMPARE_ALWAYS;
   raster.front_stencil.write_mask = 127;
   assert(mag_native_scene_validate_v4(&v, &registry4, &usage) ==
          MAG_NATIVE_INVALID);

@@ -19,7 +19,6 @@ fn prior(f: mag_render_abi::packet::StencilFace) -> bool {
 }
 fn full(f: mag_render_abi::packet::StencilFace) -> bool {
     f.write_mask & 255 == 255
-        && f.read_mask & 255 == 0
         && (f.compare == 0 || f.compare == 7)
         && [f.fail, f.depth_fail, f.pass]
             .iter()
