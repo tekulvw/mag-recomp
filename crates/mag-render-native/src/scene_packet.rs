@@ -1820,8 +1820,9 @@ impl ScenePacket {
         // draw. Unclassified missing draws retain the original strict refusal.
         for i in &self.items {
             let drawn = seen
-                .iter()
-                .any(|&(p, n, _)| p == i.pass && n == i.source_item);
+                .range((i.pass, i.source_item, 0)..=(i.pass, i.source_item, u64::MAX))
+                .next()
+                .is_some();
             if i.reserved != raw::ITEM_DRAW_REQUIRED && drawn {
                 return Err(invalid!(
                     "no-draw-kind-has-draw",
@@ -3499,6 +3500,30 @@ pub(crate) mod packet_tests {
         fn release(&mut self, id: u64) -> Result<(), i32> {
             self.released.push(id);
             Ok(())
+        }
+    }
+    #[test]
+    fn item_draw_membership_preserves_full_width_partition_and_pass_identity() {
+        for partition in [0, u64::MAX] {
+            let mut packet = fixture();
+            packet.items[0].source_item = u64::MAX;
+            packet.passes[0].draws[0].item = u64::MAX;
+            packet.passes[0].draws[0].partition = partition;
+            packet.validate(32, 1 << 20).unwrap();
+            let mut other = packet.passes[0].clone();
+            other.draws.clear();
+            packet.passes.push(other);
+            packet.items.push(raw::Item {
+                pass: 1,
+                reserved: raw::ITEM_DRAW_REQUIRED,
+                source_item: u64::MAX,
+                unresolved_obligations: 0,
+            });
+            packet.intended = 2;
+            assert_eq!(packet.validate(32, 1 << 20), Err(-1));
+            let draw = packet.passes[0].draws[0].clone();
+            packet.passes[1].draws.push(draw);
+            packet.validate(32, 1 << 20).unwrap();
         }
     }
     #[test]
