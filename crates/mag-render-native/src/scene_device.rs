@@ -190,7 +190,13 @@ impl NativeContext {
             samplers: scene_sampler::Cache::default(),
             frame: None,
             target: None,
-            inner: BatchDevice::from_api_with_byte_cap(self.api()?, limits, None, MAX_SCENE_BYTES)?,
+            inner: BatchDevice::from_api_with_byte_cap(
+                self.api()?,
+                limits,
+                None,
+                MAX_SCENE_BYTES,
+                true,
+            )?,
             graphics: BTreeMap::new(),
             rasters: BTreeMap::new(),
         })
@@ -212,6 +218,7 @@ impl SceneDevice<'static> {
                 limits,
                 Some(context),
                 MAX_SCENE_BYTES,
+                true,
             )?,
             graphics: BTreeMap::new(),
             rasters: BTreeMap::new(),
@@ -219,6 +226,9 @@ impl SceneDevice<'static> {
     }
 }
 impl SceneDevice<'_> {
+    pub fn immutable_upload_stats(&self) -> ImmutableUploadStats {
+        self.inner.upload_cache.borrow().stats()
+    }
     /// Drop only the public pipeline reference. Pending native submissions own
     /// independent references until genuine terminal receipts.
     pub fn release_graphics_pipeline(&mut self, id: u64) -> Result<(), i32> {
@@ -516,9 +526,7 @@ impl SceneDevice<'_> {
         )?;
         let result = (|| {
             for lease in &leases[compute_count..] {
-                let b = self
-                    .inner
-                    .allocate(lease.bytes().len() as u64, lease.bytes().as_ptr().cast())?;
+                let b = self.inner.allocate_upload(lease)?;
                 buffers.push(b);
                 resources.push(Resource {
                     buffer: b,
@@ -540,7 +548,13 @@ impl SceneDevice<'_> {
             }
         })();
         match result {
-            Ok(out) => Ok((buffers, resources, out)),
+            Ok(out) => {
+                let mut seen = std::collections::BTreeSet::new();
+                resources.retain(|r| {
+                    seen.insert((r.buffer.device_generation, r.buffer.id, r.buffer.version))
+                });
+                Ok((buffers, resources, out))
+            }
             Err(code) => {
                 self.inner.release(&buffers);
                 Err(code)

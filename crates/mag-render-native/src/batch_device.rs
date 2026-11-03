@@ -10,6 +10,7 @@ use mag_render::{
 };
 pub use mag_render_abi::ShaderStage;
 use std::{
+    cell::RefCell,
     collections::{BTreeMap, VecDeque},
     ffi::c_void,
     marker::PhantomData,
@@ -109,6 +110,7 @@ pub struct BatchDevice<'owner> {
     pending: Vec<Pending>,
     completed: VecDeque<Completed>,
     ready: VecDeque<BackendEvent>,
+    upload_cache: RefCell<scene_buffer_cache::Cache>,
     _owner: PhantomData<&'owner mut NativeContext>,
     // An owned driver keeps the native context alive without a self-reference.
     owned_context: Option<NativeContext>,
@@ -124,13 +126,14 @@ impl<'owner> BatchDevice<'owner> {
         limits: BatchDeviceLimits,
         owned_context: Option<NativeContext>,
     ) -> Result<Self, i32> {
-        Self::from_api_with_byte_cap(api, limits, owned_context, 64 * 1024 * 1024)
+        Self::from_api_with_byte_cap(api, limits, owned_context, 64 * 1024 * 1024, false)
     }
     fn from_api_with_byte_cap(
         api: SdkApi,
         limits: BatchDeviceLimits,
         owned_context: Option<NativeContext>,
         byte_cap: u64,
+        cache_uploads: bool,
     ) -> Result<Self, i32> {
         if limits.max_bytes == 0 || limits.max_bytes > byte_cap || limits.max_pipelines == 0 {
             return Err(-1);
@@ -171,6 +174,19 @@ impl<'owner> BatchDevice<'owner> {
             pending,
             completed,
             ready,
+            upload_cache: RefCell::new(scene_buffer_cache::Cache::new(
+                caps.device_generation,
+                if cache_uploads {
+                    scene_device::MAX_SCENE_RESOURCES
+                } else {
+                    0
+                },
+                if cache_uploads {
+                    limits.max_bytes / 4
+                } else {
+                    0
+                },
+            )),
             _owner: PhantomData,
             owned_context,
         })
@@ -238,10 +254,28 @@ impl BatchDevice<'_> {
     }
     fn release(&self, buffers: &[Buffer]) {
         for buffer in buffers {
-            unsafe {
-                self.api.buffer_release.unwrap()(self.api.device, *buffer);
+            match self.upload_cache.borrow_mut().release(*buffer) {
+                Ok(true) | Err(_) => {} // a double release must not retire a cached public handle
+                Ok(false) => unsafe {
+                    self.api.buffer_release.unwrap()(self.api.device, *buffer);
+                },
             }
         }
+    }
+    fn allocate_upload(&self, lease: &ResourceLease) -> Result<Buffer, i32> {
+        let bytes = lease.bytes().len() as u64;
+        let mut cache = self.upload_cache.borrow_mut();
+        if !cache.cacheable(bytes) {
+            return self.allocate(bytes, lease.bytes().as_ptr().cast());
+        }
+        cache.acquire(
+            lease.cache_key(),
+            bytes,
+            || self.allocate(bytes, lease.bytes().as_ptr().cast()),
+            |buffer| unsafe {
+                self.api.buffer_release.unwrap()(self.api.device, buffer);
+            },
+        )
     }
     fn allocate(&self, bytes: u64, initial: *const c_void) -> Result<Buffer, i32> {
         let desc = BufferDesc {
@@ -350,7 +384,7 @@ impl BatchDevice<'_> {
         resources.try_reserve_exact(count).map_err(|_| -5)?;
         let result = (|| {
             for lease in leases {
-                let b = self.allocate(lease.bytes().len() as u64, lease.bytes().as_ptr().cast())?;
+                let b = self.allocate_upload(lease)?;
                 buffers.push(b);
                 resources.push(Resource {
                     buffer: b,
@@ -637,6 +671,11 @@ impl Drop for BatchDevice<'_> {
         for complete in &self.completed {
             self.release(&[complete.readback]);
         }
+        // Native pending submissions independently retain their GPU objects on
+        // unexpected Drop; releasing the public cache never certifies terminal.
+        self.upload_cache.borrow_mut().clear(|b| unsafe {
+            self.api.buffer_release.unwrap()(self.api.device, b);
+        });
         for pipeline in self.pipelines.values() {
             unsafe {
                 self.api.pipeline_release.unwrap()(self.api.device, pipeline.handle);
@@ -704,5 +743,8 @@ mod abi_tests {
     }
 }
 
+#[path = "scene_buffer_cache.rs"]
+mod scene_buffer_cache;
 #[path = "scene_device.rs"]
 pub mod scene_device;
+pub use scene_buffer_cache::Stats as ImmutableUploadStats;

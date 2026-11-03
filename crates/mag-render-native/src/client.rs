@@ -257,6 +257,7 @@ struct Pending {
 struct Session {
     native_backend: u32,
     packet_cache: scene_packet::PipelineCache,
+    upload_cache: scene_upload_cache::UploadCache,
     backend: RenderBackend<Driver>,
     pipeline: Option<u64>,
     color_format: Option<ImageFormat>,
@@ -476,12 +477,17 @@ fn create_session(
     let id = NEXT_SESSION
         .try_update(Ordering::Relaxed, Ordering::Relaxed, |v| v.checked_add(1))
         .map_err(|_| -5)?;
+    let upload_cache = scene_upload_cache::UploadCache::new(
+        crate::batch_device::scene_device::MAX_SCENE_RESOURCES,
+        max_bytes as usize,
+    )?;
     SESSIONS.with(|s| {
         s.borrow_mut().insert(
             id,
             Session {
                 native_backend,
                 packet_cache: scene_packet::PipelineCache::default(),
+                upload_cache,
                 backend,
                 pipeline,
                 color_format: graphics.and_then(|d| ImageFormat::from_native(d.color_format).ok()),
@@ -1067,3 +1073,5 @@ mod tests {
 
 #[path = "scene_packet.rs"]
 pub mod scene_packet;
+#[path = "scene_upload_cache.rs"]
+mod scene_upload_cache;

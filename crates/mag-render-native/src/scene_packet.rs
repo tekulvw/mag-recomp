@@ -1028,6 +1028,7 @@ impl ScenePacket {
         }
         Ok(())
     }
+    #[cfg(test)]
     fn prepare(
         &self,
         device: &impl SceneCatalog,
@@ -1035,19 +1036,21 @@ impl ScenePacket {
         max_draws: usize,
         max_bytes: u64,
     ) -> Result<PreparedScene, i32> {
-        let mut store = ResourceStore::new(ResourceLimits {
-            max_resources: self.buffers.len() + self.images.len(),
-            max_bytes: max_bytes as usize,
-        })
-        .map_err(|_| -5)?;
-        let mut lease = |b: &[u8]| -> Result<ResourceLease, i32> {
-            let v = store
-                .apply(ResourceDelta::Create { bytes: b.to_vec() })
-                .map_err(|_| -5)?;
-            let l = store.lease(v).map_err(|_| -5)?;
-            store.retire(v).map_err(|_| -5)?;
-            Ok(l)
-        };
+        let mut cache = super::scene_upload_cache::UploadCache::new(
+            crate::batch_device::scene_device::MAX_SCENE_RESOURCES,
+            max_bytes as usize,
+        )?;
+        self.prepare_cached(device, ids, max_draws, max_bytes, &mut cache)
+    }
+    fn prepare_cached(
+        &self,
+        device: &impl SceneCatalog,
+        ids: &[u64],
+        max_draws: usize,
+        max_bytes: u64,
+        cache: &mut super::scene_upload_cache::UploadCache,
+    ) -> Result<PreparedScene, i32> {
+        let mut lease = |b: &[u8]| cache.lease(b);
         let mut batch = BatchBuilder::new(
             device.owner_generation(),
             BatchLimits {
@@ -1511,11 +1514,12 @@ pub(crate) fn submit(
             let ids = s
                 .packet_cache
                 .resolve(&mut *s.backend.device().0.borrow_mut(), &packet)?;
-            let scene = packet.prepare(
+            let scene = packet.prepare_cached(
                 &*s.backend.device().0.borrow(),
                 &ids,
                 s.max_draws,
                 s.max_bytes,
+                &mut s.upload_cache,
             )?;
             let mut admitted = BTreeSet::new();
             let mut identities = Vec::new();
