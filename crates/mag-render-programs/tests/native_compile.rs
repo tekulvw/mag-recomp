@@ -276,3 +276,38 @@ fn compiler_cache_does_not_reuse_incompatible_layout_or_retain_over_budget() {
     assert_eq!(tiny.retained_entries(), 0);
     assert_eq!(tiny.retained_payload_bytes(), 0);
 }
+
+#[test]
+fn compiler_cache_keeps_stored_depth_mode_distinct_and_reuses_each_mode() {
+    use std::sync::Arc;
+    let mut cache = NativeCompilerCache::new(CacheLimits {
+        entries: 2,
+        retained_payload_bytes: 4 * 1024 * 1024,
+    });
+    let source = HlslProgram {
+        source: "struct PSInput {float4 position:SV_Position;}; float4 main(PSInput i):SV_Target0{return float4(1,0,0,1);}"
+            .into(),
+        instructions: 1,
+        constant_slots: 0,
+        input_mask: 0,
+        current_attribute_mask: 0,
+        constant_buffer_bytes: 0,
+    };
+    let ordinary = cache.compile(&source, Stage::Fragment).unwrap();
+    let gated = cache.compile_metal_stored_depth(&source).unwrap();
+    assert!(!Arc::ptr_eq(&ordinary, &gated));
+    assert!(ordinary.stored_depth_aux.is_none());
+    assert!(gated.stored_depth_aux.is_some());
+    assert!(gated.hlsl.is_empty() && gated.spirv.is_empty());
+    assert!(Arc::ptr_eq(
+        &ordinary,
+        &cache.compile(&source, Stage::Fragment).unwrap()
+    ));
+    assert!(Arc::ptr_eq(
+        &gated,
+        &cache.compile_metal_stored_depth(&source).unwrap()
+    ));
+    assert_eq!(cache.stats().compilations, 2);
+    assert_eq!(cache.stats().hits, 2);
+    assert_eq!(cache.retained_entries(), 2);
+}

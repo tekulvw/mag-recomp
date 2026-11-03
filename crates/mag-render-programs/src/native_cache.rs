@@ -1,5 +1,8 @@
 //! Bounded CPU compiler output retention, independent of devices and frames.
-use super::{BufferBinding, NativeProgram, SamplerBinding, Stage, TextureBinding, lower};
+use super::{
+    BufferBinding, NativeProgram, SamplerBinding, Stage, TextureBinding, lower,
+    lower_metal_stored_depth,
+};
 use crate::HlslProgram;
 use std::{
     collections::HashMap,
@@ -24,6 +27,7 @@ pub struct CacheStats {
 struct Entry {
     source: String,
     stage: Stage,
+    stored_depth: bool,
     uniform_bytes: u32,
     result: Arc<NativeProgram>,
     payload_bytes: usize,
@@ -93,6 +97,22 @@ impl NativeCompilerCache {
         program: &HlslProgram,
         stage: Stage,
     ) -> Result<Arc<NativeProgram>, String> {
+        self.compile_mode(program, stage, false)
+    }
+    /// Same bounded exact-content cache, with the compiler mode in the key.
+    /// Dynamic depth bounds are draw uniforms and do not enter this key.
+    pub fn compile_metal_stored_depth(
+        &mut self,
+        program: &HlslProgram,
+    ) -> Result<Arc<NativeProgram>, String> {
+        self.compile_mode(program, Stage::Fragment, true)
+    }
+    fn compile_mode(
+        &mut self,
+        program: &HlslProgram,
+        stage: Stage,
+        stored_depth: bool,
+    ) -> Result<Arc<NativeProgram>, String> {
         if self.clock == u64::MAX {
             self.clear();
             self.clock = 0;
@@ -101,6 +121,7 @@ impl NativeCompilerCache {
         let mut hasher = DefaultHasher::new();
         (
             stage,
+            stored_depth,
             program.constant_buffer_bytes,
             program.source.as_str(),
         )
@@ -109,6 +130,7 @@ impl NativeCompilerCache {
         if let Some(entry) = self.buckets.get_mut(&hash).and_then(|b| {
             b.iter_mut().find(|e| {
                 e.stage == stage
+                    && e.stored_depth == stored_depth
                     && e.uniform_bytes == program.constant_buffer_bytes
                     && e.source == program.source
             })
@@ -118,7 +140,11 @@ impl NativeCompilerCache {
             return Ok(Arc::clone(&entry.result));
         }
         self.stats.compilations = self.stats.compilations.saturating_add(1);
-        let result = Arc::new(lower(program, stage)?);
+        let result = Arc::new(if stored_depth {
+            lower_metal_stored_depth(program)?
+        } else {
+            lower(program, stage)?
+        });
         let mut source = String::new();
         source
             .try_reserve_exact(program.source.len())
@@ -156,6 +182,7 @@ impl NativeCompilerCache {
         bucket.push(Entry {
             source,
             stage,
+            stored_depth,
             uniform_bytes: program.constant_buffer_bytes,
             result: Arc::clone(&result),
             payload_bytes,
