@@ -86,6 +86,11 @@ int mag_render_client_worker_submit(uint64_t,const MagRenderClientInput*,MagRend
  * a command the worker is still finishing (a reserved commit's encode). With
  * MAG_RENDER_WORKER_POLL_NOWAIT=1 it returns 2 at once instead: nothing polled. */
 int mag_render_client_worker_poll(uint64_t,MagRenderClientReceipt*);
+/* 0 receipt, -4 none published. Takes one terminal receipt a scene worker
+ * already published, in order. Never waits, never reaches the worker's actor
+ * and never contends with its other callers, so any thread may drain receipts
+ * while another caller (for example a Main admission) is in progress. */
+int mag_render_client_worker_take_receipt(uint64_t,MagRenderClientReceipt*);
 int mag_render_client_worker_close(uint64_t);
 #ifdef __cplusplus
 }
