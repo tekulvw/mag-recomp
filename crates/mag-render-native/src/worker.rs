@@ -890,15 +890,20 @@ impl Worker {
     /// actor); otherwise a Poll command, which with `nowait` is skipped
     /// (Ok(None)) while the actor is busy.
     fn host_poll(&self, nowait: bool) -> Result<Option<Reply>, i32> {
-        if let Some(outbox) = &self.outbox
-            && let Some(receipt) = outbox.lock().map_err(|_| -6)?.pop_front()
-        {
+        if let Some(receipt) = self.take_published()? {
             return Ok(Some((0, receipt)));
         }
         if nowait {
             self.poll_nowait()
         } else {
             self.call(Command::Poll, false).map(Some)
+        }
+    }
+    /// One already published receipt, if any; touches only the outbox.
+    fn take_published(&self) -> Result<Option<client::Receipt>, i32> {
+        match &self.outbox {
+            Some(outbox) => Ok(outbox.lock().map_err(|_| -6)?.pop_front()),
+            None => Ok(None),
         }
     }
     fn poll_nowait(&self) -> Result<Option<Reply>, i32> {
@@ -1734,6 +1739,29 @@ pub unsafe extern "C" fn mag_render_client_worker_poll(id: u64, out: *mut client
             };
             unsafe { *out = receipt };
             Ok(status)
+        },
+        -6,
+    )
+}
+/// Takes one receipt the scene session already published (see Outbox): no
+/// actor command and no serial lock, so it never refuses or delays another
+/// caller of this worker. -4 when none is published (or no outbox).
+/// # Safety
+/// out points to writable Receipt storage.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mag_render_client_worker_take_receipt(
+    id: u64,
+    out: *mut client::Receipt,
+) -> i32 {
+    if out.is_null() {
+        return -1;
+    }
+    unsafe { *out = client::Receipt::default() };
+    ffi(
+        || {
+            let receipt = get(id)?.take_published()?.ok_or(-4)?;
+            unsafe { *out = receipt };
+            Ok(0)
         },
         -6,
     )
@@ -2821,7 +2849,13 @@ mod tests {
             release.send(()).unwrap();
             wait_idle(&worker);
             assert_eq!(prepare_on(&worker).err(), Some(-4));
-            assert!(matches!(worker.host_poll(true), Ok(Some((0, r))) if r.ticket == 2));
+            {
+                // Another caller is mid-call on this worker (as the FIFO is
+                // during a Main admission): published receipts are still taken.
+                let _caller = worker.serial.lock().unwrap();
+                assert!(matches!(worker.take_published(), Ok(Some(r)) if r.ticket == 2));
+                assert!(matches!(worker.poll_nowait(), Err(-4)));
+            }
             let admitted = prepare_on(&worker).unwrap();
             assert_eq!(
                 worker

@@ -276,8 +276,8 @@ struct Session {
     outbox: Option<Outbox>,
 }
 /// Terminal receipts shared between a worker session (producer, actor thread)
-/// and its host poll (consumer, any thread). In order; bounded by MAX_READY
-/// together with the session's staging queue.
+/// and its host poll (consumer, any thread). In order; bounded by
+/// MAX_PUBLISHED together with the session's staging queue.
 pub(crate) type Outbox = std::sync::Arc<std::sync::Mutex<VecDeque<Receipt>>>;
 /// Route this session's terminal receipts to `outbox` from now on.
 pub(crate) fn set_session_outbox(id: u64, outbox: Outbox) -> Result<(), i32> {
@@ -289,8 +289,13 @@ pub(crate) fn set_session_outbox(id: u64, outbox: Outbox) -> Result<(), i32> {
 /// GPU work admitted or submitted and not yet terminal, per session.
 const MAX_IN_FLIGHT: usize = 2;
 /// Terminal receipts held for the host's next poll. They hold no GPU work,
-/// so they no longer count against MAX_IN_FLIGHT, but stay bounded.
+/// so they no longer count against MAX_IN_FLIGHT, but stay bounded. Direct
+/// sessions keep each receipt's draw identities, so they keep a small cap.
 const MAX_READY: usize = 8;
+/// Worker sessions publish bare receipts (no identities, ~100 bytes each) to
+/// a host outbox the host drains without the actor: a host stall of many
+/// frames is not GPU work and must not refuse admission.
+const MAX_PUBLISHED: usize = 1024;
 static BACKPRESSURE_WAITS: AtomicU64 = AtomicU64::new(0);
 static BACKPRESSURE_WAIT_NS: AtomicU64 = AtomicU64::new(0);
 static BACKPRESSURE_MAX_NS: AtomicU64 = AtomicU64::new(0);
@@ -356,8 +361,16 @@ impl Session {
     /// See [`wait_for_capacity`] for the exact refusal rules.
     pub(crate) fn admission_capacity(&mut self) -> Result<(), i32> {
         let budget = backpressure_budget();
+        // With an outbox the host drains receipts concurrently, so a full
+        // receipt queue is worth waiting for; without one only this caller
+        // could drain it.
+        let (cap, host_drains) = if self.outbox.is_some() {
+            (MAX_PUBLISHED, true)
+        } else {
+            (MAX_READY, false)
+        };
         let mut first = true;
-        let outcome = wait_for_capacity(budget, || {
+        let outcome = wait_for_capacity(budget, cap, host_drains, || {
             if !first {
                 self.collect_terminals()?;
             }
@@ -369,15 +382,19 @@ impl Session {
             Ok(Some(waited)) => (Ok(()), Some(waited)),
             Err((code, waited)) => (Err(code), waited),
         };
+        let held = self.host_held().unwrap_or(usize::MAX);
+        let reason = if held >= cap {
+            "receipts-full"
+        } else {
+            "in-flight"
+        };
         let Some(waited) = waited else {
             if let Err(code) = result {
-                // Immediate: the host has not taken MAX_READY terminal
-                // receipts. Waiting cannot help while the caller is the one
-                // serialized ahead of the host's poll.
+                // Immediate: full host-held receipts that only this caller
+                // could drain, or a zero budget.
                 eprintln!(
-                    "[mag native backpressure] refused reason=receipts-full in_flight={} host_held={} status={code}",
+                    "[mag native backpressure] refused reason={reason} in_flight={} host_held={held} cap={cap} status={code}",
                     self.in_flight(),
-                    self.host_held().unwrap_or(usize::MAX)
                 );
             }
             return result;
@@ -392,32 +409,35 @@ impl Session {
             + u64::from(result.is_err());
         if result.is_err() || waits <= 4 || waits.is_multiple_of(120) {
             eprintln!(
-                "[mag native backpressure] waits={waits} wait_ms={:.3} total_ms={:.3} max_ms={:.3} timeouts={timeouts} in_flight={} ready={} status={}",
+                "[mag native backpressure] waits={waits} wait_ms={:.3} total_ms={:.3} max_ms={:.3} timeouts={timeouts} reason={reason} in_flight={} host_held={held} cap={cap} status={}",
                 waited as f64 / 1e6,
                 total as f64 / 1e6,
                 max as f64 / 1e6,
                 self.in_flight(),
-                self.host_held().unwrap_or(usize::MAX),
                 result.err().unwrap_or(0)
             );
         }
         result
     }
 }
-/// Bounded backpressure over `observe`, which reports (in flight, ready
+/// Bounded backpressure over `observe`, which reports (in flight, host-held
 /// receipts); every call after the first collects terminal GPU events before
-/// reporting.
-/// - `Ok(None)`: capacity at once, or after one collection (no wait).
-/// - `Ok(Some(ns))`: capacity after waiting `ns`.
-/// - `Err((-4, ..))`: still full after `budget`, or at once when the only
-///   obstacle is host-held receipts (waiting cannot drain them) or the budget
-///   is zero. `Some(ns)` when a wait was attempted.
+/// reporting. Room means fewer than MAX_IN_FLIGHT in flight and fewer than
+/// `cap` receipts held.
+/// - `Ok(None)`: room at once, or after one collection (no wait).
+/// - `Ok(Some(ns))`: room after waiting `ns`.
+/// - `Err((-4, ..))`: still full after `budget`; or at once when the budget is
+///   zero, or when receipts are full and `host_drains` is false (only this
+///   caller could drain them). `Some(ns)` when a wait was attempted.
 /// - Any `observe` error (a failed poll) is returned unchanged: fail closed.
 fn wait_for_capacity(
     budget: std::time::Duration,
+    cap: usize,
+    host_drains: bool,
     mut observe: impl FnMut() -> Result<(usize, usize), i32>,
 ) -> Result<Option<u64>, (i32, Option<u64>)> {
-    let fits = |(in_flight, ready): (usize, usize)| in_flight < MAX_IN_FLIGHT && ready < MAX_READY;
+    let fits = |(in_flight, held): (usize, usize)| in_flight < MAX_IN_FLIGHT && held < cap;
+    let stuck = |(_, held): (usize, usize)| held >= cap && !host_drains;
     if fits(observe().map_err(|e| (e, None))?) {
         return Ok(None);
     }
@@ -425,7 +445,7 @@ fn wait_for_capacity(
     if fits(state) {
         return Ok(None);
     }
-    if state.1 >= MAX_READY || budget.is_zero() {
+    if stuck(state) || budget.is_zero() {
         return Err((-4, None));
     }
     let start = std::time::Instant::now();
@@ -436,7 +456,7 @@ fn wait_for_capacity(
         if fits(state) {
             return Ok(Some(elapsed()));
         }
-        if start.elapsed() >= budget || state.1 >= MAX_READY {
+        if start.elapsed() >= budget || stuck(state) {
             return Err((-4, Some(elapsed())));
         }
     }
@@ -1035,7 +1055,7 @@ mod tests {
         // Free capacity: no collection, no wait.
         let mut calls = 0;
         assert_eq!(
-            wait_for_capacity(budget, || {
+            wait_for_capacity(budget, MAX_READY, false, || {
                 calls += 1;
                 Ok((1, 7))
             }),
@@ -1044,18 +1064,18 @@ mod tests {
         assert_eq!(calls, 1);
         // Host-held receipts no longer count as GPU work in flight.
         assert_eq!(
-            wait_for_capacity(budget, || Ok((0, MAX_READY - 1))),
+            wait_for_capacity(budget, MAX_READY, false, || Ok((0, MAX_READY - 1))),
             Ok(None)
         );
         // One collection frees a slot: still no wait.
         let mut states = [(2, 0), (1, 1)].into_iter();
         assert_eq!(
-            wait_for_capacity(budget, || Ok(states.next().unwrap())),
+            wait_for_capacity(budget, MAX_READY, false, || Ok(states.next().unwrap())),
             Ok(None)
         );
         // GPU work completes during the wait: admitted after a counted wait.
         let mut polls = 0;
-        let waited = wait_for_capacity(budget, || {
+        let waited = wait_for_capacity(budget, MAX_READY, false, || {
             polls += 1;
             Ok(if polls < 5 { (2, 0) } else { (1, 1) })
         });
@@ -1063,7 +1083,7 @@ mod tests {
         assert_eq!(polls, 5);
         // Never completes: BUSY after the budget, never unbounded.
         let start = std::time::Instant::now();
-        let stuck = wait_for_capacity(budget, || Ok((2, 0)));
+        let stuck = wait_for_capacity(budget, MAX_READY, false, || Ok((2, 0)));
         assert!(
             matches!(stuck, Err((-4, Some(ns))) if ns >= 50_000_000),
             "{stuck:?}"
@@ -1071,28 +1091,56 @@ mod tests {
         assert!(start.elapsed() < Duration::from_secs(2));
         // Full host-held receipts or a zero budget: BUSY at once, no wait.
         assert_eq!(
-            wait_for_capacity(budget, || Ok((0, MAX_READY))),
+            wait_for_capacity(budget, MAX_READY, false, || Ok((0, MAX_READY))),
             Err((-4, None))
         );
         assert_eq!(
-            wait_for_capacity(Duration::ZERO, || Ok((2, 0))),
+            wait_for_capacity(Duration::ZERO, MAX_READY, false, || Ok((2, 0))),
             Err((-4, None))
         );
         // A failed poll stays fatal, during the first collection or the wait.
         let mut n = 0;
         assert_eq!(
-            wait_for_capacity(budget, || {
+            wait_for_capacity(budget, MAX_READY, false, || {
                 n += 1;
                 if n == 1 { Ok((2, 0)) } else { Err(-6) }
             }),
             Err((-6, None))
         );
         let mut n = 0;
-        let failed = wait_for_capacity(budget, || {
+        let failed = wait_for_capacity(budget, MAX_READY, false, || {
             n += 1;
             if n < 3 { Ok((2, 0)) } else { Err(-6) }
         });
         assert!(matches!(failed, Err((-6, Some(_)))), "{failed:?}");
+        // Host-drained receipts (worker outbox): a full queue with the GPU
+        // idle is waited for, not refused, and admitted once the host takes
+        // one; still bounded when the host never drains.
+        let mut polls = 0;
+        let drained = wait_for_capacity(budget, MAX_PUBLISHED, true, || {
+            polls += 1;
+            Ok((
+                0,
+                if polls < 4 {
+                    MAX_PUBLISHED
+                } else {
+                    MAX_PUBLISHED - 1
+                },
+            ))
+        });
+        assert!(matches!(drained, Ok(Some(ns)) if ns > 0), "{drained:?}");
+        let start = std::time::Instant::now();
+        let never = wait_for_capacity(budget, MAX_PUBLISHED, true, || Ok((0, MAX_PUBLISHED)));
+        assert!(
+            matches!(never, Err((-4, Some(ns))) if ns >= 50_000_000),
+            "{never:?}"
+        );
+        assert!(start.elapsed() < Duration::from_secs(2));
+        // The published cap leaves room far beyond the direct-session cap.
+        assert_eq!(
+            wait_for_capacity(budget, MAX_PUBLISHED, true, || Ok((1, MAX_READY * 16))),
+            Ok(None)
+        );
     }
     fn draw(vertices: &[[f32; 4]], indices: &[u16], item: u64, part: u64) -> Draw {
         Draw {
