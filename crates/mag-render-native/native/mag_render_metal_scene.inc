@@ -61,6 +61,15 @@ static id<MTLFunction> metal_scene_function(MagRenderMetal *c, const mag_native_
         return nil;
     }
     MTLCompileOptions *options = [MTLCompileOptions new];
+    // Match retained guest shaders and our compute compiler: default fast math
+    // may remove RSX NaN guards or reassociate depth-equality position math.
+#if __MAC_OS_X_VERSION_MAX_ALLOWED >= 150000
+    if (@available(macOS 15.0, iOS 18.0, *)) {
+        options.mathMode = MTLMathModeSafe;
+        options.mathFloatingPointFunctions = MTLMathFloatingPointFunctionsPrecise;
+    } else
+#endif
+    { [options setValue:@NO forKey:@"fastMathEnabled"]; }
     options.languageVersion = MTLLanguageVersion2_0;
     NSError *error = nil;
     id<MTLLibrary> lib = [c->device newLibraryWithSource:source options:options error:&error];
