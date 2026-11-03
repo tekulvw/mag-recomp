@@ -1862,13 +1862,37 @@ impl ScenePacket {
             max_resources: self.buffers.len() + self.images.len(),
             max_bytes: max_bytes as usize,
         })
-        .map_err(|_| -5)?;
-        let mut lease = |b: &[u8]| -> Result<ResourceLease, i32> {
+        .map_err(|error| packet_failure(self.source, "scene/resource-store", None, error, -5))?;
+        let mut lease = |b: &[u8], kind: &str, index: usize| -> Result<ResourceLease, i32> {
             let v = store
                 .apply(ResourceDelta::Create { bytes: b.to_vec() })
-                .map_err(|_| -5)?;
-            let l = store.lease(v).map_err(|_| -5)?;
-            store.retire(v).map_err(|_| -5)?;
+                .map_err(|error| {
+                    packet_failure(
+                        self.source,
+                        "scene/resource-create",
+                        Some(index),
+                        (kind, b.len(), error),
+                        -5,
+                    )
+                })?;
+            let l = store.lease(v).map_err(|error| {
+                packet_failure(
+                    self.source,
+                    "scene/resource-lease",
+                    Some(index),
+                    (kind, error),
+                    -5,
+                )
+            })?;
+            store.retire(v).map_err(|error| {
+                packet_failure(
+                    self.source,
+                    "scene/resource-retire",
+                    Some(index),
+                    (kind, error),
+                    -5,
+                )
+            })?;
             Ok(l)
         };
         let mut batch = BatchBuilder::new(
@@ -1880,10 +1904,26 @@ impl ScenePacket {
                 max_uploads: self.buffers.len().max(1),
             },
         )
-        .map_err(|_| -1)?;
+        .map_err(|error| {
+            packet_failure(
+                self.source,
+                "scene/batch-builder",
+                None,
+                (device.owner_generation(), max_bytes, error),
+                -1,
+            )
+        })?;
         let mut uploads = Vec::new();
-        for b in &self.buffers {
-            uploads.push(batch.upload(lease(b)?).map_err(|_| -5)?)
+        for (index, b) in self.buffers.iter().enumerate() {
+            uploads.push(batch.upload(lease(b, "buffer", index)?).map_err(|error| {
+                packet_failure(
+                    self.source,
+                    "scene/buffer-upload",
+                    Some(index),
+                    (b.len(), error),
+                    -5,
+                )
+            })?)
         }
         let prefix = batch
             .prepare_scene_prefix(device)
@@ -1897,7 +1937,21 @@ impl ScenePacket {
                 max_bytes,
             },
         )
-        .map_err(|_| -1)?;
+        .map_err(|error| {
+            packet_failure(
+                self.source,
+                "scene/builder",
+                None,
+                (
+                    self.images.len(),
+                    self.passes.len(),
+                    max_draws,
+                    max_bytes,
+                    error,
+                ),
+                -1,
+            )
+        })?;
         let mut images = Vec::new();
         for (index, image) in self.images.iter().enumerate() {
             let i = if let Some(requirement) =
@@ -1911,21 +1965,90 @@ impl ScenePacket {
                             required_initialized_planes: requirement.required_initialized_planes,
                         },
                     )
-                    .map_err(|_| -1)?
+                    .map_err(|error| {
+                        packet_failure(
+                            self.source,
+                            "scene/image-budget",
+                            Some(index),
+                            (
+                                max_bytes,
+                                self.buffers.iter().map(|b| b.len() as u64).sum::<u64>(),
+                                self.images.len(),
+                                self.images
+                                    .iter()
+                                    .enumerate()
+                                    .take(16)
+                                    .map(|(i, image)| {
+                                        (i, image.desc.width, image.desc.height, image.desc.format)
+                                    })
+                                    .collect::<Vec<_>>(),
+                            ),
+                            -1,
+                        );
+                        packet_failure(
+                            self.source,
+                            "scene/require-image",
+                            Some(index),
+                            (
+                                image.desc,
+                                requirement.source_key,
+                                requirement.required_initialized_planes,
+                                max_bytes,
+                                error,
+                            ),
+                            -1,
+                        )
+                    })?
             } else {
                 match (&image.layout, &image.bytes) {
                     (Some(layout), Some(bytes)) => scene
-                        .texture_with_layout(image.desc, layout.clone(), lease(bytes)?)
-                        .map_err(|_| -1)?
+                        .texture_with_layout(
+                            image.desc,
+                            layout.clone(),
+                            lease(bytes, "image", index)?,
+                        )
+                        .map_err(|error| {
+                            packet_failure(
+                                self.source,
+                                "scene/texture-layout",
+                                Some(index),
+                                (image.desc, error),
+                                -1,
+                            )
+                        })?
                         .image(),
                     (Some(layout), None) => scene
                         .image_with_layout(image.desc, layout.clone())
-                        .map_err(|_| -1)?,
+                        .map_err(|error| {
+                            packet_failure(
+                                self.source,
+                                "scene/image-layout",
+                                Some(index),
+                                (image.desc, error),
+                                -1,
+                            )
+                        })?,
                     (None, Some(bytes)) => scene
-                        .texture(image.desc, lease(bytes)?)
-                        .map_err(|_| -1)?
+                        .texture(image.desc, lease(bytes, "image", index)?)
+                        .map_err(|error| {
+                            packet_failure(
+                                self.source,
+                                "scene/texture",
+                                Some(index),
+                                (image.desc, error),
+                                -1,
+                            )
+                        })?
                         .image(),
-                    (None, None) => scene.image(image.desc).map_err(|_| -1)?,
+                    (None, None) => scene.image(image.desc).map_err(|error| {
+                        packet_failure(
+                            self.source,
+                            "scene/image",
+                            Some(index),
+                            (image.desc, error),
+                            -1,
+                        )
+                    })?,
                 }
             };
             images.push(i)
@@ -1943,7 +2066,15 @@ impl ScenePacket {
                     } else if a.load == 0 {
                         Load::Clear(a.clear)
                     } else {
-                        Load::Load(scene.current(i).map_err(|_| -1)?)
+                        Load::Load(scene.current(i).map_err(|error| {
+                            packet_failure(
+                                self.source,
+                                "scene/color-current",
+                                Some(pass_index),
+                                (a.image, a.load, error),
+                                -1,
+                            )
+                        })?)
                     },
                     store: if a.store == 0 {
                         Store::Store
@@ -1964,7 +2095,15 @@ impl ScenePacket {
                     } else if a.load == 0 {
                         Load::Clear(a.clear[0])
                     } else {
-                        Load::Load(scene.current(i).map_err(|_| -1)?)
+                        Load::Load(scene.current(i).map_err(|error| {
+                            packet_failure(
+                                self.source,
+                                "scene/depth-current",
+                                Some(pass_index),
+                                (a.image, a.load, error),
+                                -1,
+                            )
+                        })?)
                     },
                     store: if a.store == 0 {
                         Store::Store
@@ -1974,38 +2113,118 @@ impl ScenePacket {
                 })
             };
             let mut draws = Vec::new();
-            for d in &pass.draws {
+            for (draw_index, d) in pass.draws.iter().enumerate() {
                 let mut buffers = Vec::new();
                 for b in &d.buffers {
                     buffers.push(GraphicsBuffer {
-                        stage: stage(b.stage)?,
+                        stage: stage(b.stage).map_err(|status| {
+                            packet_failure(
+                                self.source,
+                                "scene/buffer-stage",
+                                Some(pass_index),
+                                (draw_index, b.slot, b.stage),
+                                status,
+                            )
+                        })?,
                         slot: b.slot,
                         source: ReadSource::Upload(uploads[b.view.buffer as usize]),
-                        range: self.range(b.view)?,
+                        range: self.range(b.view).map_err(|status| {
+                            packet_failure(
+                                self.source,
+                                "scene/buffer-range",
+                                Some(pass_index),
+                                (
+                                    draw_index,
+                                    b.slot,
+                                    b.view.buffer,
+                                    b.view.offset,
+                                    b.view.length,
+                                ),
+                                status,
+                            )
+                        })?,
                     })
                 }
                 let mut textures = Vec::new();
                 for t in &d.textures {
                     let view = &self.views[t.view as usize];
                     textures.push(SampledImage {
-                        stage: stage(t.stage)?,
+                        stage: stage(t.stage).map_err(|status| {
+                            packet_failure(
+                                self.source,
+                                "scene/texture-stage",
+                                Some(pass_index),
+                                (draw_index, t.texture_slot, t.stage),
+                                status,
+                            )
+                        })?,
                         texture_slot: t.texture_slot,
                         sampler_slot: t.sampler_slot,
                         image: scene
                             .view(
-                                scene.current(images[view.image as usize]).map_err(|_| -1)?,
-                                self.view_desc(t.view as usize)?,
+                                scene
+                                    .current(images[view.image as usize])
+                                    .map_err(|error| {
+                                        packet_failure(
+                                            self.source,
+                                            "scene/sampled-current",
+                                            Some(pass_index),
+                                            (draw_index, t.texture_slot, view.image, error),
+                                            -1,
+                                        )
+                                    })?,
+                                self.view_desc(t.view as usize).map_err(|status| {
+                                    packet_failure(
+                                        self.source,
+                                        "scene/view-desc",
+                                        Some(pass_index),
+                                        (draw_index, t.view),
+                                        status,
+                                    )
+                                })?,
                             )
-                            .map_err(|_| -1)?,
-                        sampler: sampler(&self.samplers[t.sampler as usize])?,
+                            .map_err(|error| {
+                                packet_failure(
+                                    self.source,
+                                    "scene/view",
+                                    Some(pass_index),
+                                    (draw_index, t.view, view.image, error),
+                                    -1,
+                                )
+                            })?,
+                        sampler: sampler(&self.samplers[t.sampler as usize]).map_err(|status| {
+                            packet_failure(
+                                self.source,
+                                "scene/sampler",
+                                Some(pass_index),
+                                (draw_index, t.sampler),
+                                status,
+                            )
+                        })?,
                     })
                 }
                 draws.push(SceneDraw {
                     pipeline: ids[d.pipeline as usize],
                     vertices: ReadSource::Upload(uploads[d.vertices.buffer as usize]),
                     indices: ReadSource::Upload(uploads[d.indices.buffer as usize]),
-                    vertex_range: self.range(d.vertices)?,
-                    index_range: self.range(d.indices)?,
+                    vertex_range: self.range(d.vertices).map_err(|status| {
+                        packet_failure(
+                            self.source,
+                            "scene/vertex-range",
+                            Some(pass_index),
+                            (draw_index, d.item, d.partition),
+                            status,
+                        )
+                    })?,
+                    index_range: self.range(d.indices).map_err(|status| {
+                        packet_failure(
+                            self.source,
+                            "scene/index-range",
+                            Some(pass_index),
+                            (draw_index, d.item, d.partition),
+                            status,
+                        )
+                    })?,
                     index_count: d.count,
                     buffers,
                     textures,
@@ -2041,7 +2260,29 @@ impl ScenePacket {
                     self.viewports.as_ref().map(|v| v[pass_index]),
                     stencil,
                 )
-                .map_err(|_| -1)?;
+                .map_err(|error| {
+                    packet_failure(
+                        self.source,
+                        "scene/render-pass",
+                        Some(pass_index),
+                        (
+                            error,
+                            [self.passes[pass_index].color, self.passes[pass_index].depth].map(
+                                |a| {
+                                    (
+                                        a.image,
+                                        self.images.get(a.image as usize).map(|i| i.desc),
+                                        a.load,
+                                        a.store,
+                                    )
+                                },
+                            ),
+                            self.viewports.as_ref().map(|v| v[pass_index]),
+                            self.passes[pass_index].draws.len(),
+                        ),
+                        -1,
+                    )
+                })?;
             scene
                 .draw_depth_bounds(
                     pass_index,
@@ -2059,16 +2300,40 @@ impl ScenePacket {
                         })
                         .collect(),
                 )
-                .map_err(|_| -1)?;
+                .map_err(|error| {
+                    packet_failure(
+                        self.source,
+                        "scene/draw-depth-bounds",
+                        Some(pass_index),
+                        error,
+                        -1,
+                    )
+                })?;
         }
         scene
             .output(
                 scene
                     .current(images[self.output as usize])
-                    .map_err(|_| -1)?,
+                    .map_err(|error| {
+                        packet_failure(
+                            self.source,
+                            "scene/output-current",
+                            Some(self.output as usize),
+                            error,
+                            -1,
+                        )
+                    })?,
                 false,
             )
-            .map_err(|_| -1)?;
+            .map_err(|error| {
+                packet_failure(
+                    self.source,
+                    "scene/output",
+                    Some(self.output as usize),
+                    error,
+                    -1,
+                )
+            })?;
         scene
             .prepare(device)
             .map_err(|error| packet_failure(self.source, "scene/prepare", None, error, -1))
