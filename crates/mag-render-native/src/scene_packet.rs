@@ -751,12 +751,30 @@ fn sampler(state: &raw::Sampler) -> Result<Sampler, i32> {
 }
 impl ScenePacket {
     fn view_desc(&self, index: usize) -> Result<ViewDesc, i32> {
-        let v = self.views.get(index).ok_or(-1)?;
-        let dimension = *self.view_dimensions.get(index).ok_or(-1)?;
+        let v = self.views.get(index).ok_or_else(|| {
+            packet_failure(
+                self.source,
+                "validate/view-reference",
+                Some(index),
+                self.views.len(),
+                -1,
+            )
+        })?;
+        let dimension = *self.view_dimensions.get(index).ok_or_else(|| {
+            packet_failure(
+                self.source,
+                "validate/view-dimension-reference",
+                Some(index),
+                self.view_dimensions.len(),
+                -1,
+            )
+        })?;
         let mapping = [4, 5, 0, 1, 2, 3];
         let mut remap = [0; 4];
         for (dest, source) in remap.iter_mut().zip(v.remap) {
-            *dest = *mapping.get(source as usize).ok_or(-1)?;
+            *dest = *mapping.get(source as usize).ok_or_else(|| {
+                packet_failure(self.source, "validate/view-remap", Some(index), source, -1)
+            })?;
         }
         Ok(ViewDesc {
             dimension,
@@ -768,12 +786,34 @@ impl ScenePacket {
         })
     }
     fn range(&self, u: raw::BufferUse) -> Result<ByteRange, i32> {
-        let b = self.buffers.get(u.buffer as usize).ok_or(-1)?;
+        let b = self.buffers.get(u.buffer as usize).ok_or_else(|| {
+            packet_failure(
+                self.source,
+                "validate/buffer-reference",
+                Some(u.buffer as usize),
+                (u.offset, u.length, self.buffers.len()),
+                -1,
+            )
+        })?;
         if u.reserved != 0
             || u.length == 0
-            || u.offset.checked_add(u.length).ok_or(-1)? > b.len() as u64
+            || u.offset.checked_add(u.length).ok_or_else(|| {
+                packet_failure(
+                    self.source,
+                    "validate/buffer-range-overflow",
+                    Some(u.buffer as usize),
+                    (u.offset, u.length),
+                    -1,
+                )
+            })? > b.len() as u64
         {
-            return Err(-1);
+            return Err(packet_failure(
+                self.source,
+                "validate/buffer-range",
+                Some(u.buffer as usize),
+                (u.offset, u.length, u.reserved, b.len()),
+                -1,
+            ));
         }
         Ok(ByteRange {
             offset: u.offset,
@@ -781,17 +821,38 @@ impl ScenePacket {
         })
     }
     fn validate(&self, max_draws: usize, max_bytes: u64) -> Result<(), i32> {
+        macro_rules! invalid {
+            ($stage:literal, $index:expr, $($reason:tt)*) => {
+                packet_failure(self.source, concat!("validate/", $stage), $index, format_args!($($reason)*), -1)
+            };
+        }
         if self.items.len() as u64 != self.intended
             || self.images.get(self.output as usize).is_none()
             || self.passes.is_empty()
         {
-            return Err(-1);
+            return Err(invalid!(
+                "population-output",
+                None,
+                "items={} intended={} output={} images={} passes={}",
+                self.items.len(),
+                self.intended,
+                self.output,
+                self.images.len(),
+                self.passes.len()
+            ));
         }
         for (program_index, p) in self.programs.iter().enumerate() {
             if p.flags & !raw::PROGRAM_STORED_DEPTH_AUX != 0
                 || p.flags != 0 && (p.stage != 1 || p.language != 1)
             {
-                return Err(-1);
+                return Err(invalid!(
+                    "program-flags",
+                    Some(program_index),
+                    "flags={} stage={} language={}",
+                    p.flags,
+                    p.stage,
+                    p.language
+                ));
             }
             let mut slots = BTreeSet::new();
             for b in &p.buffers {
@@ -807,13 +868,31 @@ impl ScenePacket {
                     || !b.alignment_bytes.is_power_of_two()
                     || b.binding_kind > 1
                 {
-                    return Err(-1);
+                    return Err(invalid!(
+                        "program-buffer",
+                        Some(program_index),
+                        "slot={} access={} bytes={} stride={} size_index={} alignment={} kind={}",
+                        b.slot,
+                        b.access,
+                        b.minimum_bytes,
+                        b.runtime_array_stride,
+                        b.runtime_size_index,
+                        b.alignment_bytes,
+                        b.binding_kind
+                    ));
                 }
             }
             slots.clear();
             for t in &p.textures {
                 if t.slot >= 16 || !slots.insert(t.slot) || t.reserved != 0 {
-                    return Err(-1);
+                    return Err(invalid!(
+                        "program-texture-slot",
+                        Some(program_index),
+                        "slot={} reserved={} prior_slots={:?}",
+                        t.slot,
+                        t.reserved,
+                        slots
+                    ));
                 }
                 if !matches!(t.dimension, 2 | 4)
                     || t.sample_kind > 3
@@ -838,13 +917,26 @@ impl ScenePacket {
             slots.clear();
             for s in &p.samplers {
                 if s.slot >= 16 || s.comparison > 1 || !slots.insert(s.slot) {
-                    return Err(-1);
+                    return Err(invalid!(
+                        "program-sampler-slot",
+                        Some(program_index),
+                        "slot={} comparison={} prior_slots={:?}",
+                        s.slot,
+                        s.comparison,
+                        slots
+                    ));
                 }
             }
             slots.clear();
             for loc in &p.vertex_locations {
                 if *loc >= 16 || !slots.insert(*loc) {
-                    return Err(-1);
+                    return Err(invalid!(
+                        "program-vertex-locations",
+                        Some(program_index),
+                        "location={} slots={:?}",
+                        loc,
+                        slots
+                    ));
                 }
             }
         }
@@ -864,11 +956,27 @@ impl ScenePacket {
                     status,
                 )
             })?;
-            let vp = self.programs.get(p.vertex as usize).ok_or(-1)?;
+            let vp = self.programs.get(p.vertex as usize).ok_or_else(|| {
+                invalid!(
+                    "pipeline-vertex-program",
+                    Some(pipeline_index),
+                    "program={} programs={}",
+                    p.vertex,
+                    self.programs.len()
+                )
+            })?;
             let fp = if p.fragment == u32::MAX {
                 None
             } else {
-                Some(self.programs.get(p.fragment as usize).ok_or(-1)?)
+                Some(self.programs.get(p.fragment as usize).ok_or_else(|| {
+                    invalid!(
+                        "pipeline-fragment-program",
+                        Some(pipeline_index),
+                        "program={} programs={}",
+                        p.fragment,
+                        self.programs.len()
+                    )
+                })?)
             };
             let aux = fp.is_some_and(|f| f.flags == raw::PROGRAM_STORED_DEPTH_AUX);
             if aux != (p.state.depth_bounds_enabled != 0)
@@ -902,7 +1010,20 @@ impl ScenePacket {
                 || p.stride > 2048
                 || !p.stride.is_multiple_of(4)
             {
-                return Err(-1);
+                return Err(invalid!(
+                    "pipeline-layout",
+                    Some(pipeline_index),
+                    "vertex={} fragment={} vs_stage={} fs_stage={:?} binding_model={} color={} depth={} stencil={} stride={}",
+                    p.vertex,
+                    p.fragment,
+                    vp.stage,
+                    fp.map(|f| f.stage),
+                    p.binding_model,
+                    p.color,
+                    p.depth,
+                    p.state.stencil_enabled,
+                    p.stride
+                ));
             }
             let mut slots = BTreeSet::new();
             let mut ranges = Vec::new();
@@ -924,20 +1045,57 @@ impl ScenePacket {
                     || a.location >= 16
                     || !slots.insert(a.location)
                     || !a.offset.is_multiple_of(4)
-                    || a.offset.checked_add(length).ok_or(-1)? > p.stride
+                    || a.offset.checked_add(length).ok_or_else(|| {
+                        invalid!(
+                            "attribute-offset-overflow",
+                            Some(pipeline_index),
+                            "location={} offset={} bytes={}",
+                            a.location,
+                            a.offset,
+                            length
+                        )
+                    })? > p.stride
                 {
-                    return Err(-1);
+                    return Err(invalid!(
+                        "attribute-layout",
+                        Some(pipeline_index),
+                        "vertex={} location={} format={} offset={} bytes={} stride={} reserved={} slots={:?}",
+                        p.vertex,
+                        a.location,
+                        a.format,
+                        a.offset,
+                        length,
+                        p.stride,
+                        a.reserved,
+                        slots
+                    ));
                 }
                 if ranges
                     .iter()
                     .any(|&(start, end)| a.offset < end && start < a.offset + length)
                 {
-                    return Err(-1);
+                    return Err(invalid!(
+                        "attribute-overlap",
+                        Some(pipeline_index),
+                        "location={} offset={} bytes={} prior_ranges={:?}",
+                        a.location,
+                        a.offset,
+                        length,
+                        ranges
+                    ));
                 }
                 ranges.push((a.offset, a.offset + length));
             }
             if slots != vp.vertex_locations.iter().copied().collect() {
-                return Err(-1);
+                return Err(invalid!(
+                    "attribute-reflection",
+                    Some(pipeline_index),
+                    "vertex={} stride={} attribute_slots={:?} reflected_slots={:?}",
+                    p.vertex,
+                    p.stride,
+                    slots,
+                    vp.vertex_locations
+                ));
             }
             let mut uses = BTreeSet::new();
             for t in &p.textures {
@@ -945,23 +1103,64 @@ impl ScenePacket {
                     || t.comparison > 1
                     || !uses.insert((t.stage, t.texture_slot, t.sampler_slot))
                 {
-                    return Err(-1);
+                    return Err(invalid!(
+                        "pipeline-texture-layout",
+                        Some(pipeline_index),
+                        "stage={} texture={} sampler={} comparison={} reserved={}",
+                        t.stage,
+                        t.texture_slot,
+                        t.sampler_slot,
+                        t.comparison,
+                        t.reserved
+                    ));
                 }
                 let program = match t.stage {
                     0 => vp,
-                    1 => fp.ok_or(-1)?,
-                    _ => return Err(-1),
+                    1 => fp.ok_or_else(|| {
+                        invalid!(
+                            "pipeline-texture-fragment",
+                            Some(pipeline_index),
+                            "fragment={}",
+                            p.fragment
+                        )
+                    })?,
+                    _ => {
+                        return Err(invalid!(
+                            "pipeline-texture-stage",
+                            Some(pipeline_index),
+                            "stage={}",
+                            t.stage
+                        ));
+                    }
                 };
                 let reflected = program
                     .textures
                     .iter()
                     .find(|r| r.slot == t.texture_slot)
-                    .ok_or(-1)?;
+                    .ok_or_else(|| {
+                        invalid!(
+                            "pipeline-texture-reflection",
+                            Some(pipeline_index),
+                            "stage={} slot={} reflected_count={}",
+                            t.stage,
+                            t.texture_slot,
+                            program.textures.len()
+                        )
+                    })?;
                 let reflected_sampler = program
                     .samplers
                     .iter()
                     .find(|r| r.slot == t.sampler_slot)
-                    .ok_or(-1)?;
+                    .ok_or_else(|| {
+                        invalid!(
+                            "pipeline-sampler-reflection",
+                            Some(pipeline_index),
+                            "stage={} slot={} reflected_count={}",
+                            t.stage,
+                            t.sampler_slot,
+                            program.samplers.len()
+                        )
+                    })?;
                 if reflected.sample_kind != format(t.format)?.info().sample_kind
                     || reflected_sampler.comparison != t.comparison
                 {
@@ -994,25 +1193,67 @@ impl ScenePacket {
                             .any(|x| x.stage == stage && x.sampler_slot == s.slot)
                     }))
                 {
-                    return Err(-1);
+                    return Err(invalid!(
+                        "pipeline-missing-texture-layout",
+                        Some(pipeline_index),
+                        "stage={} reflected_textures={} reflected_samplers={} layouts={}",
+                        stage,
+                        program.textures.len(),
+                        program.samplers.len(),
+                        p.textures.len()
+                    ));
                 }
             }
         }
         if self.view_dimensions.len() != self.views.len() {
-            return Err(-1);
+            return Err(invalid!(
+                "view-dimension-count",
+                None,
+                "dimensions={} views={}",
+                self.view_dimensions.len(),
+                self.views.len()
+            ));
         }
         for (index, v) in self.views.iter().enumerate() {
             if v.reserved != 0 || v.image as usize >= self.images.len() {
-                return Err(-1);
+                return Err(invalid!(
+                    "view-image",
+                    Some(index),
+                    "image={} images={} reserved={}",
+                    v.image,
+                    self.images.len(),
+                    v.reserved
+                ));
             }
             let image = &self.images[v.image as usize];
             let shape = image.layout.clone().unwrap_or_default();
-            self.view_desc(index)?.validate(&shape).map_err(|_| -1)?;
+            self.view_desc(index)?.validate(&shape).map_err(|error| {
+                invalid!(
+                    "view-layout",
+                    Some(index),
+                    "error={:?} image={} mip={}/{} layer={}/{} remap={:?}",
+                    error,
+                    v.image,
+                    v.base_mip,
+                    v.mip_count,
+                    v.base_layer,
+                    v.layer_count,
+                    v.remap
+                )
+            })?;
         }
         let mut external_indices = BTreeSet::new();
         let mut source_keys = BTreeSet::new();
-        for r in &self.imports {
-            let image = self.images.get(r.image as usize).ok_or(-1)?;
+        for (index, r) in self.imports.iter().enumerate() {
+            let image = self.images.get(r.image as usize).ok_or_else(|| {
+                invalid!(
+                    "import-image",
+                    Some(index),
+                    "image={} images={}",
+                    r.image,
+                    self.images.len()
+                )
+            })?;
             let planes = if image.desc.format.has_stencil() {
                 6
             } else if image.desc.format.info().depth_attachment {
@@ -1033,40 +1274,114 @@ impl ScenePacket {
                         || !l.subresources.is_empty()
                 })
             {
-                return Err(-1);
+                return Err(invalid!(
+                    "import-layout",
+                    Some(index),
+                    "image={} key={} planes={} allowed_planes={} bytes={} has_layout={}",
+                    r.image,
+                    r.source_key,
+                    r.required_initialized_planes,
+                    planes,
+                    image.bytes.is_some(),
+                    image.layout.is_some()
+                ));
             }
         }
-        for image in &self.images {
+        for (index, image) in self.images.iter().enumerate() {
             if let Some(layout) = &image.layout {
                 layout
                     .validate(image.desc, image.bytes.as_ref().map(|b| b.len() as u64))
-                    .map_err(|_| -1)?;
+                    .map_err(|error| {
+                        invalid!(
+                            "image-layout",
+                            Some(index),
+                            "error={:?} format={:?} width={} height={} bytes={:?}",
+                            error,
+                            image.desc.format,
+                            image.desc.width,
+                            image.desc.height,
+                            image.bytes.as_ref().map(Vec::len)
+                        )
+                    })?;
             }
         }
         if let Some(viewports) = &self.viewports {
             if viewports.len() != self.passes.len() {
-                return Err(-1);
+                return Err(invalid!(
+                    "viewport-count",
+                    None,
+                    "viewports={} passes={}",
+                    viewports.len(),
+                    self.passes.len()
+                ));
             }
-            for (pass, viewport) in self.passes.iter().zip(viewports) {
+            for (index, (pass, viewport)) in self.passes.iter().zip(viewports).enumerate() {
                 let image = if pass.color.image != u32::MAX {
                     pass.color.image
                 } else {
                     pass.depth.image
                 };
-                let desc = self.images.get(image as usize).ok_or(-1)?.desc;
-                viewport.validate(desc.width, desc.height).map_err(|_| -1)?;
+                let desc = self
+                    .images
+                    .get(image as usize)
+                    .ok_or_else(|| {
+                        invalid!(
+                            "viewport-image",
+                            Some(index),
+                            "image={} images={}",
+                            image,
+                            self.images.len()
+                        )
+                    })?
+                    .desc;
+                viewport
+                    .validate(desc.width, desc.height)
+                    .map_err(|error| {
+                        invalid!(
+                            "viewport-layout",
+                            Some(index),
+                            "error={:?} image={} extent={}x{} viewport={:?}",
+                            error,
+                            image,
+                            desc.width,
+                            desc.height,
+                            viewport
+                        )
+                    })?;
             }
         }
-        for s in &self.samplers {
-            sampler(s)?;
+        for (index, s) in self.samplers.iter().enumerate() {
+            sampler(s).map_err(|status| {
+                packet_failure(
+                    self.source,
+                    "validate/sampler",
+                    Some(index),
+                    (
+                        s.min_filter,
+                        s.mag_filter,
+                        s.mip_filter,
+                        s.comparison_enabled,
+                        s.comparison,
+                    ),
+                    status,
+                )
+            })?;
         }
         let mut item_set = BTreeSet::new();
-        for i in &self.items {
+        for (index, i) in self.items.iter().enumerate() {
             if i.reserved != 0
                 || i.pass as usize >= self.passes.len()
                 || !item_set.insert((i.pass, i.source_item))
             {
-                return Err(-1);
+                return Err(invalid!(
+                    "item-identity",
+                    Some(index),
+                    "pass={} source_item={} reserved={} passes={}",
+                    i.pass,
+                    i.source_item,
+                    i.reserved,
+                    self.passes.len()
+                ));
             }
             if i.unresolved_obligations != 0 && self.flags & 1 == 0 {
                 return Err(packet_failure(
@@ -1080,14 +1395,27 @@ impl ScenePacket {
         }
         if let Some(stencils) = &self.stencils {
             if stencils.len() != self.passes.len() {
-                return Err(-1);
+                return Err(invalid!(
+                    "stencil-count",
+                    None,
+                    "stencils={} passes={}",
+                    stencils.len(),
+                    self.passes.len()
+                ));
             }
-            for (pass, s) in self.passes.iter().zip(stencils) {
+            for (index, (pass, s)) in self.passes.iter().zip(stencils).enumerate() {
                 let combined = pass.depth.image != u32::MAX
                     && self
                         .images
                         .get(pass.depth.image as usize)
-                        .ok_or(-1)?
+                        .ok_or_else(|| {
+                            invalid!(
+                                "stencil-depth-image",
+                                Some(index),
+                                "image={}",
+                                pass.depth.image
+                            )
+                        })?
                         .desc
                         .format
                         .has_stencil();
@@ -1099,7 +1427,19 @@ impl ScenePacket {
                     || (combined && (s.image != pass.depth.image))
                     || (!combined && (s.image != u32::MAX || s.flags != 0))
                 {
-                    return Err(-1);
+                    return Err(invalid!(
+                        "stencil-layout",
+                        Some(index),
+                        "image={} depth_image={} combined={} flags={} reserved={} load={} store={} clear={}",
+                        s.image,
+                        pass.depth.image,
+                        combined,
+                        s.flags,
+                        s.reserved,
+                        s.load,
+                        s.store,
+                        s.clear_value
+                    ));
                 }
             }
         } else if self.images.iter().any(|i| i.desc.format.has_stencil()) {
@@ -1115,7 +1455,14 @@ impl ScenePacket {
         let mut seen = BTreeSet::new();
         for (pass, p) in self.passes.iter().enumerate() {
             if p.source.cohort == 0 || p.source.publication == 0 || p.source.pass_occurrence == 0 {
-                return Err(-1);
+                return Err(invalid!(
+                    "pass-source",
+                    Some(pass),
+                    "cohort={} publication={} occurrence={}",
+                    p.source.cohort,
+                    p.source.publication,
+                    p.source.pass_occurrence
+                ));
             }
             for a in [p.color, p.depth] {
                 if a.reserved != 0
@@ -1124,17 +1471,46 @@ impl ScenePacket {
                     || a.image != u32::MAX && a.image as usize >= self.images.len()
                     || a.clear.iter().any(|x| !x.is_finite())
                 {
-                    return Err(-1);
+                    return Err(invalid!(
+                        "pass-attachment",
+                        Some(pass),
+                        "image={} images={} reserved={} load={} store={} clear={:?}",
+                        a.image,
+                        self.images.len(),
+                        a.reserved,
+                        a.load,
+                        a.store,
+                        a.clear
+                    ));
                 }
             }
             for d in &p.draws {
                 draws = draws.checked_add(1).ok_or(-5)?;
-                let pipeline = self.pipelines.get(d.pipeline as usize).ok_or(-1)?;
+                let pipeline = self.pipelines.get(d.pipeline as usize).ok_or_else(|| {
+                    invalid!(
+                        "draw-pipeline",
+                        Some(pass),
+                        "item={} partition={} pipeline={} pipelines={}",
+                        d.item,
+                        d.partition,
+                        d.pipeline,
+                        self.pipelines.len()
+                    )
+                })?;
                 if !item_set.contains(&(pass as u32, d.item))
                     || !seen.insert((pass as u32, d.item, d.partition))
                     || d.obligations != 0 && self.flags & 1 == 0
                 {
-                    return Err(-1);
+                    return Err(invalid!(
+                        "draw-identity",
+                        Some(pass),
+                        "item={} partition={} pipeline={} obligations={} flags={}",
+                        d.item,
+                        d.partition,
+                        d.pipeline,
+                        d.obligations,
+                        self.flags
+                    ));
                 }
                 let vr = self.range(d.vertices)?;
                 let ir = self.range(d.indices)?;
@@ -1145,37 +1521,108 @@ impl ScenePacket {
                     || !ir.offset.is_multiple_of(4)
                     || ir.length != u64::from(d.count) * 4
                 {
-                    return Err(-1);
+                    return Err(invalid!(
+                        "draw-ranges",
+                        Some(pass),
+                        "item={} partition={} count={} stride={} vertex={}/{} index={}/{}",
+                        d.item,
+                        d.partition,
+                        d.count,
+                        pipeline.stride,
+                        vr.offset,
+                        vr.length,
+                        ir.offset,
+                        ir.length
+                    ));
                 }
                 let ib = &self.buffers[d.indices.buffer as usize]
                     [ir.offset as usize..(ir.offset + ir.length) as usize];
                 if ib.as_chunks::<4>().0.iter().any(|b| {
                     u32::from_ne_bytes(*b) as u64 >= vr.length / u64::from(pipeline.stride)
                 }) {
-                    return Err(-1);
+                    return Err(invalid!(
+                        "draw-index-range",
+                        Some(pass),
+                        "item={} partition={} vertex_count={} index_count={}",
+                        d.item,
+                        d.partition,
+                        vr.length / u64::from(pipeline.stride),
+                        d.count
+                    ));
                 }
                 let mut bindings = BTreeSet::new();
                 for b in &d.buffers {
                     if !bindings.insert((b.stage, b.slot)) {
-                        return Err(-1);
+                        return Err(invalid!(
+                            "draw-buffer-duplicate",
+                            Some(pass),
+                            "item={} partition={} stage={} slot={}",
+                            d.item,
+                            d.partition,
+                            b.stage,
+                            b.slot
+                        ));
                     }
                     let range = self.range(b.view)?;
                     let program = match b.stage {
                         0 => &self.programs[pipeline.vertex as usize],
-                        1 => self.programs.get(pipeline.fragment as usize).ok_or(-1)?,
-                        _ => return Err(-1),
+                        1 => self
+                            .programs
+                            .get(pipeline.fragment as usize)
+                            .ok_or_else(|| {
+                                invalid!(
+                                    "draw-buffer-fragment",
+                                    Some(pass),
+                                    "item={} fragment={}",
+                                    d.item,
+                                    pipeline.fragment
+                                )
+                            })?,
+                        _ => {
+                            return Err(invalid!(
+                                "draw-buffer-stage",
+                                Some(pass),
+                                "item={} stage={} slot={}",
+                                d.item,
+                                b.stage,
+                                b.slot
+                            ));
+                        }
                     };
                     let required = program
                         .buffers
                         .iter()
                         .find(|r| r.slot == b.slot)
-                        .ok_or(-1)?;
+                        .ok_or_else(|| {
+                            invalid!(
+                                "draw-buffer-reflection",
+                                Some(pass),
+                                "item={} partition={} stage={} slot={} reflected_count={}",
+                                d.item,
+                                d.partition,
+                                b.stage,
+                                b.slot,
+                                program.buffers.len()
+                            )
+                        })?;
                     if range.length < required.minimum_bytes
                         || !range
                             .offset
                             .is_multiple_of(u64::from(required.alignment_bytes))
                     {
-                        return Err(-1);
+                        return Err(invalid!(
+                            "draw-buffer-layout",
+                            Some(pass),
+                            "item={} partition={} stage={} slot={} offset={} bytes={} required_bytes={} alignment={}",
+                            d.item,
+                            d.partition,
+                            b.stage,
+                            b.slot,
+                            range.offset,
+                            range.length,
+                            required.minimum_bytes,
+                            required.alignment_bytes
+                        ));
                     }
                 }
                 let expected_buffers = self.programs[pipeline.vertex as usize].buffers.len()
@@ -1186,7 +1633,17 @@ impl ScenePacket {
                 if d.buffers.len() != expected_buffers
                     || d.textures.len() != pipeline.textures.len()
                 {
-                    return Err(-1);
+                    return Err(invalid!(
+                        "draw-binding-counts",
+                        Some(pass),
+                        "item={} partition={} buffers={} required_buffers={} textures={} required_textures={}",
+                        d.item,
+                        d.partition,
+                        d.buffers.len(),
+                        expected_buffers,
+                        d.textures.len(),
+                        pipeline.textures.len()
+                    ));
                 }
                 let mut textures = BTreeSet::new();
                 for t in &d.textures {
@@ -1195,7 +1652,21 @@ impl ScenePacket {
                         || t.sampler as usize >= self.samplers.len()
                         || !textures.insert((t.stage, t.texture_slot, t.sampler_slot))
                     {
-                        return Err(-1);
+                        return Err(invalid!(
+                            "draw-texture-layout",
+                            Some(pass),
+                            "item={} partition={} stage={} texture={} sampler_slot={} view={} views={} sampler={} samplers={} reserved={}",
+                            d.item,
+                            d.partition,
+                            t.stage,
+                            t.texture_slot,
+                            t.sampler_slot,
+                            t.view,
+                            self.views.len(),
+                            t.sampler,
+                            self.samplers.len(),
+                            t.reserved
+                        ));
                     }
                     let required = pipeline
                         .textures
@@ -1204,18 +1675,49 @@ impl ScenePacket {
                             (r.stage, r.texture_slot, r.sampler_slot)
                                 == (t.stage, t.texture_slot, t.sampler_slot)
                         })
-                        .ok_or(-1)?;
+                        .ok_or_else(|| {
+                            invalid!(
+                                "draw-texture-pipeline",
+                                Some(pass),
+                                "item={} partition={} stage={} texture={} sampler_slot={}",
+                                d.item,
+                                d.partition,
+                                t.stage,
+                                t.texture_slot,
+                                t.sampler_slot
+                            )
+                        })?;
                     let image = &self.images[self.views[t.view as usize].image as usize];
                     let program = if t.stage == 0 {
                         &self.programs[pipeline.vertex as usize]
                     } else {
-                        self.programs.get(pipeline.fragment as usize).ok_or(-1)?
+                        self.programs
+                            .get(pipeline.fragment as usize)
+                            .ok_or_else(|| {
+                                invalid!(
+                                    "draw-texture-fragment",
+                                    Some(pass),
+                                    "item={} fragment={}",
+                                    d.item,
+                                    pipeline.fragment
+                                )
+                            })?
                     };
                     let reflected = program
                         .textures
                         .iter()
                         .find(|r| r.slot == t.texture_slot)
-                        .ok_or(-1)?;
+                        .ok_or_else(|| {
+                            invalid!(
+                                "draw-texture-program",
+                                Some(pass),
+                                "item={} partition={} stage={} slot={}",
+                                d.item,
+                                d.partition,
+                                t.stage,
+                                t.texture_slot
+                            )
+                        })?;
                     if reflected.dimension != self.view_dimensions[t.view as usize].native_id() {
                         return Err(packet_failure(
                             self.source,
@@ -1260,7 +1762,14 @@ impl ScenePacket {
                 .any(|&(p, n, _)| p == i.pass && n == i.source_item)
                 && (i.unresolved_obligations == 0 || self.flags & 1 == 0)
             {
-                return Err(-1);
+                return Err(invalid!(
+                    "item-without-draw",
+                    Some(i.pass as usize),
+                    "item={} obligations={} flags={}",
+                    i.source_item,
+                    i.unresolved_obligations,
+                    self.flags
+                ));
             }
         }
         if draws > max_draws || self.intended > 0 && draws == 0 {
@@ -2544,6 +3053,18 @@ pub(crate) mod packet_tests {
             self.released.push(id);
             Ok(())
         }
+    }
+    #[test]
+    fn pruned_vertex_interface_still_refuses_extra_pipeline_attributes() {
+        let mut packet = fixture();
+        packet.programs[0].vertex_locations = vec![0];
+        // Position-only source reflection cannot silently accept a retained UV
+        // layout. Keep the exact -1 refusal and report both actual slot sets.
+        assert_eq!(packet.validate(32, 1 << 20), Err(-1));
+        packet.pipelines[0].attributes.retain(|a| a.location == 0);
+        packet.validate(32, 1 << 20).unwrap();
+        // Unused packed padding is allowed; the source stride remains exact.
+        assert_eq!(packet.pipelines[0].stride, 24);
     }
     #[test]
     fn pipeline_failure_status_is_preserved_without_caching_a_failed_native_pipeline() {
