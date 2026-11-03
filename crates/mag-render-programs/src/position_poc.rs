@@ -1,0 +1,309 @@
+//! Explicit POC position-only specialization of the controlled VP emitter.
+use crate::{HlslProgram, ProgramError};
+const SETUP_END: &str = "    float4 cc[2]; cc[0] = (float4)0; cc[1] = (float4)0;\n";
+const EPILOGUE: &str = "    VSOutput Out;\n    float4 _p = o[0];\n    Out.pos = float4(_p.xyz * vp_posscale.xyz + _p.w * vp_posoffset.xyz, _p.w);\n    Out.col0 = o[1]; Out.col1 = o[2]; Out.fog = o[5].xxxx;\n    Out.t0=o[7];  Out.t1=o[8];  Out.t2=o[9];  Out.t3=o[10];\n    Out.t4=o[11]; Out.t5=o[12]; Out.t6=o[13]; Out.t7=o[14];\n    Out.t8=o[15]; Out.t9=o[6];\n    return Out;\n}\n";
+const POSITION_END: &str = "    VSOutput Out;\n    float4 _p = o[0];\n    Out.pos = float4(_p.xyz * vp_posscale.xyz + _p.w * vp_posoffset.xyz, _p.w);\n    return Out;\n}\n";
+fn unsupported<T>() -> Result<T, ProgramError> {
+    Err(ProgramError::Unsupported)
+}
+#[derive(Clone, Copy)]
+struct Register {
+    output: bool,
+    index: usize,
+}
+impl Register {
+    fn lane(self, live: &mut [[u8; 32]; 2]) -> &mut u8 {
+        &mut live[usize::from(self.output)][self.index]
+    }
+}
+fn register(text: &str) -> Result<(Register, &str), ProgramError> {
+    let output = match text.as_bytes().first() {
+        Some(b'r') => false,
+        Some(b'o') => true,
+        _ => return unsupported(),
+    };
+    let rest = text
+        .get(2..)
+        .filter(|_| text.as_bytes().get(1) == Some(&b'['))
+        .ok_or(ProgramError::Unsupported)?;
+    let (number, rest) = rest.split_once(']').ok_or(ProgramError::Unsupported)?;
+    if number.is_empty() || !number.bytes().all(|b| b.is_ascii_digit()) {
+        return unsupported();
+    }
+    let index = number
+        .parse::<usize>()
+        .map_err(|_| ProgramError::Unsupported)?;
+    if index >= if output { 16 } else { 32 } {
+        return unsupported();
+    }
+    Ok((Register { output, index }, rest))
+}
+fn mask(text: &str) -> Result<u8, ProgramError> {
+    let mut result = 0;
+    let mut previous = 0;
+    for byte in text.bytes() {
+        let bit = match byte {
+            b'x' => 1,
+            b'y' => 2,
+            b'z' => 4,
+            b'w' => 8,
+            _ => return unsupported(),
+        };
+        if bit <= previous {
+            return unsupported();
+        }
+        previous = bit;
+        result |= bit;
+    }
+    if result == 0 {
+        return unsupported();
+    }
+    Ok(result)
+}
+struct Block<'a> {
+    text: &'a str,
+    writes: Vec<(Register, u8)>,
+    reads: Vec<Register>,
+}
+fn expression(text: &str) -> Result<Vec<Register>, ProgramError> {
+    let bytes = text.as_bytes();
+    let mut at = 0;
+    let mut depth = 0;
+    let mut reads = Vec::new();
+    while at < bytes.len() {
+        let byte = bytes[at];
+        if byte.is_ascii_whitespace() {
+            at += 1;
+            continue;
+        }
+        if byte.is_ascii_digit()
+            || byte == b'.' && bytes.get(at + 1).is_some_and(u8::is_ascii_digit)
+        {
+            at += 1;
+            while at < bytes.len()
+                && (bytes[at].is_ascii_digit()
+                    || bytes[at] == b'.'
+                    || matches!(bytes[at], b'e' | b'E')
+                    || matches!(bytes[at], b'+' | b'-') && matches!(bytes[at - 1], b'e' | b'E'))
+            {
+                at += 1;
+            }
+            continue;
+        }
+        if byte.is_ascii_alphabetic() || byte == b'_' {
+            let start = at;
+            at += 1;
+            while at < bytes.len() && (bytes[at].is_ascii_alphanumeric() || bytes[at] == b'_') {
+                at += 1;
+            }
+            let name = &text[start..at];
+            if matches!(name, "r" | "o" | "v" | "vp_c") {
+                if matches!(name, "r" | "o") {
+                    let (reg, rest) = register(&text[start..])?;
+                    reads.push(reg);
+                    at = text.len() - rest.len();
+                } else {
+                    let rest = text[at..]
+                        .strip_prefix('[')
+                        .ok_or(ProgramError::Unsupported)?;
+                    let (number, tail) = rest.split_once(']').ok_or(ProgramError::Unsupported)?;
+                    if number.is_empty() || !number.bytes().all(|b| b.is_ascii_digit()) {
+                        return unsupported();
+                    }
+                    let index = number
+                        .parse::<usize>()
+                        .map_err(|_| ProgramError::Unsupported)?;
+                    if index >= if name == "v" { 16 } else { 512 } {
+                        return unsupported();
+                    }
+                    at = text.len() - tail.len();
+                }
+            } else if name.len() <= 4
+                && name.bytes().all(|b| matches!(b, b'x' | b'y' | b'z' | b'w'))
+                && start > 0
+                && bytes[start - 1] == b'.'
+            {
+                // Swizzles affect arithmetic verbatim. Register liveness is
+                // conservatively all four lanes, so no cross-lane use is lost.
+            } else if matches!(
+                name,
+                "float4"
+                    | "float"
+                    | "vp_mul"
+                    | "vp_dot3"
+                    | "vp_dot4"
+                    | "abs"
+                    | "min"
+                    | "max"
+                    | "frac"
+                    | "floor"
+                    | "sign"
+                    | "clamp"
+                    | "rsqrt"
+                    | "exp2"
+                    | "log2"
+                    | "sin"
+                    | "cos"
+            ) && bytes.get(at) == Some(&b'(')
+            {
+            } else {
+                return unsupported();
+            }
+            continue;
+        }
+        match byte {
+            b'(' => depth += 1,
+            b')' => {
+                if depth == 0 {
+                    return unsupported();
+                }
+                depth -= 1;
+            }
+            b'.' | b',' | b'+' | b'-' | b'*' | b'/' | b'<' | b'>' | b'?' | b':' => {}
+            b'=' if bytes.get(at + 1) == Some(&b'=') => at += 1,
+            _ => return unsupported(),
+        }
+        at += 1;
+    }
+    if depth != 0 {
+        return unsupported();
+    }
+    Ok(reads)
+}
+fn block(text: &str) -> Result<Block<'_>, ProgramError> {
+    let mut lines = text.lines();
+    let rhs = lines
+        .next()
+        .and_then(|l| l.strip_prefix("    { float4 _v = (float4)("))
+        .ok_or(ProgramError::Unsupported)?;
+    let rhs = rhs
+        .strip_suffix("); _v = saturate(_v);")
+        .or_else(|| rhs.strip_suffix(");"))
+        .ok_or(ProgramError::Unsupported)?;
+    let reads = expression(rhs)?;
+    let mut writes = Vec::new();
+    let mut closed = false;
+    for line in lines.by_ref() {
+        if line == "    }" {
+            closed = true;
+            break;
+        }
+        let store = line
+            .strip_prefix("        ")
+            .ok_or(ProgramError::Unsupported)?;
+        let (dst, src) = store
+            .split_once(" = _v.")
+            .ok_or(ProgramError::Unsupported)?;
+        let (reg, suffix) = register(dst)?;
+        let destination = suffix.strip_prefix('.').ok_or(ProgramError::Unsupported)?;
+        if src.strip_suffix(';') != Some(destination) {
+            return unsupported();
+        }
+        writes.push((reg, mask(destination)?));
+        if writes.len() > 2 {
+            return unsupported();
+        }
+    }
+    if !closed || writes.is_empty() || lines.next().is_some() {
+        return unsupported();
+    }
+    Ok(Block {
+        text,
+        writes,
+        reads,
+    })
+}
+fn setup(text: &str) -> Result<(), ProgramError> {
+    let prefix =
+        "    float4 v[16];\n    [unroll] for (int _k=0;_k<16;_k++) v[_k]=float4(0,0,0,1);\n";
+    let tail = "    float4 r[32]; float4 o[16];\n    [unroll] for (int _i=0;_i<32;_i++) r[_i]=(float4)0;\n    [unroll] for (int _j=0;_j<16;_j++) o[_j]=float4(0,0,0,1);\n    int4 a0 = (int4)0; int4 a1 = (int4)0;\n";
+    let assignments = text
+        .strip_prefix(prefix)
+        .and_then(|s| s.strip_suffix(tail))
+        .ok_or(ProgramError::Unsupported)?;
+    for line in assignments.lines() {
+        if !(0..16).any(|i| {
+            line == format!("    v[{i}]=input.a{i};")
+                || line == format!("    v[{i}]=vp_current[{i}];")
+        }) {
+            return unsupported();
+        }
+    }
+    Ok(())
+}
+/// Explicit reduced-fidelity POC only. Input must be `vertex()`'s controlled
+/// straight-line output. Retains the complete input/current/uniform contract,
+/// and the exact arithmetic/viewport transform needed for position. Other
+/// output computations are omitted; unsupported grammar refuses specialization.
+/// This is conservative static liveness, not proof of executed instructions.
+pub fn vertex_position_only_poc(program: &HlslProgram) -> Result<HlslProgram, ProgramError> {
+    if program.source.len() > 1024 * 1024 || program.instructions > 512 {
+        return unsupported();
+    }
+    let (prefix, main) = program
+        .source
+        .split_once("VSOutput main(VSInput input) {\n")
+        .ok_or(ProgramError::Unsupported)?;
+    let (initial, body) = main
+        .split_once(SETUP_END)
+        .ok_or(ProgramError::Unsupported)?;
+    setup(initial)?;
+    let body = body
+        .strip_suffix(EPILOGUE)
+        .ok_or(ProgramError::Unsupported)?;
+    let mut remaining = body;
+    let mut blocks = Vec::new();
+    while !remaining.is_empty() {
+        let end = remaining.find("    }\n").ok_or(ProgramError::Unsupported)? + 6;
+        blocks.push(block(&remaining[..end])?);
+        if blocks.len() > 1024 {
+            return unsupported();
+        }
+        remaining = &remaining[end..];
+    }
+    let mut live = [[0u8; 32]; 2];
+    live[1][0] = 15;
+    let mut keep = vec![false; blocks.len()];
+    for (i, b) in blocks.iter().enumerate().rev() {
+        if b.writes.iter().any(|(r, m)| *r.lane(&mut live) & m != 0) {
+            keep[i] = true;
+            // All stores occur after RHS evaluation. Kill every written lane
+            // first, then reintroduce all RHS register reads (including self).
+            for (r, m) in &b.writes {
+                *r.lane(&mut live) &= !m;
+            }
+            for r in &b.reads {
+                *r.lane(&mut live) |= 15;
+            }
+        }
+    }
+    let start = prefix
+        .find("struct VSOutput {\n")
+        .ok_or(ProgramError::Unsupported)?;
+    let end = start
+        + prefix[start..]
+            .find("};\n")
+            .ok_or(ProgramError::Unsupported)?
+        + 3;
+    let mut source = String::with_capacity(program.source.len());
+    source.push_str(&prefix[..start]);
+    source.push_str("struct VSOutput { float4 pos:SV_Position; };\n");
+    source.push_str(&prefix[end..]);
+    source.push_str("VSOutput main(VSInput input) {\n");
+    source.push_str(initial);
+    source.push_str(SETUP_END);
+    for (b, keep) in blocks.iter().zip(keep) {
+        if keep {
+            source.push_str(b.text);
+        }
+    }
+    source.push_str(POSITION_END);
+    Ok(HlslProgram {
+        source,
+        instructions: program.instructions,
+        constant_slots: program.constant_slots,
+        input_mask: program.input_mask,
+        current_attribute_mask: program.current_attribute_mask,
+        constant_buffer_bytes: program.constant_buffer_bytes,
+    })
+}

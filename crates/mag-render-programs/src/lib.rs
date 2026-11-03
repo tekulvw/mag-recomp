@@ -540,3 +540,6 @@ pub fn fragment_with_texcoords(
 
 #[cfg(feature = "native-compiler")]
 pub mod native_compile;
+
+mod position_poc;
+pub use position_poc::vertex_position_only_poc;
