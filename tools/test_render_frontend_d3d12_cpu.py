@@ -122,12 +122,33 @@ def check(args):
         results["sdk_d3d12_image_abi"] = {"status": "passed", "output": run([abi])}
         provider = args.output_dir / "sdk_d3d12_image_owner_cpu.exe"
         fixture = ROOT / "crates/mag-render-native/tests/compat/test_d3d12_image_owner_cpu.c"
-        # Whole original SDK translation unit, injected CPU COM dispatch only.
-        # Function/data sections remove unrelated title, window and shader paths.
-        run([compiler, "/nologo", "/std:c17", "/TC", "/O2", "/Gy", "/Gw", "/W3",
+        # Compile the FULL original SDK TU with clang-cl/MSVC headers. COFF
+        # /OPT:REF still diagnoses unresolved calls in unused external functions;
+        # it is not equivalent to compiler whole-program elimination. Preserve
+        # this independent Windows compile check, then execute the same actual
+        # provider fixture built with GCC's explicit whole-program mode. Never
+        # stub unrelated renderer dependencies or ignore unresolved symbols.
+        provider_object = args.output_dir / "sdk_d3d12_image_owner_msvc.obj"
+        run([compiler, "/nologo", "/std:c17", "/TC", "/O2", "/Gy", "/Gw", "/W3", "/c",
              f"/I{sdk / 'include'}", f"/I{sdk / 'libs/video'}", fixture,
-             f"/Fo{args.output_dir}{os.sep}", f"/Fe{provider}", "/link", "/OPT:REF",
-             "d3d12.lib", "dxgi.lib", "d3dcompiler.lib"])
+             f"/Fo{provider_object}"])
+        results["sdk_d3d12_provider_msvc_compile"] = {
+            "status": "passed", "output": "full actual SDK source, clang-cl/MSVC compile only; separate executable below"}
+        provider_cc = args.sdk_provider_compiler or "gcc"
+        if not shutil.which(provider_cc):
+            raise RuntimeError(f"actual SDK CPU execution fixture requires x64 MinGW GCC: {provider_cc}")
+        target = run([provider_cc, "-dumpmachine"])
+        if target != "x86_64-w64-mingw32":
+            raise RuntimeError(f"SDK provider compiler must target x86_64-w64-mingw32, got {target!r}")
+        sdk_result["provider_toolchains"] = {
+            "compile_only": {"compiler": compiler, "version": run([compiler, "--version"]),
+                             "headers": "MSVC/Windows SDK", "object": provider_object.name},
+            "cpu_executable": {"compiler": provider_cc, "version": run([provider_cc, "--version"]),
+                               "target": target, "linker_version": run([provider_cc, "-Wl,--version"]),
+                               "whole_program": True, "unresolved_symbols_ignored": False}}
+        run([provider_cc, "-std=c17", "-O2", "-fwhole-program", "-ffunction-sections", "-fdata-sections",
+             f"-I{sdk / 'include'}", f"-I{sdk / 'libs/video'}", fixture,
+             "-Wl,--gc-sections", "-ld3d12", "-ldxgi", "-ld3dcompiler", "-o", provider])
         results["sdk_d3d12_provider"] = {"status": "passed", "output": run([provider])}
         results["sdk_d3d12_boundary_failure"] = {"status": "passed", "output": run([provider, "fence-failure"])}
         old = args.output_dir / "old-sdk-headers"
@@ -174,6 +195,7 @@ def main():
     parser.add_argument("--sdk-root", type=Path)
     parser.add_argument("--sdk-revision")
     parser.add_argument("--sdk-only", action="store_true")
+    parser.add_argument("--sdk-provider-compiler", help="x64 MinGW GCC for actual SDK CPU execution; clang-cl remains an independent full-source compile check")
     parser.add_argument("--output-dir", type=Path, required=True)
     args = parser.parse_args()
     args.output_dir = args.output_dir.resolve()
