@@ -4,6 +4,7 @@
 #include "ppu_recomp.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 extern "C" void mag_load_queue_firmware(void);
 extern "C" void ppu_register_function(uint64_t, void (*)(ppu_context*));
 void mag_sre_func_210127CC(ppu_context*);
@@ -337,6 +338,7 @@ static void queue_push_trace(ppu_context* ctx) {
 #ifdef MAG_LAUNCHER_HOOKS
 #include "retail_handoff.h"
 #include <stdlib.h>
+#include <string.h>
 #include <cstring>
 #include "retail_network_policy.h"
 static unsigned ticket_config() {
