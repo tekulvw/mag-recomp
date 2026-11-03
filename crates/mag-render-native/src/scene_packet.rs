@@ -194,7 +194,150 @@ pub struct Pipeline {
 pub struct ImagePayload {
     pub layout: Option<ImageLayout>,
     pub desc: ImageDesc,
-    pub bytes: Option<Vec<u8>>,
+    pub bytes: Option<ImageBytes>,
+}
+/// Owned upload bytes of one image: copied for this packet, or a resident
+/// immutable lease reused across packets for the same caller content key.
+#[derive(Clone)]
+pub enum ImageBytes {
+    Owned(Vec<u8>),
+    Resident(ResourceLease),
+}
+impl core::ops::Deref for ImageBytes {
+    type Target = [u8];
+    fn deref(&self) -> &[u8] {
+        match self {
+            Self::Owned(v) => v,
+            Self::Resident(l) => l.bytes(),
+        }
+    }
+}
+impl From<Vec<u8>> for ImageBytes {
+    fn from(v: Vec<u8>) -> Self {
+        Self::Owned(v)
+    }
+}
+/// Packed upload bytes and layout of images whose caller supplied a nonzero
+/// content key (`raw::Image::reserved`). The caller guarantees one key always
+/// names byte-identical content for the life of the process, so a hit with the
+/// same descriptor and layout is used without re-reading or copying the bytes.
+/// Bounded; eviction only drops this table's lease (packets keep theirs).
+mod keyed_images {
+    use super::*;
+    use mag_render::resources::{ResourceDelta, ResourceLimits, ResourceStore};
+    use std::{
+        collections::HashMap,
+        sync::{Mutex, OnceLock},
+    };
+    pub(super) const MAX_ENTRIES: usize = 4096;
+    pub(super) const MAX_BYTES: usize = 512 * 1024 * 1024;
+    struct Entry {
+        desc: ImageDesc,
+        layout: ImageLayout,
+        lease: ResourceLease,
+        used: u64,
+    }
+    pub(super) struct Table {
+        store: ResourceStore,
+        entries: HashMap<u32, Entry>,
+        bytes: usize,
+        clock: u64,
+        pub(super) hits: u64,
+        pub(super) misses: u64,
+    }
+    impl Table {
+        pub(super) fn new(max_entries: usize, max_bytes: usize) -> Option<Self> {
+            Some(Self {
+                // Store capacity also counts versions still leased by
+                // in-flight packets; leave room for them beyond this table.
+                store: ResourceStore::new(ResourceLimits {
+                    max_resources: max_entries * 3,
+                    max_bytes: max_bytes.saturating_mul(3),
+                })
+                .ok()?,
+                entries: HashMap::new(),
+                bytes: 0,
+                clock: 0,
+                hits: 0,
+                misses: 0,
+            })
+        }
+        pub(super) fn get(
+            &mut self,
+            key: u32,
+            desc: ImageDesc,
+            layout: &ImageLayout,
+        ) -> Option<ResourceLease> {
+            self.clock += 1;
+            let clock = self.clock;
+            let entry = self.entries.get_mut(&key)?;
+            if entry.desc != desc || entry.layout != *layout {
+                return None;
+            }
+            entry.used = clock;
+            self.hits += 1;
+            Some(entry.lease.clone())
+        }
+        /// Make `bytes` resident under `key`; on any capacity failure the
+        /// caller keeps the ordinary owned bytes.
+        pub(super) fn insert(
+            &mut self,
+            key: u32,
+            desc: ImageDesc,
+            layout: ImageLayout,
+            bytes: Vec<u8>,
+            max_entries: usize,
+            max_bytes: usize,
+        ) -> Result<ResourceLease, Vec<u8>> {
+            self.misses += 1;
+            if bytes.is_empty() || bytes.len() > max_bytes / 4 {
+                return Err(bytes);
+            }
+            if let Some(old) = self.entries.remove(&key) {
+                self.bytes -= old.lease.bytes().len();
+            }
+            while !self.entries.is_empty()
+                && (self.entries.len() >= max_entries || self.bytes + bytes.len() > max_bytes)
+            {
+                let victim = *self
+                    .entries
+                    .iter()
+                    .min_by_key(|(_, e)| e.used)
+                    .map(|(k, _)| k)
+                    .expect("non-empty");
+                let old = self.entries.remove(&victim).expect("victim");
+                self.bytes -= old.lease.bytes().len();
+            }
+            let length = bytes.len();
+            let version = match self.store.apply(ResourceDelta::Create { bytes }) {
+                Ok(v) => v,
+                Err(_) => return Err(Vec::new()),
+            };
+            let lease = match self.store.lease(version) {
+                Ok(l) => l,
+                Err(_) => return Err(Vec::new()),
+            };
+            let _ = self.store.retire(version);
+            self.clock += 1;
+            self.entries.insert(
+                key,
+                Entry {
+                    desc,
+                    layout,
+                    lease: lease.clone(),
+                    used: self.clock,
+                },
+            );
+            self.bytes += length;
+            Ok(lease)
+        }
+    }
+    pub(super) fn table() -> Option<&'static Mutex<Table>> {
+        static TABLE: OnceLock<Option<Mutex<Table>>> = OnceLock::new();
+        TABLE
+            .get_or_init(|| Table::new(MAX_ENTRIES, MAX_BYTES).map(Mutex::new))
+            .as_ref()
+    }
 }
 #[derive(Clone)]
 pub struct PacketDraw {
@@ -617,8 +760,9 @@ impl ScenePacket {
                     packet_failure(d.source, "copy/image-format", Some(index), i.format, status)
                 })?,
             };
-            if i.reserved != 0
-                || i.width == 0
+            // `reserved` is the caller's optional content key (0 = none).
+            let key = i.reserved;
+            if i.width == 0
                 || i.height == 0
                 || i.width > 8192
                 || i.height > 8192
@@ -659,7 +803,8 @@ impl ScenePacket {
                 if source.len() != i.layers as usize * i.mip_count as usize {
                     return Err(-1);
                 }
-                let mut packed = Vec::new();
+                // Layout first (no byte reads), so a resident key can skip them.
+                let mut offset = 0u64;
                 for s in source {
                     let level = desc
                         .format
@@ -668,19 +813,7 @@ impl ScenePacket {
                     if s.row_bytes as u64 != level.row_bytes || s.length != level.bytes {
                         return Err(-1);
                     }
-                    let aligned = packed.len().checked_add(15).ok_or(-5)? & !15;
-                    let padding = aligned - packed.len();
-                    budget.take(padding as u64)?;
-                    packed
-                        .try_reserve_exact(padding + usize::try_from(s.length).map_err(|_| -5)?)
-                        .map_err(|_| -5)?;
-                    packed.resize(aligned, 0);
-                    let data = unsafe {
-                        budget.copy(
-                            s.bytes.cast::<u8>(),
-                            usize::try_from(s.length).map_err(|_| -5)?,
-                        )
-                    }?;
+                    let aligned = offset.checked_add(15).ok_or(-5)? & !15;
                     layout.subresources.push(Subresource {
                         mip: s.mip,
                         layer: s.layer,
@@ -688,18 +821,63 @@ impl ScenePacket {
                         height: s.height,
                         depth: s.depth,
                         row_bytes: s.row_bytes,
-                        offset: aligned as u64,
+                        offset: aligned,
                         length: s.length,
                     });
-                    packed.extend(data);
+                    offset = aligned.checked_add(s.length).ok_or(-5)?;
                 }
-                let padded = packed.len().checked_add(15).ok_or(-5)? & !15;
-                budget.take((padded - packed.len()) as u64)?;
-                packed.resize(padded, 0);
-                layout
-                    .validate(desc, Some(packed.len() as u64))
-                    .map_err(|_| -1)?;
-                Some(packed)
+                let padded = offset.checked_add(15).ok_or(-5)? & !15;
+                layout.validate(desc, Some(padded)).map_err(|_| -1)?;
+                // Budget is charged exactly as for an owned copy either way.
+                budget.take(padded)?;
+                let resident = (key != 0)
+                    .then(keyed_images::table)
+                    .flatten()
+                    .and_then(|t| t.lock().ok()?.get(key, desc, &layout));
+                let pack = || -> Result<Vec<u8>, i32> {
+                    let mut packed = Vec::new();
+                    packed
+                        .try_reserve_exact(usize::try_from(padded).map_err(|_| -5)?)
+                        .map_err(|_| -5)?;
+                    for (s, placed) in source.iter().zip(&layout.subresources) {
+                        packed.resize(placed.offset as usize, 0);
+                        // Single copy straight from the caller's range.
+                        let data = unsafe {
+                            slice(
+                                s.bytes.cast::<u8>(),
+                                usize::try_from(s.length).map_err(|_| -5)?,
+                            )
+                        }?;
+                        packed.extend_from_slice(data);
+                    }
+                    packed.resize(padded as usize, 0);
+                    Ok(packed)
+                };
+                if let Some(lease) = resident {
+                    Some(ImageBytes::Resident(lease))
+                } else {
+                    let packed = pack()?;
+                    let table = (key != 0).then(keyed_images::table).flatten();
+                    match table.and_then(|t| t.lock().ok()) {
+                        Some(mut t) => match t.insert(
+                            key,
+                            desc,
+                            layout.clone(),
+                            packed,
+                            keyed_images::MAX_ENTRIES,
+                            keyed_images::MAX_BYTES,
+                        ) {
+                            Ok(lease) => Some(ImageBytes::Resident(lease)),
+                            Err(back) if back.len() == padded as usize => {
+                                Some(ImageBytes::Owned(back))
+                            }
+                            // The table's store refused the bytes it consumed:
+                            // keep an ordinary owned copy instead.
+                            Err(_) => Some(ImageBytes::Owned(pack()?)),
+                        },
+                        None => Some(ImageBytes::Owned(packed)),
+                    }
+                }
             };
             images.push(ImagePayload {
                 desc,
@@ -1339,7 +1517,7 @@ impl ScenePacket {
                             image.desc.format,
                             image.desc.width,
                             image.desc.height,
-                            image.bytes.as_ref().map(Vec::len)
+                            image.bytes.as_ref().map(|b| b.len())
                         )
                     })?;
             }
@@ -2054,7 +2232,10 @@ impl ScenePacket {
                         .texture_with_layout(
                             image.desc,
                             layout.clone(),
-                            lease(bytes, "image", index)?,
+                            match bytes {
+                                ImageBytes::Resident(resident) => resident.clone(),
+                                ImageBytes::Owned(owned) => lease(owned, "image", index)?,
+                            },
                         )
                         .map_err(|error| {
                             packet_failure(
@@ -2078,7 +2259,13 @@ impl ScenePacket {
                             )
                         })?,
                     (None, Some(bytes)) => scene
-                        .texture(image.desc, lease(bytes, "image", index)?)
+                        .texture(
+                            image.desc,
+                            match bytes {
+                                ImageBytes::Resident(resident) => resident.clone(),
+                                ImageBytes::Owned(owned) => lease(owned, "image", index)?,
+                            },
+                        )
                         .map_err(|error| {
                             packet_failure(
                                 self.source,
@@ -3524,7 +3711,7 @@ pub(crate) mod packet_tests {
                         height: 1,
                         format: ImageFormat::Rgba8,
                     },
-                    bytes: Some(vec![127, 20, 30, 255]),
+                    bytes: Some(vec![127, 20, 30, 255].into()),
                 },
             ],
             view_dimensions: vec![Dimension::D2],
@@ -3975,6 +4162,16 @@ pub(crate) mod packet_tests {
     fn copy_view(packet: &ScenePacket) -> ScenePacket {
         copy_view_with_prefix(packet, &[], &[])
     }
+    thread_local! {
+        /// Per-image content keys the next test copy passes as raw::Image::reserved.
+        static TEST_IMAGE_KEYS: std::cell::RefCell<Vec<u32>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+    fn copy_view_keyed(packet: &ScenePacket, keys: &[u32]) -> ScenePacket {
+        TEST_IMAGE_KEYS.with(|k| *k.borrow_mut() = keys.to_vec());
+        let copy = copy_view(packet);
+        TEST_IMAGE_KEYS.with(|k| k.borrow_mut().clear());
+        copy
+    }
     pub(crate) fn copy_view_with_prefix(
         packet: &ScenePacket,
         dispatches: &[raw::Dispatch],
@@ -4078,7 +4275,8 @@ pub(crate) mod packet_tests {
             .images
             .iter()
             .zip(&subs)
-            .map(|(image, subs)| {
+            .enumerate()
+            .map(|(index, (image, subs))| {
                 let layout = image.layout.clone().unwrap_or_default();
                 raw::Image {
                     format: image.desc.format.native_id(),
@@ -4091,7 +4289,7 @@ pub(crate) mod packet_tests {
                     samples: layout.samples,
                     subresources: subs.as_ptr(),
                     subresource_count: subs.len() as u32,
-                    reserved: 0,
+                    reserved: TEST_IMAGE_KEYS.with(|k| k.borrow().get(index).copied().unwrap_or(0)),
                 }
             })
             .collect();
@@ -4240,7 +4438,7 @@ pub(crate) mod packet_tests {
                 format: ImageFormat::Bc1,
             },
             layout: Some(layout),
-            bytes: Some(vec![7; 288]),
+            bytes: Some(vec![7; 288].into()),
         };
         packet.pipelines[0].textures[0].format = 6;
         packet.programs[1].textures[0].dimension = 4;
@@ -4286,13 +4484,95 @@ pub(crate) mod packet_tests {
         );
     }
     #[test]
+    fn keyed_image_bytes_are_copied_once_and_reused_for_the_same_key() {
+        // Unique keys for this test: the table is process-global.
+        let base = 0x5000_0000 + (std::process::id() & 0xfff) * 16;
+        let packet = fixture();
+        // The owned copy's packed (16-byte padded) bytes are the reference.
+        let original = copy_view(&packet).images[1]
+            .bytes
+            .as_ref()
+            .unwrap()
+            .to_vec();
+        let first = copy_view_keyed(&packet, &[0, base]);
+        let Some(ImageBytes::Resident(a)) = &first.images[1].bytes else {
+            panic!("first sight of a keyed image becomes resident");
+        };
+        assert_eq!(a.bytes(), original.as_slice());
+        // The key promises identical content, so a hit never re-reads the
+        // caller's bytes: changed bytes under the same key are not observed.
+        let mut changed = fixture();
+        let source_len = changed.images[1].bytes.as_ref().unwrap().len();
+        changed.images[1].bytes = Some(vec![0x55; source_len].into());
+        let second = copy_view_keyed(&changed, &[0, base]);
+        let Some(ImageBytes::Resident(b)) = &second.images[1].bytes else {
+            panic!("same key reuses the resident bytes");
+        };
+        assert_eq!(a.cache_key(), b.cache_key());
+        assert_eq!(b.bytes(), original.as_slice());
+        // A different key, or no key, copies the caller's current bytes.
+        let other = copy_view_keyed(&changed, &[0, base + 1]);
+        assert_eq!(
+            &other.images[1].bytes.as_ref().unwrap()[..source_len],
+            &vec![0x55; source_len][..]
+        );
+        let unkeyed = copy_view(&changed);
+        assert!(matches!(
+            unkeyed.images[1].bytes,
+            Some(ImageBytes::Owned(_))
+        ));
+        // Resident leases prepare like owned bytes, with the same contents.
+        second
+            .prepare(&Catalog(&second), &[1], 32, 1 << 20)
+            .unwrap();
+        first.prepare(&Catalog(&first), &[1], 32, 1 << 20).unwrap();
+    }
+    #[test]
+    fn keyed_table_rejects_shape_changes_and_stays_bounded() {
+        let packet = copy_view(&fixture());
+        let image = &packet.images[1];
+        let layout = image.layout.clone().unwrap();
+        let bytes = image.bytes.as_ref().unwrap().to_vec();
+        let mut table = keyed_images::Table::new(2, 4 * bytes.len()).unwrap();
+        for key in 1..=3 {
+            assert!(
+                table
+                    .insert(
+                        key,
+                        image.desc,
+                        layout.clone(),
+                        bytes.clone(),
+                        2,
+                        4 * bytes.len()
+                    )
+                    .is_ok()
+            );
+        }
+        // Two entries at most: the least recently used key was evicted.
+        assert!(table.get(1, image.desc, &layout).is_none());
+        assert!(table.get(3, image.desc, &layout).is_some());
+        let mut other = layout.clone();
+        other.mip_count += 1;
+        assert!(table.get(3, image.desc, &other).is_none());
+        // Oversized payloads stay owned by the caller.
+        let huge = vec![0; bytes.len() * 2];
+        assert_eq!(
+            table
+                .insert(9, image.desc, layout, huge, 2, 4 * bytes.len())
+                .err()
+                .map(|b| b.len()),
+            Some(bytes.len() * 2)
+        );
+    }
+    #[test]
     fn synchronous_transport_owns_shader_uniform_geometry_and_texels() {
         let mut packet = fixture();
         let copy = copy_view(&packet);
         packet.programs[0].source.fill(0);
         packet.buffers[0].fill(1);
         packet.buffers[2].fill(9);
-        packet.images[1].bytes.as_mut().unwrap().fill(0);
+        packet.images[1].bytes =
+            Some(vec![0; packet.images[1].bytes.as_ref().unwrap().len()].into());
         assert_ne!(copy.programs[0].source, packet.programs[0].source);
         assert_eq!(copy.buffers[0], vec![0; 72]);
         assert_eq!(copy.buffers[2], vec![1; 16]);
@@ -4427,7 +4707,7 @@ pub(crate) mod packet_tests {
         packet.imports[0].required_initialized_planes = 2;
         assert_eq!(packet.validate(32, 1 << 20), Err(-1));
         packet.imports[0].required_initialized_planes = 1;
-        packet.images[1].bytes = Some(vec![0; 4]);
+        packet.images[1].bytes = Some(vec![0; 4].into());
         assert_eq!(packet.validate(32, 1 << 20), Err(-1));
     }
     fn bounds_fixture() -> ScenePacket {
