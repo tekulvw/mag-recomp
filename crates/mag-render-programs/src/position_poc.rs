@@ -8,24 +8,24 @@ fn unsupported<T>() -> Result<T, ProgramError> {
 }
 #[derive(Clone, Copy)]
 struct Register {
-    output: bool,
+    bank: usize, // temporary, output, or condition-code bank
     index: usize,
 }
 impl Register {
-    fn lane(self, live: &mut [[u8; 32]; 2]) -> &mut u8 {
-        &mut live[usize::from(self.output)][self.index]
+    fn lane(self, live: &mut [[u8; 32]; 3]) -> &mut u8 {
+        &mut live[self.bank][self.index]
     }
 }
 fn register(text: &str) -> Result<(Register, &str), ProgramError> {
-    let output = match text.as_bytes().first() {
-        Some(b'r') => false,
-        Some(b'o') => true,
-        _ => return unsupported(),
+    let (bank, limit, rest) = if let Some(rest) = text.strip_prefix("r[") {
+        (0, 32, rest)
+    } else if let Some(rest) = text.strip_prefix("o[") {
+        (1, 16, rest)
+    } else if let Some(rest) = text.strip_prefix("cc[") {
+        (2, 2, rest)
+    } else {
+        return unsupported();
     };
-    let rest = text
-        .get(2..)
-        .filter(|_| text.as_bytes().get(1) == Some(&b'['))
-        .ok_or(ProgramError::Unsupported)?;
     let (number, rest) = rest.split_once(']').ok_or(ProgramError::Unsupported)?;
     if number.is_empty() || !number.bytes().all(|b| b.is_ascii_digit()) {
         return unsupported();
@@ -33,10 +33,10 @@ fn register(text: &str) -> Result<(Register, &str), ProgramError> {
     let index = number
         .parse::<usize>()
         .map_err(|_| ProgramError::Unsupported)?;
-    if index >= if output { 16 } else { 32 } {
+    if index >= limit {
         return unsupported();
     }
-    Ok((Register { output, index }, rest))
+    Ok((Register { bank, index }, rest))
 }
 fn mask(text: &str) -> Result<u8, ProgramError> {
     let mut result = 0;
@@ -60,9 +60,14 @@ fn mask(text: &str) -> Result<u8, ProgramError> {
     }
     Ok(result)
 }
+struct Write {
+    register: Register,
+    mask: u8,
+    predicate: Option<(Register, u8)>,
+}
 struct Block<'a> {
     text: &'a str,
-    writes: Vec<(Register, u8)>,
+    writes: Vec<Write>,
     reads: Vec<Register>,
 }
 fn expression(text: &str) -> Result<Vec<Register>, ProgramError> {
@@ -146,6 +151,12 @@ fn expression(text: &str) -> Result<Vec<Register>, ProgramError> {
                     | "cos"
             ) && bytes.get(at) == Some(&b'(')
             {
+            } else if matches!(name, "float4" | "float")
+                && start > 0
+                && bytes[start - 1] == b'('
+                && bytes.get(at) == Some(&b')')
+            {
+                // Controlled comparison operations emit a pure HLSL cast.
             } else {
                 return unsupported();
             }
@@ -191,6 +202,30 @@ fn block(text: &str) -> Result<Block<'_>, ProgramError> {
         let store = line
             .strip_prefix("        ")
             .ok_or(ProgramError::Unsupported)?;
+        let (predicate, store) = if let Some(condition) = store.strip_prefix("if (") {
+            let (condition, store) = condition
+                .split_once(") ")
+                .ok_or(ProgramError::Unsupported)?;
+            let (condition_register, suffix) = register(condition)?;
+            if condition_register.bank != 2 {
+                return unsupported();
+            }
+            let (lane, comparison) = suffix
+                .strip_prefix('.')
+                .and_then(|s| s.split_once(' '))
+                .ok_or(ProgramError::Unsupported)?;
+            if lane.len() != 1
+                || !matches!(
+                    comparison,
+                    "== 0.0" | "!= 0.0" | "< 0.0" | "<= 0.0" | "> 0.0" | ">= 0.0"
+                )
+            {
+                return unsupported();
+            }
+            (Some((condition_register, mask(lane)?)), store)
+        } else {
+            (None, store)
+        };
         let (dst, src) = store
             .split_once(" = _v.")
             .ok_or(ProgramError::Unsupported)?;
@@ -199,8 +234,12 @@ fn block(text: &str) -> Result<Block<'_>, ProgramError> {
         if src.strip_suffix(';') != Some(destination) {
             return unsupported();
         }
-        writes.push((reg, mask(destination)?));
-        if writes.len() > 2 {
+        writes.push(Write {
+            register: reg,
+            mask: mask(destination)?,
+            predicate,
+        });
+        if writes.len() > 12 {
             return unsupported();
         }
     }
@@ -261,19 +300,32 @@ pub fn vertex_position_only_poc(program: &HlslProgram) -> Result<HlslProgram, Pr
         }
         remaining = &remaining[end..];
     }
-    let mut live = [[0u8; 32]; 2];
+    let mut live = [[0u8; 32]; 3];
     live[1][0] = 15;
     let mut keep = vec![false; blocks.len()];
     for (i, b) in blocks.iter().enumerate().rev() {
-        if b.writes.iter().any(|(r, m)| *r.lane(&mut live) & m != 0) {
+        if b.writes
+            .iter()
+            .any(|w| *w.register.lane(&mut live) & w.mask != 0)
+        {
             keep[i] = true;
-            // All stores occur after RHS evaluation. Kill every written lane
-            // first, then reintroduce all RHS register reads (including self).
-            for (r, m) in &b.writes {
-                *r.lane(&mut live) &= !m;
+            // RHS is evaluated before the stores. Only unconditional stores
+            // kill old lanes: a predicate may leave the previous value intact.
+            // Restore predicate reads after kills too, including a CC bank
+            // updated by this same block. This conservatively retains its
+            // pre-store definition while the original store order is unchanged.
+            for w in &b.writes {
+                if w.predicate.is_none() {
+                    *w.register.lane(&mut live) &= !w.mask;
+                }
             }
             for r in &b.reads {
                 *r.lane(&mut live) |= 15;
+            }
+            for w in &b.writes {
+                if let Some((r, mask)) = w.predicate {
+                    *r.lane(&mut live) |= mask;
+                }
             }
         }
     }

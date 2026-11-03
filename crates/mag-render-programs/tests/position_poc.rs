@@ -79,7 +79,7 @@ fn uncertain_predicate_flow_index_address_and_unknown_forms_refuse() {
         "    if (true) { }\n",
         "    { int4 _a = (int4)floor(v[0]); a0.x = _a.x; }\n",
         "    { float4 _v = (float4)(r[a0.x]);\n        o[0].xyzw = _v.xyzw;\n    }\n",
-        "    { float4 _v = (float4)(v[0]);\n        if (cc[0].x > 0.0) o[0].x = _v.x;\n    }\n",
+        "    { float4 _v = (float4)(v[0]);\n        if (cc[0].x > vp_c[21].x) o[0].x = _v.x;\n    }\n",
         "    { float4 _v = (float4)(mystery(v[0]));\n        o[0].xyzw = _v.xyzw;\n    }\n",
     ] {
         assert!(matches!(
@@ -132,4 +132,66 @@ fn authored_position_slice_lowers_through_real_portable_compilers() {
     assert!(!native.hlsl.is_empty());
     assert_eq!(native.vertex_locations, [0]);
     assert_eq!(native.buffers[0].bytes, sliced.constant_buffer_bytes);
+}
+
+#[test]
+fn live_predicated_store_preserves_prior_value_and_condition_definition() {
+    let prior = block("(vp_c[9]).xyzw", "        r[0].xyzw = _v.xyzw;\n");
+    let condition = block("(vp_c[22]).xyzw", "        cc[0].x = _v.x;\n");
+    let conditional = block(
+        "(vp_c[21]).xyzw",
+        "        if (cc[0].x == 0.0) r[0].x = _v.x;\n",
+    );
+    let body = format!(
+        "{prior}{condition}{conditional}{}",
+        block("(r[0]).xyzw", "        o[0].xyzw = _v.xyzw;\n")
+    );
+    let sliced = vertex_position_only_poc(&fixture(&body)).unwrap();
+    assert_eq!(vertex_constant_reads(&sliced).unwrap().rows, [9, 21, 22]);
+    assert!(sliced.source.contains(&prior));
+    assert!(sliced.source.contains(&condition));
+    assert!(sliced.source.contains(&conditional));
+}
+#[test]
+fn dead_condition_outputs_and_comparison_casts_do_not_block_position_slice() {
+    let body = format!(
+        "{}{}{}{}",
+        block("(vp_c[21]).xyzw", "        cc[0].x = _v.x;\n"),
+        block(
+            "(float4)(((vp_c[22]).xyzw)<((v[0]).xyzw))",
+            "        if (cc[0].x != 0.0) r[3].x = _v.x;\n"
+        ),
+        block("(r[3]).xyzw", "        o[11].xyzw = _v.xyzw;\n"),
+        block("(v[0]).xyzw", "        o[0].xyzw = _v.xyzw;\n")
+    );
+    let sliced = vertex_position_only_poc(&fixture(&body)).unwrap();
+    assert!(vertex_constant_reads(&sliced).unwrap().rows.is_empty());
+    assert!(!sliced.source.contains("vp_c[21]"));
+    assert!(!sliced.source.contains("vp_c[22]"));
+    let cast = block(
+        "(float4)(((vp_c[7]).xyzw)<((v[0]).xyzw))",
+        "        o[0].xyzw = _v.xyzw;\n",
+    );
+    let sliced = vertex_position_only_poc(&fixture(&cast)).unwrap();
+    assert!(sliced.source.contains(&cast));
+    assert_eq!(vertex_constant_reads(&sliced).unwrap().rows, [7]);
+}
+#[test]
+fn mixed_stores_preserve_cc_read_before_its_update_and_rhs_self_reads() {
+    let initial = block(
+        "(vp_c[8]).xyzw",
+        "        r[0].xyzw = _v.xyzw;\n        cc[0].x = _v.x;\n",
+    );
+    let mixed = block(
+        "(r[0]).xyzw",
+        "        o[0].yz = _v.yz;\n        if (cc[0].x >= 0.0) r[0].x = _v.x;\n        cc[0].x = _v.x;\n",
+    );
+    let body = format!(
+        "{initial}{mixed}{}",
+        block("(r[0]).xyzw", "        o[0].xw = _v.xw;\n")
+    );
+    let sliced = vertex_position_only_poc(&fixture(&body)).unwrap();
+    assert!(sliced.source.contains(&initial));
+    assert!(sliced.source.contains(&mixed));
+    assert_eq!(vertex_constant_reads(&sliced).unwrap().rows, [8]);
 }
