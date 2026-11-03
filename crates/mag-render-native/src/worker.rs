@@ -32,7 +32,7 @@ fn single_validation() -> bool {
     static VALUE: OnceLock<bool> = OnceLock::new();
     *VALUE.get_or_init(|| env_flag("MAG_RENDER_WORKER_SINGLE_VALIDATION"))
 }
-/// Default-off (MAG_RENDER_MAIN_ASYNC_COMMIT=1): an imported subgraph commit
+/// Default-on (MAG_RENDER_MAIN_ASYNC_COMMIT=0 disables): an imported subgraph commit
 /// acknowledges once its native queue position and ticket are reserved and its
 /// imports validated under the owner lease; allocation, encoding and the GPU
 /// commit then finish on this actor after the caller is released.
@@ -45,7 +45,7 @@ fn reserved_commit() -> bool {
         return true;
     }
     static VALUE: OnceLock<bool> = OnceLock::new();
-    *VALUE.get_or_init(|| env_flag("MAG_RENDER_MAIN_ASYNC_COMMIT"))
+    *VALUE.get_or_init(|| std::env::var("MAG_RENDER_MAIN_ASYNC_COMMIT").map_or(true, |v| v != "0"))
 }
 fn elapsed_ns(start: Instant) -> u64 {
     u64::try_from(start.elapsed().as_nanos()).unwrap_or(u64::MAX)
