@@ -155,18 +155,24 @@ impl ResourceStore {
             return Err(ResourceError::EmptyResource);
         }
         self.reserve_capacity(1, bytes.len())?;
+        // Slots still referenced by a live retained version, marked once so
+        // the first-free-slot search below is linear rather than slots*retained.
+        let mut held = Vec::new();
+        held.try_reserve_exact(self.slots.len())
+            .map_err(|_| ResourceError::AllocationFailed)?;
+        held.resize(self.slots.len(), false);
+        for (id, weak) in &self.retained {
+            if let Some(flag) = held.get_mut(*id as usize)
+                && weak.strong_count() != 0
+            {
+                *flag = true;
+            }
+        }
         let reuse = self
             .slots
             .iter()
             .enumerate()
-            .find(|(i, slot)| {
-                slot.current.is_none()
-                    && slot.generation < u32::MAX
-                    && !self
-                        .retained
-                        .iter()
-                        .any(|(id, weak)| *id == *i as u32 && weak.strong_count() != 0)
-            })
+            .find(|(i, slot)| slot.current.is_none() && slot.generation < u32::MAX && !held[*i])
             .map(|(i, _)| i);
         let index = match reuse {
             Some(i) => i,
