@@ -36,14 +36,9 @@ fn single_validation() -> bool {
 /// acknowledges once its native queue position and ticket are reserved and its
 /// imports validated under the owner lease; allocation, encoding and the GPU
 /// commit then finish on this actor after the caller is released.
-#[cfg(test)]
-static TEST_RESERVED_COMMIT: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
+/// Read once per process; each actor captures it when it starts (tests pin
+/// it per actor with `Worker::start_with`).
 fn reserved_commit() -> bool {
-    #[cfg(test)]
-    if TEST_RESERVED_COMMIT.load(Ordering::SeqCst) {
-        return true;
-    }
     static VALUE: OnceLock<bool> = OnceLock::new();
     *VALUE.get_or_init(|| std::env::var("MAG_RENDER_MAIN_ASYNC_COMMIT").map_or(true, |v| v != "0"))
 }
@@ -684,6 +679,16 @@ impl Worker {
         max_draws: u32,
         max_bytes: u64,
     ) -> Result<Self, i32> {
+        Self::start_with(factory, max_draws, max_bytes, reserved_commit())
+    }
+    /// `reserved`: whether imported subgraph commits use the reserved
+    /// (acknowledge-early) path for this actor's whole life.
+    fn start_with<D: Driver + 'static, F: FnOnce() -> Result<D, i32> + Send + 'static>(
+        factory: F,
+        max_draws: u32,
+        max_bytes: u64,
+        reserved: bool,
+    ) -> Result<Self, i32> {
         let (commands, receive) = mpsc::sync_channel(1);
         let (started, ready) = mpsc::sync_channel(1);
         let timing = Arc::new(ActorTiming::default());
@@ -731,7 +736,7 @@ impl Worker {
                                 .store(elapsed_ns(start), Ordering::Relaxed);
                             let result = match admitted {
                                 Err(status) => (status, client::Receipt::default()),
-                                Ok(token) if reserved_commit() => {
+                                Ok(token) if reserved => {
                                     let start = Instant::now();
                                     let mut status = 0;
                                     driver.commit_subgraph_reserved(
@@ -773,9 +778,7 @@ impl Worker {
                                 .store(elapsed_ns(start), Ordering::Relaxed);
                             let _ = reply.send(result);
                         }
-                        Command::Subgraph(admission, source, bindings, reply)
-                            if reserved_commit() =>
-                        {
+                        Command::Subgraph(admission, source, bindings, reply) if reserved => {
                             let start = Instant::now();
                             driver.commit_subgraph_reserved(
                                 admission,
@@ -2281,7 +2284,14 @@ mod tests {
         }
     }
     fn prepared_worker(status: Arc<AtomicI32>, events: Arc<Mutex<Vec<&'static str>>>) -> Worker {
-        Worker::start(
+        prepared_worker_with(status, events, reserved_commit())
+    }
+    fn prepared_worker_with(
+        status: Arc<AtomicI32>,
+        events: Arc<Mutex<Vec<&'static str>>>,
+        reserved: bool,
+    ) -> Worker {
+        Worker::start_with(
             move || {
                 Ok(PreparedDriver {
                     prepared: Default::default(),
@@ -2293,6 +2303,7 @@ mod tests {
             },
             32,
             1 << 20,
+            reserved,
         )
         .unwrap()
     }
@@ -2483,9 +2494,15 @@ mod tests {
     }
     #[test]
     fn fused_admit_subgraph_keeps_order_cancels_definite_rejection_and_reports_busy() {
+        // Both commit modes, each pinned on its own actor (no process state).
+        for reserved in [false, true] {
+            fused_admit_subgraph_case(reserved);
+        }
+    }
+    fn fused_admit_subgraph_case(reserved: bool) {
         let status = Arc::new(AtomicI32::new(-4));
         let events = Arc::new(Mutex::new(vec![]));
-        let worker = prepared_worker(status.clone(), events.clone());
+        let worker = prepared_worker_with(status.clone(), events.clone(), reserved);
         with_input(|input, _, pins| {
             let mut host = unsafe { *input.target };
             host.image = std::ptr::dangling_mut::<u8>().cast();
@@ -2509,6 +2526,9 @@ mod tests {
             };
             // A definite commit rejection leaves nothing admitted or pinned.
             assert_eq!(fused(own()), -4);
+            // The reserved path replies at acknowledgement and cancels the
+            // rejected admission right after; wait for the actor to finish.
+            wait_idle(&worker);
             assert_eq!(pins.load(Ordering::SeqCst), 0);
             assert_eq!(*events.lock().unwrap(), ["admit", "subgraph", "cancel"]);
             assert_eq!(worker.call(Command::Close, false).unwrap().0, 0);
@@ -2516,7 +2536,7 @@ mod tests {
         // Close succeeded above: the actor retired. Use a fresh one.
         worker.join.lock().unwrap().take().unwrap().join().unwrap();
         let events = Arc::new(Mutex::new(vec![]));
-        let worker = prepared_worker(status.clone(), events.clone());
+        let worker = prepared_worker_with(status.clone(), events.clone(), reserved);
         status.store(0, Ordering::SeqCst);
         with_input(|input, _, pins| {
             let mut host = unsafe { *input.target };
@@ -2546,6 +2566,7 @@ mod tests {
             // definite BUSY refusal that never reaches commit.
             let held = prepare_on(&worker).unwrap();
             assert_eq!(fused(own()), -4);
+            wait_idle(&worker);
             assert_eq!(pins.load(Ordering::SeqCst), 0);
             assert_eq!(
                 worker.call(|r| Command::Cancel(held, r), false).unwrap().0,
@@ -2616,11 +2637,10 @@ mod tests {
     }
     #[test]
     fn reserved_commit_acknowledges_before_the_actor_finishes_and_keeps_order() {
-        TEST_RESERVED_COMMIT.store(true, Ordering::SeqCst);
         let (release, wait) = mpsc::channel();
         let events = Arc::new(Mutex::new(vec![]));
         let recorded = events.clone();
-        let worker = Worker::start(
+        let worker = Worker::start_with(
             move || {
                 Ok(ReservingDriver {
                     release: wait,
@@ -2629,6 +2649,7 @@ mod tests {
             },
             32,
             1 << 20,
+            true,
         )
         .unwrap();
         with_input(|input, _, pins| {
@@ -2677,11 +2698,10 @@ mod tests {
     }
     #[test]
     fn nowait_poll_skips_a_busy_actor_and_polls_once_it_is_idle() {
-        TEST_RESERVED_COMMIT.store(true, Ordering::SeqCst);
         let (release, wait) = mpsc::channel();
         let events = Arc::new(Mutex::new(vec![]));
         let recorded = events.clone();
-        let worker = Worker::start(
+        let worker = Worker::start_with(
             move || {
                 Ok(ReservingDriver {
                     release: wait,
@@ -2690,6 +2710,7 @@ mod tests {
             },
             32,
             1 << 20,
+            true,
         )
         .unwrap();
         // Idle actor: identical to a Poll call, and a poll leaves it idle
