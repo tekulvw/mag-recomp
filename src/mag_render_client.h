@@ -82,6 +82,9 @@ int mag_render_client_worker_create(const MagRenderHostOwner*,uint32_t max_draws
 /* Exact imported host target format:RGBA8=1/BGRA8=3. Existing create usesRGBA8. */
 int mag_render_client_worker_create_for_format(const MagRenderHostOwner*,uint32_t target_format,uint32_t max_draws,uint64_t max_bytes,uint64_t *worker);
 int mag_render_client_worker_submit(uint64_t,const MagRenderClientInput*,MagRenderClientReceipt*);
+/* 0 receipt, -4 none ready or concurrent caller. By default a poll queues behind
+ * a command the worker is still finishing (a reserved commit's encode). With
+ * MAG_RENDER_WORKER_POLL_NOWAIT=1 it returns 2 at once instead: nothing polled. */
 int mag_render_client_worker_poll(uint64_t,MagRenderClientReceipt*);
 int mag_render_client_worker_close(uint64_t);
 #ifdef __cplusplus

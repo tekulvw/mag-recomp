@@ -47,6 +47,85 @@ fn reserved_commit() -> bool {
     static VALUE: OnceLock<bool> = OnceLock::new();
     *VALUE.get_or_init(|| std::env::var("MAG_RENDER_MAIN_ASYNC_COMMIT").map_or(true, |v| v != "0"))
 }
+/// Default-off: `mag_render_client_worker_poll` never waits behind other actor
+/// work. While the actor is still executing an earlier command (for example the
+/// encode and GPU commit that follow a reserved commit's acknowledgement) the
+/// poll returns POLL_BUSY without polling. The default poll queues behind that
+/// work, which blocks a caller that polls from its FIFO/presentation thread.
+fn poll_nowait_enabled() -> bool {
+    static VALUE: OnceLock<bool> = OnceLock::new();
+    *VALUE.get_or_init(|| env_flag("MAG_RENDER_WORKER_POLL_NOWAIT"))
+}
+/// Positive, like the existing indeterminate status 1: no receipt and no error.
+/// Only the nowait poll returns it, and only when nothing was polled.
+const POLL_BUSY: i32 = 2;
+/// Per-second poll counters, printed with MAG_RENDER_FIFO_TIMING=1 or the nowait
+/// poll. `wait` is host wall time inside the poll call, so the default mode shows
+/// how long a poll queued behind actor work.
+struct PollStats {
+    calls: AtomicU64,
+    receipts: AtomicU64,
+    empty: AtomicU64,
+    busy: AtomicU64,
+    errors: AtomicU64,
+    wait_ns: AtomicU64,
+    wait_max_ns: AtomicU64,
+    waits_over_1ms: AtomicU64,
+    window: Mutex<Option<Instant>>,
+}
+static POLL_STATS: PollStats = PollStats {
+    calls: AtomicU64::new(0),
+    receipts: AtomicU64::new(0),
+    empty: AtomicU64::new(0),
+    busy: AtomicU64::new(0),
+    errors: AtomicU64::new(0),
+    wait_ns: AtomicU64::new(0),
+    wait_max_ns: AtomicU64::new(0),
+    waits_over_1ms: AtomicU64::new(0),
+    window: Mutex::new(None),
+};
+impl PollStats {
+    fn record(&self, nowait: bool, polled: &Result<Option<Reply>, i32>, wait: u64) {
+        if !nowait && !fifo_timing() {
+            return;
+        }
+        self.calls.fetch_add(1, Ordering::Relaxed);
+        match polled {
+            Ok(Some((0, _))) => &self.receipts,
+            Ok(Some(_)) => &self.empty,
+            Ok(None) => &self.busy,
+            Err(_) => &self.errors,
+        }
+        .fetch_add(1, Ordering::Relaxed);
+        self.wait_ns.fetch_add(wait, Ordering::Relaxed);
+        self.wait_max_ns.fetch_max(wait, Ordering::Relaxed);
+        if wait > 1_000_000 {
+            self.waits_over_1ms.fetch_add(1, Ordering::Relaxed);
+        }
+        let Ok(mut window) = self.window.try_lock() else {
+            return;
+        };
+        let now = Instant::now();
+        let start = *window.get_or_insert(now);
+        if now.duration_since(start).as_secs() < 1 {
+            return;
+        }
+        *window = Some(now);
+        let take = |c: &AtomicU64| c.swap(0, Ordering::Relaxed);
+        eprintln!(
+            "[mag native worker poll] nowait={} calls={} receipts={} empty={} busy_skips={} errors={} wait_ms_total={:.3} wait_ms_max={:.3} waits_over_1ms={}",
+            u32::from(nowait),
+            take(&self.calls),
+            take(&self.receipts),
+            take(&self.empty),
+            take(&self.busy),
+            take(&self.errors),
+            take(&self.wait_ns) as f64 / 1e6,
+            take(&self.wait_max_ns) as f64 / 1e6,
+            take(&self.waits_over_1ms),
+        );
+    }
+}
 fn elapsed_ns(start: Instant) -> u64 {
     u64::try_from(start.elapsed().as_nanos()).unwrap_or(u64::MAX)
 }
@@ -591,6 +670,9 @@ enum Command {
 struct Worker {
     commands: SyncSender<Command>,
     timing: Arc<ActorTiming>,
+    /// Commands sent and not yet finished by the actor, including work it
+    /// continues after acknowledging (a reserved commit's encode and GPU commit).
+    outstanding: Arc<AtomicUsize>,
     serial: Mutex<()>,
     join: Mutex<Option<JoinHandle<()>>>,
     max_draws: u32,
@@ -606,6 +688,8 @@ impl Worker {
         let (started, ready) = mpsc::sync_channel(1);
         let timing = Arc::new(ActorTiming::default());
         let actor_timing = Arc::clone(&timing);
+        let outstanding = Arc::new(AtomicUsize::new(0));
+        let actor_outstanding = Arc::clone(&outstanding);
         let join = thread::Builder::new()
             .name("mag-render-client".into())
             .spawn(move || {
@@ -621,6 +705,8 @@ impl Worker {
                     return;
                 }
                 while let Ok(command) = receive.recv() {
+                    // Finished when this iteration ends, whichever way it ends.
+                    let finished = Finished(&actor_outstanding);
                     match command {
                         Command::Admit(input, reply) => {
                             let start = Instant::now();
@@ -724,7 +810,11 @@ impl Worker {
                             let _ = reply.send(driver.submit(*input));
                         }
                         Command::Poll(reply) => {
-                            let _ = reply.send(driver.poll());
+                            let polled = driver.poll();
+                            // Nothing continues after a poll: idle before the reply,
+                            // so the caller's next nowait poll is not refused.
+                            drop(finished);
+                            let _ = reply.send(polled);
                         }
                         Command::Close(reply) => {
                             let status = driver.close();
@@ -744,6 +834,7 @@ impl Worker {
             Ok(Ok(())) => Ok(Self {
                 commands,
                 timing,
+                outstanding,
                 serial: Mutex::new(()),
                 join: Mutex::new(Some(join)),
                 max_draws,
@@ -769,10 +860,42 @@ impl Worker {
         uncertain_on_lost_ack: bool,
     ) -> Result<Reply, i32> {
         let (send, reply) = mpsc::sync_channel(1);
-        self.commands.send(make(send)).map_err(|_| -6)?;
+        self.enqueue(make(send))?;
         reply
             .recv()
             .map_err(|_| if uncertain_on_lost_ack { 1 } else { -6 })
+    }
+    /// The only way a command reaches the actor: counted until the actor has
+    /// finished it, so an idle actor can be told apart from a busy one.
+    fn enqueue(&self, command: Command) -> Result<(), i32> {
+        self.outstanding.fetch_add(1, Ordering::AcqRel);
+        self.commands.send(command).map_err(|_| {
+            release_outstanding(&self.outstanding);
+            -6
+        })
+    }
+    /// A terminal check that never waits behind other actor work. Ok(None) means
+    /// the actor is still executing an earlier command (for example the encode
+    /// that follows a reserved commit's acknowledgement), so nothing was polled;
+    /// the caller retries on a later poll. Otherwise identical to a Poll call.
+    fn poll_nowait(&self) -> Result<Option<Reply>, i32> {
+        let _serial = self.serial.try_lock().map_err(|_| -4)?;
+        // With the serial lock held no other caller can enqueue, so an idle
+        // count here means the Poll below is the only command on the actor.
+        if self.outstanding.load(Ordering::Acquire) != 0 {
+            return Ok(None);
+        }
+        self.call_serial(Command::Poll, false).map(Some)
+    }
+}
+fn release_outstanding(count: &AtomicUsize) {
+    // Saturating: a command that bypassed enqueue can never wrap the count.
+    let _ = count.try_update(Ordering::AcqRel, Ordering::Acquire, |v| v.checked_sub(1));
+}
+struct Finished<'a>(&'a AtomicUsize);
+impl Drop for Finished<'_> {
+    fn drop(&mut self) {
+        release_outstanding(self.0);
     }
 }
 static WORKERS: OnceLock<Mutex<BTreeMap<u64, Arc<Worker>>>> = OnceLock::new();
@@ -1334,10 +1457,7 @@ pub unsafe extern "C" fn mag_render_client_worker_prepare_scene_imported_v3(
             }
             let wait_start = Instant::now();
             let (send, reply) = mpsc::sync_channel(1);
-            worker
-                .commands
-                .send(Command::Admit(admit, send))
-                .map_err(|_| -6)?;
+            worker.enqueue(Command::Admit(admit, send))?;
             let admitted = reply.recv().map_err(|_| -6)?;
             timing.wait_ns = elapsed_ns(wait_start);
             if timed {
@@ -1560,8 +1680,11 @@ pub unsafe extern "C" fn mag_render_client_worker_cancel_scene(
         -6,
     )
 }
-/// Non-waiting terminal check on the same fixed native thread. Physical present
-/// events remain separate SDK host observations; this API does not poll them.
+/// Terminal check on the same fixed native thread; it does not wait for the GPU.
+/// By default it queues behind any command the actor is still executing. With
+/// MAG_RENDER_WORKER_POLL_NOWAIT=1 it returns 2 (busy, nothing polled) instead.
+/// Physical present events remain separate SDK host observations; this API does
+/// not poll them.
 /// # Safety
 /// out points to writable Receipt storage.
 #[unsafe(no_mangle)]
@@ -1572,7 +1695,20 @@ pub unsafe extern "C" fn mag_render_client_worker_poll(id: u64, out: *mut client
     unsafe { *out = client::Receipt::default() };
     ffi(
         || {
-            let (status, receipt) = get(id)?.call(Command::Poll, false)?;
+            let worker = get(id)?;
+            let nowait = poll_nowait_enabled();
+            let start = Instant::now();
+            let polled = if nowait {
+                worker.poll_nowait()
+            } else {
+                worker.call(Command::Poll, false).map(Some)
+            };
+            POLL_STATS.record(nowait, &polled, elapsed_ns(start));
+            let (status, receipt) = match polled? {
+                Some(reply) => reply,
+                // Busy actor: nothing polled; the caller's next poll retries.
+                None => return Ok(POLL_BUSY),
+            };
             unsafe { *out = receipt };
             Ok(status)
         },
@@ -2011,6 +2147,7 @@ mod tests {
         let worker = Worker {
             commands,
             timing: Arc::default(),
+            outstanding: Arc::default(),
             serial: Mutex::new(()),
             join: Mutex::new(Some(join)),
             max_draws: 4,
@@ -2168,10 +2305,7 @@ mod tests {
     }
     fn prepare_on(worker: &Worker) -> Result<mag_render_abi::packet::Admission, i32> {
         let (tx, rx) = mpsc::sync_channel(1);
-        worker
-            .commands
-            .send(Command::Admit(fixture_admit(), tx))
-            .unwrap();
+        worker.enqueue(Command::Admit(fixture_admit(), tx)).unwrap();
         rx.recv().unwrap()
     }
     #[test]
@@ -2523,7 +2657,7 @@ mod tests {
             assert_eq!(*events.lock().unwrap(), ["reserved"]);
             // The next command waits behind the remaining encode, in order.
             let (send, reply) = mpsc::sync_channel(1);
-            worker.commands.send(Command::Poll(send)).unwrap();
+            worker.enqueue(Command::Poll(send)).unwrap();
             release.send(()).unwrap();
             assert_eq!(reply.recv().unwrap().0, -4);
             assert_eq!(*events.lock().unwrap(), ["reserved", "encoded", "poll"]);
@@ -2532,16 +2666,110 @@ mod tests {
         assert_eq!(worker.call(Command::Close, false).unwrap().0, 0);
         worker.join.lock().unwrap().take().unwrap().join().unwrap();
     }
+    /// The actor replies before it finishes the iteration, so the count reaches
+    /// zero a moment after the reply. Bounded: a leaked count fails the test.
+    fn wait_idle(worker: &Worker) {
+        let start = Instant::now();
+        while worker.outstanding.load(Ordering::SeqCst) != 0 {
+            assert!(start.elapsed().as_secs() < 5, "actor never became idle");
+            thread::yield_now();
+        }
+    }
+    #[test]
+    fn nowait_poll_skips_a_busy_actor_and_polls_once_it_is_idle() {
+        TEST_RESERVED_COMMIT.store(true, Ordering::SeqCst);
+        let (release, wait) = mpsc::channel();
+        let events = Arc::new(Mutex::new(vec![]));
+        let recorded = events.clone();
+        let worker = Worker::start(
+            move || {
+                Ok(ReservingDriver {
+                    release: wait,
+                    events: recorded,
+                })
+            },
+            32,
+            1 << 20,
+        )
+        .unwrap();
+        // Idle actor: identical to a Poll call, and a poll leaves it idle
+        // before replying, so back-to-back nowait polls both run.
+        assert!(matches!(worker.poll_nowait(), Ok(Some((-4, _)))));
+        assert!(matches!(worker.poll_nowait(), Ok(Some((-4, _)))));
+        assert_eq!(*events.lock().unwrap(), ["poll", "poll"]);
+        with_input(|input, _, pins| {
+            let mut host = unsafe { *input.target };
+            host.image = std::ptr::dangling_mut::<u8>().cast();
+            let binding = mag_render_abi::packet::ImageBinding {
+                image: 0,
+                reserved: 0,
+                source_key: 99,
+                host,
+                validate_planes: None,
+            };
+            let pinned = unsafe { ImportPins::copy(&binding, 1) }.unwrap();
+            let admission = mag_render_abi::packet::Admission {
+                source: client::scene_packet::packet_tests::fixture().source,
+                ..Default::default()
+            };
+            let (status, _) = worker
+                .call(
+                    |r| Command::Subgraph(admission, admission.source, pinned, r),
+                    true,
+                )
+                .unwrap();
+            assert_eq!(status, 0);
+            // The actor is still encoding: the nowait poll returns at once and
+            // enqueues nothing (a blocking poll would wait for `release`).
+            for _ in 0..3 {
+                assert!(matches!(worker.poll_nowait(), Ok(None)));
+            }
+            assert_eq!(*events.lock().unwrap(), ["poll", "poll", "reserved"]);
+            // A concurrent caller still sees the serial BUSY status.
+            {
+                let guard = worker.serial.lock().unwrap();
+                assert!(matches!(worker.poll_nowait(), Err(-4)));
+                drop(guard);
+            }
+            release.send(()).unwrap();
+            // An ordinary poll queues behind the encode, then the actor is idle.
+            assert_eq!(worker.call(Command::Poll, false).unwrap().0, -4);
+            wait_idle(&worker);
+            assert!(matches!(worker.poll_nowait(), Ok(Some((-4, _)))));
+            assert_eq!(
+                *events.lock().unwrap(),
+                ["poll", "poll", "reserved", "encoded", "poll", "poll"]
+            );
+            assert_eq!(pins.load(Ordering::SeqCst), 0);
+        });
+        assert_eq!(worker.call(Command::Close, false).unwrap().0, 0);
+        worker.join.lock().unwrap().take().unwrap().join().unwrap();
+    }
+    #[test]
+    fn outstanding_count_returns_to_idle_after_lost_replies_and_refusals() {
+        let events = Arc::new(Mutex::new(vec![]));
+        let worker = prepared_worker(Arc::new(AtomicI32::new(0)), events.clone());
+        let (tx, rx) = mpsc::sync_channel(1);
+        drop(rx);
+        worker.enqueue(Command::Admit(fixture_admit(), tx)).unwrap();
+        worker.call(Command::Poll, false).unwrap();
+        wait_idle(&worker);
+        assert!(matches!(worker.poll_nowait(), Ok(Some(_))));
+        wait_idle(&worker);
+        assert_eq!(worker.call(Command::Close, false).unwrap().0, 0);
+        worker.join.lock().unwrap().take().unwrap().join().unwrap();
+        // Saturating release: a stray decrement can never wrap the count.
+        let count = AtomicUsize::new(0);
+        release_outstanding(&count);
+        assert_eq!(count.load(Ordering::SeqCst), 0);
+    }
     #[test]
     fn lost_prepare_reply_cancels_only_uncommitted_state_on_actor() {
         let events = Arc::new(Mutex::new(vec![]));
         let worker = prepared_worker(Arc::new(AtomicI32::new(0)), events.clone());
         let (tx, rx) = mpsc::sync_channel(1);
         drop(rx);
-        worker
-            .commands
-            .send(Command::Admit(fixture_admit(), tx))
-            .unwrap();
+        worker.enqueue(Command::Admit(fixture_admit(), tx)).unwrap();
         assert_eq!(worker.call(Command::Close, false).unwrap().0, 0);
         worker.join.lock().unwrap().take().unwrap().join().unwrap();
         assert_eq!(*events.lock().unwrap(), ["admit", "cancel"]);
