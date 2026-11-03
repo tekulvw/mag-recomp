@@ -2973,9 +2973,7 @@ pub(crate) fn admit(
         if s.acknowledged_failure {
             return Err(-6);
         }
-        if s.admissions.len() + s.pending.len() + s.ready.len() >= 2 {
-            return Err(-4);
-        }
+        s.admission_capacity()?;
         if prevalidated != Some((s.max_draws, s.max_bytes)) {
             packet
                 .validate(s.max_draws, s.max_bytes)
@@ -3111,7 +3109,7 @@ pub(crate) fn admit(
             packet.intended,
             receipt.draws,
             prepared,
-            s.pending.len() + s.ready.len(),
+            s.pending.len(),
         ) {
             Ok(a) => Ok(a),
             Err(e) => {
@@ -3420,9 +3418,7 @@ pub(crate) fn submit(
     let mut effects = false;
     let code = ffi(|| {
         with_session(id, |s| {
-            if s.admissions.len() + s.pending.len() + s.ready.len() >= 2 {
-                return Err(-4);
-            }
+            s.admission_capacity()?;
             packet
                 .validate(s.max_draws, s.max_bytes)
                 .map_err(|status| {

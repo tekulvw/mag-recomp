@@ -271,6 +271,132 @@ struct Session {
     /// encoding: its failed terminal receipt was queued; nothing more is admitted.
     acknowledged_failure: bool,
 }
+/// GPU work admitted or submitted and not yet terminal, per session.
+const MAX_IN_FLIGHT: usize = 2;
+/// Terminal receipts held for the host's next poll. They hold no GPU work,
+/// so they no longer count against MAX_IN_FLIGHT, but stay bounded.
+const MAX_READY: usize = 8;
+static BACKPRESSURE_WAITS: AtomicU64 = AtomicU64::new(0);
+static BACKPRESSURE_WAIT_NS: AtomicU64 = AtomicU64::new(0);
+static BACKPRESSURE_MAX_NS: AtomicU64 = AtomicU64::new(0);
+static BACKPRESSURE_TIMEOUTS: AtomicU64 = AtomicU64::new(0);
+/// Bounded wait for in-flight capacity: `MAG_RENDER_MAIN_BACKPRESSURE_MS`
+/// (default 100; 0 restores the immediate BUSY refusal).
+fn backpressure_budget() -> std::time::Duration {
+    static BUDGET: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    std::time::Duration::from_millis(*BUDGET.get_or_init(|| {
+        std::env::var("MAG_RENDER_MAIN_BACKPRESSURE_MS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(100)
+            .min(10_000)
+    }))
+}
+impl Session {
+    /// Turn every terminal backend event into a ready receipt for the host's
+    /// poll (in completion order). Never pops a receipt.
+    fn collect_terminals(&mut self) -> Result<(), i32> {
+        let poll = self.backend.poll().map_err(|_| -6)?;
+        for event in poll.events {
+            if let BackendEvent::Terminal { ticket, status } = event {
+                let mut p = self.pending.remove(&ticket.submission_id).ok_or(-6)?;
+                p.receipt.flags |= TERMINAL;
+                if let TerminalStatus::Failed { code } = status {
+                    p.receipt.flags |= FAILED;
+                    p.receipt.status = -(code.min(i32::MAX as u32) as i32).max(1)
+                }
+                self.ready.push_back(p);
+            }
+        }
+        if !poll.errors.is_empty() {
+            return Err(-6);
+        }
+        Ok(())
+    }
+    fn in_flight(&self) -> usize {
+        self.admissions.len() + self.pending.len()
+    }
+    /// Capacity for one more admission or submission. When the in-flight limit
+    /// is reached, wait (bounded) for earlier GPU work to reach its terminal
+    /// instead of refusing: the CPU may legitimately run ahead of the GPU.
+    /// See [`wait_for_capacity`] for the exact refusal rules.
+    pub(crate) fn admission_capacity(&mut self) -> Result<(), i32> {
+        let budget = backpressure_budget();
+        let mut first = true;
+        let outcome = wait_for_capacity(budget, || {
+            if !first {
+                self.collect_terminals()?;
+            }
+            first = false;
+            Ok((self.in_flight(), self.ready.len()))
+        });
+        let (result, waited) = match outcome {
+            Ok(None) => return Ok(()),
+            Ok(Some(waited)) => (Ok(()), Some(waited)),
+            Err((code, waited)) => (Err(code), waited),
+        };
+        let Some(waited) = waited else {
+            return result;
+        };
+        let waits = BACKPRESSURE_WAITS.fetch_add(1, Ordering::Relaxed) + 1;
+        let total = BACKPRESSURE_WAIT_NS.fetch_add(waited, Ordering::Relaxed) + waited;
+        let max = BACKPRESSURE_MAX_NS
+            .fetch_max(waited, Ordering::Relaxed)
+            .max(waited);
+        let timeouts = BACKPRESSURE_TIMEOUTS
+            .fetch_add(u64::from(result.is_err()), Ordering::Relaxed)
+            + u64::from(result.is_err());
+        if result.is_err() || waits <= 4 || waits.is_multiple_of(120) {
+            eprintln!(
+                "[mag native backpressure] waits={waits} wait_ms={:.3} total_ms={:.3} max_ms={:.3} timeouts={timeouts} in_flight={} ready={} status={}",
+                waited as f64 / 1e6,
+                total as f64 / 1e6,
+                max as f64 / 1e6,
+                self.in_flight(),
+                self.ready.len(),
+                result.err().unwrap_or(0)
+            );
+        }
+        result
+    }
+}
+/// Bounded backpressure over `observe`, which reports (in flight, ready
+/// receipts); every call after the first collects terminal GPU events before
+/// reporting.
+/// - `Ok(None)`: capacity at once, or after one collection (no wait).
+/// - `Ok(Some(ns))`: capacity after waiting `ns`.
+/// - `Err((-4, ..))`: still full after `budget`, or at once when the only
+///   obstacle is host-held receipts (waiting cannot drain them) or the budget
+///   is zero. `Some(ns)` when a wait was attempted.
+/// - Any `observe` error (a failed poll) is returned unchanged: fail closed.
+fn wait_for_capacity(
+    budget: std::time::Duration,
+    mut observe: impl FnMut() -> Result<(usize, usize), i32>,
+) -> Result<Option<u64>, (i32, Option<u64>)> {
+    let fits = |(in_flight, ready): (usize, usize)| in_flight < MAX_IN_FLIGHT && ready < MAX_READY;
+    if fits(observe().map_err(|e| (e, None))?) {
+        return Ok(None);
+    }
+    let state = observe().map_err(|e| (e, None))?;
+    if fits(state) {
+        return Ok(None);
+    }
+    if state.1 >= MAX_READY || budget.is_zero() {
+        return Err((-4, None));
+    }
+    let start = std::time::Instant::now();
+    let elapsed = || start.elapsed().as_nanos().min(u64::MAX as u128) as u64;
+    loop {
+        std::thread::sleep(std::time::Duration::from_micros(100));
+        let state = observe().map_err(|e| (e, Some(elapsed())))?;
+        if fits(state) {
+            return Ok(Some(elapsed()));
+        }
+        if start.elapsed() >= budget || state.1 >= MAX_READY {
+            return Err((-4, Some(elapsed())));
+        }
+    }
+}
 thread_local! {static SESSIONS:RefCell<BTreeMap<u64,Session>>=const {RefCell::new(BTreeMap::new())};}
 static NEXT_SESSION: AtomicU64 = AtomicU64::new(1);
 fn ffi(f: impl FnOnce() -> Result<(), i32>) -> i32 {
@@ -648,9 +774,7 @@ pub unsafe extern "C" fn mag_render_client_submit(
     let effects_possible = Cell::new(false);
     let status = ffi(|| {
         with_session(id, |s| {
-            if s.admissions.len() + s.pending.len() + s.ready.len() >= 2 {
-                return Err(-4);
-            }
+            s.admission_capacity()?;
             let pipeline = s.pipeline.ok_or(-2)?;
             let color_format = s.color_format.ok_or(-2)?;
             let input = unsafe { &*input };
@@ -783,21 +907,7 @@ pub unsafe extern "C" fn mag_render_client_poll(id: u64, out: *mut Receipt) -> i
                 unsafe { *out = p.receipt };
                 return Ok(());
             }
-            let poll = s.backend.poll().map_err(|_| -6)?;
-            for event in poll.events {
-                if let BackendEvent::Terminal { ticket, status } = event {
-                    let mut p = s.pending.remove(&ticket.submission_id).ok_or(-6)?;
-                    p.receipt.flags |= TERMINAL;
-                    if let TerminalStatus::Failed { code } = status {
-                        p.receipt.flags |= FAILED;
-                        p.receipt.status = -(code.min(i32::MAX as u32) as i32).max(1)
-                    }
-                    s.ready.push_back(p);
-                }
-            }
-            if !poll.errors.is_empty() {
-                return Err(-6);
-            }
+            s.collect_terminals()?;
             let p = s.ready.pop_front().ok_or(-4)?;
             unsafe { *out = p.receipt };
             Ok(())
@@ -859,6 +969,72 @@ pub extern "C" fn mag_render_client_close(id: u64) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn capacity_backpressure_waits_bounded_and_fails_closed() {
+        use std::time::Duration;
+        let budget = Duration::from_millis(50);
+        // Free capacity: no collection, no wait.
+        let mut calls = 0;
+        assert_eq!(
+            wait_for_capacity(budget, || {
+                calls += 1;
+                Ok((1, 7))
+            }),
+            Ok(None)
+        );
+        assert_eq!(calls, 1);
+        // Host-held receipts no longer count as GPU work in flight.
+        assert_eq!(
+            wait_for_capacity(budget, || Ok((0, MAX_READY - 1))),
+            Ok(None)
+        );
+        // One collection frees a slot: still no wait.
+        let mut states = [(2, 0), (1, 1)].into_iter();
+        assert_eq!(
+            wait_for_capacity(budget, || Ok(states.next().unwrap())),
+            Ok(None)
+        );
+        // GPU work completes during the wait: admitted after a counted wait.
+        let mut polls = 0;
+        let waited = wait_for_capacity(budget, || {
+            polls += 1;
+            Ok(if polls < 5 { (2, 0) } else { (1, 1) })
+        });
+        assert!(matches!(waited, Ok(Some(ns)) if ns > 0), "{waited:?}");
+        assert_eq!(polls, 5);
+        // Never completes: BUSY after the budget, never unbounded.
+        let start = std::time::Instant::now();
+        let stuck = wait_for_capacity(budget, || Ok((2, 0)));
+        assert!(
+            matches!(stuck, Err((-4, Some(ns))) if ns >= 50_000_000),
+            "{stuck:?}"
+        );
+        assert!(start.elapsed() < Duration::from_secs(2));
+        // Full host-held receipts or a zero budget: BUSY at once, no wait.
+        assert_eq!(
+            wait_for_capacity(budget, || Ok((0, MAX_READY))),
+            Err((-4, None))
+        );
+        assert_eq!(
+            wait_for_capacity(Duration::ZERO, || Ok((2, 0))),
+            Err((-4, None))
+        );
+        // A failed poll stays fatal, during the first collection or the wait.
+        let mut n = 0;
+        assert_eq!(
+            wait_for_capacity(budget, || {
+                n += 1;
+                if n == 1 { Ok((2, 0)) } else { Err(-6) }
+            }),
+            Err((-6, None))
+        );
+        let mut n = 0;
+        let failed = wait_for_capacity(budget, || {
+            n += 1;
+            if n < 3 { Ok((2, 0)) } else { Err(-6) }
+        });
+        assert!(matches!(failed, Err((-6, Some(_)))), "{failed:?}");
+    }
     fn draw(vertices: &[[f32; 4]], indices: &[u16], item: u64, part: u64) -> Draw {
         Draw {
             abi_version: 1,
