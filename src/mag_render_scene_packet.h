@@ -282,6 +282,12 @@ int mag_render_client_worker_prepare_scene_imported_v3(uint64_t,const MagRenderS
  * Original prior producer work must be ordered at the genuine native boundary.
  * Exact table/source matching precedes GPU commitment. */
 int mag_render_client_worker_commit_scene_subgraph(uint64_t,const MagRenderSceneAdmission*,const MagRenderClientSource*,const MagRenderPacketImageBinding*,uint32_t,MagRenderClientReceipt*);
+/* With MAG_RENDER_MAIN_ASYNC_COMMIT=1 (default off) the two subgraph commits
+ * above return once the native queue position and ticket are reserved and the
+ * imports validated under the owner lease; encoding and the GPU commit finish
+ * on the worker afterwards. The receipt and its ordering witness are the same.
+ * A failure after return arrives only as a FAILED terminal receipt from poll,
+ * after which the worker refuses further preparations. */
 /* Optional single-command form of prepare_scene_imported_v3 followed by
  * commit_scene_subgraph: one ordered actor command, no separate admission ACK.
  * Negative is definitely uncommitted (a rejected commit's preparation is

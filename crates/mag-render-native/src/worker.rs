@@ -32,6 +32,21 @@ fn single_validation() -> bool {
     static VALUE: OnceLock<bool> = OnceLock::new();
     *VALUE.get_or_init(|| env_flag("MAG_RENDER_WORKER_SINGLE_VALIDATION"))
 }
+/// Default-off (MAG_RENDER_MAIN_ASYNC_COMMIT=1): an imported subgraph commit
+/// acknowledges once its native queue position and ticket are reserved and its
+/// imports validated under the owner lease; allocation, encoding and the GPU
+/// commit then finish on this actor after the caller is released.
+#[cfg(test)]
+static TEST_RESERVED_COMMIT: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+fn reserved_commit() -> bool {
+    #[cfg(test)]
+    if TEST_RESERVED_COMMIT.load(Ordering::SeqCst) {
+        return true;
+    }
+    static VALUE: OnceLock<bool> = OnceLock::new();
+    *VALUE.get_or_init(|| env_flag("MAG_RENDER_MAIN_ASYNC_COMMIT"))
+}
 fn elapsed_ns(start: Instant) -> u64 {
     u64::try_from(start.elapsed().as_nanos()).unwrap_or(u64::MAX)
 }
@@ -454,6 +469,17 @@ trait Driver {
     fn cancel(&mut self, _admission: mag_render_abi::packet::Admission) -> Result<(), i32> {
         Err(-2)
     }
+    /// Commit whose acknowledgement may be sent before it completes on this
+    /// actor (see `reserved_commit`). Exactly one acknowledgement is sent.
+    fn commit_subgraph_reserved(
+        &mut self,
+        admission: mag_render_abi::packet::Admission,
+        source: client::Source,
+        bindings: ImportPins,
+        acknowledge: &mut dyn FnMut(Reply),
+    ) {
+        acknowledge(self.commit_subgraph(admission, source, bindings));
+    }
 
     fn scene(&mut self, _: OwnedScene) -> (i32, client::Receipt) {
         (-2, client::Receipt::default())
@@ -492,6 +518,21 @@ impl Driver for ClientDriver {
     }
     fn cancel(&mut self, admission: mag_render_abi::packet::Admission) -> Result<(), i32> {
         client::scene_packet::cancel(self.session, admission)
+    }
+    fn commit_subgraph_reserved(
+        &mut self,
+        admission: mag_render_abi::packet::Admission,
+        source: client::Source,
+        bindings: ImportPins,
+        acknowledge: &mut dyn FnMut(Reply),
+    ) {
+        client::scene_packet::commit_subgraph_reserved(
+            self.session,
+            admission,
+            source,
+            &bindings.0,
+            acknowledge,
+        );
     }
 
     fn scene(&mut self, input: OwnedScene) -> (i32, client::Receipt) {
@@ -604,6 +645,26 @@ impl Worker {
                                 .store(elapsed_ns(start), Ordering::Relaxed);
                             let result = match admitted {
                                 Err(status) => (status, client::Receipt::default()),
+                                Ok(token) if reserved_commit() => {
+                                    let start = Instant::now();
+                                    let mut status = 0;
+                                    driver.commit_subgraph_reserved(
+                                        token,
+                                        source,
+                                        bindings,
+                                        &mut |r: Reply| {
+                                            status = r.0;
+                                            actor_timing
+                                                .commit_ns
+                                                .store(elapsed_ns(start), Ordering::Relaxed);
+                                            let _ = reply.send(r);
+                                        },
+                                    );
+                                    if status < 0 {
+                                        let _ = driver.cancel(token);
+                                    }
+                                    continue;
+                                }
                                 Ok(token) => {
                                     let start = Instant::now();
                                     let result = driver.commit_subgraph(token, source, bindings);
@@ -625,6 +686,23 @@ impl Worker {
                                 .commit_ns
                                 .store(elapsed_ns(start), Ordering::Relaxed);
                             let _ = reply.send(result);
+                        }
+                        Command::Subgraph(admission, source, bindings, reply)
+                            if reserved_commit() =>
+                        {
+                            let start = Instant::now();
+                            driver.commit_subgraph_reserved(
+                                admission,
+                                source,
+                                bindings,
+                                &mut |r: Reply| {
+                                    // Time until acknowledgement: what the caller waits for.
+                                    actor_timing
+                                        .commit_ns
+                                        .store(elapsed_ns(start), Ordering::Relaxed);
+                                    let _ = reply.send(r);
+                                },
+                            );
                         }
                         Command::Subgraph(admission, source, bindings, reply) => {
                             let start = Instant::now();
@@ -2362,6 +2440,95 @@ mod tests {
             worker.call(|r| Command::Cancel(token, r), false).unwrap().0,
             0
         );
+        assert_eq!(worker.call(Command::Close, false).unwrap().0, 0);
+        worker.join.lock().unwrap().take().unwrap().join().unwrap();
+    }
+    /// Acknowledges first, then keeps "encoding" until released.
+    struct ReservingDriver {
+        release: mpsc::Receiver<()>,
+        events: Arc<Mutex<Vec<&'static str>>>,
+    }
+    impl Driver for ReservingDriver {
+        fn commit_subgraph_reserved(
+            &mut self,
+            a: mag_render_abi::packet::Admission,
+            source: client::Source,
+            _bindings: ImportPins,
+            acknowledge: &mut dyn FnMut(Reply),
+        ) {
+            assert_eq!(a.source.publication, source.publication);
+            self.events.lock().unwrap().push("reserved");
+            acknowledge((
+                0,
+                client::Receipt {
+                    native_generation: 3,
+                    native_ticket: 4,
+                    ..client::Receipt::default()
+                },
+            ));
+            self.release.recv().unwrap();
+            self.events.lock().unwrap().push("encoded");
+        }
+        fn submit(&mut self, _: OwnedInput) -> Reply {
+            (-2, client::Receipt::default())
+        }
+        fn poll(&mut self) -> Reply {
+            self.events.lock().unwrap().push("poll");
+            (-4, client::Receipt::default())
+        }
+        fn close(&mut self) -> i32 {
+            0
+        }
+    }
+    #[test]
+    fn reserved_commit_acknowledges_before_the_actor_finishes_and_keeps_order() {
+        TEST_RESERVED_COMMIT.store(true, Ordering::SeqCst);
+        let (release, wait) = mpsc::channel();
+        let events = Arc::new(Mutex::new(vec![]));
+        let recorded = events.clone();
+        let worker = Worker::start(
+            move || {
+                Ok(ReservingDriver {
+                    release: wait,
+                    events: recorded,
+                })
+            },
+            32,
+            1 << 20,
+        )
+        .unwrap();
+        with_input(|input, _, pins| {
+            let mut host = unsafe { *input.target };
+            host.image = std::ptr::dangling_mut::<u8>().cast();
+            let binding = mag_render_abi::packet::ImageBinding {
+                image: 0,
+                reserved: 0,
+                source_key: 99,
+                host,
+                validate_planes: None,
+            };
+            let pinned = unsafe { ImportPins::copy(&binding, 1) }.unwrap();
+            let admission = mag_render_abi::packet::Admission {
+                source: client::scene_packet::packet_tests::fixture().source,
+                ..Default::default()
+            };
+            let (status, receipt) = worker
+                .call(
+                    |r| Command::Subgraph(admission, admission.source, pinned, r),
+                    true,
+                )
+                .unwrap();
+            // The caller is released while the actor is still encoding.
+            assert_eq!((status, receipt.native_ticket), (0, 4));
+            assert_eq!(*events.lock().unwrap(), ["reserved"]);
+            // The next command waits behind the remaining encode, in order.
+            let (send, reply) = mpsc::sync_channel(1);
+            worker.commands.send(Command::Poll(send)).unwrap();
+            release.send(()).unwrap();
+            assert_eq!(reply.recv().unwrap().0, -4);
+            assert_eq!(*events.lock().unwrap(), ["reserved", "encoded", "poll"]);
+            assert_eq!(pins.load(Ordering::SeqCst), 0);
+        });
         assert_eq!(worker.call(Command::Close, false).unwrap().0, 0);
         worker.join.lock().unwrap().take().unwrap().join().unwrap();
     }

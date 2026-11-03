@@ -265,6 +265,9 @@ struct Session {
     max_bytes: u64,
     pending: BTreeMap<u64, Pending>,
     ready: VecDeque<Pending>,
+    /// A reserved submission already acknowledged to the caller failed while
+    /// encoding: its failed terminal receipt was queued; nothing more is admitted.
+    acknowledged_failure: bool,
 }
 thread_local! {static SESSIONS:RefCell<BTreeMap<u64,Session>>=const {RefCell::new(BTreeMap::new())};}
 static NEXT_SESSION: AtomicU64 = AtomicU64::new(1);
@@ -491,6 +494,7 @@ fn create_session(
                 max_bytes,
                 pending: BTreeMap::new(),
                 ready: VecDeque::new(),
+                acknowledged_failure: false,
             },
         )
     });

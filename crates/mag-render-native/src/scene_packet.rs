@@ -2758,6 +2758,9 @@ pub(crate) fn admit(
     prevalidated: Option<(usize, u64)>,
 ) -> Result<raw::Admission, i32> {
     with_session(id, |s| {
+        if s.acknowledged_failure {
+            return Err(-6);
+        }
         if s.admissions.len() + s.pending.len() + s.ready.len() >= 2 {
             return Err(-4);
         }
@@ -2928,6 +2931,133 @@ pub(crate) fn commit_subgraph(
     bindings: &[raw::ImageBinding],
 ) -> (i32, Receipt) {
     commit_impl(id, admission, source, None, bindings)
+}
+/// Reserved-order subgraph commit. Under the owner lease (the caller waits):
+/// bind and validate the imports and reserve the native queue position and
+/// ticket. `acknowledge` then receives exactly the receipt the synchronous
+/// commit would return (same native ordering witness). Only afterwards, with
+/// the caller released, are resources allocated, encoded and committed into
+/// that reserved position. A failure after acknowledgement queues a FAILED
+/// terminal receipt and refuses all later admissions (fail closed); the
+/// reserved position is always released. If reservation is unavailable or
+/// fails, this is exactly the synchronous commit. Never implies GPU completion.
+pub(crate) fn commit_subgraph_reserved(
+    id: u64,
+    admission: raw::Admission,
+    source: Source,
+    bindings: &[raw::ImageBinding],
+    acknowledge: impl FnOnce((i32, Receipt)),
+) {
+    let mut acknowledge = Some(acknowledge);
+    let mut early = None;
+    let reserved = ffi(|| {
+        with_session(id, |s| {
+            let p = s.admissions.get(admission, source)?;
+            if p.imports.is_empty() || s.acknowledged_failure {
+                return Err(-1);
+            }
+            let requirements = p.imports.clone();
+            let mut receipt = p.receipt;
+            unsafe {
+                s.backend
+                    .device()
+                    .0
+                    .borrow_mut()
+                    .bind_imports(bindings, &requirements)
+            }?;
+            let reserved = s.backend.device().0.borrow_mut().reserve_submission();
+            let (generation, native) = match reserved {
+                Ok(v) => v,
+                Err(e) => {
+                    s.backend.device().0.borrow_mut().release_imports()?;
+                    return Err(e);
+                }
+            };
+            receipt.ticket = s.backend.next_submission_id();
+            receipt.native_generation = generation;
+            receipt.native_ticket = native;
+            receipt.status = 0;
+            early = Some(receipt);
+            Ok(())
+        })
+    });
+    let Some(receipt) = early.filter(|_| reserved == 0) else {
+        // Nothing reserved: identical to the synchronous commit (imports were
+        // released above; commit_impl binds them again).
+        let reply = commit_subgraph(id, admission, source, bindings);
+        if let Some(ack) = acknowledge.take() {
+            ack(reply);
+        }
+        return;
+    };
+    if let Some(ack) = acknowledge.take() {
+        ack((0, receipt));
+    }
+    let failure = |s: &mut super::Session, status: i32| {
+        let _ = s.backend.device().0.borrow_mut().abandon_reservation();
+        let _ = s.backend.device().0.borrow_mut().release_imports();
+        let mut failed = receipt;
+        failed.flags |= TERMINAL | FAILED | UNCERTAIN;
+        failed.status = if status < 0 { status } else { -6 };
+        s.acknowledged_failure = true;
+        s.ready.push_back(super::Pending {
+            receipt: failed,
+            identities: vec![],
+        });
+    };
+    let _ = ffi(|| {
+        with_session(id, |s| {
+            let Ok(p) = s.admissions.get(admission, source) else {
+                failure(s, -3);
+                return Ok(());
+            };
+            let commands = p.commands.clone();
+            let leases = p.leases.clone();
+            let identities = p.identities.clone();
+            let result = s
+                .backend
+                .submit_diagnostic(source.publication, commands, leases);
+            let ticket = match result {
+                Ok(t) => t,
+                Err(BackendError::SubmissionUncertain { code, .. }) => {
+                    failure(s, -(code.min(i32::MAX as u32) as i32).max(1));
+                    let _ = s.admissions.remove(admission, source);
+                    return Ok(());
+                }
+                Err(_) => {
+                    failure(s, -6);
+                    if let Ok(p) = s.admissions.remove(admission, source) {
+                        let _ = s.packet_cache.unpin(&p.pipelines);
+                    }
+                    return Ok(());
+                }
+            };
+            let native = s.backend.device().0.borrow().native_ticket(ticket);
+            let p = s.admissions.remove(admission, source)?;
+            let mut uncertain = s.packet_cache.unpin(&p.pipelines).is_err();
+            uncertain |= s.backend.device().0.borrow_mut().release_imports().is_err();
+            let mut final_receipt = receipt;
+            if ticket.submission_id != receipt.ticket
+                || native != Some((receipt.native_generation, receipt.native_ticket))
+            {
+                // The acknowledged ordering witness must be exactly this work.
+                failure(s, -6);
+                return Ok(());
+            }
+            if uncertain {
+                final_receipt.flags |= UNCERTAIN;
+                final_receipt.status = 1;
+            }
+            s.pending.insert(
+                ticket.submission_id,
+                Pending {
+                    receipt: final_receipt,
+                    identities,
+                },
+            );
+            Ok(())
+        })
+    });
 }
 fn commit_impl(
     id: u64,

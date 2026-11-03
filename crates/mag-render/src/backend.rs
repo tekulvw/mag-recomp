@@ -206,6 +206,11 @@ impl<D: RenderDevice> RenderBackend<D> {
     /// Diagnostic source rendering only: absent world, camera and display-frame
     /// identities stay zero. This cannot qualify a replacement or FPS run.
     /// Resource ownership and actual terminal requirements are unchanged.
+    /// The submission id the next accepted submit will be assigned. Only an
+    /// observation: nothing is reserved or consumed by calling this.
+    pub fn next_submission_id(&self) -> u64 {
+        self.next_submission
+    }
     pub fn submit_diagnostic(
         &mut self,
         source_publication: u64,
