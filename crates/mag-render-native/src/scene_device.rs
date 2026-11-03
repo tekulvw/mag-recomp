@@ -176,6 +176,8 @@ mod scene_extended;
 #[path = "scene_sampler.rs"]
 mod scene_sampler;
 pub struct SceneDevice<'owner> {
+    #[cfg(test)]
+    submit_recorder: Option<unsafe extern "C" fn(*mut c_void, *const Scene, *mut Ticket) -> i32>,
     samplers: scene_sampler::Cache,
     frame: Option<crate::host_frame::HostFrame>,
     target: Option<crate::host_image::NativeImage>,
@@ -188,6 +190,8 @@ impl NativeContext {
     pub fn scene(&mut self, limits: BatchDeviceLimits) -> Result<SceneDevice<'_>, i32> {
         checked_scene_layout()?;
         Ok(SceneDevice {
+            #[cfg(test)]
+            submit_recorder: None,
             samplers: scene_sampler::Cache::default(),
             frame: None,
             target: None,
@@ -206,6 +210,8 @@ impl SceneDevice<'static> {
     ) -> Result<Self, i32> {
         checked_scene_layout()?;
         Ok(Self {
+            #[cfg(test)]
+            submit_recorder: None,
             samplers: scene_sampler::Cache::default(),
             frame: None,
             target: None,
@@ -289,6 +295,27 @@ impl SceneDevice<'_> {
             }
         }
         error.map_or(Ok(()), Err)
+    }
+    /// Release a cached graphics or compute public reference. Genuine pending
+    /// submissions retain their independent native pipeline ownership.
+    pub fn release_scene_pipeline(&mut self, id: u64) -> Result<(), i32> {
+        if self.graphics.contains_key(&id) {
+            return self.release_graphics_pipeline(id);
+        }
+        let definition = self
+            .inner
+            .pipelines
+            .get(&id)
+            .filter(|d| d.compute.is_some())
+            .ok_or(-3)?;
+        let status = unsafe {
+            self.inner.api.pipeline_release.unwrap()(self.inner.api.device, definition.handle)
+        };
+        if status != 0 {
+            return Err(status);
+        }
+        self.inner.pipelines.remove(&id);
+        Ok(())
     }
     /// Drop only the public pipeline reference. Pending native submissions own
     /// independent references until genuine terminal receipts.
@@ -919,44 +946,59 @@ impl RenderDevice for SceneDevice<'_> {
             diagnostic_readback: readback.map(|r| r.0).unwrap_or_default(),
         };
         let mut native = Ticket::default();
-        let status = unsafe {
-            if let Some(plan) = &extended {
-                plan.submit(
-                    self.inner.api.device,
-                    &scene,
-                    &sampler_table,
-                    &self.imports,
-                    (self.target.as_ref(), self.frame.as_ref()),
-                    &mut native,
-                )
-            } else if !sampler_table.is_empty() {
-                let v2 = scene_sampler::SceneV2 {
-                    struct_size: size_of::<scene_sampler::SceneV2>() as u32,
-                    abi_version: 2,
-                    scene: &scene,
-                    samplers: sampler_table.as_ptr(),
-                    sampler_count: sampler_table.len() as u32,
-                    reserved: 0,
-                };
-                scene_sampler::mag_native_submit_scene_v2(
-                    self.inner.api.device,
-                    &v2,
-                    self.target.as_ref().map_or(std::ptr::null(), |t| t),
-                    self.frame.as_ref().map_or(std::ptr::null(), |f| f),
-                    &mut native,
-                )
-            } else if let (Some(target), Some(frame)) = (self.target, self.frame.as_ref()) {
-                mag_native_submit_scene_frame(
-                    self.inner.api.device,
-                    &scene,
-                    target,
-                    frame,
-                    &mut native,
-                )
-            } else if let Some(target) = self.target {
-                mag_native_submit_scene_target(self.inner.api.device, &scene, target, &mut native)
-            } else {
-                mag_native_submit_scene(self.inner.api.device, &scene, &mut native)
+        #[cfg(test)]
+        let recorder = self.submit_recorder;
+        #[cfg(not(test))]
+        let recorder: Option<
+            unsafe extern "C" fn(*mut c_void, *const Scene, *mut Ticket) -> i32,
+        > = None;
+        let status = if let Some(record) = recorder {
+            unsafe { record(self.inner.api.device, &scene, &mut native) }
+        } else {
+            unsafe {
+                if let Some(plan) = &extended {
+                    plan.submit(
+                        self.inner.api.device,
+                        &scene,
+                        &sampler_table,
+                        &self.imports,
+                        (self.target.as_ref(), self.frame.as_ref()),
+                        &mut native,
+                    )
+                } else if !sampler_table.is_empty() {
+                    let v2 = scene_sampler::SceneV2 {
+                        struct_size: size_of::<scene_sampler::SceneV2>() as u32,
+                        abi_version: 2,
+                        scene: &scene,
+                        samplers: sampler_table.as_ptr(),
+                        sampler_count: sampler_table.len() as u32,
+                        reserved: 0,
+                    };
+                    scene_sampler::mag_native_submit_scene_v2(
+                        self.inner.api.device,
+                        &v2,
+                        self.target.as_ref().map_or(std::ptr::null(), |t| t),
+                        self.frame.as_ref().map_or(std::ptr::null(), |f| f),
+                        &mut native,
+                    )
+                } else if let (Some(target), Some(frame)) = (self.target, self.frame.as_ref()) {
+                    mag_native_submit_scene_frame(
+                        self.inner.api.device,
+                        &scene,
+                        target,
+                        frame,
+                        &mut native,
+                    )
+                } else if let Some(target) = self.target {
+                    mag_native_submit_scene_target(
+                        self.inner.api.device,
+                        &scene,
+                        target,
+                        &mut native,
+                    )
+                } else {
+                    mag_native_submit_scene(self.inner.api.device, &scene, &mut native)
+                }
             }
         };
         if status < 0 {
@@ -1237,3 +1279,7 @@ mod abi_tests {
         super::checked_graphics_v2_layout().unwrap();
     }
 }
+
+#[cfg(test)]
+#[path = "scene_compute_recording.rs"]
+mod compute_recording;

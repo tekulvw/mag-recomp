@@ -105,6 +105,11 @@ typedef struct MagRenderPacketPipeline {
     uint32_t texture_count, reserved1;
     MagRenderPacketRasterState state;
 } MagRenderPacketPipeline;
+/* UPLOAD copies length bytes synchronously. PRODUCED requires bytes=NULL,
+ * reserves exactly length GPU bytes, and has one full-range compute writer in
+ * this packet. Reads refer to that same local buffer index after its producer.
+ * Graphics vertex/uniform/storage reads are supported; index data remains a
+ * CPU-owned UPLOAD so index bounds are independently validated before queueing. */
 enum MagRenderPacketBufferRole { MAG_RENDER_PACKET_UPLOAD = 0, MAG_RENDER_PACKET_PRODUCED = 1 };
 typedef struct MagRenderPacketBuffer {
     uint32_t role, reserved;
@@ -160,6 +165,13 @@ typedef struct MagRenderPacketDraw {
     uint32_t buffer_count, texture_count;
     const MagRenderPacketTextureUse *textures;
 } MagRenderPacketDraw;
+/* Ordered compute prefix, at most32 native commands including dependencies.
+ * program must name COMPUTE with explicit threads/buffer reflection; graphics
+ * declarations, sampled textures and samplers are not compute bindings here.
+ * Binding.stage must be COMPUTE. Reflected READ_WRITE storage binds a full
+ * PRODUCED allocation; READ may bind an UPLOAD or an earlier produced value.
+ * Read-before-write, same-dispatch aliasing and multiple writers reject before
+ * admission. All draws execute after this prefix on the same native queue. */
 typedef struct MagRenderPacketDispatch {
     uint32_t program, binding_count;
     const MagRenderPacketBinding *bindings;

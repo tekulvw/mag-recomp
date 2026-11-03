@@ -2,6 +2,8 @@
 //! Source shaders are already lowered. Unknown state and unsupported resource
 //! shapes are rejected as a whole; no attributes/materials are synthesized.
 use super::*;
+#[path = "scene_packet_compute.rs"]
+pub(crate) mod compute;
 use crate::{
     batch_device::{
         ShaderStage,
@@ -221,6 +223,8 @@ pub struct ScenePacket {
     pub programs: Vec<Program>,
     pub pipelines: Vec<Pipeline>,
     pub buffers: Vec<Vec<u8>>,
+    pub produced: BTreeMap<u32, u64>,
+    pub dispatches: Vec<compute::Dispatch>,
     pub images: Vec<ImagePayload>,
     pub imports: Vec<raw::ImageRequirement>,
     pub views: Vec<raw::ImageView>,
@@ -463,15 +467,13 @@ impl ScenePacket {
         {
             return Err(-1);
         }
-        // The graph currently receives already prepared graphics buffers. GPU compute
-        // packet admission will use the same prefix once its explicit contract lands.
-        if d.dispatch_count != 0 {
+        if d.dispatch_count > 32 {
             return Err(packet_failure(
                 d.source,
                 "copy/dispatch",
                 None,
                 d.dispatch_count,
-                -2,
+                -5,
             ));
         }
         let extra = stencils.as_ref().map_or(0, |s| {
@@ -485,7 +487,7 @@ impl ScenePacket {
         };
         let mut programs = Vec::new();
         for p in unsafe { slice(d.programs, d.program_count as usize) }? {
-            if p.stage > 1
+            if p.stage > 2
                 || p.reserved & !raw::PROGRAM_STORED_DEPTH_AUX != 0
                 || p.reserved != 0 && (p.stage != 1 || p.shader.language != 1)
                 || p.reserved1 != 0
@@ -555,6 +557,7 @@ impl ScenePacket {
             });
         }
         let mut buffers = Vec::new();
+        let mut produced = BTreeMap::new();
         for (index, b) in unsafe { slice(d.buffers, d.buffer_count as usize) }?
             .iter()
             .enumerate()
@@ -562,21 +565,45 @@ impl ScenePacket {
             if b.reserved != 0 || b.length == 0 {
                 return Err(-1);
             }
-            if b.role != 0 {
-                return Err(packet_failure(
-                    d.source,
-                    "copy/buffer-role",
-                    Some(index),
-                    b.role,
-                    -2,
-                ));
+            match b.role {
+                0 => buffers.push(unsafe {
+                    budget.copy(
+                        b.bytes.cast::<u8>(),
+                        usize::try_from(b.length).map_err(|_| -5)?,
+                    )
+                }?),
+                1 => {
+                    if !b.bytes.is_null() {
+                        return Err(-1);
+                    }
+                    budget.take(b.length)?;
+                    produced.insert(index as u32, b.length);
+                    buffers.push(Vec::new());
+                }
+                _ => {
+                    return Err(packet_failure(
+                        d.source,
+                        "copy/buffer-role",
+                        Some(index),
+                        b.role,
+                        -2,
+                    ));
+                }
             }
-            buffers.push(unsafe {
-                budget.copy(
-                    b.bytes.cast::<u8>(),
-                    usize::try_from(b.length).map_err(|_| -5)?,
-                )
-            }?);
+        }
+        let mut dispatches = Vec::new();
+        for dispatch in unsafe { slice(d.dispatches, d.dispatch_count as usize) }? {
+            if dispatch.reserved != 0 || dispatch.binding_count == 0 || dispatch.binding_count > 16
+            {
+                return Err(-1);
+            }
+            dispatches.push(compute::Dispatch {
+                program: dispatch.program,
+                groups: dispatch.groups,
+                bindings: unsafe {
+                    budget.copy(dispatch.bindings, dispatch.binding_count as usize)
+                }?,
+            });
         }
         let mut images = Vec::new();
         for (index, i) in unsafe { slice(d.images, d.image_count as usize) }?
@@ -722,6 +749,8 @@ impl ScenePacket {
             programs,
             pipelines,
             buffers,
+            produced,
+            dispatches,
             images,
             imports: Vec::new(),
             view_dimensions: dimensions.unwrap_or_else(|| vec![Dimension::D2; views.len()]),
@@ -795,6 +824,11 @@ impl ScenePacket {
                 -1,
             )
         })?;
+        let length = self
+            .produced
+            .get(&u.buffer)
+            .copied()
+            .unwrap_or(b.len() as u64);
         if u.reserved != 0
             || u.length == 0
             || u.offset.checked_add(u.length).ok_or_else(|| {
@@ -805,13 +839,13 @@ impl ScenePacket {
                     (u.offset, u.length),
                     -1,
                 )
-            })? > b.len() as u64
+            })? > length
         {
             return Err(packet_failure(
                 self.source,
                 "validate/buffer-range",
                 Some(u.buffer as usize),
-                (u.offset, u.length, u.reserved, b.len()),
+                (u.offset, u.length, u.reserved, length),
                 -1,
             ));
         }
@@ -858,11 +892,15 @@ impl ScenePacket {
             for b in &p.buffers {
                 if b.slot >= 16
                     || !slots.insert(b.slot)
-                    || b.access != 1
+                    || !(b.access == 1 || p.stage == 2 && b.access == 2 && b.binding_kind == 0)
                     || b.minimum_bytes == 0
                     || !b.minimum_bytes.is_multiple_of(4)
-                    || b.runtime_array_stride != 0
-                    || b.runtime_size_index != u32::MAX
+                    || (p.stage != 2 && b.runtime_array_stride != 0)
+                    || (b.runtime_array_stride == 0 && b.runtime_size_index != u32::MAX)
+                    || (b.runtime_array_stride != 0
+                        && (p.stage != 2
+                            || b.runtime_size_index >= 16
+                            || !b.runtime_array_stride.is_multiple_of(4)))
                     || b.alignment_bytes < 4
                     || b.alignment_bytes > 256
                     || !b.alignment_bytes.is_power_of_two()
@@ -940,6 +978,7 @@ impl ScenePacket {
                 }
             }
         }
+        self.validate_compute()?;
         for (pipeline_index, p) in self.pipelines.iter().enumerate() {
             raster(&p.state).map_err(|status| {
                 packet_failure(
@@ -1549,6 +1588,15 @@ impl ScenePacket {
                         ir.length
                     ));
                 }
+                if self.produced.contains_key(&d.indices.buffer) {
+                    return Err(packet_failure(
+                        self.source,
+                        "validate/produced-indices",
+                        None,
+                        d.indices.buffer,
+                        -2,
+                    ));
+                }
                 let ib = &self.buffers[d.indices.buffer as usize]
                     [ir.offset as usize..(ir.offset + ir.length) as usize];
                 if ib.as_chunks::<4>().0.iter().any(|b| {
@@ -1851,7 +1899,7 @@ impl ScenePacket {
             }
         }
     }
-    fn prepare(
+    pub(crate) fn prepare(
         &self,
         device: &impl SceneCatalog,
         ids: &[u64],
@@ -1898,8 +1946,8 @@ impl ScenePacket {
         let mut batch = BatchBuilder::new(
             device.owner_generation(),
             BatchLimits {
-                max_commands: 1,
-                max_gpu_buffers: 1,
+                max_commands: 32,
+                max_gpu_buffers: self.produced.len().max(1),
                 max_gpu_bytes: max_bytes,
                 max_uploads: self.buffers.len().max(1),
             },
@@ -1913,18 +1961,18 @@ impl ScenePacket {
                 -1,
             )
         })?;
-        let mut uploads = Vec::new();
+        let mut sources = vec![None; self.buffers.len()];
+        let mut allocations = BTreeMap::new();
         for (index, b) in self.buffers.iter().enumerate() {
-            uploads.push(batch.upload(lease(b, "buffer", index)?).map_err(|error| {
-                packet_failure(
-                    self.source,
-                    "scene/buffer-upload",
-                    Some(index),
-                    (b.len(), error),
-                    -5,
-                )
-            })?)
+            if let Some(&length) = self.produced.get(&(index as u32)) {
+                allocations.insert(index as u32, batch.allocate(length).map_err(|_| -5)?);
+            } else {
+                sources[index] = Some(ReadSource::Upload(
+                    batch.upload(lease(b, "buffer", index)?).map_err(|_| -5)?,
+                ));
+            }
         }
+        self.prepare_compute_prefix(&mut batch, &mut sources, &allocations, ids)?;
         let prefix = batch
             .prepare_scene_prefix(device)
             .map_err(|error| packet_failure(self.source, "scene/upload-prefix", None, error, -1))?;
@@ -2127,7 +2175,7 @@ impl ScenePacket {
                             )
                         })?,
                         slot: b.slot,
-                        source: ReadSource::Upload(uploads[b.view.buffer as usize]),
+                        source: sources[b.view.buffer as usize].ok_or(-1)?,
                         range: self.range(b.view).map_err(|status| {
                             packet_failure(
                                 self.source,
@@ -2205,8 +2253,8 @@ impl ScenePacket {
                 }
                 draws.push(SceneDraw {
                     pipeline: ids[d.pipeline as usize],
-                    vertices: ReadSource::Upload(uploads[d.vertices.buffer as usize]),
-                    indices: ReadSource::Upload(uploads[d.indices.buffer as usize]),
+                    vertices: sources[d.vertices.buffer as usize].ok_or(-1)?,
+                    indices: sources[d.indices.buffer as usize].ok_or(-1)?,
                     vertex_range: self.range(d.vertices).map_err(|status| {
                         packet_failure(
                             self.source,
@@ -2505,6 +2553,7 @@ impl PipelineCache {
                 ],
             )
         }
+        key.insert(0, 0); // Disjoint graphics/compute cache namespaces.
         Ok(key)
     }
     fn resolve(
@@ -2530,7 +2579,20 @@ impl PipelineCache {
                 },
             )?)
         }
-        let required: BTreeSet<_> = keys.iter().cloned().collect();
+        let compute_keys: Vec<_> = packet
+            .compute_programs()
+            .into_iter()
+            .map(|index| {
+                let mut key = vec![1];
+                key.extend(programs[index as usize].to_le_bytes());
+                (index, key)
+            })
+            .collect();
+        let required: BTreeSet<_> = keys
+            .iter()
+            .cloned()
+            .chain(compute_keys.iter().map(|(_, key)| key.clone()))
+            .collect();
         if required.len() > MAX_PIPELINES {
             return Err(-5);
         }
@@ -2568,16 +2630,66 @@ impl PipelineCache {
             self.pipelines.insert(key, (id, epoch));
             result.push(id);
         }
+        for (index, key) in compute_keys {
+            if let Some((id, last)) = self.pipelines.get_mut(&key) {
+                *last = epoch;
+                result.push(*id);
+                continue;
+            }
+            if self.pipelines.len() >= MAX_PIPELINES {
+                let old = self
+                    .pipelines
+                    .iter()
+                    .filter(|(k, (id, _))| !required.contains(*k) && !self.pins.contains_key(id))
+                    .min_by_key(|(_, (_, age))| *age)
+                    .map(|(k, (id, _))| (k.clone(), *id))
+                    .ok_or(-5)?;
+                device.release(old.1)?;
+                self.pipelines.remove(&old.0);
+            }
+            let id = device
+                .compile_compute(&packet.programs[index as usize])
+                .map_err(|status| {
+                    packet_failure(
+                        packet.source,
+                        "cache/compile-compute",
+                        Some(index as usize),
+                        "owned-program",
+                        status,
+                    )
+                })?;
+            self.pipelines.insert(key, (id, epoch));
+            result.push(id);
+        }
         Ok(result)
     }
 }
 trait PipelineCompiler {
     fn compile(&mut self, p: &Pipeline, programs: &[Program]) -> Result<u64, i32>;
+    fn compile_compute(&mut self, _program: &Program) -> Result<u64, i32> {
+        Err(-2)
+    }
     fn release(&mut self, id: u64) -> Result<(), i32>;
 }
 impl PipelineCompiler for SceneDevice<'_> {
     fn release(&mut self, id: u64) -> Result<(), i32> {
-        self.release_graphics_pipeline(id)
+        self.release_scene_pipeline(id)
+    }
+    fn compile_compute(&mut self, program: &Program) -> Result<u64, i32> {
+        let shader = program.shader();
+        let desc = mag_render::sdk_compute::PipelineDesc {
+            struct_size: size_of::<mag_render::sdk_compute::PipelineDesc>() as u32,
+            abi_version: 1,
+            source_bytes: shader.source,
+            source_length: shader.source_length,
+            entry_point: shader.entry,
+            entry_point_length: shader.entry_length,
+            binding_count: program.buffers.len() as u32,
+            bindings: program.buffers.as_ptr(),
+            threads_per_group: program.threads,
+            shader_language: program.language,
+        };
+        unsafe { self.compute_pipeline(&desc) }
     }
     fn compile(&mut self, p: &Pipeline, programs: &[Program]) -> Result<u64, i32> {
         let vertex = &programs[p.vertex as usize];
@@ -3243,6 +3355,8 @@ pub(crate) mod packet_tests {
                 }],
                 state,
             }],
+            produced: BTreeMap::new(),
+            dispatches: Vec::new(),
             buffers: vec![
                 vec![0; 72],
                 [0u32, 1, 2]
@@ -3313,7 +3427,7 @@ pub(crate) mod packet_tests {
             imports: Vec::new(),
         }
     }
-    struct Catalog<'a>(&'a ScenePacket);
+    pub(crate) struct Catalog<'a>(pub(crate) &'a ScenePacket);
     impl PipelineCatalog for Catalog<'_> {
         fn owner_generation(&self) -> u64 {
             42
@@ -3694,6 +3808,13 @@ pub(crate) mod packet_tests {
         assert!(compiler.released.is_empty());
     }
     fn copy_view(packet: &ScenePacket) -> ScenePacket {
+        copy_view_with_prefix(packet, &[], &[])
+    }
+    pub(crate) fn copy_view_with_prefix(
+        packet: &ScenePacket,
+        dispatches: &[raw::Dispatch],
+        produced: &[u32],
+    ) -> ScenePacket {
         let programs: Vec<_> = packet
             .programs
             .iter()
@@ -3735,10 +3856,15 @@ pub(crate) mod packet_tests {
         let buffers: Vec<_> = packet
             .buffers
             .iter()
-            .map(|b| raw::Buffer {
-                role: 0,
+            .enumerate()
+            .map(|(index, b)| raw::Buffer {
+                role: u32::from(produced.contains(&(index as u32))),
                 reserved: 0,
-                bytes: b.as_ptr().cast(),
+                bytes: if produced.contains(&(index as u32)) {
+                    std::ptr::null()
+                } else {
+                    b.as_ptr().cast()
+                },
                 length: b.len() as u64,
             })
             .collect();
@@ -3858,8 +3984,8 @@ pub(crate) mod packet_tests {
             view_count: packet.views.len() as u32,
             sampler_count: packet.samplers.len() as u32,
             samplers: packet.samplers.as_ptr(),
-            dispatches: std::ptr::null(),
-            dispatch_count: 0,
+            dispatches: dispatches.as_ptr(),
+            dispatch_count: dispatches.len() as u32,
             pass_count: passes.len() as u32,
             passes: passes.as_ptr(),
             items: packet.items.as_ptr(),
