@@ -293,3 +293,9 @@ extern "C" int mag_native_packet_v3_layout(uint32_t *out,uint32_t words){
  for(uint32_t i=0;i<words;++i){out[i]=expected[i];}
  return 0;
 }
+
+extern "C" int mag_native_admission_layout(uint32_t *out,uint32_t words){
+ const uint32_t fields[]={sizeof(MagRenderSceneAdmission),alignof(MagRenderSceneAdmission),offsetof(MagRenderSceneAdmission,abi_version),offsetof(MagRenderSceneAdmission,struct_size),offsetof(MagRenderSceneAdmission,worker),offsetof(MagRenderSceneAdmission,token),offsetof(MagRenderSceneAdmission,native_generation),offsetof(MagRenderSceneAdmission,source),offsetof(MagRenderSceneAdmission,intended_items),offsetof(MagRenderSceneAdmission,draws),offsetof(MagRenderSceneAdmission,flags),offsetof(MagRenderSceneAdmission,reserved)};
+ if(!out||words!=sizeof(fields)/sizeof(fields[0]))return -1;
+ for(uint32_t i=0;i<words;++i){out[i]=fields[i];}return 0;
+}

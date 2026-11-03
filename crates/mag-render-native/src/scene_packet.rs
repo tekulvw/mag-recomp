@@ -1252,8 +1252,39 @@ pub(super) struct PipelineCache {
     next_program: u64,
     pipelines: BTreeMap<Vec<u8>, (u64, u64)>,
     epoch: u64,
+    pins: BTreeMap<u64, usize>,
 }
 impl PipelineCache {
+    pub(super) fn pin(&mut self, ids: &[u64]) -> Result<(), i32> {
+        let ids: BTreeSet<_> = ids.iter().copied().collect();
+        if ids.iter().any(|id| {
+            !self.pipelines.values().any(|(p, _)| p == id) || self.pins.get(id) == Some(&usize::MAX)
+        }) {
+            return Err(-6);
+        }
+        for id in ids {
+            *self.pins.entry(id).or_default() += 1;
+        }
+        Ok(())
+    }
+    pub(super) fn unpin(&mut self, ids: &[u64]) -> Result<(), i32> {
+        let ids: BTreeSet<_> = ids.iter().copied().collect();
+        if ids
+            .iter()
+            .any(|id| self.pins.get(id).is_none_or(|n| *n == 0))
+        {
+            return Err(-6);
+        }
+        for id in ids {
+            let n = self.pins.get_mut(&id).unwrap();
+            *n -= 1;
+            if *n == 0 {
+                self.pins.remove(&id);
+            }
+        }
+        Ok(())
+    }
+
     fn intern(&mut self, p: &Program) -> Result<u64, i32> {
         let key = p.key();
         if let Some(id) = self.programs.get(&key) {
@@ -1390,7 +1421,7 @@ impl PipelineCache {
                 let old = self
                     .pipelines
                     .iter()
-                    .filter(|(k, _)| !required.contains(*k))
+                    .filter(|(k, (id, _))| !required.contains(*k) && !self.pins.contains_key(id))
                     .min_by_key(|(_, (_, age))| *age)
                     .map(|(k, (id, _))| (k.clone(), *id))
                     .ok_or(-5)?;
@@ -1466,6 +1497,208 @@ impl PipelineCompiler for SceneDevice<'_> {
         unsafe { self.graphics_pipeline_v3(&desc) }
     }
 }
+/// CPU preparation only. No target pin, queue lease, submission or original
+/// completion publication occurs here. Owned leases and native PSOs remain held.
+pub(crate) fn admit(id: u64, worker: u64, packet: ScenePacket) -> Result<raw::Admission, i32> {
+    with_session(id, |s| {
+        if s.admissions.len() + s.pending.len() + s.ready.len() >= 2 {
+            return Err(-4);
+        }
+        packet.validate(s.max_draws, s.max_bytes)?;
+        if packet.flags != 0 {
+            return Err(-2);
+        }
+        let language = match s.native_backend {
+            1 => 1,
+            2 => 3,
+            3 => 2,
+            _ => return Err(-2),
+        };
+        if packet.programs.iter().any(|p| p.language != language) {
+            return Err(-2);
+        }
+        let ids = s
+            .packet_cache
+            .resolve(&mut *s.backend.device().0.borrow_mut(), &packet)?;
+        let scene = packet.prepare(
+            &*s.backend.device().0.borrow(),
+            &ids,
+            s.max_draws,
+            s.max_bytes,
+        )?;
+        let generation = s.backend.device().0.borrow().owner_generation();
+        let mut admitted = BTreeSet::new();
+        let mut identities = Vec::new();
+        for (pass, p) in packet.passes.iter().enumerate() {
+            for d in &p.draws {
+                admitted.insert((pass as u32, d.item));
+                identities.push(DrawIdentity {
+                    source_item: d.item,
+                    source_partition: d.partition,
+                    unresolved_obligations: d.obligations,
+                });
+            }
+        }
+        let receipt = Receipt {
+            abi_version: 1,
+            struct_size: size_of::<Receipt>() as u32,
+            source: packet.source,
+            flags: DIAGNOSTIC,
+            intended_items: packet.intended,
+            admitted_items: admitted.len() as u64,
+            omitted_items: packet.intended - admitted.len() as u64,
+            draws: identities.len() as u64,
+            ..Receipt::default()
+        };
+        let output = packet.images.get(packet.output as usize).ok_or(-1)?.desc;
+        let (commands, leases) = scene.into_submission();
+        // Same synchronous backend admission limits, checked before a token is
+        // published. This does not promise later native allocations cannot fail.
+        if leases.is_empty()
+            || leases.len() > crate::batch_device::scene_device::MAX_SCENE_RESOURCES
+            || leases
+                .iter()
+                .try_fold(0u64, |n, l| n.checked_add(l.bytes().len() as u64))
+                .is_none_or(|n| n > s.max_bytes)
+        {
+            return Err(-5);
+        }
+        s.packet_cache.pin(&ids)?;
+        let prepared = super::scene_admission::Prepared {
+            commands: std::rc::Rc::new(commands),
+            leases,
+            pipelines: ids.clone(),
+            output,
+            receipt,
+            identities,
+        };
+        match s.admissions.insert(
+            (worker, generation),
+            packet.source,
+            packet.intended,
+            receipt.draws,
+            prepared,
+            s.pending.len() + s.ready.len(),
+        ) {
+            Ok(a) => Ok(a),
+            Err(e) => {
+                s.packet_cache.unpin(&ids)?;
+                Err(e)
+            }
+        }
+    })
+}
+pub(crate) fn cancel(id: u64, admission: raw::Admission) -> Result<(), i32> {
+    with_session(id, |s| {
+        let ids = s
+            .admissions
+            .get(admission, admission.source)?
+            .pipelines
+            .clone();
+        s.packet_cache.unpin(&ids)?;
+        s.admissions.remove(admission, admission.source)?;
+        Ok(())
+    })
+}
+/// A definitely rejected commit keeps the preparation cancellable/retryable.
+/// Accepted/indeterminate consumes it exactly once; only genuine backend terminal
+/// releases submitted leases. This does not publish original CPU outputs.
+pub(crate) fn commit(
+    id: u64,
+    admission: raw::Admission,
+    source: Source,
+    target: &HostImage,
+    frame: HostFrame,
+) -> (i32, Receipt) {
+    let mut out = Receipt {
+        abi_version: 1,
+        struct_size: size_of::<Receipt>() as u32,
+        flags: DIAGNOSTIC,
+        source,
+        ..Receipt::default()
+    };
+    let mut effects = false;
+    let status = ffi(|| {
+        with_session(id, |s| {
+            let p = s.admissions.get(admission, source)?;
+            if !frame.valid()
+                || frame.owner_lifetime != target.owner_lifetime
+                || target.width != p.output.width
+                || target.height != p.output.height
+                || format(target.format)? != p.output.format
+            {
+                return Err(-3);
+            }
+            let commands = p.commands.clone();
+            let leases = p.leases.clone();
+            let mut receipt = p.receipt;
+            let identities = p.identities.clone();
+            let image = unsafe { s.backend.device().0.borrow_mut().import_target(target) }?;
+            if let Err(e) = unsafe { s.backend.device().0.borrow_mut().frame_context(frame) } {
+                s.backend.device().0.borrow_mut().release_target(image)?;
+                return Err(e);
+            }
+            let result = s
+                .backend
+                .submit_diagnostic(source.publication, commands, leases);
+            let (ticket, mut uncertain) = match result {
+                Ok(t) => (t, false),
+                Err(BackendError::SubmissionUncertain { ticket, .. }) => (ticket, true),
+                Err(e) => {
+                    s.backend.device().0.borrow_mut().release_target(image)?;
+                    return Err(match e {
+                        BackendError::DeviceRejected { code } => {
+                            -(code.min(i32::MAX as u32) as i32).max(1)
+                        }
+                        _ => -6,
+                    });
+                }
+            };
+            effects = true;
+            // Remove the replayable preparation before any further fallible cleanup.
+            let p = s.admissions.remove(admission, source)?;
+            uncertain |= s.packet_cache.unpin(&p.pipelines).is_err();
+            uncertain |= s
+                .backend
+                .device()
+                .0
+                .borrow_mut()
+                .release_target(image)
+                .is_err();
+            let (generation, native) = s
+                .backend
+                .device()
+                .0
+                .borrow()
+                .native_ticket(ticket)
+                .unwrap_or((0, 0));
+            receipt.ticket = ticket.submission_id;
+            receipt.native_generation = generation;
+            receipt.native_ticket = native;
+            receipt.status = i32::from(uncertain);
+            if uncertain {
+                receipt.flags |= UNCERTAIN;
+            }
+            out = receipt;
+            s.pending.insert(
+                ticket.submission_id,
+                Pending {
+                    receipt,
+                    identities,
+                },
+            );
+            Ok(())
+        })
+    });
+    if status != 0 {
+        out.status = if effects { 1 } else { status };
+        if effects {
+            out.flags |= UNCERTAIN;
+        }
+    }
+    (out.status, out)
+}
+
 /// Called only on the fixed worker's session thread. It shares the same backend,
 /// generation, genuine target/frame, pending limit and terminal evidence path.
 pub(crate) fn submit(
@@ -1485,7 +1718,7 @@ pub(crate) fn submit(
     let mut effects = false;
     let code = ffi(|| {
         with_session(id, |s| {
-            if s.pending.len() + s.ready.len() >= 2 {
+            if s.admissions.len() + s.pending.len() + s.ready.len() >= 2 {
                 return Err(-4);
             }
             packet.validate(s.max_draws, s.max_bytes)?;
@@ -1540,9 +1773,11 @@ pub(crate) fn submit(
                 return Err(e);
             }
             let (commands, leases) = scene.into_submission();
-            let result = s
-                .backend
-                .submit_diagnostic(packet.source.publication, commands, leases);
+            let result = s.backend.submit_diagnostic(
+                packet.source.publication,
+                std::rc::Rc::new(commands),
+                leases,
+            );
             let (ticket, uncertain) = match result {
                 Ok(t) => (t, false),
                 Err(BackendError::SubmissionUncertain { ticket, .. }) => (ticket, true),
@@ -2015,6 +2250,37 @@ pub(crate) mod packet_tests {
                 .prepare(&Catalog(&packet), &[1], 32, 1 << 20)
                 .is_err()
         );
+    }
+    #[test]
+    fn admitted_pipeline_is_never_evicted_until_its_pin_is_cancelled() {
+        let mut packet = fixture();
+        let mut cache = PipelineCache::default();
+        let mut compiler = Compiler::default();
+        let first = cache.resolve(&mut compiler, &packet).unwrap();
+        cache.pin(&first).unwrap();
+        for i in 0..256u32 {
+            packet.programs[0].source = i.to_le_bytes().to_vec();
+            cache.resolve(&mut compiler, &packet).unwrap();
+        }
+        assert!(!compiler.released.contains(&first[0]));
+        cache.unpin(&first).unwrap();
+        packet.programs[0].source = b"aftercancel".to_vec();
+        cache.resolve(&mut compiler, &packet).unwrap();
+        assert!(compiler.released.contains(&first[0]));
+    }
+    #[test]
+    fn all_pinned_pipeline_capacity_refuses_without_releasing_an_admission() {
+        let mut packet = fixture();
+        let mut cache = PipelineCache::default();
+        let mut compiler = Compiler::default();
+        for i in 0..256u32 {
+            packet.programs[0].source = i.to_le_bytes().to_vec();
+            let ids = cache.resolve(&mut compiler, &packet).unwrap();
+            cache.pin(&ids).unwrap();
+        }
+        packet.programs[0].source = b"overflow".to_vec();
+        assert_eq!(cache.resolve(&mut compiler, &packet), Err(-5));
+        assert!(compiler.released.is_empty());
     }
     fn copy_view(packet: &ScenePacket) -> ScenePacket {
         let programs: Vec<_> = packet

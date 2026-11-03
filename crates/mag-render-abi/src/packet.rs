@@ -586,3 +586,35 @@ pub fn v3_layout() -> Vec<u32> {
         offset_of!(DescV3, reserved) as u32,
     ]
 }
+
+/// CPU preparation identity only; never a native GPU/completion ticket.
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct Admission {
+    pub abi_version: u32,
+    pub struct_size: u32,
+    pub worker: u64,
+    pub token: u64,
+    pub native_generation: u64,
+    pub source: Source,
+    pub intended_items: u64,
+    pub draws: u64,
+    pub flags: u32,
+    pub reserved: u32,
+}
+pub fn admission_layout() -> Vec<u32> {
+    vec![
+        size_of::<Admission>() as u32,
+        align_of::<Admission>() as u32,
+        offset_of!(Admission, abi_version) as u32,
+        offset_of!(Admission, struct_size) as u32,
+        offset_of!(Admission, worker) as u32,
+        offset_of!(Admission, token) as u32,
+        offset_of!(Admission, native_generation) as u32,
+        offset_of!(Admission, source) as u32,
+        offset_of!(Admission, intended_items) as u32,
+        offset_of!(Admission, draws) as u32,
+        offset_of!(Admission, flags) as u32,
+        offset_of!(Admission, reserved) as u32,
+    ]
+}

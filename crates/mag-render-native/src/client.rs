@@ -237,11 +237,11 @@ unsafe fn pack(input: &Input, max_draws: usize, max_bytes: u64) -> Result<Packed
 }
 struct Driver(RefCell<SceneDevice<'static>>);
 impl RenderDevice for Driver {
-    type Commands = SceneCommands;
+    type Commands = std::rc::Rc<SceneCommands>;
     fn submit(
         &mut self,
         t: SubmissionTicket,
-        c: &SceneCommands,
+        c: &std::rc::Rc<SceneCommands>,
         l: &[ResourceLease],
     ) -> SubmitDisposition {
         self.0.get_mut().submit(t, c, l)
@@ -257,6 +257,7 @@ struct Pending {
 struct Session {
     native_backend: u32,
     packet_cache: scene_packet::PipelineCache,
+    admissions: scene_admission::Transactions<scene_admission::Prepared>,
     backend: RenderBackend<Driver>,
     pipeline: Option<u64>,
     color_format: Option<ImageFormat>,
@@ -482,6 +483,7 @@ fn create_session(
             Session {
                 native_backend,
                 packet_cache: scene_packet::PipelineCache::default(),
+                admissions: scene_admission::Transactions::default(),
                 backend,
                 pipeline,
                 color_format: graphics.and_then(|d| ImageFormat::from_native(d.color_format).ok()),
@@ -628,7 +630,7 @@ pub unsafe extern "C" fn mag_render_client_submit(
     let effects_possible = Cell::new(false);
     let status = ffi(|| {
         with_session(id, |s| {
-            if s.pending.len() + s.ready.len() >= 2 {
+            if s.admissions.len() + s.pending.len() + s.ready.len() >= 2 {
                 return Err(-4);
             }
             let pipeline = s.pipeline.ok_or(-2)?;
@@ -670,9 +672,11 @@ pub unsafe extern "C" fn mag_render_client_submit(
                 return Err(code);
             }
             let (commands, leases) = scene.into_submission();
-            let result = s
-                .backend
-                .submit_diagnostic(input.source.publication, commands, leases);
+            let result = s.backend.submit_diagnostic(
+                input.source.publication,
+                std::rc::Rc::new(commands),
+                leases,
+            );
             let (ticket, uncertain) = match result {
                 Ok(t) => (t, false),
                 Err(BackendError::SubmissionUncertain { ticket, .. }) => (ticket, true),
@@ -824,7 +828,7 @@ pub extern "C" fn mag_render_client_close(id: u64) -> i32 {
         SESSIONS.with(|sessions| {
             let mut all = sessions.try_borrow_mut().map_err(|_| -4)?;
             let s = all.get_mut(&id).ok_or(-3)?;
-            if !s.pending.is_empty() || !s.ready.is_empty() {
+            if s.admissions.len() != 0 || !s.pending.is_empty() || !s.ready.is_empty() {
                 return Err(-4);
             }
             s.backend.try_shutdown().map_err(|_| -4)?;
@@ -1067,3 +1071,6 @@ mod tests {
 
 #[path = "scene_packet.rs"]
 pub mod scene_packet;
+
+#[path = "scene_admission.rs"]
+pub(crate) mod scene_admission;

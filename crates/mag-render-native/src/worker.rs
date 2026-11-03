@@ -275,6 +275,25 @@ impl OwnedInput {
     }
 }
 trait Driver {
+    fn admit(
+        &mut self,
+        _worker: u64,
+        _packet: client::scene_packet::ScenePacket,
+    ) -> Result<mag_render_abi::packet::Admission, i32> {
+        Err(-2)
+    }
+    fn commit(
+        &mut self,
+        _admission: mag_render_abi::packet::Admission,
+        _source: client::Source,
+        _target: TargetPin,
+    ) -> Reply {
+        (-2, client::Receipt::default())
+    }
+    fn cancel(&mut self, _admission: mag_render_abi::packet::Admission) -> Result<(), i32> {
+        Err(-2)
+    }
+
     fn scene(&mut self, _: OwnedScene) -> (i32, client::Receipt) {
         (-2, client::Receipt::default())
     }
@@ -286,6 +305,25 @@ struct ClientDriver {
     session: u64,
 }
 impl Driver for ClientDriver {
+    fn admit(
+        &mut self,
+        worker: u64,
+        packet: client::scene_packet::ScenePacket,
+    ) -> Result<mag_render_abi::packet::Admission, i32> {
+        client::scene_packet::admit(self.session, worker, packet)
+    }
+    fn commit(
+        &mut self,
+        admission: mag_render_abi::packet::Admission,
+        source: client::Source,
+        target: TargetPin,
+    ) -> Reply {
+        client::scene_packet::commit(self.session, admission, source, &target.image, target.frame)
+    }
+    fn cancel(&mut self, admission: mag_render_abi::packet::Admission) -> Result<(), i32> {
+        client::scene_packet::cancel(self.session, admission)
+    }
+
     fn scene(&mut self, input: OwnedScene) -> (i32, client::Receipt) {
         client::scene_packet::submit(
             self.session,
@@ -308,6 +346,18 @@ impl Driver for ClientDriver {
 }
 type Reply = (i32, client::Receipt);
 enum Command {
+    Admit(
+        u64,
+        Box<client::scene_packet::ScenePacket>,
+        SyncSender<Result<mag_render_abi::packet::Admission, i32>>,
+    ),
+    Commit(
+        mag_render_abi::packet::Admission,
+        client::Source,
+        TargetPin,
+        SyncSender<Reply>,
+    ),
+    Cancel(mag_render_abi::packet::Admission, SyncSender<Reply>),
     Scene(Box<OwnedScene>, SyncSender<Reply>),
     Submit(Box<OwnedInput>, SyncSender<Reply>),
     Poll(SyncSender<Reply>),
@@ -344,6 +394,23 @@ impl Worker {
                 }
                 while let Ok(command) = receive.recv() {
                     match command {
+                        Command::Admit(worker, packet, reply) => {
+                            let result = driver.admit(worker, *packet);
+                            let token = result.as_ref().ok().copied();
+                            if reply.send(result).is_err()
+                                && let Some(token) = token
+                            {
+                                let _ = driver.cancel(token);
+                            }
+                        }
+                        Command::Commit(admission, source, target, reply) => {
+                            let _ = reply.send(driver.commit(admission, source, target));
+                        }
+                        Command::Cancel(admission, reply) => {
+                            let status = driver.cancel(admission).map_or_else(|e| e, |()| 0);
+                            let _ = reply.send((status, client::Receipt::default()));
+                        }
+
                         Command::Scene(input, reply) => {
                             let _ = reply.send(driver.scene(*input));
                         }
@@ -884,6 +951,132 @@ pub unsafe extern "C" fn mag_render_client_worker_submit_scene_v3(
     }
     status
 }
+/// Prepare an owned, fully resolved scene on the fixed native thread. This
+/// obtains no target/frame and commits no GPU work or original CPU outputs.
+/// # Safety
+/// Complete ABI3 nested ranges and writable admission storage are valid for the
+/// synchronous call. Both embedded target/frame pointers must be null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mag_render_client_worker_prepare_scene_v3(
+    id: u64,
+    input: *const client::scene_packet::raw::DescV3,
+    out: *mut mag_render_abi::packet::Admission,
+) -> i32 {
+    if out.is_null() {
+        return -1;
+    }
+    unsafe {
+        *out = mag_render_abi::packet::Admission::default();
+    }
+    ffi(
+        || {
+            client::scene_admission::checked_layout()?;
+            let worker = get(id)?;
+            let _serial = worker.serial.try_lock().map_err(|_| -4)?;
+            let input = unsafe { checked_ref(input) }?;
+            if !input.base.base.target.is_null() || !input.base.base.frame.is_null() {
+                return Err(-1);
+            }
+            let packet = unsafe {
+                client::scene_packet::ScenePacket::copy_v3(
+                    input,
+                    worker.max_draws as usize,
+                    worker.max_bytes,
+                )
+            }?;
+            let (send, reply) = mpsc::sync_channel(1);
+            worker
+                .commands
+                .send(Command::Admit(id, Box::new(packet), send))
+                .map_err(|_| -6)?;
+            let admission = reply.recv().map_err(|_| -6)??;
+            unsafe {
+                *out = admission;
+            }
+            Ok(0)
+        },
+        -6,
+    )
+}
+/// Commit an exact preparation/source on a genuine source-qualified target and
+/// frame. Accepted/indeterminate consumes the token, negative leaves it intact.
+/// # Safety
+/// POD pointers and writable receipt are valid. Provider metadata obeys the
+/// existing process-lived, cross-thread retained callback contract. No GPU wait.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mag_render_client_worker_commit_scene(
+    id: u64,
+    admission: *const mag_render_abi::packet::Admission,
+    source: *const client::Source,
+    target: *const HostImage,
+    frame: *const HostFrame,
+    out: *mut client::Receipt,
+) -> i32 {
+    if out.is_null() {
+        return -1;
+    }
+    unsafe {
+        *out = client::Receipt {
+            abi_version: 1,
+            struct_size: size_of::<client::Receipt>() as u32,
+            flags: 1,
+            ..client::Receipt::default()
+        };
+    }
+    let status = ffi(
+        || {
+            client::scene_admission::checked_layout()?;
+            let worker = get(id)?;
+            let _serial = worker.serial.try_lock().map_err(|_| -4)?;
+            let admission = *unsafe { checked_ref(admission) }?;
+            let source = *unsafe { checked_ref(source) }?;
+            if admission.worker != id
+                || !client::scene_admission::same_source(admission.source, source)
+            {
+                return Err(-3);
+            }
+            let target = unsafe { TargetPin::copy(target, frame) }?;
+            let (status, receipt) = worker.call_serial(
+                |reply| Command::Commit(admission, source, target, reply),
+                true,
+            )?;
+            unsafe {
+                *out = receipt;
+            }
+            Ok(status)
+        },
+        1,
+    );
+    unsafe {
+        (*out).status = status;
+        if status > 0 {
+            (*out).flags |= 3;
+        }
+    }
+    status
+}
+/// Cancel only an uncommitted preparation. Native GPU completion is not implied.
+/// # Safety
+/// admission points to a valid synchronous POD range.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mag_render_client_worker_cancel_scene(
+    id: u64,
+    admission: *const mag_render_abi::packet::Admission,
+) -> i32 {
+    ffi(
+        || {
+            client::scene_admission::checked_layout()?;
+            let worker = get(id)?;
+            let admission = *unsafe { checked_ref(admission) }?;
+            if admission.worker != id {
+                return Err(-3);
+            }
+            let (status, _) = worker.call(|reply| Command::Cancel(admission, reply), false)?;
+            Ok(status)
+        },
+        -6,
+    )
+}
 /// Non-waiting terminal check on the same fixed native thread. Physical present
 /// events remain separate SDK host observations; this API does not poll them.
 /// # Safety
@@ -1286,5 +1479,196 @@ mod tests {
     #[test]
     fn unknown_worker_is_not_a_thread_local_session_alias() {
         assert_eq!(mag_render_client_worker_close(u64::MAX), -3);
+    }
+    struct PreparedDriver {
+        prepared: client::scene_admission::Transactions<client::scene_packet::ScenePacket>,
+        pending: Vec<client::scene_packet::ScenePacket>,
+        status: Arc<AtomicI32>,
+        events: Arc<Mutex<Vec<&'static str>>>,
+        thread: ThreadId,
+    }
+    impl Driver for PreparedDriver {
+        fn admit(
+            &mut self,
+            worker: u64,
+            packet: client::scene_packet::ScenePacket,
+        ) -> Result<mag_render_abi::packet::Admission, i32> {
+            assert_eq!(self.thread, thread::current().id());
+            self.events.lock().unwrap().push("admit");
+            self.prepared.insert(
+                (worker, 7),
+                packet.source,
+                packet.intended,
+                packet.passes[0].draws.len() as u64,
+                packet,
+                self.pending.len(),
+            )
+        }
+        fn commit(
+            &mut self,
+            a: mag_render_abi::packet::Admission,
+            source: client::Source,
+            _target: TargetPin,
+        ) -> Reply {
+            assert_eq!(self.thread, thread::current().id());
+            if self.prepared.get(a, source).is_err() {
+                return (-3, client::Receipt::default());
+            }
+            let status = self.status.load(Ordering::SeqCst);
+            self.events.lock().unwrap().push("commit");
+            if status < 0 {
+                return (status, client::Receipt::default());
+            }
+            self.pending.push(self.prepared.remove(a, source).unwrap());
+            (
+                status,
+                client::Receipt {
+                    ticket: 99,
+                    ..client::Receipt::default()
+                },
+            )
+        }
+        fn cancel(&mut self, a: mag_render_abi::packet::Admission) -> Result<(), i32> {
+            assert_eq!(self.thread, thread::current().id());
+            self.prepared.remove(a, a.source)?;
+            self.events.lock().unwrap().push("cancel");
+            Ok(())
+        }
+        fn submit(&mut self, _: OwnedInput) -> Reply {
+            (-2, client::Receipt::default())
+        }
+        fn poll(&mut self) -> Reply {
+            self.pending.clear();
+            self.events.lock().unwrap().push("terminal");
+            (
+                0,
+                client::Receipt {
+                    ticket: 99,
+                    ..client::Receipt::default()
+                },
+            )
+        }
+        fn close(&mut self) -> i32 {
+            if self.prepared.len() + self.pending.len() != 0 {
+                -4
+            } else {
+                0
+            }
+        }
+    }
+    fn prepared_worker(status: Arc<AtomicI32>, events: Arc<Mutex<Vec<&'static str>>>) -> Worker {
+        Worker::start(
+            move || {
+                Ok(PreparedDriver {
+                    prepared: Default::default(),
+                    pending: vec![],
+                    status,
+                    events,
+                    thread: thread::current().id(),
+                })
+            },
+            32,
+            1 << 20,
+        )
+        .unwrap()
+    }
+    fn prepare_on(worker: &Worker) -> Result<mag_render_abi::packet::Admission, i32> {
+        let (tx, rx) = mpsc::sync_channel(1);
+        worker
+            .commands
+            .send(Command::Admit(
+                23,
+                Box::new(client::scene_packet::packet_tests::fixture()),
+                tx,
+            ))
+            .unwrap();
+        rx.recv().unwrap()
+    }
+    #[test]
+    fn fixed_actor_prepares_without_target_rejects_replay_and_preserves_definite_rejection() {
+        let status = Arc::new(AtomicI32::new(-4));
+        let events = Arc::new(Mutex::new(vec![]));
+        let worker = prepared_worker(status.clone(), events.clone());
+        let first = prepare_on(&worker).unwrap();
+        let second = prepare_on(&worker).unwrap();
+        assert_eq!(prepare_on(&worker).err(), Some(-4));
+        assert_eq!(worker.call(Command::Close, false).unwrap().0, -4);
+        with_input(|input, _, pins| {
+            let mut wrong = first.source;
+            wrong.publication += 1;
+            let target = unsafe { TargetPin::copy(input.target, input.frame) }.unwrap();
+            assert_eq!(
+                worker
+                    .call(|r| Command::Commit(first, wrong, target, r), true)
+                    .unwrap()
+                    .0,
+                -3
+            );
+            assert_eq!(pins.load(Ordering::SeqCst), 0);
+            let target = unsafe { TargetPin::copy(input.target, input.frame) }.unwrap();
+            assert_eq!(
+                worker
+                    .call(|r| Command::Commit(first, first.source, target, r), true)
+                    .unwrap()
+                    .0,
+                -4
+            );
+            assert_eq!(
+                worker.call(|r| Command::Cancel(first, r), false).unwrap().0,
+                0
+            );
+            assert_eq!(
+                worker.call(|r| Command::Cancel(first, r), false).unwrap().0,
+                -3
+            );
+            status.store(1, Ordering::SeqCst);
+            let target = unsafe { TargetPin::copy(input.target, input.frame) }.unwrap();
+            assert_eq!(
+                worker
+                    .call(|r| Command::Commit(second, second.source, target, r), true)
+                    .unwrap()
+                    .0,
+                1
+            );
+            assert_eq!(
+                worker
+                    .call(|r| Command::Cancel(second, r), false)
+                    .unwrap()
+                    .0,
+                -3
+            );
+            assert_eq!(worker.call(Command::Close, false).unwrap().0, -4);
+            worker.call(Command::Poll, false).unwrap();
+            assert_eq!(pins.load(Ordering::SeqCst), 0);
+        });
+        assert_eq!(worker.call(Command::Close, false).unwrap().0, 0);
+        worker.join.lock().unwrap().take().unwrap().join().unwrap();
+        assert_eq!(
+            events
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|e| **e == "cancel")
+                .count(),
+            1
+        );
+    }
+    #[test]
+    fn lost_prepare_reply_cancels_only_uncommitted_state_on_actor() {
+        let events = Arc::new(Mutex::new(vec![]));
+        let worker = prepared_worker(Arc::new(AtomicI32::new(0)), events.clone());
+        let (tx, rx) = mpsc::sync_channel(1);
+        drop(rx);
+        worker
+            .commands
+            .send(Command::Admit(
+                23,
+                Box::new(client::scene_packet::packet_tests::fixture()),
+                tx,
+            ))
+            .unwrap();
+        assert_eq!(worker.call(Command::Close, false).unwrap().0, 0);
+        worker.join.lock().unwrap().take().unwrap().join().unwrap();
+        assert_eq!(*events.lock().unwrap(), ["admit", "cancel"]);
     }
 }

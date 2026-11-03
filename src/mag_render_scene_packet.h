@@ -214,6 +214,24 @@ typedef struct MagRenderScenePacketV2Desc {
 typedef struct MagRenderPacketStencilAttachment {uint32_t image,load,store,clear_value,flags,reserved;} MagRenderPacketStencilAttachment;
 typedef struct MagRenderScenePacketV3Desc {uint32_t abi_version,struct_size;MagRenderScenePacketV2Desc base;const MagRenderPacketStencilAttachment *stencils;uint32_t stencil_count,reserved;} MagRenderScenePacketV3Desc;
 int mag_render_client_worker_submit_scene_v3(uint64_t,const MagRenderScenePacketV3Desc*,MagRenderClientReceipt*);
+/* Target-independent CPU preparation. A token pins owned typed commands,
+ * input snapshots and native PSOs on this worker. It is NOT a GPU ticket,
+ * original-job completion publication or permission to suppress any source job.
+ * Prepare rejects partial-diagnostic packets. target/frame in the input must be
+ * NULL; later commit supplies genuine metadata and the exact source tuple.
+ * Prepared+pending+unread-terminal records share the existing bound of two. */
+#define MAG_RENDER_SCENE_ADMISSION_CPU_PREPARED 1u
+typedef struct MagRenderSceneAdmission {
+ uint32_t abi_version,struct_size;uint64_t worker,token,native_generation;
+ MagRenderClientSource source;uint64_t intended_items,draws;uint32_t flags,reserved;
+} MagRenderSceneAdmission;
+int mag_render_client_worker_prepare_scene_v3(uint64_t,const MagRenderScenePacketV3Desc*,MagRenderSceneAdmission*);
+/* Definite rejection leaves preparation cancellable/retryable. Accepted or
+ * indeterminate consumes the token; never replay originals after uncertainty.
+ * Native/GPU allocation failure remains possible at commit. */
+int mag_render_client_worker_commit_scene(uint64_t,const MagRenderSceneAdmission*,const MagRenderClientSource*,const MagRenderHostImage*,const MagRenderHostFrame*,MagRenderClientReceipt*);
+/* Precommit only. Unknown/consumed/foreign/stale tokens return STALE. */
+int mag_render_client_worker_cancel_scene(uint64_t,const MagRenderSceneAdmission*);
 /* Uses the SAME persistent worker/session/SceneDevice and genuine ticket path.
  * Negative is definitely uncommitted; caller owns early frame cancellation.
  * Positive indeterminate must not be replayed. Physical present remains separate.
