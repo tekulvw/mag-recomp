@@ -38,28 +38,45 @@ static int metal_scene_graphics_info(void *opaque, mag_native_pipeline ref,
     *out = &p->scene_desc;*model=p->scene_binding_model;
     return MAG_NATIVE_OK;
 }
+static void metal_scene_error(const char *stage,const mag_native_shader_stage *shader,NSError *error) {
+    static unsigned failures=0;
+    if(__atomic_fetch_add(&failures,1,__ATOMIC_RELAXED)>=8)return;
+    const char *message=error.localizedDescription.UTF8String;
+    fprintf(stderr,"[rsx frontend/metal scene] stage=%s status=%d entry=%.*s language=%u source_bytes=%llu error=%.*s\n",stage,MAG_NATIVE_UNSUPPORTED,
+        shader?(int)(shader->entry_length<128?shader->entry_length:128):0,
+        shader?(const char *)shader->entry:"",shader?shader->language:0,
+        (unsigned long long)(shader?shader->source_length:0),2048,message?message:"entry or pipeline unavailable");
+}
 static id<MTLFunction> metal_scene_function(MagRenderMetal *c, const mag_native_shader_stage *s) {
-    if (s->language != MAG_NATIVE_MSL)
+    if (s->language != MAG_NATIVE_MSL) {
+        metal_scene_error("shader-language",s,nil);
         return nil;
+    }
     NSString *source =
         [[NSString alloc] initWithBytes:s->source length:s->source_length encoding:NSUTF8StringEncoding];
     NSString *entry =
         [[NSString alloc] initWithBytes:s->entry length:s->entry_length encoding:NSUTF8StringEncoding];
-    if (!source || !entry)
+    if (!source || !entry) {
+        metal_scene_error("shader-source-encoding",s,nil);
         return nil;
+    }
     MTLCompileOptions *options = [MTLCompileOptions new];
     options.languageVersion = MTLLanguageVersion2_0;
     NSError *error = nil;
     id<MTLLibrary> lib = [c->device newLibraryWithSource:source options:options error:&error];
-    if (!lib)
+    if (!lib) {
+        metal_scene_error("shader-library",s,error);
         return nil;
-    return [lib newFunctionWithName:entry];
+    }
+    id<MTLFunction> function=[lib newFunctionWithName:entry];
+    if(!function)metal_scene_error("shader-entry",s,nil);
+    return function;
 }
 static int metal_scene_graphics_create_layout(void *opaque, const mag_native_scene_graphics_desc *desc,
                                        const mag_native_vertex_attribute *attributes,uint32_t attribute_count,uint32_t binding_model,const mag_native_raster_state *raster,uint32_t flags,mag_native_pipeline *out) {
     MagRenderMetal *c = context(opaque);
-    if(!!flags!=!!(raster&&raster->depth_bounds_enabled))return MAG_NATIVE_UNSUPPORTED;
-    if(desc->depth_format==MAG_NATIVE_SCENE_D24S8&&![c->device isDepth24Stencil8PixelFormatSupported])return MAG_NATIVE_UNSUPPORTED;
+    if(!!flags!=!!(raster&&raster->depth_bounds_enabled)){metal_scene_error("stored-depth-flags",&desc->vertex,nil);return MAG_NATIVE_UNSUPPORTED;}
+    if(desc->depth_format==MAG_NATIVE_SCENE_D24S8&&![c->device isDepth24Stencil8PixelFormatSupported]){metal_scene_error("depth24-stencil8-format",&desc->vertex,nil);return MAG_NATIVE_UNSUPPORTED;}
     if (c->next_pipeline == UINT64_MAX)
         return MAG_NATIVE_ALLOCATION_FAILED;
     id<MTLFunction> vertex = metal_scene_function(c, &desc->vertex), fragment = nil;
@@ -115,7 +132,7 @@ static int metal_scene_graphics_create_layout(void *opaque, const mag_native_sce
         if(@available(macOS 13.0,*)){
             MTLRenderPipelineReflection *reflection=nil;
             graphics=[c->device newRenderPipelineStateWithDescriptor:pd options:MTLPipelineOptionBindingInfo|MTLPipelineOptionBufferTypeInfo reflection:&reflection error:&error];
-            if(!graphics)return MAG_NATIVE_UNSUPPORTED;
+            if(!graphics){metal_scene_error("render-pipeline",&desc->vertex,error);return MAG_NATIVE_UNSUPPORTED;}
             int texture=0,buffer=0;
             for(id<MTLBinding> binding in reflection.fragmentBindings){
                 if(binding.type==MTLBindingTypeTexture&&binding.index==15){id<MTLTextureBinding> t=(id<MTLTextureBinding>)binding;texture=t.depthTexture&&t.textureType==MTLTextureType2D&&t.textureDataType==MTLDataTypeFloat&&t.access==MTLBindingAccessReadOnly;}
@@ -124,7 +141,7 @@ static int metal_scene_graphics_create_layout(void *opaque, const mag_native_sce
             if(!texture||!buffer)return MAG_NATIVE_UNSUPPORTED;
         }else{return MAG_NATIVE_UNSUPPORTED;}
     }else{graphics=[c->device newRenderPipelineStateWithDescriptor:pd error:&error];}
-    if(!graphics)return MAG_NATIVE_UNSUPPORTED;
+    if(!graphics){metal_scene_error("render-pipeline",&desc->vertex,error);return MAG_NATIVE_UNSUPPORTED;}
     MTLDepthStencilDescriptor *depth = [MTLDepthStencilDescriptor new];
     const MTLCompareFunction compares[] = {MTLCompareFunctionAlways, MTLCompareFunctionLess,
                                            MTLCompareFunctionLessEqual, MTLCompareFunctionAlways};

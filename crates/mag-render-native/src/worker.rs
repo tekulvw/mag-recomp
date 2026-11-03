@@ -16,6 +16,22 @@ use std::{
 const MAX_WORKERS: usize = 2;
 const MAX_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_DRAWS: u32 = crate::batch_device::scene_device::MAX_SCENE_DRAWS as u32;
+fn scene_refusal(
+    stage: &str,
+    status: i32,
+    backend: u32,
+    lifetime: u64,
+    source: client::Source,
+) -> i32 {
+    static FAILURES: AtomicUsize = AtomicUsize::new(0);
+    if FAILURES.fetch_add(1, Ordering::Relaxed) < 8 {
+        eprintln!(
+            "[mag native worker refusal] stage={stage} status={status} backend={backend} owner_lifetime={lifetime} engine_update={} cohort={} publication={} occurrence={}",
+            source.engine_update, source.cohort, source.publication, source.pass_occurrence
+        );
+    }
+    status
+}
 
 struct DrawCopy {
     item: u64,
@@ -808,12 +824,30 @@ fn start_scene(
                     known_features,
                     enabled_features,
                 };
-                unsafe { crate::NativeContext::from_host_v2(&owner) }?
+                unsafe { crate::NativeContext::from_host_v2(&owner) }
             } else {
-                unsafe { crate::NativeContext::from_host(&pin.0) }?
-            };
+                unsafe { crate::NativeContext::from_host(&pin.0) }
+            }
+            .map_err(|status| {
+                scene_refusal(
+                    "create-native-context",
+                    status,
+                    pin.0.backend,
+                    pin.0.lifetime,
+                    client::Source::default(),
+                )
+            })?;
             let session =
-                client::create_scene_session(context, pin.0.backend, max_draws, max_bytes)?;
+                client::create_scene_session(context, pin.0.backend, max_draws, max_bytes)
+                    .map_err(|status| {
+                        scene_refusal(
+                            "create-scene-session",
+                            status,
+                            pin.0.backend,
+                            pin.0.lifetime,
+                            client::Source::default(),
+                        )
+                    })?;
             drop(pin);
             Ok(ClientDriver { session })
         },
@@ -1100,13 +1134,26 @@ pub unsafe extern "C" fn mag_render_client_worker_prepare_scene_imported_v3(
                     worker.max_draws as usize,
                     worker.max_bytes,
                 )
-            }?;
+            }
+            .inspect_err(|&status| {
+                if status < 0 {
+                    scene_refusal(
+                        "prepare-copy-imported-v3",
+                        status,
+                        0,
+                        0,
+                        input.base.base.source,
+                    );
+                }
+            })?;
             let (send, reply) = mpsc::sync_channel(1);
             worker
                 .commands
                 .send(Command::Admit(id, Box::new(packet), send))
                 .map_err(|_| -6)?;
-            let admission = reply.recv().map_err(|_| -6)??;
+            let admission = reply.recv().map_err(|_| -6)?.map_err(|status| {
+                scene_refusal("prepare-actor-admit", status, 0, 0, input.base.base.source)
+            })?;
             unsafe {
                 *out = admission;
             }

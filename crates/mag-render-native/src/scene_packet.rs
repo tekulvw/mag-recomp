@@ -232,6 +232,32 @@ pub struct ScenePacket {
     pub items: Vec<raw::Item>,
     pub output: u32,
 }
+/// Failure-only private runtime evidence. Status values/admission remain exact;
+/// neither shader bytes nor resource payloads are printed. One process emits
+/// at most32 short records, including nested stage context for its first errors.
+fn packet_failure(
+    source: Source,
+    stage: &'static str,
+    index: Option<usize>,
+    reason: impl std::fmt::Debug,
+    status: i32,
+) -> i32 {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static REPORTED: AtomicUsize = AtomicUsize::new(0);
+    if REPORTED
+        .try_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
+            if n < 32 { Some(n + 1) } else { None }
+        })
+        .is_ok()
+    {
+        let reason: String = format!("{reason:?}").chars().take(512).collect();
+        eprintln!(
+            "[mag native packet failure] source={}/{}/{}/{} stage={stage} index={index:?} status={status} reason={reason}",
+            source.engine_update, source.cohort, source.publication, source.pass_occurrence
+        );
+    }
+    status
+}
 fn words(k: &mut Vec<u8>, v: &[u32]) {
     for x in v {
         k.extend(x.to_le_bytes())
@@ -273,12 +299,16 @@ impl ScenePacket {
     /// Every declared synchronous range is valid and aligned. All bytes are copied;
     /// the host image and frame are pinned separately by worker admission.
     pub unsafe fn copy(d: &raw::Desc, max_draws: usize, max_bytes: u64) -> Result<Self, i32> {
-        unsafe { Self::copy_impl(d, max_draws, max_bytes, None, None, None) }
+        unsafe { Self::copy_impl(d, max_draws, max_bytes, None, None, None) }.map_err(|status| {
+            packet_failure(d.source, "copy/v1", None, "copy-or-validation", status)
+        })
     }
     /// # Safety
     /// Same synchronous range contract as copy; V2 tables are complete and valid.
     pub unsafe fn copy_v2(d: &raw::DescV2, max_draws: usize, max_bytes: u64) -> Result<Self, i32> {
-        unsafe { Self::copy_v2_impl(d, max_draws, max_bytes, None) }
+        unsafe { Self::copy_v2_impl(d, max_draws, max_bytes, None) }.map_err(|status| {
+            packet_failure(d.base.source, "copy/v2", None, "copy-or-validation", status)
+        })
     }
     /// # Safety
     /// All V3/V2 ranges remain readable through the synchronous copy. Source
@@ -294,7 +324,17 @@ impl ScenePacket {
             return Err(-1);
         }
         let stencils = unsafe { slice(d.stencils, d.stencil_count as usize) }?.to_vec();
-        unsafe { Self::copy_v2_impl(&d.base, max_draws, max_bytes, Some(stencils)) }
+        unsafe { Self::copy_v2_impl(&d.base, max_draws, max_bytes, Some(stencils)) }.map_err(
+            |status| {
+                packet_failure(
+                    d.base.base.source,
+                    "copy/v3",
+                    None,
+                    "copy-or-validation",
+                    status,
+                )
+            },
+        )
     }
     /// # Safety
     /// Same copy contract; requirement records are exact source-bound external inputs.
@@ -317,7 +357,9 @@ impl ScenePacket {
             .try_reserve_exact(requirements.len())
             .map_err(|_| -5)?;
         packet.imports.extend_from_slice(requirements);
-        packet.validate(max_draws, max_bytes)?;
+        packet.validate(max_draws, max_bytes).map_err(|status| {
+            packet_failure(packet.source, "copy/validate", None, "owned-packet", status)
+        })?;
         Ok(packet)
     }
     unsafe fn copy_v2_impl(
@@ -339,11 +381,23 @@ impl ScenePacket {
             return Err(-1);
         }
         let mut dimensions = Vec::new();
-        for d in unsafe { slice(d.view_dimensions, d.view_dimension_count as usize) }? {
-            dimensions.push(match d {
+        for (index, dimension) in
+            unsafe { slice(d.view_dimensions, d.view_dimension_count as usize) }?
+                .iter()
+                .enumerate()
+        {
+            dimensions.push(match dimension {
                 2 => Dimension::D2,
                 4 => Dimension::Cube,
-                _ => return Err(-2),
+                _ => {
+                    return Err(packet_failure(
+                        d.base.source,
+                        "copy/view-dimension",
+                        Some(index),
+                        dimension,
+                        -2,
+                    ));
+                }
             })
         }
         let viewports = unsafe { slice(d.viewports, d.viewport_count as usize) }?
@@ -412,7 +466,13 @@ impl ScenePacket {
         // The graph currently receives already prepared graphics buffers. GPU compute
         // packet admission will use the same prefix once its explicit contract lands.
         if d.dispatch_count != 0 {
-            return Err(-2);
+            return Err(packet_failure(
+                d.source,
+                "copy/dispatch",
+                None,
+                d.dispatch_count,
+                -2,
+            ));
         }
         let extra = stencils.as_ref().map_or(0, |s| {
             s.len() as u64 * size_of::<raw::StencilAttachment>() as u64
@@ -495,12 +555,21 @@ impl ScenePacket {
             });
         }
         let mut buffers = Vec::new();
-        for b in unsafe { slice(d.buffers, d.buffer_count as usize) }? {
+        for (index, b) in unsafe { slice(d.buffers, d.buffer_count as usize) }?
+            .iter()
+            .enumerate()
+        {
             if b.reserved != 0 || b.length == 0 {
                 return Err(-1);
             }
             if b.role != 0 {
-                return Err(-2);
+                return Err(packet_failure(
+                    d.source,
+                    "copy/buffer-role",
+                    Some(index),
+                    b.role,
+                    -2,
+                ));
             }
             buffers.push(unsafe {
                 budget.copy(
@@ -510,11 +579,16 @@ impl ScenePacket {
             }?);
         }
         let mut images = Vec::new();
-        for i in unsafe { slice(d.images, d.image_count as usize) }? {
+        for (index, i) in unsafe { slice(d.images, d.image_count as usize) }?
+            .iter()
+            .enumerate()
+        {
             let desc = ImageDesc {
                 width: i.width,
                 height: i.height,
-                format: format(i.format)?,
+                format: format(i.format).map_err(|status| {
+                    packet_failure(d.source, "copy/image-format", Some(index), i.format, status)
+                })?,
             };
             if i.reserved != 0
                 || i.width == 0
@@ -529,7 +603,15 @@ impl ScenePacket {
             let dimension = match i.dimension {
                 2 => Dimension::D2,
                 4 => Dimension::Cube,
-                _ => return Err(-2),
+                _ => {
+                    return Err(packet_failure(
+                        d.source,
+                        "copy/image-dimension",
+                        Some(index),
+                        i.dimension,
+                        -2,
+                    ));
+                }
             };
             let mut layout = ImageLayout {
                 dimension,
@@ -651,7 +733,9 @@ impl ScenePacket {
             items,
             output: d.output_image,
         };
-        packet.validate(max_draws, max_bytes)?;
+        packet.validate(max_draws, max_bytes).map_err(|status| {
+            packet_failure(packet.source, "copy/validate", None, "owned-packet", status)
+        })?;
         Ok(packet)
     }
 }
@@ -703,7 +787,7 @@ impl ScenePacket {
         {
             return Err(-1);
         }
-        for p in &self.programs {
+        for (program_index, p) in self.programs.iter().enumerate() {
             if p.flags & !raw::PROGRAM_STORED_DEPTH_AUX != 0
                 || p.flags != 0 && (p.stage != 1 || p.language != 1)
             {
@@ -736,7 +820,19 @@ impl ScenePacket {
                     || t.arrayed != 0
                     || t.multisampled != 0
                 {
-                    return Err(-2);
+                    return Err(packet_failure(
+                        self.source,
+                        "validate/program-texture-shape",
+                        Some(program_index),
+                        (
+                            t.slot,
+                            t.dimension,
+                            t.sample_kind,
+                            t.arrayed,
+                            t.multisampled,
+                        ),
+                        -2,
+                    ));
                 }
             }
             slots.clear();
@@ -752,8 +848,22 @@ impl ScenePacket {
                 }
             }
         }
-        for p in &self.pipelines {
-            raster(&p.state)?;
+        for (pipeline_index, p) in self.pipelines.iter().enumerate() {
+            raster(&p.state).map_err(|status| {
+                packet_failure(
+                    self.source,
+                    "validate/pipeline-raster",
+                    Some(pipeline_index),
+                    (
+                        p.state.known_fields,
+                        p.state.unresolved_obligations,
+                        p.state.depth_bounds_enabled,
+                        p.state.bias_enabled,
+                        p.state.stencil_enabled,
+                    ),
+                    status,
+                )
+            })?;
             let vp = self.programs.get(p.vertex as usize).ok_or(-1)?;
             let fp = if p.fragment == u32::MAX {
                 None
@@ -772,7 +882,13 @@ impl ScenePacket {
                                 || f.textures.iter().any(|t| t.slot == 15)
                         }))
             {
-                return Err(-2);
+                return Err(packet_failure(
+                    self.source,
+                    "validate/stored-depth-aux",
+                    Some(pipeline_index),
+                    (aux, p.binding_model, p.state.depth_bounds_enabled),
+                    -2,
+                ));
             }
             if vp.stage != 0
                 || fp.is_some_and(|f| f.stage != 1)
@@ -794,7 +910,15 @@ impl ScenePacket {
                 let length = match a.format {
                     1..=4 => a.format * 4,
                     5 => 4,
-                    _ => return Err(-2),
+                    _ => {
+                        return Err(packet_failure(
+                            self.source,
+                            "validate/attribute-format",
+                            Some(pipeline_index),
+                            (a.location, a.format),
+                            -2,
+                        ));
+                    }
                 };
                 if a.reserved != 0
                     || a.location >= 16
@@ -841,7 +965,20 @@ impl ScenePacket {
                 if reflected.sample_kind != format(t.format)?.info().sample_kind
                     || reflected_sampler.comparison != t.comparison
                 {
-                    return Err(-2);
+                    return Err(packet_failure(
+                        self.source,
+                        "validate/texture-reflection",
+                        Some(pipeline_index),
+                        (
+                            t.stage,
+                            t.texture_slot,
+                            t.format,
+                            t.comparison,
+                            reflected.sample_kind,
+                            reflected_sampler.comparison,
+                        ),
+                        -2,
+                    ));
                 }
                 format(t.format)?;
             }
@@ -932,7 +1069,13 @@ impl ScenePacket {
                 return Err(-1);
             }
             if i.unresolved_obligations != 0 && self.flags & 1 == 0 {
-                return Err(-2);
+                return Err(packet_failure(
+                    self.source,
+                    "validate/item-obligations",
+                    Some(i.pass as usize),
+                    (i.source_item, i.unresolved_obligations, self.flags),
+                    -2,
+                ));
             }
         }
         if let Some(stencils) = &self.stencils {
@@ -960,7 +1103,13 @@ impl ScenePacket {
                 }
             }
         } else if self.images.iter().any(|i| i.desc.format.has_stencil()) {
-            return Err(-2);
+            return Err(packet_failure(
+                self.source,
+                "validate/missing-stencil-table",
+                None,
+                "stencil-image",
+                -2,
+            ));
         }
         let mut draws = 0usize;
         let mut seen = BTreeSet::new();
@@ -1068,13 +1217,37 @@ impl ScenePacket {
                         .find(|r| r.slot == t.texture_slot)
                         .ok_or(-1)?;
                     if reflected.dimension != self.view_dimensions[t.view as usize].native_id() {
-                        return Err(-2);
+                        return Err(packet_failure(
+                            self.source,
+                            "validate/draw-texture-dimension",
+                            Some(pass),
+                            (
+                                d.item,
+                                d.partition,
+                                t.texture_slot,
+                                reflected.dimension,
+                                self.view_dimensions[t.view as usize].native_id(),
+                            ),
+                            -2,
+                        ));
                     }
                     if image.desc.format != format(required.format)?
                         || sampler(&self.samplers[t.sampler as usize])?.comparison()
                             != (required.comparison != 0)
                     {
-                        return Err(-2);
+                        return Err(packet_failure(
+                            self.source,
+                            "validate/draw-texture-sampler",
+                            Some(pass),
+                            (
+                                d.item,
+                                d.partition,
+                                t.texture_slot,
+                                required.format,
+                                required.comparison,
+                            ),
+                            -2,
+                        ));
                     }
                 }
             }
@@ -1137,7 +1310,9 @@ impl ScenePacket {
         for b in &self.buffers {
             uploads.push(batch.upload(lease(b)?).map_err(|_| -5)?)
         }
-        let prefix = batch.prepare_scene_prefix(device).map_err(|_| -1)?;
+        let prefix = batch
+            .prepare_scene_prefix(device)
+            .map_err(|error| packet_failure(self.source, "scene/upload-prefix", None, error, -1))?;
         let mut scene = SceneBuilder::new(
             prefix,
             SceneLimits {
@@ -1319,7 +1494,9 @@ impl ScenePacket {
                 false,
             )
             .map_err(|_| -1)?;
-        scene.prepare(device).map_err(|_| -1)
+        scene
+            .prepare(device)
+            .map_err(|error| packet_failure(self.source, "scene/prepare", None, error, -1))
     }
 }
 #[repr(C)]
@@ -1518,7 +1695,7 @@ impl PipelineCache {
             return Err(-5);
         }
         let mut result = Vec::new();
-        for (p, key) in packet.pipelines.iter().zip(keys) {
+        for (index, (p, key)) in packet.pipelines.iter().zip(keys).enumerate() {
             if let Some((id, last)) = self.pipelines.get_mut(&key) {
                 *last = epoch;
                 result.push(*id);
@@ -1535,7 +1712,19 @@ impl PipelineCache {
                 device.release(old.1)?;
                 self.pipelines.remove(&old.0);
             }
-            let id = device.compile(p, &packet.programs)?;
+            let id = device.compile(p, &packet.programs).map_err(|status| {
+                packet_failure(
+                    packet.source,
+                    "cache/compile-pipeline",
+                    Some(index),
+                    format_args!("vertex={} fragment={} stride={} color={} depth={} attributes={} textures={} known={:x} unresolved={:x} depth_enabled={} depth_write={} stencil={} bounds={} bias={} blend={} cull={} samples={} topology={}",
+                        p.vertex,p.fragment,p.stride,p.color,p.depth,p.attributes.len(),p.textures.len(),
+                        p.state.known_fields,p.state.unresolved_obligations,p.state.depth_enabled,p.state.depth_write,
+                        p.state.stencil_enabled,p.state.depth_bounds_enabled,p.state.bias_enabled,p.state.blend_enabled,
+                        p.state.cull_mode,p.state.samples,p.state.topology),
+                    status,
+                )
+            })?;
             self.pipelines.insert(key, (id, epoch));
             result.push(id);
         }
@@ -1611,28 +1800,76 @@ pub(crate) fn admit(id: u64, worker: u64, packet: ScenePacket) -> Result<raw::Ad
         if s.admissions.len() + s.pending.len() + s.ready.len() >= 2 {
             return Err(-4);
         }
-        packet.validate(s.max_draws, s.max_bytes)?;
+        packet
+            .validate(s.max_draws, s.max_bytes)
+            .map_err(|status| {
+                packet_failure(
+                    packet.source,
+                    "actor/validate",
+                    None,
+                    "owned-packet",
+                    status,
+                )
+            })?;
         if packet.flags != 0 {
-            return Err(-2);
+            return Err(packet_failure(
+                packet.source,
+                "admit/flags",
+                None,
+                packet.flags,
+                -2,
+            ));
         }
         let language = match s.native_backend {
             1 => 1,
             2 => 3,
             3 => 2,
-            _ => return Err(-2),
+            _ => {
+                return Err(packet_failure(
+                    packet.source,
+                    "admit/backend",
+                    None,
+                    s.native_backend,
+                    -2,
+                ));
+            }
         };
-        if packet.programs.iter().any(|p| p.language != language) {
-            return Err(-2);
+        if let Some((index, program)) = packet
+            .programs
+            .iter()
+            .enumerate()
+            .find(|(_, p)| p.language != language)
+        {
+            return Err(packet_failure(
+                packet.source,
+                "admit/program-language",
+                Some(index),
+                (program.language, language),
+                -2,
+            ));
         }
         let ids = s
             .packet_cache
-            .resolve(&mut *s.backend.device().0.borrow_mut(), &packet)?;
-        let scene = packet.prepare(
-            &*s.backend.device().0.borrow(),
-            &ids,
-            s.max_draws,
-            s.max_bytes,
-        )?;
+            .resolve(&mut *s.backend.device().0.borrow_mut(), &packet)
+            .map_err(|status| {
+                packet_failure(
+                    packet.source,
+                    "actor/cache-resolve",
+                    None,
+                    "pipeline-cache",
+                    status,
+                )
+            })?;
+        let scene = packet
+            .prepare(
+                &*s.backend.device().0.borrow(),
+                &ids,
+                s.max_draws,
+                s.max_bytes,
+            )
+            .map_err(|status| {
+                packet_failure(packet.source, "admit/prepare", None, "owned-scene", status)
+            })?;
         let generation = s.backend.device().0.borrow().owner_generation();
         let mut admitted = BTreeSet::new();
         let mut identities = Vec::new();
@@ -1871,7 +2108,17 @@ pub(crate) fn submit(
             if s.admissions.len() + s.pending.len() + s.ready.len() >= 2 {
                 return Err(-4);
             }
-            packet.validate(s.max_draws, s.max_bytes)?;
+            packet
+                .validate(s.max_draws, s.max_bytes)
+                .map_err(|status| {
+                    packet_failure(
+                        packet.source,
+                        "actor/validate",
+                        None,
+                        "owned-packet",
+                        status,
+                    )
+                })?;
             if !frame.valid() || frame.owner_lifetime != target.owner_lifetime {
                 return Err(-3);
             }
@@ -1880,20 +2127,60 @@ pub(crate) fn submit(
                 || output.desc.height != target.height
                 || output.desc.format != format(target.format)?
             {
-                return Err(-2);
+                return Err(packet_failure(
+                    packet.source,
+                    "submit/output-target",
+                    None,
+                    (
+                        output.desc.width,
+                        output.desc.height,
+                        target.width,
+                        target.height,
+                        target.format,
+                    ),
+                    -2,
+                ));
             }
             let language = match s.native_backend {
                 1 => 1,
                 2 => 3,
                 3 => 2,
-                _ => return Err(-2),
+                _ => {
+                    return Err(packet_failure(
+                        packet.source,
+                        "submit/backend",
+                        None,
+                        s.native_backend,
+                        -2,
+                    ));
+                }
             };
-            if packet.programs.iter().any(|p| p.language != language) {
-                return Err(-2);
+            if let Some((index, program)) = packet
+                .programs
+                .iter()
+                .enumerate()
+                .find(|(_, p)| p.language != language)
+            {
+                return Err(packet_failure(
+                    packet.source,
+                    "submit/program-language",
+                    Some(index),
+                    (program.language, language),
+                    -2,
+                ));
             }
             let ids = s
                 .packet_cache
-                .resolve(&mut *s.backend.device().0.borrow_mut(), &packet)?;
+                .resolve(&mut *s.backend.device().0.borrow_mut(), &packet)
+                .map_err(|status| {
+                    packet_failure(
+                        packet.source,
+                        "actor/cache-resolve",
+                        None,
+                        "pipeline-cache",
+                        status,
+                    )
+                })?;
             let scene = packet.prepare(
                 &*s.backend.device().0.borrow(),
                 &ids,
@@ -2257,6 +2544,25 @@ pub(crate) mod packet_tests {
             self.released.push(id);
             Ok(())
         }
+    }
+    #[test]
+    fn pipeline_failure_status_is_preserved_without_caching_a_failed_native_pipeline() {
+        struct Rejected;
+        impl PipelineCompiler for Rejected {
+            fn compile(&mut self, _: &Pipeline, _: &[Program]) -> Result<u64, i32> {
+                Err(-2)
+            }
+            fn release(&mut self, _: u64) -> Result<(), i32> {
+                panic!("no pipeline exists")
+            }
+        }
+        let packet = fixture();
+        let mut cache = PipelineCache::default();
+        assert_eq!(cache.resolve(&mut Rejected, &packet), Err(-2));
+        assert!(cache.pipelines.is_empty());
+        let mut compiler = Compiler::default();
+        assert_eq!(cache.resolve(&mut compiler, &packet).unwrap(), vec![1]);
+        assert_eq!(compiler.creates, 1);
     }
     #[test]
     fn complete_owned_material_packet_reaches_real_scene_builder() {
