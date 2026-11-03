@@ -672,6 +672,9 @@ struct Worker {
     join: Mutex<Option<JoinHandle<()>>>,
     max_draws: u32,
     max_bytes: u64,
+    /// Scene workers: terminal receipts the session already published. The
+    /// host poll takes them directly, without the actor or the serial lock.
+    outbox: Option<client::Outbox>,
 }
 impl Worker {
     fn start<D: Driver + 'static, F: FnOnce() -> Result<D, i32> + Send + 'static>(
@@ -842,6 +845,7 @@ impl Worker {
                 join: Mutex::new(Some(join)),
                 max_draws,
                 max_bytes,
+                outbox: None,
             }),
             other => {
                 let _ = join.join();
@@ -881,6 +885,22 @@ impl Worker {
     /// the actor is still executing an earlier command (for example the encode
     /// that follows a reserved commit's acknowledgement), so nothing was polled;
     /// the caller retries on a later poll. Otherwise identical to a Poll call.
+    /// The host's terminal poll. A receipt the session already published is
+    /// taken directly (never behind actor work, never refused by a busy
+    /// actor); otherwise a Poll command, which with `nowait` is skipped
+    /// (Ok(None)) while the actor is busy.
+    fn host_poll(&self, nowait: bool) -> Result<Option<Reply>, i32> {
+        if let Some(outbox) = &self.outbox
+            && let Some(receipt) = outbox.lock().map_err(|_| -6)?.pop_front()
+        {
+            return Ok(Some((0, receipt)));
+        }
+        if nowait {
+            self.poll_nowait()
+        } else {
+            self.call(Command::Poll, false).map(Some)
+        }
+    }
     fn poll_nowait(&self) -> Result<Option<Reply>, i32> {
         let _serial = self.serial.try_lock().map_err(|_| -4)?;
         // With the serial lock held no other caller can enqueue, so an idle
@@ -1136,7 +1156,9 @@ fn start_scene(
     let id = NEXT
         .try_update(Ordering::AcqRel, Ordering::Acquire, |n| n.checked_add(1))
         .map_err(|_| -5)?;
-    let worker = Worker::start(
+    let outbox = client::Outbox::default();
+    let session_outbox = Arc::clone(&outbox);
+    let mut worker = Worker::start(
         move || {
             let context = if let Some((known_features, enabled_features)) = pin.1 {
                 let owner = crate::HostOwnerV2 {
@@ -1171,11 +1193,13 @@ fn start_scene(
                         )
                     })?;
             drop(pin);
+            client::set_session_outbox(session, session_outbox)?;
             Ok(ClientDriver { session })
         },
         max_draws,
         max_bytes,
     )?;
+    worker.outbox = Some(outbox);
     all().lock().map_err(|_| -6)?.insert(id, Arc::new(worker));
     unsafe { *out = id };
     std::mem::forget(reservation);
@@ -1701,11 +1725,7 @@ pub unsafe extern "C" fn mag_render_client_worker_poll(id: u64, out: *mut client
             let worker = get(id)?;
             let nowait = poll_nowait_enabled();
             let start = Instant::now();
-            let polled = if nowait {
-                worker.poll_nowait()
-            } else {
-                worker.call(Command::Poll, false).map(Some)
-            };
+            let polled = worker.host_poll(nowait);
             POLL_STATS.record(nowait, &polled, elapsed_ns(start));
             let (status, receipt) = match polled? {
                 Some(reply) => reply,
@@ -2155,6 +2175,7 @@ mod tests {
             join: Mutex::new(Some(join)),
             max_draws: 4,
             max_bytes: 1024,
+            outbox: None,
         };
         with_input(|input, _, _| {
             let owned = unsafe { OwnedInput::copy(input, 4, 1024) }.unwrap();
@@ -2683,6 +2704,133 @@ mod tests {
             assert_eq!(reply.recv().unwrap().0, -4);
             assert_eq!(*events.lock().unwrap(), ["reserved", "encoded", "poll"]);
             assert_eq!(pins.load(Ordering::SeqCst), 0);
+        });
+        assert_eq!(worker.call(Command::Close, false).unwrap().0, 0);
+        worker.join.lock().unwrap().take().unwrap().join().unwrap();
+    }
+    /// A session stand-in: terminal receipts go to the shared outbox when the
+    /// "encode" after a reserved acknowledgement finishes, and admission is
+    /// refused while two receipts are still held for the host (cap of two).
+    struct OutboxDriver {
+        release: mpsc::Receiver<()>,
+        outbox: client::Outbox,
+        next: u64,
+    }
+    impl Driver for OutboxDriver {
+        fn admit(
+            &mut self,
+            _: u64,
+            packet: client::scene_packet::ScenePacket,
+            _: Option<(usize, u64)>,
+        ) -> Result<mag_render_abi::packet::Admission, i32> {
+            if self.outbox.lock().unwrap().len() >= 2 {
+                return Err(-4);
+            }
+            Ok(mag_render_abi::packet::Admission {
+                source: packet.source,
+                ..Default::default()
+            })
+        }
+        fn cancel(&mut self, _: mag_render_abi::packet::Admission) -> Result<(), i32> {
+            Ok(())
+        }
+        fn commit_subgraph_reserved(
+            &mut self,
+            _: mag_render_abi::packet::Admission,
+            _: client::Source,
+            _: ImportPins,
+            acknowledge: &mut dyn FnMut(Reply),
+        ) {
+            self.next += 1;
+            acknowledge((0, client::Receipt::default()));
+            self.release.recv().unwrap();
+            self.outbox.lock().unwrap().push_back(client::Receipt {
+                ticket: self.next,
+                ..client::Receipt::default()
+            });
+        }
+        fn submit(&mut self, _: OwnedInput) -> Reply {
+            (-2, client::Receipt::default())
+        }
+        fn poll(&mut self) -> Reply {
+            match self.outbox.lock().unwrap().pop_front() {
+                Some(r) => (0, r),
+                None => (-4, client::Receipt::default()),
+            }
+        }
+        fn close(&mut self) -> i32 {
+            0
+        }
+    }
+    #[test]
+    fn nowait_host_poll_drains_published_receipts_while_the_actor_is_busy() {
+        let (release, wait) = mpsc::channel();
+        let outbox = client::Outbox::default();
+        let actor_outbox = outbox.clone();
+        let mut worker = Worker::start_with(
+            move || {
+                Ok(OutboxDriver {
+                    release: wait,
+                    outbox: actor_outbox,
+                    next: 0,
+                })
+            },
+            32,
+            1 << 20,
+            true,
+        )
+        .unwrap();
+        worker.outbox = Some(outbox.clone());
+        with_input(|input, _, _| {
+            let mut host = unsafe { *input.target };
+            host.image = std::ptr::dangling_mut::<u8>().cast();
+            let binding = mag_render_abi::packet::ImageBinding {
+                image: 0,
+                reserved: 0,
+                source_key: 99,
+                host,
+                validate_planes: None,
+            };
+            let source = client::scene_packet::packet_tests::fixture().source;
+            let commit = || {
+                let pins = unsafe { ImportPins::copy(&binding, 1) }.unwrap();
+                worker
+                    .call(
+                        |r| Command::AdmitSubgraph(fixture_admit(), source, pins, r),
+                        true,
+                    )
+                    .unwrap()
+                    .0
+            };
+            // Frame 1: acknowledged, then terminal and published.
+            assert_eq!(commit(), 0);
+            release.send(()).unwrap();
+            wait_idle(&worker);
+            // Frame 2: acknowledged; the actor is still encoding it.
+            assert_eq!(commit(), 0);
+            assert_ne!(worker.outstanding.load(Ordering::SeqCst), 0);
+            // The busy actor does not hide frame 1's published receipt.
+            assert!(matches!(worker.host_poll(true), Ok(Some((0, r))) if r.ticket == 1));
+            // Nothing else published yet: a busy skip, as before.
+            assert!(matches!(worker.host_poll(true), Ok(None)));
+            release.send(()).unwrap();
+            wait_idle(&worker);
+            // Frame 3 fills the host-held receipts (2 and 3): refused until
+            // the host drains one, then admitted again.
+            assert_eq!(commit(), 0);
+            release.send(()).unwrap();
+            wait_idle(&worker);
+            assert_eq!(prepare_on(&worker).err(), Some(-4));
+            assert!(matches!(worker.host_poll(true), Ok(Some((0, r))) if r.ticket == 2));
+            let admitted = prepare_on(&worker).unwrap();
+            assert_eq!(
+                worker
+                    .call(|r| Command::Cancel(admitted, r), false)
+                    .unwrap()
+                    .0,
+                0
+            );
+            assert!(matches!(worker.host_poll(true), Ok(Some((0, r))) if r.ticket == 3));
         });
         assert_eq!(worker.call(Command::Close, false).unwrap().0, 0);
         worker.join.lock().unwrap().take().unwrap().join().unwrap();
