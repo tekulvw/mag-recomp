@@ -1316,7 +1316,10 @@ static int buffer_read(void *opaque, mag_native_buffer ref, uint64_t offset,
 #include "mag_render_d3d12_import.inc"
 #include "mag_render_d3d12_scene.inc"
 static const mag_native_ops operations={caps,buffer_create,buffer_release,buffer_read,pipeline_create,pipeline_release,
- submit,poll,close,graphics_create,submit_batch,scene_graphics_create,submit_scene,image_import,image_release,nullptr,nullptr,scene_graphics_create_v2,scene_graphics_create_v3,sampler_create,sampler_release,submit_scene_v2,submit_scene_v3,submit_scene_v4,image_import_certified,nullptr,submit_scene_v5};
+ submit,poll,close,graphics_create,submit_batch,scene_graphics_create,submit_scene,image_import,image_release,nullptr,nullptr,scene_graphics_create_v2,scene_graphics_create_v3,sampler_create,sampler_release,submit_scene_v2,submit_scene_v3,submit_scene_v4,image_import_certified,nullptr,submit_scene_v5,
+ /* reserve_scene, abandon_scene_reservation, buffer_write, scene_chunk_stats,
+    memory_stats: not implemented on D3D12 (callers treat NULL as unsupported). */
+ nullptr,nullptr,nullptr,nullptr,nullptr};
 static int compiler_path(std::string &out) {
   DWORD count = GetEnvironmentVariableW(L"PS3RECOMP_DXC_LIBRARY", nullptr, 0);
   if (!count)
