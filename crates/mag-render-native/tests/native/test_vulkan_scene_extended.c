@@ -68,7 +68,10 @@ static frontend_vk *context(void){
 int main(void){
     const VkFormat expected[]={VK_FORMAT_UNDEFINED,VK_FORMAT_R8G8B8A8_UNORM,VK_FORMAT_D32_SFLOAT,VK_FORMAT_B8G8R8A8_UNORM,VK_FORMAT_R8_UNORM,VK_FORMAT_R8G8_UNORM,VK_FORMAT_BC1_RGBA_UNORM_BLOCK,VK_FORMAT_BC2_UNORM_BLOCK,VK_FORMAT_BC3_UNORM_BLOCK,VK_FORMAT_R16_UNORM,VK_FORMAT_R16G16_UNORM,VK_FORMAT_R16G16B16A16_SFLOAT,VK_FORMAT_R32G32B32A32_SFLOAT,VK_FORMAT_R32_SFLOAT,VK_FORMAT_R16G16_SFLOAT};
     frontend_vk *c=context();
-    for(uint32_t i=1;i<15;++i)assert(scene_vk_format(i)==expected[i]);assert(scene_vk_format(99)==VK_FORMAT_UNDEFINED);
+    for(uint32_t i=1;i<15;++i) {
+        assert(scene_vk_format(i)==expected[i]);
+    }
+    assert(scene_vk_format(99)==VK_FORMAT_UNDEFINED);
     mag_native_scene_image im={MAG_NATIVE_SCENE_BC1,4,4,0,{1,3,1}};mag_native_scene_image_layout shape={4,1,6,3,1,0,NULL,0,0};frontend_vk_scene_image created={0};
     assert(scene_image_create(c,&im,&shape,VK_IMAGE_USAGE_SAMPLED_BIT,&created)==MAG_NATIVE_UNSUPPORTED);
     c->known_features=c->enabled_features=MAG_RENDER_HOST_FEATURE_BC|MAG_RENDER_HOST_FEATURE_ANISOTROPY;
