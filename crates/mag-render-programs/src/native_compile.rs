@@ -52,6 +52,12 @@ pub struct SamplerBinding {
     pub slot: u32,
     pub comparison: bool,
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StoredDepthAux {
+    pub texture_slot: u32,
+    pub bounds_buffer_slot: u32,
+    pub bounds_bytes: u32,
+}
 #[derive(Debug)]
 pub struct NativeProgram {
     pub stage: Stage,
@@ -70,6 +76,8 @@ pub struct NativeProgram {
     pub texture_bindings: Vec<TextureBinding>,
     pub sampler_bindings: Vec<SamplerBinding>,
     pub vertex_locations: Vec<u32>,
+    /// Internal Metal arguments, excluded from ordinary material bindings.
+    pub stored_depth_aux: Option<StoredDepthAux>,
 }
 unsafe extern "C" {
     fn mrf_compile_spirv(
@@ -217,7 +225,24 @@ fn restore_centroid(words: &[u32], module: &mut naga::Module) -> Result<(), Stri
     }
     Ok(())
 }
+#[path = "stored_depth.rs"]
+mod stored_depth;
+/// Restricted Metal-only variant. Hidden depth texture15 must be a same-size
+/// immutable snapshot of the stored depth for this draw; uniform buffer2 is
+/// float4(min,max,0,0). The owner must prove fixed depth writes disabled and
+/// preserve stencil/ordering semantics. No range is baked into the shader.
+/// Other backend outputs are absent so they cannot run an unmodified variant.
+pub fn lower_metal_stored_depth(program: &HlslProgram) -> Result<NativeProgram, String> {
+    lower_inner(program, Stage::Fragment, true)
+}
 pub fn lower(program: &HlslProgram, stage: Stage) -> Result<NativeProgram, String> {
+    lower_inner(program, stage, false)
+}
+fn lower_inner(
+    program: &HlslProgram,
+    stage: Stage,
+    depth_gate: bool,
+) -> Result<NativeProgram, String> {
     if program.source.len() > 1024 * 1024 {
         return Err("HLSL exceeds owned compiler bound".into());
     }
@@ -268,6 +293,9 @@ pub fn lower(program: &HlslProgram, stage: Stage) -> Result<NativeProgram, Strin
         return Err("unexpected entry points or specialization constants".into());
     }
     restore_centroid(&words, &mut module)?;
+    if depth_gate {
+        stored_depth::inject(&mut module)?;
+    }
     let info = naga::valid::Validator::new(
         naga::valid::ValidationFlags::all(),
         naga::valid::Capabilities::empty(),
@@ -299,8 +327,11 @@ pub fn lower(program: &HlslProgram, stage: Stage) -> Result<NativeProgram, Strin
         let mut target = naga::back::msl::BindTarget::default();
         match (&global.space, &module.types[global.ty].inner) {
             (AddressSpace::Uniform, _) if binding.binding < 16 => {
-                if binding.binding != stage.group()
-                    || sizes[global.ty].size != program.constant_buffer_bytes
+                let hidden_bounds =
+                    depth_gate && binding.binding == 2 && sizes[global.ty].size == 16;
+                if !hidden_bounds
+                    && (binding.binding != stage.group()
+                        || sizes[global.ty].size != program.constant_buffer_bytes)
                 {
                     return Err("uniform layout differs from owned program contract".into());
                 }
@@ -425,7 +456,9 @@ pub fn lower(program: &HlslProgram, stage: Stage) -> Result<NativeProgram, Strin
         msl_entry,
         // D3D pixel SV_Position.w is reciprocal clip W too. The retained
         // emitter's old FXC comment is not the native frontend contract.
-        hlsl: if stage == Stage::Fragment {
+        hlsl: if depth_gate {
+            String::new()
+        } else if stage == Stage::Fragment {
             format!(
                 "#define RSX_FRAGCOORD_W_IS_RCP 1\n{}",
                 remove_locations(&source)
@@ -435,13 +468,18 @@ pub fn lower(program: &HlslProgram, stage: Stage) -> Result<NativeProgram, Strin
         },
         hlsl_entry: "main".into(),
         spirv_entry: entry.name.clone(),
-        spirv,
+        spirv: if depth_gate { Vec::new() } else { spirv },
         buffers,
         textures,
         samplers,
         texture_bindings,
         sampler_bindings,
         vertex_locations,
+        stored_depth_aux: depth_gate.then_some(StoredDepthAux {
+            texture_slot: 15,
+            bounds_buffer_slot: 2,
+            bounds_bytes: 16,
+        }),
     })
 }
 
