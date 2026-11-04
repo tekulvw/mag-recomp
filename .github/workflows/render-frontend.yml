@@ -367,6 +367,12 @@ jobs:
         run: cargo test --manifest-path crates/mag-render-adapter-core/Cargo.toml --features owned-scene --locked --offline
       - name: Adapter core owned-scene Clippy
         run: cargo clippy --manifest-path crates/mag-render-adapter-core/Cargo.toml --features owned-scene --all-targets --locked --offline -- -D warnings
+      - name: Fetch locked adapter scene dependencies
+        run: cargo fetch --manifest-path crates/mag-render-adapter-scene/Cargo.toml --locked
+      - name: Adapter scene owned-programs tests
+        run: cargo test --manifest-path crates/mag-render-adapter-scene/Cargo.toml --features owned-programs --locked --offline
+      - name: Adapter scene owned-programs Clippy
+        run: cargo clippy --manifest-path crates/mag-render-adapter-scene/Cargo.toml --features owned-programs --all-targets --locked --offline -- -D warnings
 
   vulkan-sdk-cpu:
     name: Vulkan SDK provider and bridge (CPU only)

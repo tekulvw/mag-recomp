@@ -49,7 +49,9 @@ impl MainPipelineSources {
         Ok(Self {
             lists_enabled: user[0x4c] != 0,
             depth_control: user[0x4d],
-            enabled_groups: u16::from_be_bytes(user[0x48..0x4a].try_into().unwrap()),
+            // The group-enable mask is the low half of the 32-bit word at
+            // 0x48: bit `1 << group` enables that material group.
+            enabled_groups: u16::from_be_bytes(user[0x4a..0x4c].try_into().unwrap()),
             setup_references: [word(0x50), word(0x54), word(0x58)],
             group13_reference: word(0x5c),
             group15_references: [word(0x60), word(0x64)],
