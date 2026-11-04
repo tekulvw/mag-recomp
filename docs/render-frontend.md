@@ -13,7 +13,33 @@ effect and UI passes. Acceptance requires complete coverage, independent evidenc
 original work no longer executes, preserved output and behavior, and sustained 60 newly rendered
 frames per second in representative real matches on declared macOS, Windows and Linux hardware.
 Synthetic tests, repeated presentations and CPU diagnostic timings do not establish that result.
-Private adapters and original-program verification remain outside this public repository.
+Original-program verification (differential tests against the original program) remains outside
+this public repository.
+
+## Game adapter
+
+The adapter reads the game's render sources from guest memory and turns them into owned scenes for
+the frontend. Its publishable parts move into `crates/mag-render-adapter-core` step by step; the
+rest stays in a separate checkout until it meets the rules below. A part is publishable when it
+depends only on public interface facts (RSX method layout, the guest data-structure layouts needed
+to read and write guest memory, hardware number formats) and on behaviour written in our own words
+under [the reimplementation method](native-graphics-reimplementation-method.md). Code organised
+around the original program's functions, call order, stack frames, local-store layout or register
+use is not publishable, whatever its comments say; it is re-specified and reimplemented first.
+Identities that verify inputs, including generated-function hashes keyed by address, are allowed
+(see `AGENTS.md`).
+
+The crate has no game content and needs no game files to build or test. Nothing in it runs unless
+a host calls it, and its per-frame entry points also check a master switch that is off by default:
+set `MAG_RENDER_ADAPTER=1`, or call `mag_render_adapter_enable()` before the first frame, to turn
+it on. A build that does not link the crate, or links it without turning the switch on, renders
+exactly as before.
+
+```sh
+cargo fmt --manifest-path crates/mag-render-adapter-core/Cargo.toml --check
+cargo clippy --manifest-path crates/mag-render-adapter-core/Cargo.toml --all-targets --locked -- -D warnings
+cargo test --manifest-path crates/mag-render-adapter-core/Cargo.toml --locked
+```
 
 ## Build the optional library
 
