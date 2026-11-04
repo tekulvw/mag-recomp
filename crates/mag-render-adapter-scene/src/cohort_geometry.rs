@@ -2789,12 +2789,14 @@ mod pending_noninstanced_tests {
     #[test]
     fn parallel_pending_preparation_is_bit_identical_to_the_inline_call_in_job_order() {
         // Enough total vertices to use helper threads, plus one late refusal
-        // (a non-finite position, which only the deformation itself checks)
-        // that must stay Err.
+        // (finite inputs whose displaced positions overflow binary32, which
+        // the deformation refuses) that must stay Err.
         let mut jobs: Vec<_> = (0..40)
             .map(|i| job(i, if i % 3 == 0 { 4 } else { 3 }, 97 + i * 13, 1.0))
             .collect();
-        jobs.push(job(40, 3, 64, f32::NAN));
+        let mut overflow = job(40, 3, 64, 3.3e38);
+        overflow.material_rows[0][0] = 1.0e38f32.to_bits();
+        jobs.push(overflow);
         let parallel = run_pending_noninstanced(&jobs);
         assert_eq!(parallel.len(), jobs.len());
         let mut failures = 0;
