@@ -25,6 +25,11 @@
 //! | [`vertex_inputs`] | `vertex-inputs.md` |
 //! | [`raster`] | `raster-state.md` |
 //! | [`scene_plan`] | `scene-plan.md` (planner core) |
+//! | [`transitions`] | `main-group-transitions.md` |
+//! | [`effects`] | `main-effects.md` (framework and stencil-mask producer) |
+//! | [`quincunx`] | `main-quincunx.md` (nearest-sample approximation, labelled) |
+//! | [`downsample`] | `main-downsample.md` |
+//! | [`finish`] | `main-finish.md` |
 //! | [`waveform`] | helpers defined in `group-zero-deformation.md` |
 //!
 //! Floating-point outputs use ordinary native arithmetic. They are checked against the
@@ -33,6 +38,9 @@
 // Matrix and lane arithmetic reads more clearly with explicit indices.
 #![allow(clippy::needless_range_loop)]
 
+pub mod downsample;
+pub mod effects;
+pub mod finish;
 pub mod fog;
 pub mod fog_values;
 pub mod group_twelve;
@@ -44,12 +52,14 @@ pub mod normals;
 pub mod producer;
 pub mod producers;
 pub mod program_compilation;
+pub mod quincunx;
 pub mod raster;
 pub mod scene_plan;
 pub mod setup;
 pub mod skinning;
 pub mod surfaces;
 pub mod texture;
+pub mod transitions;
 pub mod vertex_inputs;
 pub mod waveform;
 
