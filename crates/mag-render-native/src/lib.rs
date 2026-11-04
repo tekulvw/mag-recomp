@@ -293,6 +293,19 @@ pub extern "C" fn mag_render_native_abi_version() -> u32 {
 
 mod client;
 
+/// Copy and validate an ABI v3 scene packet exactly as scene preparation does, without a device,
+/// worker or target. Returns the validator's status on refusal. This lets producers of packets
+/// (for example the clean-room planner glue) test what they build against the real validator.
+///
+/// # Safety
+/// Every nested range declared by `desc` is valid, aligned and readable for the call.
+pub unsafe fn validate_scene_packet_v3(desc: &mag_render_abi::packet::DescV3) -> Result<(), i32> {
+    let limits = client::scene_packet::limits()?;
+    let max_draws = usize::try_from(limits.max_draws).map_err(|_| -5)?;
+    unsafe { client::scene_packet::ScenePacket::copy_v3(desc, max_draws, limits.max_bytes) }
+        .map(drop)
+}
+
 pub mod host_frame;
 
 pub mod thread_stack;

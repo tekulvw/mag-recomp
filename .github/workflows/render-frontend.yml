@@ -83,6 +83,12 @@ jobs:
       - name: Fetch clean-room glue dependencies
         run: cargo fetch --manifest-path crates/mag-render-behavior-glue/Cargo.toml --locked
       - name: Check clean-room glue crate
+        # mag-render-native (a dev-dependency) builds C11 sources: use the same
+        # compiler and generator as the native jobs (clang-cl on Windows).
+        env:
+          CC: ${{ runner.os == 'Windows' && 'clang-cl' || 'cc' }}
+          CXX: ${{ runner.os == 'Windows' && 'clang-cl' || 'c++' }}
+          CMAKE_GENERATOR: Ninja
         run: |
           cargo fmt --manifest-path crates/mag-render-behavior-glue/Cargo.toml --check
           cargo clippy --manifest-path crates/mag-render-behavior-glue/Cargo.toml --locked --offline --all-targets -- -D warnings

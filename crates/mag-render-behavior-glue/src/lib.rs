@@ -3,6 +3,7 @@
 //!
 //! | Module | Role |
 //! | --- | --- |
+//! | [`abi`] | the pointer-bearing packet records from an owned arena |
 //! | [`memory`] | `GuestSnapshot` as a behaviour `GuestMemory` |
 //! | [`cohort`] | owned cohort records as planner inputs |
 //! | [`packet`] | plan steps and producer passes as packet entries |
@@ -16,6 +17,7 @@
 //! the single behaviour-crate function for each group; no pass may keep its own copy, variant or
 //! coefficients.
 
+pub mod abi;
 pub mod cohort;
 pub mod deformation;
 pub mod memory;

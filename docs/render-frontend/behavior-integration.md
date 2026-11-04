@@ -72,6 +72,20 @@ Draws carry: the pipeline from the compiled pair (`program_compilation`), the ra
 vertex uniform tail), the vertex and index buffers (`vertex_inputs`), and textures
 (`scene_plan::draw_textures`), with views and samplers de-duplicated by the packet.
 
+### Pointer-bearing records
+
+`glue::abi::SceneBuilder` is an owned arena of programs, pipelines, buffers, images, views,
+samplers, passes (with their packet v2 viewports and v3 stencil records) and items.
+`SceneBuilder::add_assembled` takes the assembler's passes and items. `SceneBuilder::view` borrows
+the arena and returns a `PacketView` whose `DescV3` points only into the arena and into the view's
+own tables, so the synchronous copy into the native worker reads live, unchanged memory. Views and
+samplers are de-duplicated by the bits of every field. Index buffers hold native-endian `u32`.
+
+The builder is tested against the real packet validator,
+`mag_render_native::validate_scene_packet_v3`, which runs exactly the copy and validation that
+scene preparation runs, without a device. One test takes a clean-room plan end to end: traversal,
+pass assembly, programs compiled through `RsxTranslator`, vertex inputs and uniforms.
+
 ## `ProducerResources`
 
 `glue::resources::ImageTable` implements `producer::ProducerResources` for the lighting and fog
@@ -131,7 +145,5 @@ tests for equality. Tests cover groups 0, 3, 4 and 11.
 
 ## Not covered yet
 
-- Writing the ABI's pointer-bearing records (`Desc`, `Draw`, `Pass`) and the synchronous copy into
-  the native worker. That belongs to the adapter's packet builder.
 - Native shader lowering and the stored-depth Metal variant (`mag-render-programs` with
   `native-compiler`).

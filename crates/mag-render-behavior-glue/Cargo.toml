@@ -15,5 +15,10 @@ mag-render-adapter-core = { path = "../mag-render-adapter-core" }
 mag-render-behavior = { path = "../mag-render-behavior" }
 mag-render-programs = { path = "../mag-render-programs" }
 
+[dev-dependencies]
+# The real packet validator, for round-trip tests of the ABI builder.
+mag-render-native = { path = "../mag-render-native" }
+
 [lints.rust]
-unsafe_code = "forbid"
+# The library has no unsafe code; only the validator round-trip test calls the unsafe entry point.
+unsafe_code = "deny"
