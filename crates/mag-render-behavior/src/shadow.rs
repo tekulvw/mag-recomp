@@ -92,10 +92,10 @@ pub const RUNS: [CascadeRun; 2] = [
 
 /// The enabled-group mask the game passes for both runs. A replacement reads the mask from the
 /// run's input; this value is only what the specification observed.
-pub const OBSERVED_GROUP_MASK: u32 = 0xfe;
+pub const OBSERVED_GROUP_MASK: u16 = 0xfe;
 
 /// The groups a run may draw under the established rules: 1–7.
-pub const SUPPORTED_GROUPS: u32 = 0xfe;
+pub const SUPPORTED_GROUPS: u16 = 0xfe;
 
 /// The selected casters of one run.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -115,9 +115,12 @@ impl CasterSelection {
 
 /// Selects the enabled groups of a run from its mask and the cohort's group counts.
 ///
-/// A mask bit outside groups 1–7 is open question 9 and is refused, never drawn or dropped.
+/// The mask is 16 bits, bit `g` for mesh group `g`, the width of the setup record's enabled-group
+/// mask (the low half of its group-enable word, `material-setup.md`); a caller never passes the
+/// whole 32-bit word. A mask bit outside groups 1–7 is open question 9 and is refused, never
+/// drawn or dropped.
 /// Which camera's counts the caller passes is open question 8; see [`run_camera`].
-pub fn select_casters(mask: u32, group_counts: &[u32; 16]) -> Result<CasterSelection, ShadowError> {
+pub fn select_casters(mask: u16, group_counts: &[u32; 16]) -> Result<CasterSelection, ShadowError> {
     if mask & !SUPPORTED_GROUPS != 0 {
         return Err(ShadowError::Unresolved(ShadowQuestion::GroupsOutsideMask));
     }
@@ -133,7 +136,7 @@ pub fn select_casters(mask: u32, group_counts: &[u32; 16]) -> Result<CasterSelec
 ///
 /// `groups` are the items' census groups, in cohort order (ascending group, then sorted order).
 /// Items out of ascending group order are refused, because the run draws in cohort order.
-pub fn caster_items(mask: u32, groups: &[u32]) -> Result<Vec<usize>, ShadowError> {
+pub fn caster_items(mask: u16, groups: &[u32]) -> Result<Vec<usize>, ShadowError> {
     if mask & !SUPPORTED_GROUPS != 0 {
         return Err(ShadowError::Unresolved(ShadowQuestion::GroupsOutsideMask));
     }
@@ -143,7 +146,7 @@ pub fn caster_items(mask: u32, groups: &[u32]) -> Result<Vec<usize>, ShadowError
     Ok(groups
         .iter()
         .enumerate()
-        .filter(|(_, g)| **g < 32 && mask & (1 << **g) != 0)
+        .filter(|(_, g)| **g < 16 && mask & (1 << **g) != 0)
         .map(|(i, _)| i)
         .collect())
 }
