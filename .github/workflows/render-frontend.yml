@@ -1,9 +1,12 @@
 name: Rust rendering frontend
 
+# Docs-only changes don't affect the frontend build; skip them (CI capacity is limited).
 on:
   push:
     branches: [main]
+    paths-ignore: ['docs/**', '**/*.md']
   pull_request:
+    paths-ignore: ['docs/**', '**/*.md']
   workflow_dispatch:
 
 # The integration branch has a draft PR: run it once via pull_request, not
