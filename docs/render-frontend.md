@@ -46,6 +46,41 @@ cargo clippy --manifest-path crates/mag-render-adapter-scene/Cargo.toml --all-ta
 cargo test --manifest-path crates/mag-render-adapter-scene/Cargo.toml --locked
 ```
 
+### Source hooks
+
+The adapter learns when the original engine configures, fills and submits its render work through
+observer hooks in the lifted PPU sources. `tools/render_hooks/prepare.py` copies a complete engine
+lift to a new directory and adds the hooks of the chosen stages:
+
+| Stage | Observes | Compile guard |
+| --- | --- | --- |
+| `configuration` | Shadow configuration manager init and shutdown | `MAG_RENDER_ADAPTER_CONFIGURATION` |
+| `shadow-view` | the Shadow view-corner helper (needs `configuration`) | `MAG_RENDER_ADAPTER_SHADOW_VIEW` |
+| `cohort` | retained visibility cohort ownership and publication (needs `configuration`) | `MAG_RENDER_ADAPTER_COHORT` |
+| `ui-handoff` | the UI packet writers at the pre-UI boundary (needs `cohort`) | `MAG_RENDER_ADAPTER_UI_HANDOFF` |
+
+```sh
+python3 tools/render_hooks/prepare.py --base generated/retail-v1.0/mage_g-dispatcher \
+  --output generated/retail-v1.0/mage_g-render --stage configuration --stage cohort
+```
+
+Each stage pins the functions it changes, and the callees it relies on, inline by address to the
+SHA-256 of the complete lifted body and to the lifted file that holds it. The pins identify the
+output of the PPU lifter pinned in `profiles/framework.json` (`LIFTER_REVISION` in
+`tools/render_hooks/common.py`), and the base lift's provenance must name that revision. Every pin
+and every seam is re-checked when a stage is applied; any mismatch refuses the whole preparation
+and writes no output. After a lifter pin change, regenerate the tables with
+`prepare.py --print-pins <unprepared lift>`, review them and commit them with the pin change.
+
+Hooks only add lines, each under its stage's compile guard. Removing them restores every original
+body byte for byte, which the tool checks before writing. Every original call, drain, guest write
+and return is kept, so a prepared lift compiled without the guards is the original program. Hooks
+name original seams (a function's address, a call's return address, the register that holds a
+value at that seam) only to identify where to observe, as `tools/occlusion_store_hooks.py` does;
+they never reproduce original behaviour. The prepared provenance keeps every base field, updates
+the hashes of the rewritten sources and adds a `render_adapter_hooks` record that names the stages
+and the SHA-256 of each hook tool file.
+
 ## Build the optional library
 
 Use the exact Rust version and components recorded in `rust-toolchain.toml`. The frontend and
