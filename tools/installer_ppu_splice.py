@@ -1,7 +1,9 @@
 """Reproduce a profile-bound engine dispatcher fix using already pinned SDKs.
 
-No generated body is bundled. The original decoder is shared by both runs;
-only the lifter changes. Keep the complete reviewed function inventory because
+No generated body is bundled. The original decoder and ELF parser are shared
+by both runs; only the lifter changes. Both are staged beside each lifter: a
+lifter that cannot import the parser silently reads the ELF as raw bytes and
+finds different function bounds. Keep the complete reviewed function inventory because
 jump-table discovery uses neighbouring function boundaries. This deliberately
 avoids a single-function inventory that could change dispatcher extents.
 """
@@ -69,6 +71,7 @@ def prepare(base, output, work, elf, inventory, nonlocal_profile, before_sdk, af
         if provenance.get(key) != expected:
             raise ValueError('Splice base provenance differs from reviewed generation inputs: ' + key)
     decoder = pinned_blob(before_sdk, profile['before']['revision'], 'tools/ppu_disasm.py', profile['decoder_sha256'])
+    parser = pinned_blob(before_sdk, profile['before']['revision'], 'tools/elf_parser.py', profile['parser_sha256'])
     lifters = {name: pinned_blob(sdk, profile[name]['revision'], 'tools/ppu_lifter.py', profile[name]['lifter_sha256'])
                for name, sdk in (('before', before_sdk), ('after', after_sdk))}
     work.mkdir(parents=True)
@@ -76,6 +79,7 @@ def prepare(base, output, work, elf, inventory, nonlocal_profile, before_sdk, af
     with tempfile.TemporaryDirectory(prefix='dispatcher-relift-', dir=output.parent) as temporary:
         temporary = Path(temporary)
         (temporary / 'ppu_disasm.py').write_bytes(decoder)
+        (temporary / 'elf_parser.py').write_bytes(parser)
         for name in ('before', 'after'):
             lifter = temporary / ('lifter_' + name + '.py'); lifter.write_bytes(lifters[name])
             commands[name] = [sys.executable, str(lifter), str(elf), '--functions', str(funcs),
