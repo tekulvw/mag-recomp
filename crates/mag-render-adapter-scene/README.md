@@ -41,6 +41,10 @@ Current contents:
   within the tolerances of its deformation specifications;
 - `depth_sources`, `depth_materials`: the depth pre-pass inputs and its
   selected-material programs and fragment builtin requests;
+- `material_finish`, `material_group_twelve`: the Main pass's owned finish
+  inputs and auxiliary records, and its group-twelve compact texture inputs;
+- `client_scene`: a position-only client scene prepared from the captured
+  geometry, with every omission kept explicit;
 - `capture_view`: optional copy-free comparison of guest spans through
   read-only views the host registers
   (`PS3_RENDER_CAPTURE_VIEW_VALIDATION=1`, default off).
