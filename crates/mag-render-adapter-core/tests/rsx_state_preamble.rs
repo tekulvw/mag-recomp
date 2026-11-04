@@ -155,3 +155,42 @@ fn classes_of_representative_methods() {
     }
     assert!(!C::Draw.is_state() && !C::Clear.is_state() && !C::NoOperation.is_state());
 }
+
+#[test]
+fn context_dma_bindings_are_state_except_notify_and_synchronisation() {
+    for (method, class) in [
+        (0x0194, MethodClass::Attachment), // colour A
+        (0x018c, MethodClass::Attachment), // colour B
+        (0x01b4, MethodClass::Attachment), // colour C
+        (0x01b8, MethodClass::Attachment), // colour D
+        (0x0198, MethodClass::Attachment), // zeta
+        (0x0184, MethodClass::TextureBinding),
+        (0x0188, MethodClass::TextureBinding),
+        (0x019c, MethodClass::VertexInput),
+        (0x01a0, MethodClass::VertexInput),
+    ] {
+        assert_eq!(classify(method), Some(class), "{method:#06x}");
+    }
+    // Notify, state, semaphore, report, clip and cull context DMAs stay unknown.
+    for method in [0x0180, 0x0190, 0x01a4, 0x01a8, 0x01ac, 0x01b0] {
+        assert_eq!(classify(method), None, "{method:#06x}");
+    }
+    // A surface setup replays its context DMAs with the surface words.
+    let writes = [
+        w(0x0194, 0xfeed_0000),
+        w(0x0198, 0xfeed_0001),
+        w(0x0200, 0x0101),
+    ];
+    let p = encode_state_preamble(&writes, ClassSet::all_state(), 64).unwrap();
+    assert_eq!(
+        p.words,
+        [
+            (2 << 18) | 0x0194,
+            0xfeed_0000,
+            0xfeed_0001,
+            0x0004_0200,
+            0x0101,
+            RETURN
+        ]
+    );
+}
