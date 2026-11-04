@@ -21,7 +21,7 @@ static int sampler_create(void *opaque, const mag_native_sampler_desc *desc, mag
          (!(c->known_features&c->enabled_features&MAG_RENDER_HOST_FEATURE_ANISOTROPY) ||
           s->max_anisotropy>c->owner.properties.limits.maxSamplerAnisotropy)) ||
         fabsf(s->lod_bias) > c->owner.properties.limits.maxSamplerLodBias)
-        return MAG_NATIVE_UNSUPPORTED;
+        return VK_REFUSE(MAG_NATIVE_UNSUPPORTED);
     const VkSamplerAddressMode wraps[] = {
         VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE, VK_SAMPLER_ADDRESS_MODE_REPEAT,
         VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER};

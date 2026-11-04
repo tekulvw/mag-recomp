@@ -492,11 +492,46 @@ static int close_context(void *opaque) {
     host.release(host.userdata,host.lifetime);return MAG_NATIVE_OK;
 }
 
+/* Every refusal inside the scene, pipeline and import paths records where it
+ * was decided, and each refused scene entry point reports it on one line
+ * (rate limited), so an unsupported game scene is visible rather than a bare
+ * status. Plain statics: these entry points run on the one client thread. */
+static const char *vk_refusal_file;
+static int vk_refusal_line;
+static unsigned long long vk_refusal_count;
+#define VK_REFUSE(status) (vk_refusal_file = __FILE__, vk_refusal_line = __LINE__, (status))
+static void vk_refusal_begin(void) { vk_refusal_file = NULL; vk_refusal_line = 0; }
+static int vk_refusal_end(const char *operation, int status) {
+    /* BUSY and STALE are ordinary back-pressure and lifetime answers. */
+    if (status >= 0 || status == MAG_NATIVE_BUSY || status == MAG_NATIVE_STALE) return status;
+    ++vk_refusal_count;
+    if (vk_refusal_count <= 16 || vk_refusal_count % 256 == 0) {
+        const char *file = vk_refusal_file ? vk_refusal_file : "unattributed";
+        for (const char *p = file; *p; ++p) if (*p == '/' || *p == '\\') file = p + 1;
+        fprintf(stderr, "[mag native vulkan refusal] op=%s status=%d at=%s:%d count=%llu\n", operation, status,
+                file, vk_refusal_file ? vk_refusal_line : 0, vk_refusal_count);
+    }
+    return status;
+}
 #include "mag_render_vulkan_sampler.inc"
 #include "mag_render_vulkan_batch.inc"
 #include "mag_render_vulkan_import.inc"
 #include "mag_render_vulkan_resident.inc"
 #include "mag_render_vulkan_scene.inc"
+/* The reporting entry points (see vk_refusal_end). */
+#define VK_REPORTED(name, params, args) \
+    static int reported_##name params { vk_refusal_begin(); return vk_refusal_end(#name, name args); }
+VK_REPORTED(scene_graphics_create, (void *o, const mag_native_scene_graphics_desc *d, mag_native_pipeline *p), (o, d, p))
+VK_REPORTED(scene_graphics_create_v2, (void *o, const mag_native_scene_graphics_v2_desc *d, mag_native_pipeline *p), (o, d, p))
+VK_REPORTED(scene_graphics_create_v3, (void *o, const mag_native_scene_graphics_v3_desc *d, mag_native_pipeline *p), (o, d, p))
+VK_REPORTED(submit_scene, (void *o, const mag_native_scene *s, mag_native_ticket *t), (o, s, t))
+VK_REPORTED(submit_scene_v2, (void *o, const mag_native_scene_v2 *d, const mag_native_image *i, const MagRenderHostFrame *f, mag_native_ticket *t), (o, d, i, f, t))
+VK_REPORTED(submit_scene_v3, (void *o, const mag_native_scene_v3 *d, const mag_native_image *i, const MagRenderHostFrame *f, mag_native_ticket *t), (o, d, i, f, t))
+VK_REPORTED(submit_scene_v4, (void *o, const mag_native_scene_v4 *d, const mag_native_image *i, const MagRenderHostFrame *f, mag_native_ticket *t), (o, d, i, f, t))
+VK_REPORTED(submit_scene_v5, (void *o, const mag_native_scene_v5 *d, const mag_native_image *i, const MagRenderHostFrame *f, mag_native_ticket *t), (o, d, i, f, t))
+VK_REPORTED(reserve_scene, (void *o, const mag_native_scene_import *im, uint32_t n, mag_native_ticket *t), (o, im, n, t))
+VK_REPORTED(image_import, (void *o, const MagRenderHostImage *h, mag_native_image *i), (o, h, i))
+VK_REPORTED(image_import_certified, (void *o, const mag_native_image_certificate *c, mag_native_image *i), (o, c, i))
 /* Designated: every operation this backend lacks is an explicit NULL, which
  * the wrapper reports as UNSUPPORTED (scene_chunk_stats: Metal's chunked
  * encoding only). reserve_scene reports UNSUPPORTED itself unless
@@ -506,13 +541,13 @@ static const mag_native_ops operations = {
     .caps = caps, .buffer_create = buffer_create, .buffer_release = buffer_release, .buffer_read = buffer_read,
     .pipeline_create = pipeline_create, .pipeline_release = pipeline_release, .submit = submit, .poll = poll,
     .close = close_context, .graphics_create = graphics_create, .submit_batch = submit_batch,
-    .scene_graphics_create = scene_graphics_create, .submit_scene = submit_scene, .image_import = image_import,
+    .scene_graphics_create = reported_scene_graphics_create, .submit_scene = reported_submit_scene, .image_import = reported_image_import,
     .image_release = image_release, .submit_scene_target = NULL, .submit_scene_frame = NULL,
-    .scene_graphics_create_v2 = scene_graphics_create_v2, .scene_graphics_create_v3 = scene_graphics_create_v3,
-    .sampler_create = sampler_create, .sampler_release = sampler_release, .submit_scene_v2 = submit_scene_v2,
-    .submit_scene_v3 = submit_scene_v3, .submit_scene_v4 = submit_scene_v4,
-    .image_import_certified = image_import_certified, .scene_graphics_create_aux = NULL,
-    .submit_scene_v5 = submit_scene_v5, .reserve_scene = reserve_scene, .abandon_scene_reservation = abandon_scene_reservation,
+    .scene_graphics_create_v2 = reported_scene_graphics_create_v2, .scene_graphics_create_v3 = reported_scene_graphics_create_v3,
+    .sampler_create = sampler_create, .sampler_release = sampler_release, .submit_scene_v2 = reported_submit_scene_v2,
+    .submit_scene_v3 = reported_submit_scene_v3, .submit_scene_v4 = reported_submit_scene_v4,
+    .image_import_certified = reported_image_import_certified, .scene_graphics_create_aux = NULL,
+    .submit_scene_v5 = reported_submit_scene_v5, .reserve_scene = reported_reserve_scene, .abandon_scene_reservation = abandon_scene_reservation,
     .buffer_write = buffer_write, .scene_chunk_stats = NULL, .memory_stats = memory_stats};
 static int vulkan_create(const MagRenderHostOwner *host,uint64_t known,uint64_t enabled,mag_native_device **out) {
     if (!host || !out || host->backend!=MAG_RENDER_HOST_VULKAN) return MAG_NATIVE_INVALID;
