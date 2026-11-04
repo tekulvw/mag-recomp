@@ -1,9 +1,12 @@
 name: Rust rendering frontend
 
+# Docs-only changes don't affect the frontend build; skip them (CI capacity is limited).
 on:
   push:
     branches: [main]
+    paths-ignore: ['docs/**', '**/*.md']
   pull_request:
+    paths-ignore: ['docs/**', '**/*.md']
   workflow_dispatch:
 
 # The integration branch has a draft PR: run it once via pull_request, not
@@ -57,6 +60,14 @@ jobs:
         run: cargo test --all-features --locked --offline
       - name: Real static library C++ linkage and rebuild
         run: python -m unittest tests.test_rust_render_build -v
+      - name: Fetch locked adapter core dependencies
+        run: cargo fetch --manifest-path crates/mag-render-adapter-core/Cargo.toml --locked
+      - name: Adapter core format
+        run: cargo fmt --manifest-path crates/mag-render-adapter-core/Cargo.toml --check
+      - name: Adapter core Clippy
+        run: cargo clippy --manifest-path crates/mag-render-adapter-core/Cargo.toml --locked --offline --all-targets -- -D warnings
+      - name: Adapter core synthetic tests
+        run: cargo test --manifest-path crates/mag-render-adapter-core/Cargo.toml --locked --offline
       - name: Fetch isolated game-program compiler dependencies
         run: cargo fetch --manifest-path crates/mag-render-programs/Cargo.toml --locked
       - name: Check isolated game-program compiler
@@ -330,6 +341,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends spirv-tools
           cargo test --manifest-path crates/mag-render-programs/Cargo.toml --features native-compiler --locked --offline --test native_compile -- --ignored
+      - name: Fetch locked adapter core dependencies
+        run: cargo fetch --manifest-path crates/mag-render-adapter-core/Cargo.toml --locked
+      - name: Adapter core owned-scene tests
+        run: cargo test --manifest-path crates/mag-render-adapter-core/Cargo.toml --features owned-scene --locked --offline
+      - name: Adapter core owned-scene Clippy
+        run: cargo clippy --manifest-path crates/mag-render-adapter-core/Cargo.toml --features owned-scene --all-targets --locked --offline -- -D warnings
 
   vulkan-sdk-cpu:
     name: Vulkan SDK provider and bridge (CPU only)
