@@ -25,7 +25,13 @@ pub mod capture_memo;
 #[allow(unsafe_code)] // Calls the bridge's registered read-only views inside one capture call.
 pub mod capture_view;
 pub mod client_scene;
+#[allow(unsafe_code)] // Synchronous borrowed owned-scene callback only.
+pub mod client_scene_ffi;
+#[allow(unsafe_code)] // Fixed-size pointer-free observation ABI only.
+pub mod cohort_ffi;
 pub mod cohort_geometry;
+#[allow(unsafe_code)] // Synchronous copy callback only; checked owned buffers, no retained pointer.
+pub mod cohort_resource_ffi;
 pub mod cohort_resources;
 pub mod decoded_geometry_cache;
 pub mod deformation;
@@ -44,6 +50,8 @@ pub mod material_sources;
 pub mod material_textures;
 pub mod material_values;
 pub mod materials;
+#[allow(unsafe_code)] // Synchronous source copy; no retained guest pointer.
+pub mod producer_sources;
 pub mod shared_scene_sources;
 pub mod source_acquisition;
 pub mod vertex_inputs;

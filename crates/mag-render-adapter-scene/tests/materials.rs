@@ -1166,6 +1166,257 @@ fn repeated_items_share_exact_program_and_layout_decodes() {
         assert_eq!(s.fragment_template, cold.fragment_template);
     }
 }
+
+/// The default capture runs materials on a helper thread concurrently with
+/// geometry. Its outputs, refusals and counters must equal the serial
+/// schedule (`PS3_RENDER_SERIAL_CAPTURE_PHASES=1`), and every bridge callback
+/// must still run on the calling thread.
+#[test]
+fn concurrent_capture_phases_match_the_serial_schedule() {
+    // The adapter entry points do nothing while the master switch is off.
+    mag_render_adapter_core::runtime::enable();
+    use core::ffi::c_void;
+    use mag_render_adapter_scene::{cohort_ffi::*, cohort_resource_ffi::*};
+    const CHILD: &str = "MAG_SERIAL_CAPTURE_PHASES_CHILD";
+    use std::sync::atomic::{AtomicU64, Ordering};
+    struct Source {
+        memory: BTreeMap<u32, Vec<u8>>,
+        thread: std::thread::ThreadId,
+        calls: AtomicU64,
+        foreign: AtomicU64,
+        // Like the bridge's helper read window: off-thread reads are accepted
+        // only when the helper-read schedule is selected.
+        window: bool,
+    }
+    unsafe extern "C" fn read(opaque: *mut c_void, address: u32, bytes: u32, out: *mut u8) -> i32 {
+        // SAFETY: the test passes a live Source for this call; shared access only.
+        let source = unsafe { &*opaque.cast::<Source>() };
+        source.calls.fetch_add(1, Ordering::Relaxed);
+        if std::thread::current().id() != source.thread {
+            source.foreign.fetch_add(1, Ordering::Relaxed);
+            if !source.window {
+                return -1;
+            }
+        }
+        let Ok(owned) = copy(
+            &source.memory,
+            StreamRequest {
+                address,
+                bytes: bytes as usize,
+            },
+        ) else {
+            return -1;
+        };
+        // SAFETY: production synchronous copy ABI with an exact extent.
+        unsafe { std::ptr::copy_nonoverlapping(owned.as_ptr(), out, owned.len()) };
+        0
+    }
+    unsafe extern "C" fn located(_: *mut c_void, _: u32, _: u32, _: u32, _: *mut u8) -> i32 {
+        -1
+    }
+    let fingerprint = || {
+        let f = fixture();
+        let vm = 77;
+        assert_eq!(mag_render_adapter_cohort_vm(vm), 0);
+        let items = 6u32;
+        let mut begin = CohortBegin {
+            abi_version: 1,
+            struct_bytes: size_of::<CohortBegin>() as u32,
+            vm,
+            invocation: 1,
+            owner: 3,
+            pass_occurrence: 4,
+            execution_update: 5,
+            ..CohortBegin::default()
+        };
+        begin.group_counts[0][1] = items;
+        assert_eq!(mag_render_adapter_cohort_begin(begin), 0);
+        for i in 0..items {
+            // Shards are source-ordered: repeats of item 0, then of item 1.
+            let which = i / (items / 2);
+            let source = &f.cohort.items()[which as usize];
+            let mut item = CohortItemInput {
+                vm,
+                invocation: 1,
+                source_index: 1 + which,
+                ..CohortItemInput::default()
+            };
+            for (w, chunk) in item.mbi.iter_mut().zip(source.mbi.chunks(4)) {
+                *w = u32::from_be_bytes(chunk.try_into().unwrap());
+            }
+            assert_eq!(mag_render_adapter_cohort_item(item), 0);
+        }
+        assert_eq!(mag_render_adapter_cohort_finish(vm, 1), 0);
+        let input = CohortResourceInputV3 {
+            base: CohortResourceInput {
+                abi_version: 3,
+                struct_bytes: size_of::<CohortResourceInputV3>() as u32,
+                vm,
+                invocation: 1,
+                source_pass_address: f.pass.source_pass_address,
+                geometry_resource_base: f.pass.asset_bank,
+                ..CohortResourceInput::default()
+            },
+            located_copy: Some(located),
+            located_opaque: std::ptr::null_mut(),
+        };
+        let window = std::env::var_os("PS3_RENDER_CAPTURE_HELPER_READS").is_some();
+        let mut source = Source {
+            memory: f.memory.clone(),
+            thread: std::thread::current().id(),
+            calls: AtomicU64::new(0),
+            foreign: AtomicU64::new(0),
+            window,
+        };
+        // SAFETY: complete input and live synchronous callbacks.
+        let result = unsafe {
+            mag_render_adapter_cohort_assets_v3(&input, Some(read), (&raw mut source).cast())
+        };
+        let foreign = source.foreign.load(Ordering::Relaxed);
+        if window {
+            // The material helper read the guest itself, without round trips.
+            assert!(foreign > 0, "helper reads were not used");
+        } else {
+            assert_eq!(foreign, 0, "bridge called off the source thread");
+        }
+        let mut out = format!(
+            "status {} items {} reads {} bytes {} calls {}\n",
+            result.status,
+            result.items,
+            result.reads,
+            result.bytes,
+            source.calls.load(Ordering::Relaxed)
+        );
+        let owned = take_latest_main_sources().unwrap();
+        if let Ok(expected) = std::env::var("MAG_TEST_EXPECT_CHUNKS") {
+            // "chunks,reruns" of the chunked geometry schedule.
+            assert_eq!(
+                format!("{},{}", owned.geometry_chunks.0, owned.geometry_chunks.1),
+                expected
+            );
+        }
+        out += &format!(
+            "geometry {} {} {}\n",
+            owned.geometry.source_bytes,
+            owned.geometry.source_reads,
+            owned.geometry.items.len()
+        );
+        for item in &owned.geometry.items {
+            out += &format!(
+                "g {} {:?} {}\n",
+                item.ordinal,
+                item.omissions,
+                item.draws.len()
+            );
+        }
+        match &owned.materials {
+            Err(e) => out += &format!("materials err {e:?}\n"),
+            Ok(m) => {
+                out += &format!("materials {} {}\n", m.source_bytes, m.source_reads);
+                for item in &m.items {
+                    match &item.sources {
+                        Err(e) => out += &format!("m {} err {e:?}\n", item.ordinal),
+                        Ok(s) => {
+                            out += &format!(
+                                "m {} {:?} {:?} {:x?} {} {}\n",
+                                item.ordinal,
+                                s.programs,
+                                s.fragment_seed_layout,
+                                s.fragment_template,
+                                s.textures.len(),
+                                s.texture_bindings
+                                    .as_ref()
+                                    .map(Vec::len)
+                                    .ok()
+                                    .unwrap_or(usize::MAX)
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        out += &format!(
+            "callbacks {} {}\n",
+            owned.acquisition.guest_callbacks, owned.acquisition.guest_callback_bytes
+        );
+        out
+    };
+    if std::env::var_os(CHILD).is_some() {
+        print!("BEGIN\n{}END\n", fingerprint());
+        return;
+    }
+    let run_child_with = |envs: &[(&str, &str)]| {
+        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+        command
+            .args([
+                "--exact",
+                "concurrent_capture_phases_match_the_serial_schedule",
+                "--nocapture",
+            ])
+            .env(CHILD, "1");
+        for key in [
+            "PS3_RENDER_SERIAL_CAPTURE_PHASES",
+            "PS3_RENDER_CONCURRENT_CAPTURE_PHASES",
+            "PS3_RENDER_CAPTURE_HELPER_READS",
+            "PS3_RENDER_CAPTURE_GEOMETRY_CHUNKS",
+            "PS3_RENDER_CAPTURE_POOL",
+            "PS3_RENDER_CAPTURE_CONCURRENT_CACHES",
+            "MAG_TEST_EXPECT_CHUNKS",
+        ] {
+            command.env_remove(key);
+        }
+        for (key, value) in envs {
+            command.env(key, value);
+        }
+        let child = command.output().unwrap();
+        assert!(
+            child.status.success(),
+            "{}",
+            String::from_utf8_lossy(&child.stderr)
+        );
+        let stdout = String::from_utf8(child.stdout).unwrap();
+        stdout
+            .split_once("BEGIN\n")
+            .and_then(|(_, rest)| rest.split_once("END\n"))
+            .map(|(body, _)| body.to_owned())
+            .expect("child fingerprint")
+    };
+    let run_child = |key: &str| run_child_with(&[(key, "1")]);
+    // Serial is the default schedule; compare it with the opt-in concurrent one.
+    let serial = run_child("PS3_RENDER_SERIAL_CAPTURE_PHASES");
+    let concurrent = run_child("PS3_RENDER_CONCURRENT_CAPTURE_PHASES");
+    assert!(concurrent.contains("materials "), "{concurrent}");
+    assert!(
+        concurrent
+            .lines()
+            .any(|l| l.starts_with("m 0 ") && !l.contains(" err ")),
+        "{concurrent}"
+    );
+    assert_eq!(concurrent, serial);
+    // Helper reads: the same reads, outputs, refusals and counters again.
+    let helper = run_child("PS3_RENDER_CAPTURE_HELPER_READS");
+    assert_eq!(helper, serial);
+    // Chunked geometry (scoped helpers, then the persistent pool): accepted by
+    // the exactness guard and equal to the serial schedule.
+    for pool in ["0", "1"] {
+        let chunked = run_child_with(&[
+            ("PS3_RENDER_CAPTURE_HELPER_READS", "1"),
+            ("PS3_RENDER_CAPTURE_GEOMETRY_CHUNKS", "2"),
+            ("PS3_RENDER_CAPTURE_POOL", pool),
+            ("MAG_TEST_EXPECT_CHUNKS", "2,0"),
+        ]);
+        assert_eq!(chunked, serial, "pool={pool}");
+    }
+    // Concurrent caches: the same fingerprint again.
+    let concurrent_caches = run_child_with(&[
+        ("PS3_RENDER_CAPTURE_HELPER_READS", "1"),
+        ("PS3_RENDER_CAPTURE_GEOMETRY_CHUNKS", "3"),
+        ("PS3_RENDER_CAPTURE_POOL", "1"),
+        ("PS3_RENDER_CAPTURE_CONCURRENT_CACHES", "1"),
+        ("MAG_TEST_EXPECT_CHUNKS", "3,0"),
+    ]);
+    assert_eq!(concurrent_caches, serial);
+}
 /// The group-enable mask is the low half of the job input word at 0x48 (bit
 /// `1 << group`); the high half is a separate value.
 #[test]

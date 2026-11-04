@@ -189,10 +189,6 @@ pub(crate) fn count_view(equal: bool, bytes: usize) {
         }
     });
 }
-#[expect(
-    dead_code,
-    reason = "called by the source FFI layer, which is migrated later"
-)]
 pub(crate) fn count_callback(bytes: usize) {
     count(|s| {
         s.guest_callbacks += 1;
@@ -636,10 +632,6 @@ pub fn resident_texture_occupancy() -> (usize, usize) {
         .map_or((0, 0), |t| (t.len(), t.retained_bytes()))
 }
 /// A different VM has no relation to retained bytes; drop every entry.
-#[expect(
-    dead_code,
-    reason = "called by the source FFI layer, which is migrated later"
-)]
 pub(crate) fn vm_changed() {
     if let Some(t) = TEXTURES.get()
         && let Ok(mut t) = t.lock()
