@@ -128,8 +128,33 @@ The map is described by the full texture descriptor at `PARAMS+0x1520`
 ([material-producers.md](material-producers.md)), where `PARAMS` is the shadow/parameter object.
 The two shadow texture transforms at `PARAMS+0xD0` and `PARAMS+0xB50` are one per cascade. The
 lighting producer combines each with a scale-bias matrix whose horizontal offset differs between the
-cascades ([main-lighting.md](main-lighting.md)). The working hypothesis is that both cascades share
-one depth texture, side by side horizontally. That is not yet confirmed (open question 3).
+cascades ([main-lighting.md](main-lighting.md)).
+
+**Shadow surface** *(captured from a frame of the original renderer)*:
+
+- Both cascades share one depth surface: 2048×1024, Z24S8, tiled. Each cascade uses one
+  1024×1024 half: x 0–1023 or x 1024–2047. Which half belongs to which cascade is not yet known
+  (open question 3).
+- The colour target bound during the pass aliases the depth surface's memory. It is nominally
+  A8R8G8B8, but with colour mask 0 it is never written.
+- The surface is cleared to depth 1.0 once per frame, in the clear group at the start of the frame.
+  The stencil clear value is not yet known.
+- Both cascade runs render into it within one depth-only pass per frame, with depth test and write
+  on, less-or-equal, blending off and stencil test off. The viewport depth transform has z scale 0.5
+  and z offset 0.5, which maps clip depth −1…1 to window depth 0…1.
+
+**Frame order:** scene depth and normal pass, then this shadow pass, then the shadow-resolve pass
+(the lighting producer of [main-lighting.md](main-lighting.md)), then Main.
+
+**Readers of the shadow surface:**
+
+- The shadow-resolve pass samples it on texture unit 1, as a depth texture with depth comparison
+  (masked format `0x90`, linear-layout bit set), together with the scene depth on unit 0. It writes
+  only the alpha channel (colour mask `0x01000000`) of its 2560×720 target, with the stencil test on.
+  The capture shows one draw per cascade. Reconciling that with the two draws of
+  [main-lighting.md](main-lighting.md), which split by target rather than by cascade, is open
+  question 12.
+- A late blended draw in group 15 also samples the shadow surface, on texture unit 11.
 
 ## Outputs
 
@@ -232,7 +257,8 @@ semaphore offsets are `0x490` and `0x4A0` for Shadow and `0x4B0` for Depth.
    item's geometry and technique exactly as Main does, using the run's own pass object.
 2. Render the items, in cohort order, depth-only into the bound shadow target, from the cascade's
    light view. Use depth test on, depth write on, less-or-equal, blending and alpha test off and
-   colour writes off. Take stencil and depth bias as inherited from the state at run start.
+   colour writes off and the stencil test off. Use the cascade's half of the shared shadow surface.
+   Take any depth bias as inherited from the state at run start (open question 1).
 3. Order the result before Main's lighting producer samples the map, through the native equivalent
    of the texture-read semaphore.
 4. Meet the run's guest-visible obligations even though the original job does not run. This mirrors
@@ -313,15 +339,15 @@ pass.
 
 **Still open.**
 
-1. **Stencil and depth bias.** No recorded run emitted stencil or polygon offset, so both come from
-   the state in effect at run start. Which earlier work sets them, and with what values, needs the
-   FIFO segment just before each run.
+1. **Depth bias.** The stencil test is off during the pass. No recorded run emitted polygon offset,
+   so any depth bias comes from the state in effect at run start. Whether a bias is set, and its
+   factor and units, is not yet known.
 2. **Light view and projection.** This is PPU-side work. Rows 3–6 carry each draw's transform, but
    their construction from the cascade sphere (orientation, depth range, snapping) still needs the
    shadow owner's view construction traced.
-3. **Target, layout and clear.** The job sets no surface, viewport, scissor or clear. Recording the
-   FIFO just before each run settles these, together with question 11: both cascades in one texture
-   or not, size, format, viewport and clear value.
+3. **Cascade halves, viewport and stencil clear.** The surface, its format, the two halves and the
+   depth clear are now known. Still open: which half belongs to which cascade, each run's viewport
+   and scissor, and the stencil clear value.
 5. **Row 42.** What the one-row upload at vertex constant row 42 holds.
 7. **Child work.** Technique selection, programs and per-material state are in the per-item child
    jobs, not in the Shadow job. They need recordings of the material-binding child (image entry
@@ -331,7 +357,9 @@ pass.
 10. **Group 7 skinning admission.** `skinning-deformation.md` admits group 11 only. The group-7
     admission conditions (geometry mode, worker control, palette inputs) need their own statement
     before group-7 casters can be prepared natively.
-11. **Unit-1 import identity.** Compare the shadow map descriptor at `PARAMS+0x1520` (location,
+11. **Unit-1 import identity.** The shadow-resolve pass does sample the shadow surface on unit 1.
+    What is still to show is word-for-word equality between that bound descriptor (and its
+    comparison function) and `PARAMS+0x1520`. Compare the shadow map descriptor at `PARAMS+0x1520` (location,
     offset, pitch, size, format) against the depth surface bound for the two Shadow runs, in the
     same update. If it matches, the native Shadow pass writes the image that Main's lighting unit 1
     imports. Also check whether the game's post-join cascade-target record and handle write change
@@ -340,3 +368,7 @@ pass.
 
 Observed cost, for orientation: in Training the PPU waits about 1.8 ms on cascade 0 and about 4.3 ms
 on cascade 1, about 6.1 ms of a 29 ms update.
+12. **Shadow-resolve draws.** The capture shows one shadow-resolve draw per cascade, while
+    [main-lighting.md](main-lighting.md) describes a first draw to the role-1 target and an optional
+    second draw to the role-0 target. Whether each draw resolves one cascade (for example through
+    the depth-bounds range or the stencil reference) or both, needs the draws' state compared.
