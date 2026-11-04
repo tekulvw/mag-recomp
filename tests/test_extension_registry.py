@@ -1,4 +1,4 @@
-"""The runtime extension registry: empty by default, refuses double registration, carries scratch."""
+"""The runtime extension registry: empty by default, fans out lifecycle slots, keeps single-owner slots, carries scratch."""
 import shutil
 import subprocess
 import tempfile
