@@ -51,7 +51,7 @@ static int import_image(frontend_vk *c, const MagRenderHostImage *host,
     return status < 0 ? status : MAG_NATIVE_DEVICE_FAILED;
   MagRenderVulkanImage metadata = {0};
   if (!host->image) {
-    status = MAG_NATIVE_INVALID;
+    status = VK_REFUSE(MAG_NATIVE_INVALID);
     goto fail;
   }
   /* A foreign provider type has no C effective-type alias with this header. */
@@ -59,7 +59,7 @@ static int import_image(frontend_vk *c, const MagRenderHostImage *host,
   memcpy(header, host->image, sizeof(header));
   if (header[0] != MAG_RENDER_VULKAN_IMAGE_ABI ||
       header[1] != sizeof(metadata)) {
-    status = MAG_NATIVE_INVALID;
+    status = VK_REFUSE(MAG_NATIVE_INVALID);
     goto fail;
   }
   memcpy(&metadata, host->image, sizeof(metadata));
@@ -68,7 +68,7 @@ static int import_image(frontend_vk *c, const MagRenderHostImage *host,
       host->width > c->owner.properties.limits.maxImageDimension2D ||
       host->height > c->owner.properties.limits.maxImageDimension2D ||
       !mag_native_image_format_info(host->format, &format)) {
-    status = MAG_NATIVE_UNSUPPORTED;
+    status = VK_REFUSE(MAG_NATIVE_UNSUPPORTED);
     goto fail;
   }
   VkFormat vkformat = scene_vk_format(host->format);
@@ -87,13 +87,13 @@ static int import_image(frontend_vk *c, const MagRenderHostImage *host,
     goto fail;
   if (vkformat == VK_FORMAT_UNDEFINED ||
       !(metadata.usage & (attachment | VK_IMAGE_USAGE_SAMPLED_BIT))) {
-    status = MAG_NATIVE_UNSUPPORTED;
+    status = VK_REFUSE(MAG_NATIVE_UNSUPPORTED);
     goto fail;
   }
   if (host->format >= MAG_NATIVE_SCENE_BC1 &&
       host->format <= MAG_NATIVE_SCENE_BC3 &&
       !(c->known_features & c->enabled_features & MAG_RENDER_HOST_FEATURE_BC)) {
-    status = MAG_NATIVE_UNSUPPORTED;
+    status = VK_REFUSE(MAG_NATIVE_UNSUPPORTED);
     goto fail;
   }
   for (frontend_vk_imported_image *p = c->images; p; p = p->next)
@@ -107,7 +107,7 @@ static int import_image(frontend_vk *c, const MagRenderHostImage *host,
       (PFN_vkGetPhysicalDeviceFormatProperties)c->owner.host.get_instance_proc(
           c->owner.host.instance, "vkGetPhysicalDeviceFormatProperties");
   if (!query) {
-    status = MAG_NATIVE_UNSUPPORTED;
+    status = VK_REFUSE(MAG_NATIVE_UNSUPPORTED);
     goto fail;
   }
   VkFormatProperties properties;
@@ -120,7 +120,7 @@ static int import_image(frontend_vk *c, const MagRenderHostImage *host,
   if (metadata.usage & VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT)
     features |= VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT;
   if ((properties.optimalTilingFeatures & features) != features) {
-    status = MAG_NATIVE_UNSUPPORTED;
+    status = VK_REFUSE(MAG_NATIVE_UNSUPPORTED);
     goto fail;
   }
   PFN_vkGetPhysicalDeviceImageFormatProperties image_query =
@@ -135,7 +135,7 @@ static int import_image(frontend_vk *c, const MagRenderHostImage *host,
       host->width > image_properties.maxExtent.width ||
       host->height > image_properties.maxExtent.height ||
       !(image_properties.sampleCounts & VK_SAMPLE_COUNT_1_BIT)) {
-    status = MAG_NATIVE_UNSUPPORTED;
+    status = VK_REFUSE(MAG_NATIVE_UNSUPPORTED);
     goto fail;
   }
   frontend_vk_imported_image *image = calloc(1, sizeof(*image));
@@ -202,7 +202,7 @@ static int scene_import_info(void *opaque, mag_native_image ref,
     return status < 0 ? status : MAG_NATIVE_DEVICE_FAILED;
   if (required) {
     if (!image->validate_planes)
-      return MAG_NATIVE_UNSUPPORTED;
+      return VK_REFUSE(MAG_NATIVE_UNSUPPORTED);
     status =
         image->validate_planes(h->userdata, h->owner_lifetime, h->resource_id,
                                h->resource_generation, required);

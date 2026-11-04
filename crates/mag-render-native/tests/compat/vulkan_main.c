@@ -3,6 +3,7 @@
 #include "mag_render_imported_image.h"
 #include "mag_render_scene.h"
 #include "mag_render_stencil.h"
+#include "mag_render_sampler.h"
 #include <pthread.h>
 #include <time.h>
 #include <unistd.h>
@@ -236,6 +237,32 @@ static int bounds_pipeline(mag_native_device *device, int write_depth, int bound
     d.raster = bounds_raster(write_depth, bounds);
     return mag_native_scene_graphics_create_v3(device, &d, out);
 }
+/* An anisotropic sampler is created exactly when the owner's device enabled
+ * samplerAnisotropy, and refused (never silently clamped) otherwise. */
+static void check_anisotropic_sampler(void) {
+    MagRenderHostOwnerV2 owner = {.abi_version = 2, .struct_size = sizeof(owner)};
+    assert(mag_render_test_owner_v2(&owner) == 0);
+    mag_native_device *device = NULL;
+    assert(mag_native_create_v2(&owner, &device) == 0);
+    mag_native_sampler_desc desc = {.struct_size = sizeof(desc), .abi_version = MAG_NATIVE_SAMPLER_ABI};
+    desc.state.known_fields = MAG_NATIVE_SAMPLER_KNOWN_ALL;
+    desc.state.min_filter = desc.state.mag_filter = MAG_NATIVE_FILTER_LINEAR;
+    desc.state.mip_filter = MAG_NATIVE_MIP_LINEAR;
+    desc.state.wrap_s = desc.state.wrap_t = desc.state.wrap_r = MAG_NATIVE_WRAP_REPEAT;
+    desc.state.lod_max = 8;
+    desc.state.max_anisotropy = 4;
+    mag_native_sampler sampler = {0};
+    const int status = mag_native_sampler_create(device, &desc, &sampler);
+    if (owner.known_features & owner.enabled_features & MAG_RENDER_HOST_FEATURE_ANISOTROPY) {
+        assert(status == 0 && sampler.id);
+        assert(mag_native_sampler_release(device, sampler) == 0);
+        fprintf(stderr, "[anisotropy] owner enabled samplerAnisotropy: 4x sampler created\n");
+    } else {
+        assert(status == MAG_NATIVE_UNSUPPORTED);
+        fprintf(stderr, "[anisotropy] owner has no samplerAnisotropy: refused\n");
+    }
+    assert(mag_native_close(device) == 0);
+}
 static void check_depth_bounds(void) {
     MagRenderHostOwnerV2 owner = {.abi_version = 2, .struct_size = sizeof(owner)};
     assert(mag_render_test_owner_v2(&owner) == 0);
@@ -448,6 +475,7 @@ int main(int argc, char **argv) {
         check_resident_images(&owner);
     }
     if (!strcmp(argv[1], "draw")) check_depth_bounds();
+    if (!strcmp(argv[1], "draw")) check_anisotropic_sampler();
     if (mag_render_test_owner_gate()) {
         mag_render_test_owner_close(1);
         return 3;

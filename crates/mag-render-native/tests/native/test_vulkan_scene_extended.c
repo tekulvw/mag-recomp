@@ -96,7 +96,8 @@ int main(void){
     assert(submit_scene_owned(c,&scene,&ticket,NULL,0,&desc,NULL,NULL)==0);assert(ticket.submission_id==1&&queue_calls==1&&passes==1&&ends==1&&draws==0);assert(copies==1&&uploaded_regions==18&&last_copy.bufferOffset==136&&last_copy.imageSubresource.mipLevel==2&&last_copy.imageSubresource.baseArrayLayer==5);assert(full_ranges==2);assert(last_viewport.x==-.25f&&last_viewport.y==5.5f&&last_viewport.height==-4&&last_viewport.minDepth==.2f);assert(c->slots[0].scene_view_count==1&&destroyed_views==old_views&&a.readers==1&&p.references==1);assert(last_view.components.r==VK_COMPONENT_SWIZZLE_B&&last_view.components.a==VK_COMPONENT_SWIZZLE_ONE);assert(scene_texture_view(&c->slots[0],MAG_NATIVE_SCENE_VIEW_TABLE_BIT)==c->slots[0].scene_views[0]);
     slot_release(c,&c->slots[0]);assert(destroyed_views==old_views+3&&a.readers==0&&p.references==0);
     vp.scissor_width=4;assert(submit_scene_owned(c,&scene,&ticket,NULL,0,&desc,NULL,NULL)==0);assert(draws==1&&passes==2&&ends==2);slot_release(c,&c->slots[0]);
-    tb.sampler=1;linear_supported=0;assert(submit_scene_owned(c,&scene,&ticket,NULL,0,&desc,NULL,NULL)==MAG_NATIVE_UNSUPPORTED&&queue_calls==2);linear_supported=1;
+    tb.sampler=1;linear_supported=0;vk_refusal_begin();assert(submit_scene_owned(c,&scene,&ticket,NULL,0,&desc,NULL,NULL)==MAG_NATIVE_UNSUPPORTED&&queue_calls==2);linear_supported=1;
+    assert(vk_refusal_file&&strstr(vk_refusal_file,"mag_render_vulkan_scene.inc")&&vk_refusal_line>0);   /* the refusal names its check */
     c->known_features=0;tb.sampler=0;assert(submit_scene_owned(c,&scene,&ticket,NULL,0,&desc,NULL,NULL)==MAG_NATIVE_UNSUPPORTED&&queue_calls==2);assert(!c->slots[0].scene_images&&!c->slots[0].scene_views);
     scene.image_count=1;scene.resource_count=0;scene.resources=NULL;pass.draw_count=0;pass.draws=NULL;
     assert(submit_scene(c,&scene,&ticket)==0&&queue_calls==3&&last_viewport.x==0&&last_viewport.y==4&&last_viewport.height==-4);slot_release(c,&c->slots[0]);
@@ -115,6 +116,7 @@ int main(void){
     const frontend_vk_scene_image *ci=&c->slots[0].scene_images[0];assert(ci->view&&ci->sampled_view&&ci->view!=ci->sampled_view);
     assert(last_view.subresourceRange.aspectMask==VK_IMAGE_ASPECT_DEPTH_BIT&&last_attachment.stencilLoadOp==VK_ATTACHMENT_LOAD_OP_LOAD);
     slot_release(c,&c->slots[0]);assert(destroyed_views==before_views+2);
-    assert(operations.submit_scene_v4==submit_scene_v4);
-    assert(operations.submit_scene_v3==submit_scene_v3);test_vulkan_import_cpu(c);assert(!mag_native_sampler_registry_close(&c->samplers));free(c);puts("PASS VulkanV3 CPU command/lease fixture; no GPU driver calls");return 0;
+    /* The table's scene entries report refusals (vk_refusal_end) around the encoders. */
+    assert(operations.submit_scene_v4==reported_submit_scene_v4);
+    assert(operations.submit_scene_v3==reported_submit_scene_v3);test_vulkan_import_cpu(c);assert(!mag_native_sampler_registry_close(&c->samplers));free(c);puts("PASS VulkanV3 CPU command/lease fixture; no GPU driver calls");return 0;
 }

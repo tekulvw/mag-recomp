@@ -55,7 +55,7 @@ static int scene_viewport_capabilities(frontend_vk *c,const mag_native_scene *sc
         if(image->width>limits->maxFramebufferWidth||image->height>limits->maxFramebufferHeight||
            viewport.width>limits->maxViewportDimensions[0]||-viewport.height>limits->maxViewportDimensions[1]||
            viewport.x<limits->viewportBoundsRange[0]||viewport.y+viewport.height<limits->viewportBoundsRange[0]||
-           viewport.x+viewport.width>limits->viewportBoundsRange[1]||viewport.y>limits->viewportBoundsRange[1])return MAG_NATIVE_UNSUPPORTED;
+           viewport.x+viewport.width>limits->viewportBoundsRange[1]||viewport.y>limits->viewportBoundsRange[1])return VK_REFUSE(MAG_NATIVE_UNSUPPORTED);
     }
     return MAG_NATIVE_OK;
 }
@@ -97,29 +97,29 @@ static int scene_image_create(frontend_vk *c,const mag_native_scene_image *desc,
     /* Only genuine enabled-device facts on this retained owner authorize
      * optional compressed formats. Old ABI1 owners carry zero known facts. */
     if(desc->format>=MAG_NATIVE_SCENE_BC1&&desc->format<=MAG_NATIVE_SCENE_BC3&&
-       !(c->known_features&c->enabled_features&MAG_RENDER_HOST_FEATURE_BC))return MAG_NATIVE_UNSUPPORTED;
+       !(c->known_features&c->enabled_features&MAG_RENDER_HOST_FEATURE_BC))return VK_REFUSE(MAG_NATIVE_UNSUPPORTED);
     PFN_vkGetPhysicalDeviceFormatProperties formats=(PFN_vkGetPhysicalDeviceFormatProperties)
         c->owner.host.get_instance_proc(c->owner.host.instance,"vkGetPhysicalDeviceFormatProperties");
     PFN_vkGetPhysicalDeviceImageFormatProperties images=(PFN_vkGetPhysicalDeviceImageFormatProperties)
         c->owner.host.get_instance_proc(c->owner.host.instance,"vkGetPhysicalDeviceImageFormatProperties");
-    if(!formats||!images)return MAG_NATIVE_UNSUPPORTED;
-    VkFormat format=scene_vk_format(desc->format);if(format==VK_FORMAT_UNDEFINED)return MAG_NATIVE_UNSUPPORTED;
+    if(!formats||!images)return VK_REFUSE(MAG_NATIVE_UNSUPPORTED);
+    VkFormat format=scene_vk_format(desc->format);if(format==VK_FORMAT_UNDEFINED)return VK_REFUSE(MAG_NATIVE_UNSUPPORTED);
     VkFormatProperties supported;formats((VkPhysicalDevice)c->owner.host.physical_device,format,&supported);
     VkFormatFeatureFlags required=VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT;
     if(usage&VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT)required|=VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT;
     if(usage&VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT)required|=VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT;
     if(usage&VK_IMAGE_USAGE_TRANSFER_SRC_BIT)required|=VK_FORMAT_FEATURE_TRANSFER_SRC_BIT;
     if(usage&VK_IMAGE_USAGE_TRANSFER_DST_BIT)required|=VK_FORMAT_FEATURE_TRANSFER_DST_BIT;
-    if((supported.optimalTilingFeatures&required)!=required)return MAG_NATIVE_UNSUPPORTED;
+    if((supported.optimalTilingFeatures&required)!=required)return VK_REFUSE(MAG_NATIVE_UNSUPPORTED);
     VkImageCreateFlags flags=shape->dimension==4?VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT:0;
     VkImageFormatProperties properties;
     if(images((VkPhysicalDevice)c->owner.host.physical_device,format,VK_IMAGE_TYPE_2D,
               VK_IMAGE_TILING_OPTIMAL,usage,flags,&properties)!=VK_SUCCESS||
        desc->width>properties.maxExtent.width||desc->height>properties.maxExtent.height||
        shape->mip_count>properties.maxMipLevels||shape->layers>properties.maxArrayLayers||
-       !(properties.sampleCounts&VK_SAMPLE_COUNT_1_BIT))return MAG_NATIVE_UNSUPPORTED;
+       !(properties.sampleCounts&VK_SAMPLE_COUNT_1_BIT))return VK_REFUSE(MAG_NATIVE_UNSUPPORTED);
     mag_native_image_format metadata;
-    if(!mag_native_image_format_info(desc->format,&metadata))return MAG_NATIVE_UNSUPPORTED;
+    if(!mag_native_image_format_info(desc->format,&metadata))return VK_REFUSE(MAG_NATIVE_UNSUPPORTED);
     im->aspect=metadata.depth_attachment?VK_IMAGE_ASPECT_DEPTH_BIT:VK_IMAGE_ASPECT_COLOR_BIT;
     if(mag_native_image_has_stencil(desc->format))im->aspect|=VK_IMAGE_ASPECT_STENCIL_BIT;
     im->mip_count=shape->mip_count;im->layers=shape->layers;
@@ -133,7 +133,7 @@ static int scene_image_create(frontend_vk *c,const mag_native_scene_image *desc,
     for(type=0;type<c->owner.memory.memoryTypeCount;++type)
         if((requirements.memoryTypeBits&(1u<<type))&&
            (c->owner.memory.memoryTypes[type].propertyFlags&VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT))break;
-    if(type==c->owner.memory.memoryTypeCount)return MAG_NATIVE_UNSUPPORTED;
+    if(type==c->owner.memory.memoryTypeCount)return VK_REFUSE(MAG_NATIVE_UNSUPPORTED);
     VkMemoryAllocateInfo allocation={.sType=VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,.allocationSize=requirements.size,.memoryTypeIndex=type};
     if(native_memory_allocate(c,&allocation,&im->memory,&im->memory_bytes)!=VK_SUCCESS||
        c->vkBindImageMemory(c->owner.device,im->image,im->memory,0)!=VK_SUCCESS)return MAG_NATIVE_ALLOCATION_FAILED;
@@ -142,7 +142,7 @@ static int scene_image_create(frontend_vk *c,const mag_native_scene_image *desc,
 static int scene_filter_capabilities(frontend_vk *c,const mag_native_scene *scene,const mag_native_scene_v3 *v3,const mag_native_sampler *sampler_table){
     PFN_vkGetPhysicalDeviceFormatProperties formats=(PFN_vkGetPhysicalDeviceFormatProperties)
         c->owner.host.get_instance_proc(c->owner.host.instance,"vkGetPhysicalDeviceFormatProperties");
-    if(!formats)return MAG_NATIVE_UNSUPPORTED;
+    if(!formats)return VK_REFUSE(MAG_NATIVE_UNSUPPORTED);
     uint8_t checked[MAG_NATIVE_SCENE_MAX_IMAGES]={0};
     for(uint32_t p=0;p<scene->pass_count;++p)for(uint32_t d=0;d<scene->passes[p].draw_count;++d){
         const mag_native_scene_draw *draw=&scene->passes[p].draws[d];
@@ -160,13 +160,13 @@ static int scene_filter_capabilities(frontend_vk *c,const mag_native_scene *scen
                     const mag_native_image_view *view=&v3->views[MAG_NATIVE_SCENE_VIEW_TABLE_INDEX(binding->image)];
                     // Core1.1 leaves opaque-black border values undefined under
                     // nonidentity swizzles; an extension/rewritten shader is needed.
-                    for(unsigned channel=0;channel<4;++channel)if(view->remap[channel]!=channel)return MAG_NATIVE_UNSUPPORTED;
+                    for(unsigned channel=0;channel<4;++channel)if(view->remap[channel]!=channel)return VK_REFUSE(MAG_NATIVE_UNSUPPORTED);
                 }
             }
             uint32_t image=mag_native_scene_image_index(v3,binding->image);
             if(linear&&!checked[image]){
                 VkFormatProperties properties;formats((VkPhysicalDevice)c->owner.host.physical_device,scene_vk_format(scene->images[image].format),&properties);
-                if(!(properties.optimalTilingFeatures&VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT))return MAG_NATIVE_UNSUPPORTED;
+                if(!(properties.optimalTilingFeatures&VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT))return VK_REFUSE(MAG_NATIVE_UNSUPPORTED);
                 checked[image]=1;
             }
         }
@@ -183,7 +183,7 @@ static int scene_views_create(frontend_vk *c,frontend_vk_slot *slot,const mag_na
         const frontend_vk_scene_image *im=&slot->scene_images[view->image];
         // Core1.1 does not guarantee depth/stencil constant-one swizzles.
         if(im->aspect&VK_IMAGE_ASPECT_DEPTH_BIT)
-            for(unsigned component=0;component<4;++component)if(view->remap[component]==5)return MAG_NATIVE_UNSUPPORTED;
+            for(unsigned component=0;component<4;++component)if(view->remap[component]==5)return VK_REFUSE(MAG_NATIVE_UNSUPPORTED);
         VkImageViewUsageCreateInfo usage={.sType=VK_STRUCTURE_TYPE_IMAGE_VIEW_USAGE_CREATE_INFO,.usage=VK_IMAGE_USAGE_SAMPLED_BIT};
         VkImageViewCreateInfo info={.sType=VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,.pNext=&usage,.image=im->image,
             .viewType=view->dimension==4?VK_IMAGE_VIEW_TYPE_CUBE:VK_IMAGE_VIEW_TYPE_2D,
@@ -267,7 +267,7 @@ static int scene_graphics_create_layout(void *opaque, const mag_native_scene_gra
         (PFN_vkGetPhysicalDeviceFormatProperties)c->owner.host.get_instance_proc(
             c->owner.host.instance, "vkGetPhysicalDeviceFormatProperties");
     if (!format_properties)
-        return MAG_NATIVE_UNSUPPORTED;
+        return VK_REFUSE(MAG_NATIVE_UNSUPPORTED);
     VkFormatProperties color_format, depth_format;
     memset(&color_format,0,sizeof(color_format));
     if(desc->color_format)format_properties((VkPhysicalDevice)c->owner.host.physical_device, scene_vk_format(desc->color_format), &color_format);
@@ -276,7 +276,7 @@ static int scene_graphics_create_layout(void *opaque, const mag_native_scene_gra
         (desc->color_format && ((state&&state->blend_enabled)||(!state&&desc->blend)) &&
          !(color_format.optimalTilingFeatures & VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BLEND_BIT)) ||
         (desc->depth_format && !(depth_format.optimalTilingFeatures & VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT)))
-        return MAG_NATIVE_UNSUPPORTED;
+        return VK_REFUSE(MAG_NATIVE_UNSUPPORTED);
     const mag_native_shader_stage *source[2] = {&desc->vertex, &desc->fragment};
     VkShaderModule modules[2] = {0};
     char entries[2][129];
@@ -290,7 +290,7 @@ static int scene_graphics_create_layout(void *opaque, const mag_native_scene_gra
             goto done;
         if (!s->source || s->source_length < 20 || s->source_length > 1024 * 1024 || s->source_length % 4 ||
             !s->entry || !s->entry_length || s->entry_length > 128) {
-            status = MAG_NATIVE_INVALID;
+            status = VK_REFUSE(MAG_NATIVE_INVALID);
             goto done;
         }
         uint32_t header[2];
@@ -321,7 +321,7 @@ static int scene_graphics_create_layout(void *opaque, const mag_native_scene_gra
     status = scene_renderpass(c, desc->color_format, desc->depth_format, NULL,NULL, &p->render_pass);
     if (status)
         goto done;
-    status = MAG_NATIVE_UNSUPPORTED;
+    status = VK_REFUSE(MAG_NATIVE_UNSUPPORTED);
     uint32_t total_resources[4] = {0};
     for (unsigned stage = 0; stage < 2; ++stage) {
         VkDescriptorSetLayoutBinding bindings[48];
@@ -555,7 +555,7 @@ static int scene_graphics_create_v3(void *opaque,const mag_native_scene_graphics
      * the bounds-gated program itself is the ordinary one (no Metal aux). */
     if(desc->raster.depth_bounds_enabled&&(!desc->base.base.depth_format||
        !(((frontend_vk*)opaque)->known_features&((frontend_vk*)opaque)->enabled_features&MAG_RENDER_HOST_FEATURE_DEPTH_BOUNDS)))
-        return MAG_NATIVE_UNSUPPORTED;
+        return VK_REFUSE(MAG_NATIVE_UNSUPPORTED);
     mag_native_scene_graphics_desc schema;mag_native_scene_graphics_v3_schema(desc,&schema);
     return scene_graphics_create_layout(opaque,&schema,desc->base.attributes,desc->base.attribute_count,desc->base.binding_model,&desc->raster,out);
 }
@@ -571,7 +571,7 @@ static int scene_compute_info(void *opaque, mag_native_pipeline ref, mag_native_
     if (!p)
         return MAG_NATIVE_STALE;
     if (p->graphics)
-        return MAG_NATIVE_INVALID;
+        return VK_REFUSE(MAG_NATIVE_INVALID);
     *out = (mag_native_scene_compute_info){p->bindings, p->count, {1, 1, 1}};
     return MAG_NATIVE_OK;
 }
@@ -581,7 +581,7 @@ static int scene_graphics_info(void *opaque, mag_native_pipeline ref,
     if (!p)
         return MAG_NATIVE_STALE;
     if (!p->scene)
-        return MAG_NATIVE_INVALID;
+        return VK_REFUSE(MAG_NATIVE_INVALID);
     *out = &p->scene_desc;
     *model = p->scene_binding_model;
     return MAG_NATIVE_OK;
@@ -721,7 +721,7 @@ static int scene_descriptor_capacity(frontend_vk *c, frontend_vk_slot *slot, con
     return MAG_NATIVE_OK;
 }
 static int scene_raster_info(void *opaque,mag_native_pipeline ref,const mag_native_raster_state **out){
- frontend_vk_pipeline *p=pipeline_find(opaque,ref);if(!p)return MAG_NATIVE_STALE;if(!p->scene)return MAG_NATIVE_INVALID;*out=p->explicit_raster?&p->raster:NULL;return MAG_NATIVE_OK;
+ frontend_vk_pipeline *p=pipeline_find(opaque,ref);if(!p)return MAG_NATIVE_STALE;if(!p->scene)return VK_REFUSE(MAG_NATIVE_INVALID);*out=p->explicit_raster?&p->raster:NULL;return MAG_NATIVE_OK;
 }
 static int submit_scene_owned(frontend_vk *c, const mag_native_scene *scene, mag_native_ticket *out,const mag_native_sampler *sampler_table,uint32_t sampler_count,const mag_native_scene_v3 *v3,const mag_native_scene_v4 *v4,const mag_native_scene_v5 *v5) {
     if (c->failed || c->next_submission == UINT64_MAX)
@@ -750,13 +750,14 @@ static int submit_scene_owned(frontend_vk *c, const mag_native_scene *scene, mag
     mag_native_scene_registry_v4 registry_v4={&registry_v2,scene_raster_info};
     mag_native_scene_registry_v5 registry_v5={&registry_v4,scene_import_info};
     int status = v5?mag_native_scene_validate_v5(v5,&registry_v5,&usage):v4?mag_native_scene_validate_v4(v4,&registry_v4,&usage):v3?mag_native_scene_validate_v3(v3,&registry_v2,&usage):mag_native_scene_validate_v2(scene, &registry_v2, &usage);
+    if (status && !vk_refusal_file) (void)VK_REFUSE(status);   /* the shared scene validator */
     if (status)
         return status;
     if(v5){
         const frontend_vk_imported_image *seen[MAG_NATIVE_SCENE_MAX_IMAGES];
         for(uint32_t i=0;i<v5->import_count;++i){
             const frontend_vk_imported_image *image=imported_image_find(c,v5->imports[i].ref);
-            for(uint32_t j=0;j<i;++j)if(seen[j]->metadata.image_bits==image->metadata.image_bits)return MAG_NATIVE_INVALID;
+            for(uint32_t j=0;j<i;++j)if(seen[j]->metadata.image_bits==image->metadata.image_bits)return VK_REFUSE(MAG_NATIVE_INVALID);
             seen[i]=image;
         }
     }
@@ -766,7 +767,7 @@ static int submit_scene_owned(frontend_vk *c, const mag_native_scene *scene, mag
     for(uint32_t n=0;n<scene->pass_count;++n){const mag_native_scene_pass *p=&scene->passes[n];
         if(p->color.image!=MAG_NATIVE_SCENE_NONE&&p->depth.image!=MAG_NATIVE_SCENE_NONE){
             const mag_native_scene_image *color=&scene->images[p->color.image],*depth=&scene->images[p->depth.image];
-            if(!v5&&(color->width!=depth->width||color->height!=depth->height))return MAG_NATIVE_UNSUPPORTED;
+            if(!v5&&(color->width!=depth->width||color->height!=depth->height))return VK_REFUSE(MAG_NATIVE_UNSUPPORTED);
         }
     }
     /* Bounds-tested draws: the shared validator already required a loaded
@@ -777,8 +778,8 @@ static int submit_scene_owned(frontend_vk *c, const mag_native_scene *scene, mag
         for(uint32_t n=0;n<scene->pass_count;++n)for(uint32_t j=0;j<scene->passes[n].draw_count;++j,++flat){
             if(!v5->bounds[flat].enabled)continue;
             const frontend_vk_pipeline *p=pipeline_find(c,scene->passes[n].draws[j].pipeline);
-            if(!p||!p->explicit_raster||!p->raster.depth_bounds_enabled)return MAG_NATIVE_INVALID;
-            if(p->raster.depth_enabled&&p->raster.depth_write)return MAG_NATIVE_UNSUPPORTED;
+            if(!p||!p->explicit_raster||!p->raster.depth_bounds_enabled)return VK_REFUSE(MAG_NATIVE_INVALID);
+            if(p->raster.depth_enabled&&p->raster.depth_write)return VK_REFUSE(MAG_NATIVE_UNSUPPORTED);
         }
     }
     status=scene_filter_capabilities(c,scene,v3,sampler_table);
@@ -818,7 +819,7 @@ static int submit_scene_owned(frontend_vk *c, const mag_native_scene *scene, mag
         if(borrowed){
             VkImageUsageFlags required=scene_import_usage(scene,v3,i);
             if(shape.dimension!=2||shape.mip_count!=1||shape.layers!=1||
-               (borrowed->metadata.usage&required)!=required){status=MAG_NATIVE_UNSUPPORTED;goto fail;}
+               (borrowed->metadata.usage&required)!=required){status = VK_REFUSE(MAG_NATIVE_UNSUPPORTED);goto fail;}
             _Static_assert(sizeof(im->image)<=sizeof(borrowed->metadata.image_bits),"Vulkan opaque handle transport");
             memcpy(&im->image,&borrowed->metadata.image_bits,sizeof(im->image));
             im->layout=VK_IMAGE_LAYOUT_GENERAL;im->aspect=borrowed->metadata.aspect;
@@ -1144,7 +1145,7 @@ static int submit_scene(void *opaque, const mag_native_scene *scene, mag_native_
 }
 
 static int submit_scene_v2(void *opaque,const mag_native_scene_v2 *desc,const mag_native_image *target,const MagRenderHostFrame *frame,mag_native_ticket *out){
-    if(target||frame)return MAG_NATIVE_UNSUPPORTED;
+    if(target||frame)return VK_REFUSE(MAG_NATIVE_UNSUPPORTED);
     frontend_vk *c=opaque;int status=c->owner.host.try_begin(c->owner.host.userdata,c->owner.host.lifetime);
     if(status)return status<0?status:MAG_NATIVE_DEVICE_FAILED;
     int result=submit_scene_owned(c,desc->scene,out,desc->samplers,desc->sampler_count,NULL,NULL,NULL);
@@ -1152,7 +1153,7 @@ static int submit_scene_v2(void *opaque,const mag_native_scene_v2 *desc,const ma
 }
 
 static int submit_scene_v3(void *opaque,const mag_native_scene_v3 *desc,const mag_native_image *target,const MagRenderHostFrame *frame,mag_native_ticket *out){
-    if(target||frame)return MAG_NATIVE_UNSUPPORTED;
+    if(target||frame)return VK_REFUSE(MAG_NATIVE_UNSUPPORTED);
     frontend_vk *c=opaque;int status=c->owner.host.try_begin(c->owner.host.userdata,c->owner.host.lifetime);
     if(status)return status<0?status:MAG_NATIVE_DEVICE_FAILED;
     int result=submit_scene_owned(c,desc->base.scene,out,desc->base.samplers,desc->base.sampler_count,desc,NULL,NULL);
@@ -1160,7 +1161,7 @@ static int submit_scene_v3(void *opaque,const mag_native_scene_v3 *desc,const ma
 }
 
 static int submit_scene_v4(void *opaque,const mag_native_scene_v4 *desc,const mag_native_image *target,const MagRenderHostFrame *frame,mag_native_ticket *out){
- if(target||frame)return MAG_NATIVE_UNSUPPORTED;
+ if(target||frame)return VK_REFUSE(MAG_NATIVE_UNSUPPORTED);
  frontend_vk *c=opaque;int status=c->owner.host.try_begin(c->owner.host.userdata,c->owner.host.lifetime);if(status)return status<0?status:MAG_NATIVE_DEVICE_FAILED;
  int result=submit_scene_owned(c,desc->base.base.scene,out,desc->base.base.samplers,desc->base.base.sampler_count,&desc->base,desc,NULL);
  c->owner.host.end(c->owner.host.userdata,c->owner.host.lifetime);return result;
@@ -1177,10 +1178,11 @@ static void reservation_release(frontend_vk *c){
  * without the lease, in submit_scene_v5. */
 static int reserve_scene(void *opaque,const mag_native_scene_import *imports,uint32_t count,mag_native_ticket *out){
  frontend_vk *c=opaque;
+ /* Not a refusal: no queue order here; the commit is synchronous. */
  if(!c->order_ok)return MAG_NATIVE_UNSUPPORTED;
  if(c->failed||c->next_submission==UINT64_MAX)return MAG_NATIVE_DEVICE_FAILED;
  if(c->reserved||(c->slots[0].occupied&&c->slots[1].occupied))return MAG_NATIVE_BUSY;
- for(uint32_t i=0;i<count;++i)for(uint32_t j=0;j<i;++j)if(imports[j].image==imports[i].image)return MAG_NATIVE_INVALID;
+ for(uint32_t i=0;i<count;++i)for(uint32_t j=0;j<i;++j)if(imports[j].image==imports[i].image)return VK_REFUSE(MAG_NATIVE_INVALID);
  int status=c->owner.host.try_begin(c->owner.host.userdata,c->owner.host.lifetime);
  if(status)return status<0?status:MAG_NATIVE_DEVICE_FAILED;
  mag_native_import_info info[MAG_NATIVE_SCENE_MAX_IMAGES];
@@ -1203,7 +1205,7 @@ static int abandon_scene_reservation(void *opaque){
  reservation_release(c);return MAG_NATIVE_OK;
 }
 static int submit_scene_v5(void *opaque,const mag_native_scene_v5 *desc,const mag_native_image *target,const MagRenderHostFrame *frame,mag_native_ticket *out){
- if(target||frame)return MAG_NATIVE_UNSUPPORTED;
+ if(target||frame)return VK_REFUSE(MAG_NATIVE_UNSUPPORTED);
  frontend_vk *c=opaque;
  if(c->reserved){
   /* Encode the reservation; on any failure before it was submitted, release
