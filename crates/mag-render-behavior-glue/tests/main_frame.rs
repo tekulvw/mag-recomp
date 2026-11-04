@@ -6,16 +6,17 @@
 //! 12 (static, after the group-twelve setup), and a stencil-mask producer pass. Every byte is
 //! synthetic.
 //!
-//! Where no public specification fixes how a value is found, the harness uses a stated
-//! convention, marked `GAP:`. Those are the open specification items this harness exposed.
+//! Every guest value is found by a published rule: items, meshes, materials, techniques and
+//! microcode by `material-sources.md`; partition streams and attribute banks by
+//! `geometry-streams.md`; fragment built-in rows by `fragment-builtins.md`; group-zero instance
+//! rows and the colour pool by `group-zero-deformation.md`; the skinned preparation by
+//! `vertex-inputs.md`.
 #![allow(unsafe_code)]
 
 use mag_render_abi::packet::Viewport;
 use mag_render_abi::{Source, TextureLayout, VertexAttribute};
 use mag_render_adapter_core::cohort::{CohortBuilder, CohortHeader};
-use mag_render_adapter_core::geometry_bindings::{
-    VertexBinding as CoreBinding, decode_gpu_attribute, decode_output_bindings,
-};
+use mag_render_adapter_core::geometry_bindings::{builtin_output_bindings, decode_output_bindings};
 use mag_render_adapter_core::guest_memory::GuestSnapshot;
 use mag_render_adapter_core::main_flow::{MainItemRoute, main_item_route};
 use mag_render_adapter_core::material_programs::{
@@ -23,15 +24,23 @@ use mag_render_adapter_core::material_programs::{
     decode_technique_programs, decode_vertex_program_source,
 };
 use mag_render_adapter_core::mesh_sources::{MeshSource, PartitionChain};
-use mag_render_adapter_core::partition_inputs::{
-    NonInstancedSourceBases, copy_noninstanced_inputs,
-};
 use mag_render_behavior::effects::{
     self, AttachmentImage, LoadOp, ModuleConstants, SurfaceBinding,
 };
 use mag_render_behavior::finish::{CarriedState, FinishSources, finish};
+use mag_render_behavior::fragment_builtins::builtin_rows;
+use mag_render_behavior::geometry_streams::{
+    Lookup, PartitionGeometry, StreamBases, decode_partition, partition_chain,
+    read_partition_streams, slot,
+};
 use mag_render_behavior::group_twelve::run_group_twelve;
-use mag_render_behavior::group_zero::{GroupZeroAdmission, GroupZeroInputs, admit_group_zero};
+use mag_render_behavior::group_zero::{
+    GroupZeroAdmission, GroupZeroInputs, admit_group_zero, read_colour_pool, read_instance_rows,
+    required_pool_length,
+};
+use mag_render_behavior::material_sources::{
+    GeometrySource, ItemSources, PassSources, item_sources,
+};
 use mag_render_behavior::material_values::{
     Identity, ItemInputs, MaterialValueState, PassValues, TransformRecord, read_parameter_column,
     read_technique,
@@ -46,6 +55,7 @@ use mag_render_behavior::program_compilation::{
 use mag_render_behavior::raster::{
     BlendConstant, KNOWN_ALL, RasterDrawInputs, Topology, translate,
 };
+use mag_render_behavior::rsx_location::FixedAddressMap;
 use mag_render_behavior::scene_plan::{
     self, CohortHeader as PlanHeader, DrawSources, PlanStep, ProducerEvent, SetupReferences,
     SourceIdentity, check_association, traverse,
@@ -60,7 +70,7 @@ use mag_render_behavior::surfaces::{
 use mag_render_behavior::texture::TextureUnitRecord;
 use mag_render_behavior::transitions::{TransitionSources, transition, water_rows};
 use mag_render_behavior::vertex_inputs::{
-    AttributeList, AuxiliarySet, GroupZeroPreparation, NonInstancedPreparation, Prepared,
+    AuxiliarySet, GroupZeroPreparation, NonInstancedPreparation, Prepared, StaticSourceFacts,
     VertexBinding, VertexDraw, pack_vertex_inputs,
 };
 use mag_render_behavior_glue::SnapshotMemory;
@@ -132,21 +142,25 @@ const GROUP12_DESCRIPTORS: u32 = 0x3_1000;
 const ENVIRONMENT: u32 = 0x3_1800;
 const MATERIALS: u32 = 0x3_2000;
 const CHUNK: u32 = 0x3_8000;
-const FRAGMENT_BANK: u32 = 0x3_c000;
+/// The asset-bank base at `PASS+0x284`, also the geometry resource base `G`.
+const ASSET_BANK: u32 = 0x3_c000;
 const MESHES: u32 = 0x4_0000;
-const LAYOUTS: u32 = 0x4_1000;
 const PARTITIONS: u32 = 0x4_2000;
 const STREAMS: u32 = 0x5_0000;
-const RESOURCE_BASE: u32 = 0x6_0000;
+const INSTANCE_ROWS: u32 = 0x6_0000;
 const PALETTE: u32 = 0x6_8000;
 const COLOUR_POOL: u32 = 0x6_c000;
+/// The colour pool's RSX location: main memory, I/O offset `0x200010` (I/O page 2).
+const COLOUR_POOL_LOCATION: u32 = 0x8020_0010;
+/// Material bytes per item: `MBI+0x1C` length units of 16 bytes.
+const MATERIAL_UNITS: u32 = 0x30;
 const STENCIL_BANK: u32 = 0x4000;
 const RESTORE_BANK: u32 = 0x41c;
 
 const W: u32 = 64;
 const H: u32 = 64;
 
-/// The items: (group, material index, mesh index).
+/// The items: (group, material index).
 const ITEMS: [(u32, u32); 5] = [(0, 1), (1, 0), (4, 0), (11, 2), (12, 0)];
 
 fn surface_record(position: u32) -> [u32; 21] {
@@ -299,7 +313,10 @@ fn build_guest() -> Guest {
     g.u32(SETUP_RECORD + 0x50, STENCIL_BANK);
     g.u32(SETUP_RECORD + 0x6c, RESTORE_BANK);
 
-    // Pass object.
+    // Pass object: its own binding payload, render mode 0, no override, the asset bank.
+    g.u32(PASS + 0x1fc, PASS);
+    g.u32(PASS + 0x284, ASSET_BANK);
+    g.f32(PASS + 0xd8, 0.5);
     g.f32(PASS + 0x68, 2.0);
     g.floats(
         PASS + 0x80,
@@ -376,19 +393,30 @@ fn build_guest() -> Guest {
             m,
             &[0.5, 1.0, 0.0, 1.0, 0.5, 0.25, 2.0, 0.0, 0.25, 1.0, 4.0, 0.0],
         );
+        g.u32(m + 0x38, CHUNK);
         g.u16(m + 0x44, 0x100);
         g.u16(m + 0x46, 0x200);
         g.u16(m + 0x48, 0x80);
+        g.u16(m + 0x4a, 0x2c0);
         g.u16(m + 0x4c, 1);
         g.u32(m + 0x58, flags);
-        // Technique 0: membership bit 0, flags bit 7 (transform rows).
+        g.u8(m + 0x5c, 51);
+        // Technique map record 0: table index (and membership bit) 0, flags bit 7 (transform rows).
         g.u8(m + 0x80 + 1, 0);
         g.bytes(m + 0x88, &(1u64 << 7).to_be_bytes());
+        // Technique table entry 0: the chunk at the resource base, 0x140 bytes.
+        g.words(m + 0x2c0, &[0, 0x140]);
         // One 4-float parameter to fragment slot 0; its destination word is chunk +0x100.
         g.u32(m + 0x100 + 4, 1);
         g.u8(m + 0x100 + 10, 7);
         g.u16(m + 0x100 + 12, 0x100);
         g.floats(m + 0x200, &[0.25, 0.5, 0.75, 1.0]);
+        if index == 0 {
+            // One alpha-transfer built-in (kind 3) to fragment slot 0, destination chunk +0x104.
+            g.u16(m + 0x42, 0x2e0);
+            g.u8(m + 0x53, 1);
+            g.words(m + 0x2e0, &[0, 3, 1, 0x104]);
+        }
     }
 
     // Technique chunk (shared): objects a, b, vertex and fragment descriptors, programs.
@@ -402,75 +430,158 @@ fn build_guest() -> Guest {
     let microcode = constant_fragment();
     g.u32(CHUNK + 0xc0, microcode.len() as u32);
     g.u32(CHUNK + 0xc0 + 8, 0x40);
+    // Storage word: tag 2, asset-bank offset 0.
     g.u32(CHUNK + 0xc0 + 12, 0x2);
     // Relocation directory: slot 0 → list at +0x30 naming inline row 1 (byte offset 16).
     g.u32(CHUNK + 0xc0 + 24, 0x30);
     g.u16(CHUNK + 0xc0 + 0x30, 1);
     g.u16(CHUNK + 0xc0 + 0x32, 1);
     g.u32(CHUNK + 0x100, 3 << 24);
-    g.bytes(FRAGMENT_BANK, &microcode);
+    g.u32(CHUNK + 0x104, 3 << 24);
+    g.bytes(ASSET_BANK, &microcode);
 
-    // Meshes, layouts and partitions, one per item.
+    // Meshes and partitions, one per item.
     for (index, &(group, _)) in ITEMS.iter().enumerate() {
         let index = index as u32;
         let mesh = MESHES + 0x100 * index;
-        let layout = LAYOUTS + 0x40 * index;
         let partition = PARTITIONS + 0x300 * index;
         let streams = STREAMS + 0x1000 * index;
         g.floats(mesh + 0x20, &[1.0, 2.0, 3.0, 4.0]);
         g.u32(mesh + 0x34, 2);
-        g.u32(mesh + 0x3c, layout);
-        g.u32(mesh + 0x50, partition);
+        // The first partition, relative to the geometry resource base (bit 31 ignored).
+        g.u32(mesh + 0x50, 0x8000_0000 | (partition - ASSET_BANK));
         g.u32(
             mesh + 0x9c,
-            if matches!(group, 1 | 12) { 0x1000 } else { 0 },
+            if matches!(group, 1 | 4 | 12) {
+                0x1000
+            } else {
+                0
+            },
         );
         g.u8(mesh + 0xa2, 1);
         g.u16(mesh + 0xbc, group as u16);
-        // Custom output layout: one float3 position (semantic 1) in register 0.
-        g.bytes(layout, &[1, 16, 0, 0, 0, 0, 0, 0, 0, 2, 3, 1, 12, 0, 0, 0]);
-        // Partition streams (GAP: stream roles are a harness convention).
-        let stream = |slot: u32| partition + 0x30 + 8 * slot;
-        let positions: Vec<f32> = VERTICES.iter().flatten().copied().collect();
-        g.floats(streams, &positions);
-        g.words(stream(0), &[48, streams]);
-        g.floats(streams + 0x100, &[0.0, 0.0, 1.0, 0.0].repeat(3));
-        g.words(stream(1), &[48, streams + 0x100]);
-        g.floats(streams + 0x200, &[1.0, 0.5, 0.25, 0.0].repeat(3));
-        g.words(stream(2), &[48, streams + 0x200]);
-        g.floats(streams + 0x300, &[1.0, 0.0, 0.0, 1.0].repeat(3));
-        g.words(stream(6), &[48, streams + 0x300]);
+        let stream = |k: u32| partition + 0x30 + 8 * k;
+
+        // Configuration (slot 19): position codec, secondary layout 255, output selector,
+        // V = K = 3.
+        let codec: u8 = match group {
+            1 => 0,
+            12 => 6,
+            _ => 255,
+        };
+        let mut config = [0u8; 16];
+        config[2] = codec;
+        config[3] = 255;
+        config[4] = if group == 0 { 0 } else { 4 };
+        config[8..10].copy_from_slice(&3u16.to_be_bytes());
+        config[10..12].copy_from_slice(&3u16.to_be_bytes());
+        if group == 11 {
+            config[0] = 0x83;
+            config[6] = 17;
+            config[12..].fill(0xff);
+        }
+        g.bytes(streams + 0x600, &config);
+        g.words(stream(19), &[16, streams + 0x600]);
+
+        // Custom output layout (slot 0): one float3 position (semantic 1) in register 0.
+        g.bytes(
+            streams + 0x700,
+            &[1, 16, 0, 0, 0, 0, 0, 0, 0, 2, 3, 1, 12, 0, 0, 0],
+        );
+        g.words(stream(0), &[16, streams + 0x700]);
+
+        // Index list (slot 1): big-endian u16.
         g.bytes(streams + 0x400, &[0, 0, 0, 1, 0, 2]);
-        g.words(stream(7), &[6, streams + 0x400]);
+        g.words(stream(1), &[6, streams + 0x400]);
+
+        // Vertex data (slot 7).
+        match codec {
+            0 => {
+                for (v, p) in VERTICES.iter().enumerate() {
+                    g.floats(streams + 12 * v as u32, &p[..3]);
+                }
+                g.words(stream(7), &[36, streams]);
+            }
+            6 => {
+                for (v, p) in VERTICES.iter().enumerate() {
+                    for (lane, value) in p[..3].iter().enumerate() {
+                        g.u16(streams + 6 * v as u32 + 2 * lane as u32, half(*value));
+                    }
+                }
+                g.words(stream(7), &[18, streams]);
+                // A secondary list (slot 10, described by slot 21): float normals, stride 16.
+                g.bytes(
+                    streams + 0x800,
+                    &[1, 16, 0, 0, 0, 0, 0, 0, 0, 2, 3, 2, 12, 0, 0, 0],
+                );
+                g.words(stream(21), &[16, streams + 0x800]);
+                g.floats(streams + 0x900, &[0.0, 0.0, 1.0, 0.0].repeat(3));
+                g.u32(stream(10) + 4, streams + 0x900);
+                g.u16(partition + 0x0a, 48);
+            }
+            _ => {
+                // Stride 32: float position at 0, packed spherical normal (codec 9) at 12,
+                // unsigned-byte weights at 16, packed tangent (codec 6) at 20.
+                let normal = (511u32 << 14) | (511 << 4) | 11;
+                for (v, p) in VERTICES.iter().enumerate() {
+                    let row = streams + 32 * v as u32;
+                    g.floats(row, &p[..3]);
+                    g.bytes(row + 12, &normal.to_be_bytes()[1..]);
+                    g.bytes(row + 16, &[255, 128, 64, 0]);
+                    g.u32(row + 20, 0x0000_03ff);
+                }
+                g.words(stream(7), &[96, streams]);
+                let mut table = vec![4u8, 32, 0, 0, 0, 0, 0, 0];
+                table.extend([0, 2, 3, 1, 12, 0, 0, 0]);
+                table.extend([12, 9, 3, 2, 3, 0, 0, 0]);
+                table.extend([16, 4, 4, 9, 4, 0, 0, 0]);
+                table.extend([20, 6, 4, 3, 4, 0, 0, 0]);
+                g.bytes(streams + 0x500, &table);
+                g.words(stream(20), &[table.len() as u32, streams + 0x500]);
+            }
+        }
         g.u32(partition + 0xfc, 1);
         if group == 11 {
-            // One palette matrix in segment 0 at PALETTE + 0x10; influences (stream 5),
-            // configuration (stream 19).
+            // One palette matrix in segment 0 at PALETTE + 0x10 (the slot-3 address word is
+            // replaced by the palette base); influences in slot 5.
             g.u16(partition + 0x14, 0x10);
             g.words(stream(3), &[48, 0]);
             g.floats(
                 PALETTE + 0x10,
                 &[1.0, 0.0, 0.0, 0.25, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0],
             );
-            g.bytes(streams + 0x500, &[255, 0, 0, 0, 0, 0, 0, 0].repeat(3));
-            g.words(stream(5), &[24, streams + 0x500]);
-            let mut config = [0u8; 16];
-            config[0] = 0x83;
-            config[6] = 17;
-            config[12..].fill(0xff);
-            g.bytes(streams + 0x600, &config);
-            g.words(stream(19), &[16, streams + 0x600]);
+            g.bytes(streams + 0xa00, &[255, 0, 0, 0, 0, 0, 0, 0].repeat(3));
+            g.words(stream(5), &[24, streams + 0xa00]);
         }
     }
     // Group-zero instance rows (two instances) and colour pool.
-    g.u16(RESOURCE_BASE, 0x3c00);
-    g.u16(RESOURCE_BASE + 6, 0x3c00);
-    g.u16(RESOURCE_BASE + 14, 0x3c00);
-    g.u16(RESOURCE_BASE + 16 + 2, 0x3800);
-    g.u16(RESOURCE_BASE + 16 + 6, 0x3800);
-    g.u16(RESOURCE_BASE + 16 + 14, 0x3c00);
+    g.u16(INSTANCE_ROWS, 0x3c00);
+    g.u16(INSTANCE_ROWS + 6, 0x3c00);
+    g.u16(INSTANCE_ROWS + 14, 0x3c00);
+    g.u16(INSTANCE_ROWS + 16 + 2, 0x3800);
+    g.u16(INSTANCE_ROWS + 16 + 6, 0x3800);
+    g.u16(INSTANCE_ROWS + 16 + 14, 0x3c00);
     g.bytes(COLOUR_POOL, &[200, 100, 50, 255].repeat(8));
     g
+}
+
+/// The rebased half of a value that has one (sign, exponent `E − 15`, ten mantissa bits).
+fn half(value: f32) -> u16 {
+    if value == 0.0 {
+        return 0;
+    }
+    let bits = value.to_bits();
+    let exponent = (bits >> 23) & 0xff;
+    assert_eq!(bits & 0x1fff, 0, "exact in a rebased half");
+    (((bits >> 16) & 0x8000) | ((exponent - 112) << 10) | ((bits >> 13) & 0x3ff)) as u16
+}
+
+/// The GCM address map: I/O page 2 holds the colour pool.
+fn address_map() -> FixedAddressMap {
+    FixedAddressMap {
+        local: None,
+        io_pages: vec![(2, COLOUR_POOL - 0x10)],
+    }
 }
 
 /// The 112-byte transform record of item `index`.
@@ -485,8 +596,10 @@ fn transform(index: usize, group: u32) -> [u8; 112] {
         put(0x20 + 20 * row, 1.0);
     }
     if group == 0 {
-        t[0x60..0x64].copy_from_slice(&(0x8000_0000u32).to_be_bytes());
-        t[0x64..0x68].copy_from_slice(&(0x8000_0000u32 | COLOUR_POOL).to_be_bytes());
+        // Instance rows at G + offset; the colour pool at an RSX main-memory location.
+        t[0x60..0x64]
+            .copy_from_slice(&(0x8000_0000u32 | (INSTANCE_ROWS - ASSET_BANK)).to_be_bytes());
+        t[0x64..0x68].copy_from_slice(&COLOUR_POOL_LOCATION.to_be_bytes());
         t[0x6c] = 2;
     }
     t
@@ -495,11 +608,14 @@ fn transform(index: usize, group: u32) -> [u8; 112] {
 fn item_mbi(index: usize, group: u32, material: u32) -> [u8; 32] {
     let mut mbi = [0u8; 32];
     mbi[0] = (group << 4) as u8;
-    // GAP: the draw-batch 24-bit material address (bytes 6..8, low byte zero) is used as the
-    // primary material location; the full material-source specification is not public.
+    // Technique selector byte 0; the primary material address (bits 31–8) and its length.
+    mbi[4] = 0;
     let address = MATERIALS + 0x400 * material;
     mbi[6..9].copy_from_slice(&address.to_be_bytes()[0..3]);
-    mbi[12..16].copy_from_slice(&(index as u32).to_be_bytes());
+    mbi[0x1c..0x20].copy_from_slice(&MATERIAL_UNITS.to_be_bytes());
+    // The mesh index: the mesh's address in 16-byte units.
+    let mesh = MESHES + 0x100 * index as u32;
+    mbi[0x0c..0x10].copy_from_slice(&(mesh / 16).to_be_bytes());
     if group == 11 {
         mbi[20..24].copy_from_slice(&PALETTE.to_be_bytes());
     }
@@ -727,19 +843,35 @@ fn one_main_frame_from_guest_memory() {
     };
     let plan_header: PlanHeader = cohort_header(cohort.header());
 
-    // Material entries: mesh group from the mesh record, the item's own transform.
-    let meshes: Vec<MeshSource> = (0..ITEMS.len())
-        // GAP: the mesh record of an item is found by its mesh index; the location rule is not
-        // public, so the harness places mesh `i` at MESHES + 0x100·i.
-        .map(|i| MeshSource::copy(&snapshot, MESHES + 0x100 * i as u32).unwrap())
+    // Item sources (material-sources.md): mesh, primary material, technique chunk, microcode.
+    let pass_sources = PassSources::read(&memory, PASS).unwrap();
+    let sources: Vec<ItemSources> = cohort
+        .items()
+        .iter()
+        .map(|item| {
+            item_sources(
+                &memory,
+                &pass_sources,
+                &item.mbi,
+                item.transform.unwrap()[0x6f],
+            )
+            .unwrap()
+        })
         .collect();
+    for (i, source) in sources.iter().enumerate() {
+        // The adapter core's mesh reader sees the same record and group.
+        let mesh = MeshSource::copy(&snapshot, source.mesh_address).unwrap();
+        assert_eq!(mesh.bytes(), &source.mesh);
+        assert_eq!(mesh.material_group() as u32, ITEMS[i].0);
+        assert_eq!(source.microcode_address, ASSET_BANK);
+    }
     let materials: Vec<_> = cohort
         .items()
         .iter()
-        .zip(&meshes)
-        .map(|(item, mesh)| {
+        .zip(&sources)
+        .map(|(item, source)| {
             Some(Some(DrawSources {
-                group: mesh.material_group() as u32,
+                group: source.mesh_group as u32,
                 transform: item.transform.unwrap(),
                 pass_control,
             }))
@@ -835,34 +967,43 @@ fn one_main_frame_from_guest_memory() {
         static_constant_rows: 512,
         fragment_bytes: 1 << 16,
     };
-    let chunk = snapshot.copy_bytes(CHUNK as u64, 0x140).unwrap();
-    let technique_programs = decode_technique_programs(&chunk, budget).unwrap();
-    let FragmentSourceReference::AssetBankOffset(bank_offset) =
-        technique_programs.fragment.reference
-    else {
-        panic!("asset bank reference")
+    // The technique decode of each item's chunk is the published `material_programs` contract;
+    // its fragment reference agrees with the asset-bank rule.
+    let technique = |source: &ItemSources| -> TechniqueSource {
+        let programs = decode_technique_programs(&source.chunk, budget).unwrap();
+        let FragmentSourceReference::AssetBankOffset(offset) = programs.fragment.reference else {
+            panic!("asset bank reference")
+        };
+        assert_eq!(pass_sources.asset_bank + offset, source.microcode_address);
+        assert_eq!(
+            programs.fragment.semantic_bytes as usize,
+            source.microcode.len()
+        );
+        TechniqueSource {
+            vertex_instructions: programs.vertex.instructions.clone(),
+            load_slot: programs.vertex.load_slot as u32,
+            declared_input_mask: programs.vertex.input_mask as u16,
+            declared_output_mask: programs.vertex.output_mask,
+            transform_word: programs.vertex.unresolved_transform_word,
+            fragment_bytes: source.microcode.clone(),
+            semantic_bytes: source.microcode.len(),
+            transfer_bytes: source.microcode.len(),
+            shader_control: programs.fragment.shader_control,
+            texcoord_controls: programs.fragment.texcoord_controls,
+            directory: programs.fragment.relocation_directory.clone(),
+        }
     };
-    // GAP: the asset-bank base that turns the fragment reference into microcode bytes is not in
-    // a public specification; the harness uses FRAGMENT_BANK.
-    let microcode = snapshot
-        .copy_bytes(
-            (FRAGMENT_BANK + bank_offset) as u64,
-            technique_programs.fragment.semantic_bytes as usize,
-        )
-        .unwrap();
-    let technique_source = TechniqueSource {
-        vertex_instructions: technique_programs.vertex.instructions.clone(),
-        load_slot: technique_programs.vertex.load_slot as u32,
-        declared_input_mask: technique_programs.vertex.input_mask as u16,
-        declared_output_mask: technique_programs.vertex.output_mask,
-        transform_word: technique_programs.vertex.unresolved_transform_word,
-        fragment_bytes: microcode.clone(),
-        semantic_bytes: microcode.len(),
-        transfer_bytes: microcode.len(),
-        shader_control: technique_programs.fragment.shader_control,
-        texcoord_controls: technique_programs.fragment.texcoord_controls,
-        directory: technique_programs.fragment.relocation_directory.clone(),
+    let static_rows = |source: &ItemSources| -> Vec<(u32, [u32; 4])> {
+        decode_technique_programs(&source.chunk, budget)
+            .unwrap()
+            .vertex
+            .static_constants
+            .iter()
+            .map(|c| (c.slot, c.words))
+            .collect()
     };
+    let map = address_map();
+    let mut secondary_normals = 0;
 
     let mut current_group = -1i32;
     let mut producer_passes = 0;
@@ -1052,39 +1193,45 @@ fn one_main_frame_from_guest_memory() {
             CallerWork::Step(other) => panic!("unexpected step {other:?}"),
             CallerWork::Prepare { item, group } => {
                 let cohort_item = &cohort.items()[item];
-                let mesh = &meshes[item];
+                let source = &sources[item];
+                let mesh = &source.mesh;
                 let mbi = cohort_item.mbi;
                 let transform_bytes = cohort_item.transform.unwrap();
-                let material = (u32::from(mbi[6]) << 24)
-                    | (u32::from(mbi[7]) << 16)
-                    | (u32::from(mbi[8]) << 8);
-                let material_bytes = snapshot.copy_bytes(material as u64, 0x60).unwrap();
-                let material_flags = be(&material_bytes, 0x58);
-                let (technique, parameters) = read_technique(&memory, material, CHUNK, 0).unwrap();
-                let parameter_column =
-                    read_parameter_column(&memory, technique.flags, &mbi, be(&pass, 0x140))
+                let material = source.material_address;
+                let material_bytes = &source.material;
+                let material_flags = source.flags;
+                let (technique_record, parameters) =
+                    read_technique(&memory, material, source.chunk_address, source.selector)
                         .unwrap();
-                let static_rows: Vec<(u32, [u32; 4])> = technique_programs
-                    .vertex
-                    .static_constants
-                    .iter()
-                    .map(|c| (c.slot, c.words))
-                    .collect();
+                let parameter_column =
+                    read_parameter_column(&memory, technique_record.flags, &mbi, be(&pass, 0x140))
+                        .unwrap();
+                let static_rows = static_rows(source);
+                let builtins = builtin_rows(
+                    &memory,
+                    PASS,
+                    material_bytes,
+                    &source.chunk,
+                    source.selector,
+                )
+                .unwrap();
+                // Material 0 carries one alpha-transfer built-in: α = 51, μ = 0.5.
+                assert_eq!(builtins.len(), usize::from(ITEMS[item].1 == 0));
                 let item_inputs = ItemInputs {
                     identity: Identity {
                         material,
-                        technique: CHUNK,
-                        selector: 0,
+                        technique: source.chunk_address,
+                        selector: source.selector,
                         group,
                     },
-                    technique,
+                    technique: technique_record,
                     parameters: &parameters,
                     material_class: material_bytes[0x56],
                     material_flags,
                     mbi,
                     transform: Some(TransformRecord::from_bytes(&transform_bytes)),
                     parameter_column,
-                    mesh_constant: std::array::from_fn(|lane| be(mesh.bytes(), 0x20 + 4 * lane)),
+                    mesh_constant: std::array::from_fn(|lane| be(mesh, 0x20 + 4 * lane)),
                     pass: PassValues {
                         depth_anchor: be(&pass, 0x68),
                         depth_scale: be(&pass, 0x1dc),
@@ -1095,54 +1242,56 @@ fn one_main_frame_from_guest_memory() {
                         control: pass_control,
                     },
                     static_rows: &static_rows,
-                    // GAP: fragment built-in rows are not specified publicly; none are added.
-                    builtin_rows: &[],
+                    builtin_rows: &builtins,
                 };
                 values.compose(&item_inputs, &memory).unwrap();
+                if let Some(row) = builtins.first() {
+                    // Built-in rows follow the ordinary rows, so they win at the same slot.
+                    assert_eq!(values.fragment_writes.last(), Some(row));
+                    assert_eq!(f32::from_bits(row.1[0]), 5.0);
+                }
 
-                // Geometry through the adapter core's readers.
-                let chain = PartitionChain::copy(&snapshot, be(mesh.bytes(), 0x50), 4).unwrap();
-                let partition = &chain.partitions()[0];
-                let palette_base = be(&mbi, 20) & !0xf;
-                let streams = copy_noninstanced_inputs(
+                // Geometry (geometry-streams.md), from the source the dispatch chose.
+                let (first, palette_base) = match source.geometry {
+                    GeometrySource::GroupZero { first } | GeometrySource::Static { first } => {
+                        (first, 0)
+                    }
+                    GeometrySource::Skinned { first, palette } => (first, palette),
+                    GeometrySource::Direct { .. } => panic!("no direct draws in this frame"),
+                };
+                assert_eq!(
+                    matches!(source.geometry, GeometrySource::Static { .. }),
+                    matches!(group, 1 | 4 | 12)
+                );
+                let chain = partition_chain(&memory, first, 4).unwrap();
+                // The adapter core follows the same chain.
+                let core_chain = PartitionChain::copy(&snapshot, first, 4).unwrap();
+                assert_eq!(core_chain.partitions().len(), chain.len());
+                assert_eq!(core_chain.partitions()[0].bytes(), &chain[0].bytes);
+                let partition = &chain[0];
+                let streams = read_partition_streams(
+                    &memory,
                     partition,
-                    NonInstancedSourceBases {
+                    &StreamBases {
                         palette_base,
                         extra_stream: 0,
                         environment: 0,
                     },
                     1 << 20,
-                    &mut |request| snapshot.copy_bytes(request.address as u64, request.bytes),
-                )
-                .unwrap();
-                let float4 = CoreBinding {
-                    declaration: 0,
-                    semantic: 0,
-                    slot: 0,
-                    format: 2,
-                    components: 4,
-                    stride: 16,
-                    byte_offset: 0,
-                    encoded_bytes: 16,
+                );
+                let geometry: PartitionGeometry = decode_partition(partition, &streams).unwrap();
+                let bank = |semantic: u8| match geometry.lookup(semantic) {
+                    Lookup::Found(rows) => rows,
+                    other => panic!("semantic {semantic}: {other:?}"),
                 };
-                // GAP: which partition stream holds which attribute bank, and its codec, is not in
-                // a public specification. Convention: streams 0, 1, 2 and 6 hold float4 positions,
-                // normals, weights and tangents; stream 7 holds u16 indices.
-                let bank = |slot: usize| {
-                    decode_gpu_attribute(&float4, streams.inputs()[slot].bytes(), 3, 1 << 16)
+                let selector = geometry.configuration.output_selector;
+                let core_outputs = if selector <= 3 {
+                    builtin_output_bindings(selector).unwrap()
+                } else {
+                    decode_output_bindings(&streams.slot(slot::OUTPUT_LAYOUT).unwrap().bytes)
                         .unwrap()
                 };
-                let (positions, normals, weights, tangents) = (bank(0), bank(1), bank(2), bank(6));
-                let raw_indices: Vec<u16> = streams.inputs()[7]
-                    .bytes()
-                    .chunks(2)
-                    .map(|c| u16::from_be_bytes([c[0], c[1]]))
-                    .collect();
-                let layout = snapshot
-                    .copy_bytes(mesh.vertex_layout_address() as u64, 16)
-                    .unwrap();
-                let outputs: Vec<VertexBinding> = decode_output_bindings(&layout)
-                    .unwrap()
+                let outputs: Vec<VertexBinding> = core_outputs
                     .iter()
                     .map(|b| VertexBinding {
                         declaration: b.declaration as u32,
@@ -1152,67 +1301,71 @@ fn one_main_frame_from_guest_memory() {
                         components: b.components as u32,
                     })
                     .collect();
+                if group == 12 {
+                    // Positions from rebased halves; normals from the secondary list.
+                    assert_eq!(bank(2), &[[0, 0, 1f32.to_bits(), 0]; 3]);
+                    secondary_normals += 1;
+                }
                 let key = DeformationKey {
                     cohort: 2,
                     item: item as u32,
                     partition: 0,
                 };
                 let material_rows: [[u32; 4]; 3] = std::array::from_fn(|r| {
-                    std::array::from_fn(|l| be(&material_bytes, 16 * r + 4 * l))
+                    std::array::from_fn(|l| be(material_bytes, 16 * r + 4 * l))
                 });
                 let wind: [u32; 5] = std::array::from_fn(|i| be(&pass, 0x260 + 4 * i));
                 let origin: [u32; 3] = std::array::from_fn(|i| be(&transform_bytes, 0x10 + 4 * i));
                 let mut draw = VertexDraw {
                     output_bindings: Some(outputs),
                     auxiliary: Some(AuxiliarySet::default()),
-                    primary: AttributeList::Absent,
-                    secondary: AttributeList::Absent,
-                    positions: &positions,
-                    raw_indices: &raw_indices,
+                    primary: geometry.primary.attribute_list(),
+                    secondary: geometry.secondary.attribute_list(),
+                    positions: &geometry.positions,
+                    raw_indices: &geometry.indices,
                     direct: None,
                     group_zero: Prepared::Absent,
                     non_instanced: Prepared::Absent,
                 };
                 let shared = match group {
                     0 => {
+                        let colour_frequency = be(mesh, 0x34) & 0xffff;
+                        let instance_location = be(&transform_bytes, 0x60);
                         admit_group_zero(&GroupZeroAdmission {
                             draw_batch_byte0: mbi[0],
                             pass_control,
                             pass_mode: be(&pass, 0x230),
                             pass_workers: be(&pass, 0x22c),
                             material_flags,
-                            output_selector: 0,
+                            output_selector: selector,
                             instance_count: transform_bytes[0x6c],
-                            instance_location: be(&transform_bytes, 0x60),
+                            instance_location,
                             auxiliary_slot12: false,
-                            colour_frequency: be(mesh.bytes(), 0x34) & 0xffff,
-                            batch_max: be(partition.bytes(), 0xfc),
+                            colour_frequency,
+                            batch_max: partition.batch_max(),
                         })
                         .unwrap();
                         let count = transform_bytes[0x6c] as usize;
-                        // GAP: the geometry resource base and the colour pool's address mapping
-                        // are not public; the harness uses RESOURCE_BASE and a direct address.
-                        let rows_bytes = snapshot
-                            .copy_bytes(
-                                (RESOURCE_BASE + (be(&transform_bytes, 0x60) & 0x7fff_ffff)) as u64,
-                                16 * count,
-                            )
-                            .unwrap();
-                        let instances: Vec<[u16; 8]> = rows_bytes
-                            .chunks(16)
-                            .map(|r| {
-                                std::array::from_fn(|i| {
-                                    u16::from_be_bytes([r[2 * i], r[2 * i + 1]])
-                                })
-                            })
-                            .collect();
-                        let pool_bytes = snapshot
-                            .copy_bytes((be(&transform_bytes, 0x64) & 0x7fff_ffff) as u64, 32)
-                            .unwrap();
-                        let pool: Vec<[u8; 4]> = pool_bytes
-                            .chunks(4)
-                            .map(|c| [c[0], c[1], c[2], c[3]])
-                            .collect();
+                        let instances = read_instance_rows(
+                            &memory,
+                            pass_sources.geometry_base(),
+                            instance_location,
+                            count,
+                        )
+                        .unwrap();
+                        let entries = required_pool_length(
+                            count as u64,
+                            geometry.vertex_count as u64,
+                            colour_frequency as u64,
+                            partition.batch_max() as u64,
+                        );
+                        let pool = read_colour_pool(
+                            &memory,
+                            &map,
+                            be(&transform_bytes, 0x64),
+                            entries as usize,
+                        )
+                        .unwrap();
                         let environment = be(&pass, 0x238);
                         let env: [[u32; 4]; 4] = std::array::from_fn(|r| {
                             std::array::from_fn(|l| {
@@ -1231,13 +1384,13 @@ fn one_main_frame_from_guest_memory() {
                             fade: [0, 0],
                             environment: env,
                             instances: &instances,
-                            colour_frequency: be(mesh.bytes(), 0x34) & 0xffff,
-                            batch_max: be(partition.bytes(), 0xfc),
+                            colour_frequency,
+                            batch_max: partition.batch_max(),
                             colour_pool: &pool,
-                            positions: &positions,
-                            normals: &normals,
-                            weights: &weights,
-                            indices: &raw_indices,
+                            positions: bank(1),
+                            normals: bank(2),
+                            weights: bank(9),
+                            indices: &geometry.indices,
                         };
                         Some(store.prepare(key, || group_zero(&inputs, 1 << 16)))
                     }
@@ -1250,13 +1403,13 @@ fn one_main_frame_from_guest_memory() {
                                 draw_batch_byte18: mbi[0x18],
                                 draw_batch_byte1b: mbi[0x1b],
                                 palette_lengths: [
-                                    be(partition.bytes(), 0x48),
-                                    be(partition.bytes(), 0x50)
+                                    partition.control(slot::PALETTE_0),
+                                    partition.control(slot::PALETTE_1),
                                 ],
                                 pass_mode: be(&pass, 0x230),
                                 pass_workers: be(&pass, 0x22c),
                                 material_flags,
-                                has_tangents: true,
+                                has_tangents: matches!(geometry.lookup(3), Lookup::Found(_)),
                             }),
                             Ok(4)
                         );
@@ -1265,18 +1418,19 @@ fn one_main_frame_from_guest_memory() {
                             wind,
                             material: material_rows,
                             origin,
-                            positions: &positions,
-                            normals: &normals,
-                            weights: &weights,
-                            tangents: Some(&tangents),
+                            positions: bank(1),
+                            normals: bank(2),
+                            weights: bank(9),
+                            tangents: Some(bank(3)),
                         };
                         Some(store.prepare(key, || noninstanced(&inputs, 1 << 16)))
                     }
                     11 => {
+                        let configuration = streams.slot(slot::CONFIGURATION).unwrap();
                         let location = admit_skinning(&SkinningAdmission {
                             mesh_group: group as u16,
                             draw_batch_byte0: mbi[0],
-                            mesh_flags: be(mesh.bytes(), 0x9c),
+                            mesh_flags: be(mesh, 0x9c),
                             object_byte_6f: transform_bytes[0x6f],
                             material_flags,
                             pass_address: PASS,
@@ -1285,41 +1439,29 @@ fn one_main_frame_from_guest_memory() {
                             draw_batch_palette: be(&mbi, 20),
                             pass_mode: be(&pass, 0x230),
                             pass_workers: be(&pass, 0x22c),
-                            configuration: streams.inputs()[19].bytes().to_vec(),
-                            segment_offsets: [
-                                u16::from_be_bytes([
-                                    partition.bytes()[0x14],
-                                    partition.bytes()[0x15],
-                                ]),
-                                u16::from_be_bytes([
-                                    partition.bytes()[0x16],
-                                    partition.bytes()[0x17],
-                                ]),
-                            ],
+                            configuration: configuration.bytes.clone(),
+                            segment_offsets: partition.palette_offsets(),
                             segment_lengths: [
-                                be(partition.bytes(), 0x48),
-                                be(partition.bytes(), 0x50),
+                                partition.control(slot::PALETTE_0),
+                                partition.control(slot::PALETTE_1),
                             ],
                         })
                         .unwrap();
-                        let segment = |s: usize| {
-                            let (address, length) = location.segments[s];
-                            if length == 0 {
-                                Vec::new()
-                            } else {
-                                snapshot
-                                    .copy_bytes(address as u64, length as usize)
-                                    .unwrap()
-                            }
-                        };
-                        let (s0, s1) = (segment(0), segment(1));
+                        // The admission's palette segments are the slot-3 and slot-4 reads.
+                        let segment = |s: usize| streams.slot(slot::PALETTE_0 + s).unwrap();
+                        for s in 0..2 {
+                            assert_eq!(
+                                location.segments[s],
+                                (segment(s).address, segment(s).bytes.len() as u32)
+                            );
+                        }
                         let f = |rows: &[[u32; 4]]| -> Vec<[f32; 4]> {
                             rows.iter().map(|r| r.map(f32::from_bits)).collect()
                         };
-                        let (p, n, t) = (f(&positions), f(&normals), f(&tangents));
+                        let (p, n, t) = (f(bank(1)), f(bank(2)), f(bank(3)));
                         let inputs = SkinningInputs {
-                            segments: [&s0, &s1],
-                            influences: streams.inputs()[5].bytes(),
+                            segments: [&segment(0).bytes, &segment(1).bytes],
+                            influences: &streams.slot(slot::INFLUENCES).unwrap().bytes,
                             positions: &p,
                             normals: &n,
                             tangents: &t,
@@ -1336,54 +1478,58 @@ fn one_main_frame_from_guest_memory() {
                         &store.prepare(key, || unreachable!("prepared once"))
                     ));
                 }
-                let skinned_rows;
-                let (zero_positions, zero_colours, zero_indices);
+                let skinned_rows: [Vec<[u32; 4]>; 3];
                 match shared.as_deref() {
                     Some(Ok(Deformed::GroupZero(out))) => {
-                        zero_positions = out.positions.clone();
-                        zero_colours = out.colours.clone();
-                        zero_indices = out.indices.clone();
                         draw.group_zero = Prepared::Present(GroupZeroPreparation {
-                            positions: &zero_positions,
-                            indices: &zero_indices,
-                            colours: &zero_colours,
+                            positions: &out.positions,
+                            indices: &out.indices,
+                            colours: &out.colours,
                             auxiliary: AuxiliarySet::default(),
                             gpu: None,
                         });
                     }
                     Some(Ok(Deformed::Ripple(out))) => {
-                        skinned_rows = out.positions.clone();
                         draw.non_instanced = Prepared::Present(NonInstancedPreparation {
-                            positions: &skinned_rows,
-                            normals: &[],
-                            weights: &[],
-                            tangents: None,
+                            positions: &out.positions,
+                            normals: &out.normals,
+                            weights: &out.weights,
+                            tangents: out.tangents.as_deref(),
                             mesh_group: group,
                             geometry_mode: 8,
-                            configuration_byte6: 0,
-                            palette_controls: [0, 0],
+                            static_facts: Some(StaticSourceFacts {
+                                configuration_byte6: geometry.configuration.bytes[6],
+                                palette_controls: [
+                                    partition.control(slot::PALETTE_0),
+                                    partition.control(slot::PALETTE_1),
+                                ],
+                            }),
                         });
                     }
                     Some(Ok(Deformed::Skinned(out))) => {
-                        // GAP: vertex-inputs has no skinned preparation case; the skinned banks are
-                        // packed as a non-instanced preparation.
-                        skinned_rows = out.positions.iter().map(|r| r.map(f32::to_bits)).collect();
-                        draw.non_instanced = Prepared::Present(NonInstancedPreparation {
-                            positions: &skinned_rows,
-                            normals: &[],
-                            weights: &[],
-                            tangents: None,
-                            mesh_group: group,
-                            geometry_mode: 8,
-                            configuration_byte6: 0,
-                            palette_controls: [0, 0],
-                        });
+                        // vertex-inputs.md: a skinning result packs as a non-instanced
+                        // preparation with skinned positions, normals and tangents.
+                        let bits = |rows: &[[f32; 4]]| -> Vec<[u32; 4]> {
+                            rows.iter().map(|r| r.map(f32::to_bits)).collect()
+                        };
+                        skinned_rows = [
+                            bits(&out.positions),
+                            bits(&out.normals),
+                            bits(&out.tangents),
+                        ];
+                        draw.non_instanced = Prepared::Present(NonInstancedPreparation::skinned(
+                            &skinned_rows[0],
+                            &skinned_rows[1],
+                            &skinned_rows[2],
+                            8,
+                        ));
                     }
                     Some(Err(error)) => panic!("deformation refused: {error:?}"),
                     None => {}
                 }
 
                 // Programs with this item's values.
+                let technique_source = technique(source);
                 let array_mask =
                     mag_render_behavior::vertex_inputs::effective_array_mask(&draw).unwrap();
                 let controls = scene_plan::shader_controls(
@@ -1418,6 +1564,7 @@ fn one_main_frame_from_guest_memory() {
                 let required = pair.required_arrays(array_mask).unwrap();
                 let packed = pack_vertex_inputs(&draw, required, 1 << 20).unwrap();
                 let raster = complete_raster(&pipeline_state);
+                // Reflected attributes only (program-compilation.md, "Packet vertex attributes").
                 let attributes = packed
                     .attributes
                     .iter()
@@ -1469,6 +1616,9 @@ fn one_main_frame_from_guest_memory() {
     assert_eq!(item_draws[0].1, 6);
     assert_eq!(item_draws[1].2, VERTICES[0][0]);
     assert_eq!(item_draws[3].2, VERTICES[0][0] + 0.25);
+    // Group 12 decodes rebased-half positions exactly.
+    assert_eq!(item_draws[4].2, VERTICES[0][0]);
+    assert_eq!(secondary_normals, 1);
 
     // Pass viewports: the producer pass uses its own, Main passes the Main surface's.
     let producer = assembler

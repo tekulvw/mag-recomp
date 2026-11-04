@@ -6,6 +6,8 @@
 //! implementation's own ([`crate::waveform`]), so the original program's depth for these items
 //! is not comparable bit for bit.
 
+use crate::guest::{GuestMemory, SourceError};
+use crate::rsx_location::{RsxAddressMap, read_rsx_location};
 use crate::waveform::{KA1, KB1, KC, wave};
 
 /// The guest fields that decide whether an item is admitted.
@@ -180,6 +182,52 @@ pub fn required_pool_length(instances: u64, vertices: u64, frequency: u64, batch
         first += batch_max;
     }
     length
+}
+
+/// The guest address of the instance rows: `G + (transform+0x60 AND 0x7FFFFFFF)`, modulo `2^32`.
+pub fn instance_rows_address(geometry_base: u32, location: u32) -> u32 {
+    geometry_base.wrapping_add(location & 0x7fff_ffff)
+}
+
+/// Reads `count` 16-byte instance rows. A location with bit 31 clear is refused by admission
+/// before any read, so callers check [`admit_group_zero`] first.
+pub fn read_instance_rows<M: GuestMemory + ?Sized>(
+    memory: &M,
+    geometry_base: u32,
+    location: u32,
+    count: usize,
+) -> Result<Vec<[u16; 8]>, SourceError> {
+    let address = instance_rows_address(geometry_base, location);
+    let length = 16 * count as u32;
+    let short = |reason: &str| SourceError {
+        address,
+        length,
+        reason: reason.into(),
+    };
+    if address as u64 + length as u64 > 1 << 32 {
+        return Err(short("range passes 2^32"));
+    }
+    let bytes = memory.read(address, length)?;
+    if bytes.len() != length as usize {
+        return Err(short("short read"));
+    }
+    Ok(bytes
+        .as_chunks::<16>()
+        .0
+        .iter()
+        .map(|r| std::array::from_fn(|i| u16::from_be_bytes([r[2 * i], r[2 * i + 1]])))
+        .collect())
+}
+
+/// Reads `entries` colour pool entries at the RSX location `transform+0x64`.
+pub fn read_colour_pool<M: GuestMemory + ?Sized>(
+    memory: &M,
+    map: &dyn RsxAddressMap,
+    location: u32,
+    entries: usize,
+) -> Result<Vec<[u8; 4]>, SourceError> {
+    let bytes = read_rsx_location(memory, map, location, 4 * entries as u32)?;
+    Ok(bytes.as_chunks::<4>().0.to_vec())
 }
 
 fn finite(bits: u32, what: &'static str) -> Result<f64, GroupZeroError> {
@@ -361,6 +409,38 @@ pub fn deform_group_zero(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gz8_instance_row_address() {
+        assert_eq!(instance_rows_address(0x1000_0000, 0x8000_1230), 0x1000_1230);
+        let mut memory = crate::guest::SparseMemory::new();
+        memory.put(0x1000_1230, &[0x3c, 0x00].repeat(8));
+        assert_eq!(
+            read_instance_rows(&memory, 0x1000_0000, 0x8000_1230, 1),
+            Ok(vec![[0x3c00; 8]])
+        );
+        assert!(read_instance_rows(&memory, 0x1000_0000, 0x8000_1230, 2).is_err());
+        // Bit 31 clear is refused by admission, before any read.
+        let mut admission = GroupZeroAdmission {
+            draw_batch_byte0: 0,
+            pass_control: 3,
+            pass_mode: 8,
+            pass_workers: 1,
+            material_flags: 1,
+            output_selector: 0,
+            instance_count: 1,
+            instance_location: 0x0000_1230,
+            auxiliary_slot12: false,
+            colour_frequency: 2,
+            batch_max: 1,
+        };
+        assert_eq!(
+            admit_group_zero(&admission),
+            Err(GroupZeroError::InstanceLocation)
+        );
+        admission.instance_location = 0x8000_1230;
+        assert_eq!(admit_group_zero(&admission), Ok(()));
+    }
     use crate::testutil::Rng;
 
     const ONE: u16 = 0x3c00;

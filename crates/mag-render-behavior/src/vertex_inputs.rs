@@ -80,10 +80,38 @@ pub struct NonInstancedPreparation<'a> {
     pub tangents: Option<Rows<'a>>,
     pub mesh_group: u32,
     pub geometry_mode: u32,
+    /// The static-source facts; `None` when the preparation has none (a skinning result).
+    pub static_facts: Option<StaticSourceFacts>,
+}
+
+/// The facts that decide whether a non-instanced preparation is an undeformed static source.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StaticSourceFacts {
     /// Configuration-stream byte 6.
     pub configuration_byte6: u8,
     /// Partition `+0x48` and `+0x50`.
     pub palette_controls: [u32; 2],
+}
+
+impl<'a> NonInstancedPreparation<'a> {
+    /// A successful skinning result as a non-instanced preparation: skinned positions, normals
+    /// and tangents, no weights (skinning consumes them) and no static-source facts.
+    pub fn skinned(
+        positions: Rows<'a>,
+        normals: Rows<'a>,
+        tangents: Rows<'a>,
+        geometry_mode: u32,
+    ) -> Self {
+        Self {
+            positions,
+            normals,
+            weights: &[],
+            tangents: Some(tangents),
+            mesh_group: 11,
+            geometry_mode,
+            static_facts: None,
+        }
+    }
 }
 
 /// A preparation slot: absent, a recorded refusal, or present.
@@ -378,14 +406,19 @@ fn output_rows<'a>(
             4 => {
                 let static_source = matches!(prep.geometry_mode, 8 | 10)
                     && !matches!(prep.mesh_group, 0 | 3 | 4 | 6)
-                    && prep.configuration_byte6 & 0xf == 0
-                    && prep.palette_controls == [0, 0];
+                    && prep.static_facts.is_some_and(|facts| {
+                        facts.configuration_byte6 & 0xf == 0 && facts.palette_controls == [0, 0]
+                    });
                 if !static_source {
                     return Err(unprepared);
                 }
-                let bank = first_bank(&draw.primary, 4)
-                    .or_else(|| first_bank(&draw.secondary, 4))
-                    .ok_or(missing)?;
+                // The primary list first, then the secondary list; a secondary list that failed
+                // as a whole fails the lookup (`geometry-streams.md`).
+                let bank = match first_bank(&draw.primary, 4) {
+                    Some(bank) => bank,
+                    None if draw.secondary == AttributeList::Failed => return Err(failed),
+                    None => first_bank(&draw.secondary, 4).ok_or(missing)?,
+                };
                 let rows = bank.rows.ok_or(failed.clone())?;
                 let in_domain = rows.iter().all(|row| {
                     row[..3]
@@ -748,8 +781,10 @@ mod tests {
             tangents: None,
             mesh_group: 5,
             geometry_mode: 8,
-            configuration_byte6: 0,
-            palette_controls: [0, 0],
+            static_facts: Some(StaticSourceFacts {
+                configuration_byte6: 0,
+                palette_controls: [0, 0],
+            }),
         }
     }
 
@@ -815,6 +850,77 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn v14_skinned_preparation() {
+        let normals = [row([0.0, 1.0, 0.0, 0.0]); 3];
+        let tangents = [row([1.0, 0.0, 0.0, -1.0]); 3];
+        let mut draw = base(&[]);
+        draw.auxiliary = Some(AuxiliarySet::default());
+        draw.output_bindings = Some(vec![
+            binding(0, 1, 0, 2, 3),
+            binding(1, 2, 2, 2, 3),
+            binding(2, 3, 6, 2, 4),
+        ]);
+        draw.non_instanced = Prepared::Present(NonInstancedPreparation::skinned(
+            &POSITIONS, &normals, &tangents, 8,
+        ));
+        assert_eq!(effective_array_mask(&draw), Ok(0x45));
+        let out = pack_vertex_inputs(&draw, 0x45, 1 << 20).unwrap();
+        assert_eq!(out.attributes, vec![(0, 0), (2, 16), (6, 32)]);
+        assert_eq!(words(&out.vertices[16..28]), normals[0][..3].to_vec());
+        assert_eq!(words(&out.vertices[32..48]), tangents[0].to_vec());
+        // Weights are consumed by skinning; semantic 4 has no static-source facts.
+        for (semantic, error) in [
+            (
+                9,
+                VertexInputError::MissingSemantic {
+                    slot: 4,
+                    semantic: 9,
+                },
+            ),
+            (
+                4,
+                VertexInputError::UnpreparedPrimarySemantic {
+                    slot: 4,
+                    semantic: 4,
+                },
+            ),
+        ] {
+            let mut d = draw.clone();
+            d.output_bindings
+                .as_mut()
+                .unwrap()
+                .push(binding(3, semantic, 4, 2, 4));
+            assert_eq!(pack_vertex_inputs(&d, 0x55, 1 << 20), Err(error));
+        }
+    }
+
+    #[test]
+    fn semantic_four_lookup_fails_on_a_failed_secondary_list() {
+        let t = texcoords();
+        let mut draw = base(&t);
+        draw.output_bindings
+            .as_mut()
+            .unwrap()
+            .push(binding(1, 4, 6, 2, 4));
+        draw.non_instanced = Prepared::Present(non_instanced(&POSITIONS, &[]));
+        draw.secondary = AttributeList::Failed;
+        assert_eq!(
+            pack_vertex_inputs(&draw, 0x0041, 1 << 20),
+            Err(VertexInputError::FailedSemantic {
+                slot: 6,
+                semantic: 4
+            })
+        );
+        // A primary bank still wins over the failed secondary list.
+        let good = [[0.6f32.to_bits(), 0.8f32.to_bits(), 0, 0]; 3];
+        draw.primary = AttributeList::Banks(vec![SemanticBank {
+            semantic: 4,
+            rows: Some(&good),
+        }]);
+        assert!(pack_vertex_inputs(&draw, 0x0041, 1 << 20).is_ok());
     }
 
     #[test]
