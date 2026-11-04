@@ -178,6 +178,44 @@ def check(args):
                 host=dict(system=platform.system(), machine=platform.machine(), release=platform.release()))
 
 
+COMPAT = NATIVE / "tests/compat"
+
+
+def compile_only(args):
+    """Syntax-check the backend's compat fixtures against the SDK source, with
+    no shader build, GPU or link: a stub shader fixture header declares every
+    fixture the sources name. Same definitions and warning level as the CMake
+    build (tests/compat/CMakeLists.txt). Returns the checked sources."""
+    import re
+    import shlex
+    import tempfile
+    common = ["-fsyntax-only", "-DPS3RECOMP_DISABLE_NATIVE_OSK", "-DRSX_RING_PROGRESS_OPTIONAL",
+              f"-I{NATIVE / 'native'}", f"-I{ROOT / 'src'}", f"-I{args.sdk_source / 'include'}",
+              f"-I{args.sdk_source / 'libs/video'}"]
+    if args.backend == "vulkan":
+        flags = shlex.split(run(["pkg-config", "--cflags", "vulkan", "sdl2"]).stdout)
+        sources = [COMPAT / "vulkan_main.c", COMPAT / "vulkan_owner.c"]
+        names = sorted({name for source in sources
+                        for name in re.findall(r"\b([a-z][a-z0-9_]*)_fixture\b", source.read_text())})
+        with tempfile.TemporaryDirectory(prefix="vulkan-fixture-syntax-") as temporary:
+            header = Path(temporary) / "native_shader_fixture.h"
+            header.write_text("\n".join(
+                ['#include <stddef.h>', '#include "mag_render_batch.h"',
+                 'typedef struct mag_native_fixture_shader { const void *source; uint64_t length; const char *entry; '
+                 'const mag_native_binding_layout *bindings; uint32_t binding_count, threads[3]; } mag_native_fixture_shader;'] +
+                [f"static const mag_native_fixture_shader {name}_fixture = {{0}};" for name in names if name != "mag_native"]) + "\n")
+            for source in sources:
+                run([os.environ.get("CC", "cc"), "-std=gnu17", *common, f'-DMAG_RENDER_SHADER_FIXTURE="{header}"',
+                     *flags, source])
+    else:
+        sources = [COMPAT / "metal_owner.m", COMPAT / "metal_main.mm", COMPAT / "draw_main.mm", COMPAT / "scene_main.mm"]
+        for source in sources:
+            objective_cxx = source.suffix == ".mm"
+            run([os.environ.get("CXX" if objective_cxx else "CC", "clang++" if objective_cxx else "clang"),
+                 "-fobjc-arc", *(["-std=c++17"] if objective_cxx else []), *common, source])
+    return [str(source.relative_to(ROOT)) for source in sources]
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--backend", choices=("metal", "vulkan"), default="metal")
@@ -185,10 +223,23 @@ def main():
     parser.add_argument("--device-id", type=lambda value: int(value, 0))
     parser.add_argument("--gpu-index", type=int, default=0)
     parser.add_argument("--sdk-source", type=Path, required=True)
-    parser.add_argument("--shader-root", type=Path, required=True)
-    parser.add_argument("--build-dir", type=Path, required=True)
-    parser.add_argument("--report", type=Path, required=True)
+    parser.add_argument("--compile-only", action="store_true",
+                        help="only syntax-check the compat fixtures (no shaders, GPU, link or report)")
+    parser.add_argument("--shader-root", type=Path)
+    parser.add_argument("--build-dir", type=Path)
+    parser.add_argument("--report", type=Path)
     args = parser.parse_args()
+    if args.compile_only:
+        args.sdk_source = args.sdk_source.resolve()
+        try:
+            for source in compile_only(args):
+                print(f"syntax ok: {source}")
+        except (OSError, RuntimeError, subprocess.TimeoutExpired) as error:
+            print(f"compat fixture syntax check failed: {error}", file=sys.stderr)
+            return 1
+        return 0
+    if not (args.shader_root and args.build_dir and args.report):
+        parser.error("--shader-root, --build-dir and --report are required unless --compile-only")
     for key in ("sdk_source", "shader_root", "build_dir", "report"):
         setattr(args, key, getattr(args, key).resolve())
     args.report.parent.mkdir(parents=True, exist_ok=True)
