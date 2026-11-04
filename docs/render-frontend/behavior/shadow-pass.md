@@ -16,12 +16,18 @@ produce:
 Applies to retail v1.0. Identities: the job is the material-flush module whose parent object is at
 `0x1F6BAD0`. Its image base is `0x192BF80` and its payload entry is local-store `0x12F68`.
 
-**Status: partial.** The structure below comes from the job's construction, its input format (shared
-with Main and Depth), the cascade-view behaviour and the job's set of emitted RSX methods. The values
-of most per-pass state words, the render target setup and the clear behaviour have not been
-established. They are listed in Open questions together with the recording that would settle them.
-An implementation must not guess those values. Until they are settled, it may only implement the
-established parts behind a default-off switch.
+**Status: partial.** The structure below comes from:
+
+- the job's construction and its input format (shared with Main and Depth);
+- the cascade-view behaviour;
+- the job's set of emitted RSX methods;
+- a job-IO recording of four runs, which settles the pass state, the command output and the terminal
+  segment.
+
+Two captures of original-renderer frames settle the shadow surface, its clear, the raster state and
+the unit-1 link. The light-view construction and the per-item child work are not yet established,
+and are listed in Open questions. An implementation
+must not guess them. It may implement the established parts behind a default-off switch.
 
 Out of scope: how the game picks the cascade distances and light direction, the cull and sort jobs
 that build the caster lists ([scene-plan.md](scene-plan.md) consumes the same kind of lists for
@@ -51,7 +57,8 @@ input, not assume `0xFE`.
 ### Caster lists
 
 Each run consumes a visibility cohort: the sorted per-group item lists that the game's sort job
-produced for that run's family. The cohort, item, draw-batch (MBI) and transform formats are the
+produced for that run's family. Cascade 0 uses cohort camera slot 1 and cascade 1 uses camera slot 2
+(Main uses slot 3). The cohort, item, draw-batch (MBI) and transform formats are the
 same as Main's ([scene-plan.md](scene-plan.md), [material-sources.md](material-sources.md),
 `mag-render-adapter-core::cohort`). The run's item budget is the sum of the cohort's group counts
 for the enabled groups only. Items are drawn in cohort order: ascending group, then sorted order
@@ -66,7 +73,8 @@ streams and attribute codecs are located exactly as for Main ([material-sources.
 - group 3 wind and group 4 ripple, as in [noninstanced-deformation.md](noninstanced-deformation.md);
 - palette-skinned group-7 partitions, which use the same palette skinning as group 11
   ([skinning-deformation.md](skinning-deformation.md)) without group 11's Main-only depth-axis
-  adjustment. Group 7 admission is not yet in a public spec (open question 10);
+  adjustment. Group 7 admission is not yet in a public spec (open question 10). The recorded runs drew group-7
+  items;
 - static partitions for the other enabled groups.
 
 The *pass object* is the shadow run's own pass record. It has the same layout as Main's pass record,
@@ -104,53 +112,165 @@ reimplemented as owned native state in `mag-render-adapter-core` (`views`, `shad
 
 ### Shadow map texture
 
-The map is described by the full texture descriptor at `PARAMS+0x1520`
-([material-producers.md](material-producers.md)), where `PARAMS` is the shadow/parameter object.
-The two shadow texture transforms at `PARAMS+0xD0` and `PARAMS+0xB50` are one per cascade. The
-lighting producer combines each with a scale-bias matrix whose horizontal offset differs between the
-cascades ([main-lighting.md](main-lighting.md)). The working hypothesis is that both cascades share
-one depth texture, side by side horizontally. That is not yet confirmed (open question 3).
+Main's lighting producer, the *shadow-resolve* pass, samples two depth sources:
+
+- **Unit 0** is the *scene* depth: Main's own depth buffer (2560×720 in the captured frames), read
+  through the descriptor at `RENDERER+0x3120` or `+0x3140` as a packed Z24S8 alias
+  ([main-producer-inputs.md](main-producer-inputs.md)). It is not a cascade map.
+- **Unit 1** is the *shadow map*. Its descriptor is exactly the parameter object's texture record at
+  `PARAMS+0x1520` ([material-producers.md](material-producers.md)), with no other source. The two
+  per-cascade transforms at `PARAMS+0xD0` and `PARAMS+0xB50` project the reconstructed scene
+  position into it ([main-lighting.md](main-lighting.md)).
+
+**Shadow surface** *(captured from frames of the original renderer)*:
+
+- **Surface.** Both cascades share one linear surface: 2048×1024, Z24S8 depth, pitch 8192 bytes.
+  The colour target bound during the pass is A8R8G8B8 and aliases the same memory. It is fully
+  masked, so it is never written.
+- **Cascade 0** uses x 0–1023, y 0–1023. Its viewport and scissor are 1024×1024 at the origin, with
+  viewport scale `(512, −512, 0.5)`, offset `(512, 512, 0.5)` and depth range 0–1.
+- **Cascade 1** uses x 1024–2047. This is inferred, not confirmed: both halves are written, and the
+  first run uses the left half. Its viewport is presumably the same with an x origin of 1024.
+- **Clear.** Once per frame, in the clear group at the start of the frame: depth 1.0, stencil 0,
+  colour `0xFF000000`.
+- **Raster state, both cascades:**
+  - depth test and write on, less-or-equal;
+  - polygon offset fill on, factor 2.0, units 60.0; point and line offset off;
+  - stencil and two-sided stencil off;
+  - depth bounds off;
+  - blending and alpha test off;
+  - colour and MRT colour masks 0;
+  - back faces culled, front face counter-clockwise. Some casters' materials disable culling.
+- **Sampling record** (`PARAMS+0x1520`):
+  - masked format `0x90` with the linear-layout bit (24-bit depth, linear), 2048×1024, 1 mip;
+  - s and t wrap clamp-to-border (`4`), r wrap clamp-to-edge (`3`);
+  - depth comparison greater-or-equal (`6`);
+  - linear minification and magnification;
+  - component remap `0xAAE4`.
+
+  These are guest data, read at run time as usual. They are listed so an implementation can check
+  that its native image matches.
+
+The polygon offset is not emitted by the Shadow job. The work that prepares the shadow pass sets it,
+and it is in effect when the first run starts. The captures do not show whether that work sets it
+again every frame or leaves it from an earlier frame. A native Shadow pass must apply factor 2.0 and
+units 60.0 explicitly, or take them from the same source, rather than rely on whatever happens to be
+current.
+
+**Frame order:** scene depth and normal pass, then this shadow pass, then the shadow-resolve pass,
+then Main.
+
+**Readers of the shadow surface:**
+
+- The shadow-resolve pass samples it on unit 1 together with the scene depth on unit 0, through a
+  depth-comparison sampler.
+- A late blended draw in group 15 also samples it, on texture unit 11.
 
 ## Outputs
 
-1. **Shadow map contents.** For each cascade, the depth of every drawn item's geometry as seen from
-   that cascade's light view, written into the cascade's region of the shadow map. Colour output,
-   if any target is bound, is not consumed (open question 4).
-2. **Fixed-function state per draw.** The run builds the following state itself, in addition to
-   whatever its copied setup banks contain. The methods are public NV4097 interface facts; the values
-   are open (question 1):
-   - alpha test enable (`0x0304`), blend enable (`0x0310`), colour mask (`0x0324`) and the MRT colour
-     mask (`0x0370`);
-   - stencil: enable (`0x0328`), front write mask (`0x032C`), front function, reference and read
-     mask (`0x0330`–`0x0338`), front operations (`0x033C`–`0x0344`), back write mask (`0x034C`),
-     back function, reference and read mask (`0x0350`–`0x0358`) and back operations
-     (`0x035C`–`0x0364`);
-   - depth function (`0x0A6C`), depth write mask (`0x0A70`) and depth test enable (`0x0A74`);
-   - polygon offset scale factor and bias (`0x0A78`, `0x0A7C`), the shadow depth bias;
-   - shader packer (`0x1FEC`).
-3. **Per-item geometry and programs.** Vertex array offsets and formats for slots 6 and 12
-   (`0x1698`, `0x16B0`, `0x1758`, `0x1770`); the current value of attribute 6 (`0x1C60`); vertex
-   constant uploads of one, two and eight rows (`0x1EFC` with 4, 8 and 32 data words); and
-   indexed draws (`0x1808` begin/end, `0x181C` index array address and format). The eight-row upload
-   is the per-cascade light transform (open question 5).
-4. **Completion.** After the last draw of a run, a texture-read semaphore release (`0x1D6C`
-   semaphore offset, then `0x1D74`) tells later texture reads that the shadow map is complete. Main's
-   lighting producer must not sample the map before this point. Unlike the Depth job, the Shadow job
-   writes no report (`0x17C8`/`0x1800`).
+Facts marked *(observed)* come from a job-IO recording of four consecutive runs, two updates times
+two cascades, in a populated outdoor scene. The recording itself stays private; only the behaviour
+is stated here. Facts marked *(static)* come from the job's set of emitted methods, but no recorded
+run used them.
+
+### Which run is which
+
+Runs alternate per update: cascade 0, then cascade 1. Each run's progress semaphore offset
+identifies it *(observed)*: `0x490` for cascade 0 and `0x4A0` for cascade 1. Cascade 1 draws more
+items than cascade 0 and takes correspondingly longer.
+
+### Command output
+
+Each run writes its commands into the shared command ring *(observed)*:
+
+- in segments of at most 8 KB, each ending in a jump to the next;
+- one 32-byte segment descriptor per segment, written into the writer's descriptor table;
+- usually several segments per run, and more for cascade 1.
+
+1. **Opening.** The first segment begins with a progress marker: semaphore offset (`0x1D6C`), then a
+   texture-read semaphore release (`0x1D74`) whose value is the ring offset of the next word with
+   bit 31 set *(observed)*.
+2. **Pass state, once per run** *(observed)*:
+   - shader packer `0`;
+   - depth test on;
+   - depth write on;
+   - depth function less-or-equal (`0x0203`);
+   - blending off;
+   - alpha test off;
+   - colour mask all channels, then immediately none (`0x01010101`, then `0`);
+   - MRT colour mask `0xFFF0`, then `0`.
+
+   The net effect is depth-only rendering: no colour channel is written.
+3. **Vertex arrays, once per run** *(observed)*: arrays 1–15 are disabled (format `0x2`: float, size
+   0) and the frequency divider is cleared.
+4. **Per draw** *(observed)*:
+   - vertex array 0 offset and format, for positions only. Formats seen: three floats (stride 12,
+     20, 24 or 28) and three half floats (stride 6 or 22), as the partition's stream dictates;
+   - vertex constant rows 3–6, the draw's four transform rows;
+   - when it changes, vertex constant row 24, the binding row of [material-values.md](material-values.md).
+     Observed values have a denominator of 15, and lane 3 differs per cascade;
+   - when it changes, vertex constant row 42, one row whose meaning is not yet established
+     (question 5);
+   - a reserved command region (*hole*) jumped over by the job, which the item's child job fills.
+5. **Per-item child jobs** *(observed)*. Each drawn item gets one 464-byte child descriptor. Two
+   child kinds appear, one for most items and the other for a small share. The children fill the
+   reserved regions, so the item's draw calls and per-material state are not in the Shadow job's own
+   output.
+6. **Draws the job issues itself** *(observed)*. For a minority of items the job writes the draw
+   directly: begin/end with triangles (`5`), an index array in local memory with 16-bit indices
+   (`0x181C` with format word `0x10`), and one or more `0x1824` index ranges.
+7. **Not emitted** *(observed)*:
+   - surface, viewport, scissor or clear methods;
+   - stencil or polygon offset;
+   - cull state;
+   - texture units;
+   - any report.
+
+   The render target, its clear, depth bias, stencil and cull state are therefore whatever was in
+   effect when the run started. The frame captures give their values ("Shadow map texture").
+   Stencil and polygon-offset methods exist in the job *(static)*, but no recorded run used them.
+8. **Closing.** The last segment is a 128-byte terminal segment *(observed)*: no-operation, the
+   semaphore offset, a texture-read semaphore release, then a jump to the continuation.
+9. **Progress release values.** Every texture-read semaphore release the run writes has the ring
+   offset of the word after it in its low 30 bits. Bits 30–31 carry the *ring generation* in force
+   when the release is written. The generation is a 2-bit counter kept in the writer's epoch word.
+   It advances by one, modulo 4, each time the ring wraps back to its start. So a run that wraps
+   writes its earlier releases with the old generation and its later ones with the new. A run that
+   does not wrap leaves the epoch word unchanged. Readers of the semaphore compare both parts: an
+   offset alone is ambiguous across laps.
+10. **Continuation.** The closing jump targets the writer's address base plus the run's
+    continuation offset, which is part of the run's input. Shadow and Depth write through side
+    slots 1 and 2, and always return through that continuation, even when the run wrapped the ring.
+    Main's slot 0 differs: it jumps to the ring start only on a wrap. That is the shared ring rule;
+    see the native ring writer.
+11. **Writer publication** *(observed)*: after each batch of segments the run writes:
+   - the new ring write offset to the put word;
+   - the writer slot's word with value `offset | 2`;
+   - the epoch word holding the current ring generation;
+   - a 16-byte next-writer-state record (begin, end, current, `0xFFFFFFFF`).
+
+### Shadow map contents
+
+For each cascade: the depth of every drawn item's geometry, as seen from that cascade's light view,
+written into the bound depth target with less-or-equal testing and writes on. Colour is masked off.
 
 ### Comparison with the Depth job
 
-The two jobs share the input format and most per-item work. The Shadow job adds stencil state,
-polygon offset and the texture-read semaphore. It omits the Depth job's report clear and report
-write. Both upload vertex constants, set vertex arrays 6 and 12 and attribute 6, and set alpha test,
-blend, colour mask and depth state.
+The two jobs share the input format and most per-item work. In the recorded scene the Shadow job
+emitted no stencil, polygon offset or report. The Depth job writes report clears and reports. Both
+use per-item child jobs, vertex constant uploads and progress semaphores in the shared ring. The
+semaphore offsets are `0x490` and `0x4A0` for Shadow and `0x4B0` for Depth.
 
 ## Behaviour required of a native replacement
 
 1. For each cascade run, select the items of the enabled groups from that run's cohort. Prepare each
    item's geometry and technique exactly as Main does, using the run's own pass object.
-2. Render the items, in cohort order, depth-only into the cascade's region of the shadow map, from
-   the cascade's light view, with the run's fixed-function state and depth bias.
+2. Render the items, in cohort order, depth-only into the bound shadow target, from the cascade's
+   light view. Use depth test on, depth write on, less-or-equal, blending and alpha test off and
+   colour writes off, the stencil test off, back-face culling with counter-clockwise front faces
+   (unless the material disables culling), and polygon offset factor 2.0, units 60.0. Use the
+   cascade's half of the shared shadow surface, with that half's viewport and scissor. Clear the
+   surface once per frame, before the first cascade, to depth 1.0 and stencil 0.
 3. Order the result before Main's lighting producer samples the map, through the native equivalent
    of the texture-read semaphore.
 4. Meet the run's guest-visible obligations even though the original job does not run. This mirrors
@@ -161,8 +281,10 @@ blend, colour mask and depth state.
    - perform the ready-work notification;
    - let the PPU wait on each run return only after the native result is published.
 
-   The exact terminal segment of an empty Shadow run is not yet specified (open question 6). Until
-   it is, the original job must keep running.
+   The terminal segment shape is in "Command output" step 8. The child jobs must not be created,
+   because their work is part of the native draw. Releases carry the ring generation and the
+   closing jump uses the side-slot continuation, as in steps 9 and 10. Keep the original job for any
+   update that is not wholly owned.
 5. A frame whose Main is not natively owned keeps the original Shadow job.
 
 ## Edge cases and errors
@@ -207,41 +329,53 @@ pass.
 6. **Corners.** `P = 0`, `X = (1,0,0)`, `Y = (0,1,0)`, `Z = (0,0,1)`, `d = 4`, `v = 0.5`, `r = 2`:
    `h = 2`, `w = 4`, centre `(0, 0, −4)`, corners `(4, 2, −4)`, `(−4, 2, −4)`, `(−4, −2, −4)`,
    `(4, −2, −4)`.
+7. **Ring generation.** Epoch generation `0b10` and no wrap during the run: every release has bits
+   30–31 `0b10`, and the epoch word is unchanged. Generation `0b11` and one wrap: releases written
+   before the wrap carry `0b11`, those after it carry `0b00`, and the epoch word becomes `0b00`. A
+   release for ring offset `0x001230` under generation `0b11` has the value `0xC0001230`.
 
 ## Open questions
 
-Questions 1, 4, 5, 6, 7 and 8 can all be settled by one job-IO recording of the Shadow job, taken
-the same way as the Main recording: set `MAG_JOB_IO_ENTRY` to the payload entry `0x12F68`, and
-record both runs of several updates in a scene with visible shadows. Run the recording through
-`tools/jobio.py`, `tools/jobio_provenance.py` and `tools/jobio_rules.py`. That yields the emitted
-command words with their input provenance, and so the state values and their item-level rules.
+**Settled by the recording.**
 
-1. **State values.** The values the run writes for alpha test, blend, colour masks, stencil (both
-   faces), depth function, depth write and test, polygon offset factor and bias, and shader packer.
-   Also whether they are fixed per run, set per group, or taken from the material.
-2. **Light view and projection.** How each cascade's sphere becomes an orthographic light view: its
-   orientation (the up vector), depth range, texel snapping, and where the eight-row transform comes
-   from. This is PPU-side work and needs a PPU-side trace of the shadow owner's view construction,
-   or the recording's eight-row constant values matched against the sphere fit.
-3. **Map layout.** Whether both cascades share one texture (and if so how it is split), the map's
-   size and format, and the viewport and scissor of each run. Surface, viewport and clear methods
-   are not among the state the run builds itself. The target is therefore set either by work
-   outside the job (the PPU, or the FIFO just before the run) or by a setup bank the run copies
-   unchanged. The recording plus the FIFO segment just before each run settles which.
-4. **Colour target.** Whether a colour target is bound during the shadow runs, and if so whether
-   anything reads it.
-5. **Constant rows.** Which vertex constant rows the one-, two- and eight-row uploads write, and
-   their meaning.
-6. **Terminal segment.** The exact command-ring segment an empty Shadow run writes: progress
-   semaphores, final state, continuation, and the texture-read semaphore offset and value. The
-   native Depth cutover needed the equivalent for Depth.
-7. **Technique selection.** Which technique the shadow pass object's render mode selects for each
-   enabled group, and whether alpha-tested casters (foliage cards in groups 3 and 4) use a fragment
-   program that discards.
-8. **Families and cameras.** Which cohort camera index each run's caster list uses, and whether the
-   two runs always draw disjoint lists.
-9. **Groups outside the mask.** Whether any later setting enables groups outside `0xFE` (for example
-   group 11 characters), or whether characters cast shadows by another route.
+- Pairing: the runs alternate cascade 0, then cascade 1, and the semaphore offset (`0x490` or
+  `0x4A0`) identifies each.
+- State values: depth-only, less-or-equal with writes, no blend, no alpha test, no colour (former
+  question 1, except stencil and bias, which no run emitted).
+- Colour target writes: masked off (former question 4).
+- Terminal segment shape and writer publication (former question 6).
+- The release flag is the ring generation, and the continuation follows the side-slot rule (former
+  question 6, settled by checking the recordings against the shared ring writer).
+- Shadow surface, cascade 0 layout, viewport and scissor, clear values, raster state including
+  polygon offset, and the unit-1 identity (former questions 1, 3 and 11, from two frame captures).
+- Disjointness: the two cascades' lists are *not* disjoint. Most of cascade 0's items also appear in
+  cascade 1 in the same update (former question 8).
+
+**Still open.**
+
+2. **Light view and projection.** This is PPU-side work. Rows 3–6 carry each draw's transform, but
+   their construction from the cascade sphere (orientation, depth range, snapping) still needs the
+   shadow owner's view construction traced.
+3. **Cascade 1 half.** Cascade 1 is inferred to use x 1024–2047 with a viewport like cascade 0's.
+   A capture of the second run's viewport would confirm it.
+5. **Row 42.** What the one-row upload at vertex constant row 42 holds.
+7. **Child work.** Technique selection, programs and per-material state are in the per-item child
+   jobs, not in the Shadow job. They need recordings of the material-binding child (image entry
+   `0x105F8`) and the geometry child (image entry `0x15898`) during shadow runs.
+9. **Groups outside the mask.** Whether any setting enables groups outside `0xFE`. The recorded runs
+   drew items of groups 1, 2, 3, 4 and 7 only.
 10. **Group 7 skinning admission.** `skinning-deformation.md` admits group 11 only. The group-7
     admission conditions (geometry mode, worker control, palette inputs) need their own statement
     before group-7 casters can be prepared natively.
+Observed cost, for orientation: in Training the PPU waits about 1.8 ms on cascade 0 and about 4.3 ms
+on cascade 1, about 6.1 ms of a 29 ms update.
+12. **Shadow-resolve draws.** In the captured frame the shadow-resolve pass has three draws in one
+    pass on the same 2560×720 target (2× horizontal anti-aliasing, viewport 1280×720):
+    - draw 0 samples the colour;
+    - draws 1 and 2 sample the scene depth and the shadow map through different pipelines;
+    - draw 1 writes alpha only, with the stencil test on but inert (always passes, masks 0), depth
+      off and three vertices.
+
+    The draws are not split by target in this scene. Whether they split per cascade, or by the
+    role-1 and role-0 draws of [main-lighting.md](main-lighting.md), is still open. A further capture
+    of all three draws is planned.

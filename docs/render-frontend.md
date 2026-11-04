@@ -46,6 +46,41 @@ cargo clippy --manifest-path crates/mag-render-adapter-scene/Cargo.toml --all-ta
 cargo test --manifest-path crates/mag-render-adapter-scene/Cargo.toml --locked
 ```
 
+### Source hooks
+
+The adapter learns when the original engine configures, fills and submits its render work through
+observer hooks in the lifted PPU sources. `tools/render_hooks/prepare.py` copies a complete engine
+lift to a new directory and adds the hooks of the chosen stages:
+
+| Stage | Observes | Compile guard |
+| --- | --- | --- |
+| `configuration` | Shadow configuration manager init and shutdown | `MAG_RENDER_ADAPTER_CONFIGURATION` |
+| `shadow-view` | the Shadow view-corner helper (needs `configuration`) | `MAG_RENDER_ADAPTER_SHADOW_VIEW` |
+| `cohort` | retained visibility cohort ownership and publication (needs `configuration`) | `MAG_RENDER_ADAPTER_COHORT` |
+| `ui-handoff` | the UI packet writers at the pre-UI boundary (needs `cohort`) | `MAG_RENDER_ADAPTER_UI_HANDOFF` |
+
+```sh
+python3 tools/render_hooks/prepare.py --base generated/retail-v1.0/mage_g-dispatcher \
+  --output generated/retail-v1.0/mage_g-render --stage configuration --stage cohort
+```
+
+Each stage pins the functions it changes, and the callees it relies on, inline by address to the
+SHA-256 of the complete lifted body and to the lifted file that holds it. The pins identify the
+output of the PPU lifter pinned in `profiles/framework.json` (`LIFTER_REVISION` in
+`tools/render_hooks/common.py`), and the base lift's provenance must name that revision. Every pin
+and every seam is re-checked when a stage is applied; any mismatch refuses the whole preparation
+and writes no output. After a lifter pin change, regenerate the tables with
+`prepare.py --print-pins <unprepared lift>`, review them and commit them with the pin change.
+
+Hooks only add lines, each under its stage's compile guard. Removing them restores every original
+body byte for byte, which the tool checks before writing. Every original call, drain, guest write
+and return is kept, so a prepared lift compiled without the guards is the original program. Hooks
+name original seams (a function's address, a call's return address, the register that holds a
+value at that seam) only to identify where to observe, as `tools/occlusion_store_hooks.py` does;
+they never reproduce original behaviour. The prepared provenance keeps every base field, updates
+the hashes of the rewritten sources and adds a `render_adapter_hooks` record that names the stages
+and the SHA-256 of each hook tool file.
+
 ## Build the optional library
 
 Use the exact Rust version and components recorded in `rust-toolchain.toml`. The frontend and
@@ -75,6 +110,46 @@ Receipts add seven extension inputs: `rust-render-sources`, `rust-render-manifes
 `rust-render-library`. They bind the source, dependency lock, build recipe, C interface and linked
 archive to the binary. This build provenance is separate from proof of rendering removal or GPU
 completion.
+
+### Build with the game adapter
+
+`-DMAG_RENDER_ADAPTER=ON` (default `OFF`, needs `MAG_RENDER_FRONTEND_NATIVE=ON` and
+`MAG_IMAGE=mage_g`) links the adapter crates and the bridges its source hooks call. Point
+`RECOMP_DIR` at a lift prepared by `tools/render_hooks/prepare.py` (see
+[Source hooks](#source-hooks)) and fetch the link crate's dependencies once:
+
+```sh
+cargo fetch --manifest-path crates/mag-render-adapter-link/Cargo.toml --locked
+```
+
+Cargo then builds `crates/mag-render-adapter-link`, one static library that holds
+`mag-render-native` and `mag-render-adapter-core` from this checkout, in place of the native
+frontend library. Two Rust static libraries in one executable would each carry the standard library
+and clash at link time.
+
+| Option | Adds | Status |
+| --- | --- | --- |
+| `MAG_RENDER_ADAPTER` | configuration lifetime observer (`src/render_adapter`) | available |
+| `MAG_RENDER_ADAPTER_SHADOW_VIEW` | Shadow view-corner observer | available |
+| `MAG_RENDER_ADAPTER_COHORT` | retained cohort observer | refused at configure until its bridge is published |
+| `MAG_RENDER_ADAPTER_UI_HANDOFF` | native scene handoff before the UI (needs `COHORT`) | refused at configure: needs `libs/video/rsx_native_handoff.h`, which the pinned runtime lacks, and its bridge |
+
+At configure time the option reads the `render_adapter_hooks` record in `RECOMP_DIR`. It refuses a
+lift without the record, one prepared without an enabled stage, and one prepared by different
+hook tools, by file set or by SHA-256. Only the lifted files the tool rewrote get the stage guards
+and the bridge include directory, so the other generated translation units keep their compile
+commands. Receipts add the bridges, every hook tool file, the adapter-core and link crate
+sources, manifests and lock, and `cmake/MagRenderAdapter.cmake`; like every receipt extra they
+record content hashes, not paths.
+
+The adapter also has a single runtime master switch, off by default: `MAG_RENDER_ADAPTER=1` in the
+environment, or `mag_render_adapter_enable()` before the first frame. While it is off, every
+bridge entry point that a hook reaches returns at once and the adapter's C entry points return
+their "not ready" results, so an adapter build behaves like the original program.
+
+With `MAG_RENDER_ADAPTER` off, CMake defines the options and does nothing else: it reads no lift
+record, adds no source, definition, library or receipt entry, and builds the native frontend
+library as before.
 
 ## Synthetic verification
 

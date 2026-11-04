@@ -35,6 +35,7 @@
 //! | [`quincunx`] | `main-quincunx.md` (nearest-sample approximation, labelled) |
 //! | [`downsample`] | `main-downsample.md` |
 //! | [`finish`] | `main-finish.md` |
+//! | [`shadow`] | `shadow-pass.md` (the settled parts; open questions are refusals) |
 //! | [`waveform`] | helpers and wind tuning values from `group-zero-deformation.md` |
 //!
 //! Floating-point outputs use ordinary native arithmetic. They are checked against the
@@ -66,6 +67,7 @@ pub mod raster;
 pub mod rsx_location;
 pub mod scene_plan;
 pub mod setup;
+pub mod shadow;
 pub mod skinning;
 pub mod surfaces;
 pub mod texture;

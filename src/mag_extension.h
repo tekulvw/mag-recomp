@@ -20,7 +20,10 @@ typedef struct MagExtensionCallbacks {
     void (*prepare)(const char* elf);
 } MagExtensionCallbacks;
 
-/* Adds every non-null slot. Returns 0, or -1 (changing nothing) if any of them is already taken. */
+/* Adds every non-null slot. prepare, start, frame_poll and stop accept up to eight registrants,
+ * called in registration order (stop in reverse); trace_enter, trace_exit, payload_select and
+ * payload_begin have one owner each. Returns 0, or -1 (changing nothing) if a single-owner slot
+ * is already taken or a lifecycle slot is full. */
 int mag_extension_register(const MagExtensionCallbacks* callbacks);
 /* Never null; every slot is null when nothing is registered. */
 const MagExtensionCallbacks* mag_extension(void);

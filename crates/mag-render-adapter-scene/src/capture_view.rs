@@ -9,6 +9,9 @@
 use core::ffi::c_void;
 use std::sync::{Arc, OnceLock};
 
+/// The bridge's synchronous guest copy: `copy(opaque, address, bytes, out)`
+/// fills `out` with `bytes` guest bytes and returns 0, or returns nonzero.
+pub type SourceCopy = unsafe extern "C" fn(*mut c_void, u32, u32, *mut u8) -> i32;
 /// Read-only view of a located span inside the capture window: the same
 /// checks as the located copy, then a pointer to the guest bytes, or null.
 /// Only valid during the synchronous capture call that supplied `opaque`.

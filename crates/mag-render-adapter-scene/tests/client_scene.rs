@@ -173,3 +173,186 @@ fn bad_projection_keeps_failed_item_visible_in_receipt_population() {
     assert_eq!(packet.items[0].projection_failures.len(), 1);
     assert_ne!(packet.draws[0].unresolved_obligations & OMIT_PROJECTION, 0);
 }
+
+#[test]
+fn actual_source_copy_reaches_public_draw_callback_and_accepted_source_cannot_replay() {
+    // The adapter entry points do nothing while the master switch is off.
+    mag_render_adapter_core::runtime::enable();
+    use core::ffi::c_void;
+    use mag_render_adapter_scene::{client_scene_ffi::*, cohort_ffi::*, cohort_resource_ffi::*};
+    fn word(b: &mut [u8], at: usize, v: u32) {
+        b[at..at + 4].copy_from_slice(&v.to_be_bytes());
+    }
+    unsafe extern "C" fn read(_: *mut c_void, address: u32, bytes: u32, out: *mut u8) -> i32 {
+        let b = match address {
+            0x20000 => vec![0; 192],
+            0x40000 => {
+                let mut b = vec![0; 544];
+                for (slot, address, bytes) in [(19, 0x50000, 16), (7, 0x60000, 36), (1, 0x70000, 6)]
+                {
+                    word(&mut b, 0x30 + slot * 8, bytes);
+                    word(&mut b, 0x34 + slot * 8, address);
+                }
+                b
+            }
+            0x50000 => {
+                let mut b = vec![0; 16];
+                b[9] = 3;
+                b[11] = 3;
+                b
+            }
+            0x60000 => [1f32, 2., 3., 4., 5., 6., 7., 8., 9.]
+                .into_iter()
+                .flat_map(f32::to_be_bytes)
+                .collect(),
+            0x70000 => vec![0, 2, 0, 0, 0, 1],
+            0x80000 => {
+                let mut pass = vec![0; 688];
+                word(&mut pass, 0x284, 0x40000);
+                word(&mut pass, 0x1fc, 0x80000);
+                pass
+            }
+            _ => return -1,
+        };
+        if b.len() != bytes as usize {
+            return -1;
+        }
+        unsafe {
+            std::ptr::copy_nonoverlapping(b.as_ptr(), out, b.len());
+        }
+        0
+    }
+    unsafe extern "C" fn submit(opaque: *mut c_void, view: *const SceneView) -> i32 {
+        let view = unsafe { &*view };
+        let draws = unsafe { std::slice::from_raw_parts(view.draws, view.draw_count as usize) };
+        assert_eq!(
+            (
+                view.cohort,
+                view.publication,
+                view.intended_items,
+                draws.len()
+            ),
+            (2, 77, 1, 1)
+        );
+        let d = &draws[0];
+        assert_eq!(
+            (
+                d.vertex_count,
+                d.index_count,
+                d.source_item,
+                d.source_partition
+            ),
+            (3, 3, 0, 0)
+        );
+        assert_eq!(unsafe { *d.positions }, [1., 2., 2., 1.]);
+        assert_eq!(
+            unsafe { std::slice::from_raw_parts(d.indices, 3) },
+            [2, 0, 1]
+        );
+        assert_ne!(d.unresolved_obligations, 0);
+        let items = unsafe { std::slice::from_raw_parts(view.items, view.item_count as usize) };
+        assert_eq!(items[0].admitted_draws, 1);
+        unsafe { *(opaque as *const i32) }
+    }
+    assert_eq!(size_of::<SceneRequest>(), 88);
+    assert_eq!(size_of::<SceneView>(), 80);
+    assert_eq!(size_of::<ClientDraw>(), 64);
+    assert_eq!(mag_render_adapter_cohort_vm(1), 0);
+    let mut begin = CohortBegin {
+        abi_version: 1,
+        struct_bytes: size_of::<CohortBegin>() as u32,
+        vm: 1,
+        invocation: 2,
+        owner: 3,
+        pass_occurrence: 4,
+        execution_update: 5,
+        ..Default::default()
+    };
+    begin.group_counts[0][0] = 1;
+    assert_eq!(mag_render_adapter_cohort_begin(begin), 0);
+    let mut item = CohortItemInput {
+        vm: 1,
+        invocation: 2,
+        has_transform: 1,
+        ..Default::default()
+    };
+    item.mbi[3] = 0x2000;
+    for i in 0..4 {
+        item.transform[8 + i * 5] = 1f32.to_bits();
+    }
+    assert_eq!(mag_render_adapter_cohort_item(item), 0);
+    assert_eq!(mag_render_adapter_cohort_finish(1, 2), 0);
+    let input = CohortResourceInput {
+        abi_version: 2,
+        source_pass_address: 0x80000,
+        struct_bytes: size_of::<CohortResourceInput>() as u32,
+        vm: 1,
+        invocation: 2,
+        geometry_resource_base: 0x40000,
+        ..Default::default()
+    };
+    assert_eq!(
+        unsafe { mag_render_adapter_cohort_assets(input, Some(read), std::ptr::null_mut()) }.status,
+        0
+    );
+    let request = SceneRequest {
+        abi_version: 1,
+        struct_size: size_of::<SceneRequest>() as u32,
+        vm: 1,
+        invocation: 2,
+        owner: 3,
+        pass_occurrence: 4,
+        engine_update: 5,
+        publication: 77,
+        viewport_scale: 0.5f32.to_bits(),
+        viewport_offset: 0.5f32.to_bits(),
+        max_draws: 16,
+        max_bytes: 4096,
+        ..Default::default()
+    };
+    let rejected = -4i32;
+    let accepted = 1i32;
+    assert_eq!(
+        unsafe {
+            mag_render_adapter_submit_scene(
+                SceneRequest {
+                    invocation: 3,
+                    ..request
+                },
+                Some(submit),
+                (&rejected as *const i32).cast_mut().cast(),
+            )
+        },
+        -3
+    );
+    assert_eq!(
+        unsafe {
+            mag_render_adapter_submit_scene(
+                request,
+                Some(submit),
+                (&rejected as *const i32).cast_mut().cast(),
+            )
+        },
+        -4
+    );
+    assert_eq!(
+        unsafe {
+            mag_render_adapter_submit_scene(
+                request,
+                Some(submit),
+                (&accepted as *const i32).cast_mut().cast(),
+            )
+        },
+        1
+    );
+    assert_eq!(
+        unsafe {
+            mag_render_adapter_submit_scene(
+                request,
+                Some(submit),
+                (&accepted as *const i32).cast_mut().cast(),
+            )
+        },
+        -3
+    );
+}

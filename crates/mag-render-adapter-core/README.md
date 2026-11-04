@@ -41,7 +41,14 @@ Current contents:
   protocols (`mag_render_adapter_config_event`,
   `mag_render_adapter_config_snapshot`, `mag_render_adapter_shadow_call`).
   Each returns its "not ready" result and records nothing while the master
-  switch is off.
+  switch is off;
+- `rsx_state_preamble`: a state-only replay of recorded RSX method writes. It
+  classifies NV4097 methods (program, vertex constants, vertex input, texture
+  binding, raster, attachment, or work: clear, primitive, draw,
+  synchronisation, no-operation), keeps the requested state classes in source
+  order, merges increasing runs into incrementing packets, and ends the block
+  in a return so it can be called. Unclassified methods, other subchannels and
+  overflow are refused before any output.
 
 With the `owned-scene` feature (which needs the pinned native compiler
 libraries of `mag-render-programs`):
@@ -51,7 +58,8 @@ libraries of `mag-render-programs`):
   frontend packet records.
 
 `material_constants` also decodes a material's fragment builtin requests
-(kinds 3, 4, 31 and 32 of `fragment-builtins.md`) and prepares their rows.
+(kinds 3, 4, 31 and 32 of `fragment-builtins.md`); `mag-render-adapter-scene`
+prepares their rows.
 Nothing in this crate runs unless a host calls it. The C exports are `mag_render_adapter_enabled`,
 `mag_render_adapter_enable`, `mag_original_work_sha256_file` and the `ffi`
 entry points above.

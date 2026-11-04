@@ -37,6 +37,7 @@ class RustRenderBuildTests(unittest.TestCase):
         shutil.copytree(FIXTURE, directory, dirs_exist_ok=True)
         (directory / "cmake").mkdir()
         shutil.copy2(ROOT / "cmake/MagRender.cmake", directory / "cmake")
+        shutil.copy2(ROOT / "cmake/MagRenderAdapter.cmake", directory / "cmake")
         if enabled:
             shutil.copy2(ROOT / "rust-toolchain.toml", directory)
             shutil.copytree(ROOT / "crates/mag-render", directory / "crates/mag-render",
