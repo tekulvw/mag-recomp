@@ -17,12 +17,13 @@
 // addressable from one crate under the module names its code uses.
 pub use mag_render_adapter_core::{
     capture_pool, cohort, error, fast_hash, geometry_bindings, guest_memory, main_flow,
-    material_constants, material_programs, mesh_sources, partition_inputs,
+    material_capture, material_constants, material_programs, mesh_sources, partition_inputs,
 };
 
 pub mod capture_memo;
 #[allow(unsafe_code)] // Calls the bridge's registered read-only views inside one capture call.
 pub mod capture_view;
+pub mod client_scene;
 pub mod cohort_geometry;
 pub mod cohort_resources;
 pub mod decoded_geometry_cache;
@@ -31,6 +32,8 @@ pub mod depth_materials;
 pub mod depth_sources;
 pub mod geometry_attributes;
 pub mod geometry_streams;
+pub mod material_finish;
+pub mod material_group_twelve;
 pub mod material_sources;
 pub mod material_textures;
 pub mod shared_scene_sources;
