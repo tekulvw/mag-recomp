@@ -31,10 +31,35 @@ pub struct DirtyRange {
     pub offset: u64,
     pub bytes: Vec<u8>,
 }
+/// Immutable bytes owned elsewhere and shared by reference: a snapshot made
+/// from them is adopted without a copy. The owner keeps the bytes unchanged
+/// for as long as any clone (and so any lease) is alive.
+#[derive(Clone)]
+pub struct SharedBytes(Arc<dyn AsRef<[u8]> + Send + Sync>);
+impl SharedBytes {
+    pub fn new(bytes: Arc<dyn AsRef<[u8]> + Send + Sync>) -> Self {
+        Self(bytes)
+    }
+}
+impl std::ops::Deref for SharedBytes {
+    type Target = [u8];
+    fn deref(&self) -> &[u8] {
+        (*self.0).as_ref()
+    }
+}
+impl std::fmt::Debug for SharedBytes {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "SharedBytes({} bytes)", self.len())
+    }
+}
 #[derive(Debug)]
 pub enum ResourceDelta {
     Create {
         bytes: Vec<u8>,
+    },
+    /// Create from shared immutable bytes without copying them.
+    CreateShared {
+        bytes: SharedBytes,
     },
     Update {
         expected: ResourceVersion,
@@ -74,10 +99,24 @@ pub struct ResourceCacheKey {
     pub content_version: u64,
 }
 #[derive(Debug)]
+enum Payload {
+    Owned(Box<[u8]>),
+    Shared(SharedBytes),
+}
+impl std::ops::Deref for Payload {
+    type Target = [u8];
+    fn deref(&self) -> &[u8] {
+        match self {
+            Self::Owned(b) => b,
+            Self::Shared(b) => b,
+        }
+    }
+}
+#[derive(Debug)]
 struct Snapshot {
     namespace: ResourceNamespace,
     version: ResourceVersion,
-    bytes: Box<[u8]>,
+    bytes: Payload,
     dirty: Vec<DirtySpan>,
 }
 #[derive(Clone, Debug)]
@@ -146,11 +185,14 @@ impl ResourceStore {
         // identity, contents, capacity usage or observable allocation counters.
         self.retained.retain(|(_, weak)| weak.strong_count() != 0);
         match delta {
-            ResourceDelta::Create { bytes } => self.create(bytes),
+            ResourceDelta::Create { bytes } => {
+                self.create(Payload::Owned(bytes.into_boxed_slice()))
+            }
+            ResourceDelta::CreateShared { bytes } => self.create(Payload::Shared(bytes)),
             ResourceDelta::Update { expected, ranges } => self.update(expected, ranges),
         }
     }
-    fn create(&mut self, bytes: Vec<u8>) -> Result<ResourceVersion, ResourceError> {
+    fn create(&mut self, bytes: Payload) -> Result<ResourceVersion, ResourceError> {
         if bytes.is_empty() {
             return Err(ResourceError::EmptyResource);
         }
@@ -206,7 +248,7 @@ impl ResourceStore {
         let snapshot = Arc::new(Snapshot {
             namespace: self.namespace,
             version,
-            bytes: bytes.into_boxed_slice(),
+            bytes,
             dirty: vec![DirtySpan { offset: 0, length }],
         });
         let slot = Slot {
@@ -267,7 +309,8 @@ impl ResourceStore {
             id: expected.id,
             content_version,
         };
-        let shared = Arc::strong_count(current) > 1;
+        // Shared bytes are never written in place: an update copies them.
+        let shared = Arc::strong_count(current) > 1 || matches!(current.bytes, Payload::Shared(_));
         if shared {
             self.reserve_capacity(1, current.bytes.len())?;
         }
@@ -314,7 +357,7 @@ impl ResourceStore {
             let snapshot = Arc::new(Snapshot {
                 namespace: current.namespace,
                 version,
-                bytes: bytes.into_boxed_slice(),
+                bytes: Payload::Owned(bytes.into_boxed_slice()),
                 dirty,
             });
             self.retained.push((index as u32, Arc::downgrade(current)));
@@ -329,9 +372,12 @@ impl ResourceStore {
                     .ok_or(ResourceError::StaleVersion)?,
             )
             .ok_or(ResourceError::StaleVersion)?;
+            let Payload::Owned(bytes) = &mut current.bytes else {
+                return Err(ResourceError::StaleVersion);
+            };
             for range in ranges {
                 let start = range.offset as usize;
-                current.bytes[start..start + range.bytes.len()].copy_from_slice(&range.bytes);
+                bytes[start..start + range.bytes.len()].copy_from_slice(&range.bytes);
             }
             current.version = version;
             current.dirty = dirty;
