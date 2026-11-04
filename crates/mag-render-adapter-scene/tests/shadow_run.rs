@@ -1,4 +1,6 @@
-use mag_render_adapter_scene::{depth_sources::*, error::Error};
+use mag_render_adapter_scene::{
+    depth_sources::*, error::Error, geometry_attributes::OwnedPrimaryAttributes,
+};
 use mag_render_adapter_scene::{
     depth_sources::{DepthImmutablePartition, DepthItemRoute},
     mesh_sources::GeometrySource,
@@ -23,6 +25,9 @@ fn partition(n: usize) -> DepthImmutablePartition {
         positions: Ok(Arc::new(vec![[0x3f80_0000, 0, 0, 0x3f80_0000]; n])),
         indices: Ok(Arc::new((0..n as u16).collect())),
         attributes: None,
+        record: Box::new([0; 544]),
+        secondary_attributes: None,
+        skinning: None,
     }
 }
 struct Fixture {
@@ -437,6 +442,9 @@ fn deformable(n: usize) -> DepthImmutablePartition {
         )),
         indices: Ok(Arc::new((0..n as u16).collect())),
         attributes: Some(Ok(attributes)),
+        record: Box::new([0; 544]),
+        secondary_attributes: None,
+        skinning: None,
     }
 }
 fn wind_pass(mode: u32, workers: u32) -> Vec<u8> {
@@ -548,4 +556,262 @@ fn groups_three_and_four_deform_through_the_shared_entry_point() {
         ),
         Err(ShadowRunRefusal::Deformation)
     );
+}
+
+fn content(
+    address: u32,
+    bytes: &[u8],
+) -> Arc<mag_render_adapter_scene::shared_scene_sources::SourceContent> {
+    mag_render_adapter_scene::shared_scene_sources::SourceSnapshot::default()
+        .observe(
+            mag_render_adapter_scene::shared_scene_sources::SourceDomain::Guest,
+            address,
+            bytes,
+        )
+        .unwrap()
+}
+fn attributes(semantics: &[u8], n: usize, seed: f32) -> OwnedPrimaryAttributes {
+    // One four-float bank per semantic, interleaved in the vertex.
+    let stride = 16 * semantics.len();
+    let mut format = vec![semantics.len() as u8, stride as u8, 0, 0, 0, 0, 0, 0];
+    for (i, &semantic) in semantics.iter().enumerate() {
+        format.extend([16 * i as u8, 2, 3, semantic, 16, 0, 0, 0]);
+    }
+    let mut source = Vec::new();
+    for v in 0..n {
+        for i in 0..semantics.len() {
+            source.extend(floats(&[seed + i as f32, 0.5 * v as f32, 1.0, 0.0]));
+        }
+    }
+    mag_render_adapter_scene::geometry_attributes::decode_primary_attributes(
+        &format,
+        &source,
+        0x1000,
+        n,
+        1 << 20,
+    )
+    .unwrap()
+}
+fn skinnable(n: usize) -> DepthImmutablePartition {
+    let mut palette = Vec::new();
+    for m in 0..2 {
+        for value in [
+            1.0f32, 0.0, 0.0, m as f32, 0.0, 1.0, 0.0, 0.5, 0.0, 0.0, 1.0, -0.25,
+        ] {
+            palette.extend(value.to_be_bytes());
+        }
+    }
+    let mut config = vec![0u8; 16];
+    config[0] = 0x83;
+    config[6] = 17;
+    config[12..16].copy_from_slice(&[255; 4]);
+    let influences: Vec<u8> = (0..n as u8)
+        .flat_map(|v| [255, v % 2, 0, 0, 0, 0, 0, 0])
+        .collect();
+    let mut record = [0u8; 544];
+    record[0x30 + 8 * 3..0x34 + 8 * 3].copy_from_slice(&60u32.to_be_bytes());
+    record[0x30 + 8 * 4..0x34 + 8 * 4].copy_from_slice(&36u32.to_be_bytes());
+    DepthImmutablePartition {
+        source_address: 0x1000,
+        record: Box::new(record),
+        positions: Ok(Arc::new(
+            (0..n)
+                .map(|i| [(i as f32).to_bits(), 0, 1f32.to_bits(), 1f32.to_bits()])
+                .collect(),
+        )),
+        indices: Ok(Arc::new((0..n as u16).collect())),
+        // Normals in the primary banks, tangents only in the secondary banks.
+        attributes: Some(Ok(attributes(&[2], n, 0.0))),
+        secondary_attributes: Some(Ok(attributes(&[3], n, 1.0))),
+        skinning: Some(Ok(DepthSkinningSource {
+            config: content(0x5000, &config),
+            palette_addresses: [0x6000, 0x603c],
+            segments: [
+                content(0x6000, &palette[..60]),
+                content(0x603c, &palette[60..]),
+            ],
+            influences: content(0x7000, &influences),
+        })),
+    }
+}
+
+#[test]
+fn group_seven_skins_through_the_shared_entry_point_only_when_admitted() {
+    let partitions = vec![skinnable(4)];
+    let mut transform = transform(0x100);
+    for (i, v) in [0f32, 0.0, 0.0, 1.0, 2.0, -1.0, 0.5, 1.0]
+        .into_iter()
+        .enumerate()
+    {
+        transform[4 * i..4 * i + 4].copy_from_slice(&v.to_be_bytes());
+    }
+    let material = vec![0u8; 96];
+    let pass = wind_pass(8, 2);
+    let source = CasterSource {
+        census_group: 7,
+        route: DepthItemRoute::Prepare,
+        mesh_group: Some(7),
+        geometry: Some(GeometrySource::SkinnedPartitions {
+            first: 0x2000,
+            count: 1,
+            palette_address: 0x6000,
+        }),
+        transform: Some(&transform),
+        partitions: Some(&partitions),
+        mbi: &NO_MBI,
+        material: Some(&material),
+    };
+    let plan = |source: CasterSource<'_>, pass: &[u8], admit: bool| {
+        plan_shadow_casters(
+            0,
+            MASK,
+            &[source],
+            pass,
+            &PipelineState::default(),
+            &LayoutAssumptions::default(),
+            &ShadowRunPolicy {
+                admit_group_seven: admit,
+                ..ShadowRunPolicy::default()
+            },
+        )
+    };
+    // Refused by default, as the behaviour crate leaves it open.
+    assert_eq!(
+        plan(source, &pass, false),
+        Err(ShadowRunRefusal::Behaviour(ShadowError::Unresolved(
+            ShadowQuestion::GroupSevenSkinning
+        )))
+    );
+    let admitted = plan(source, &pass, true).unwrap();
+    assert_eq!(
+        (admitted.draws.len(), admitted.skinned, admitted.deformed),
+        (1, 1, 0)
+    );
+    assert!(admitted.draws[0].skinned && !admitted.draws[0].undeformed);
+    // Exactly the shared entry point's positions for the same inputs.
+    let p = &partitions[0];
+    let bank = |a: &OwnedPrimaryAttributes, semantic| {
+        a.first_semantic(semantic).unwrap().unwrap().words.to_vec()
+    };
+    let normals = bank(p.attributes.as_ref().unwrap().as_ref().unwrap(), 2);
+    let tangents = bank(
+        p.secondary_attributes.as_ref().unwrap().as_ref().unwrap(),
+        3,
+    );
+    let s = p.skinning.as_ref().unwrap().as_ref().unwrap();
+    let expected = mag_render_adapter_scene::deformation::prepare_skinning(
+        mag_render_adapter_scene::deformation::SkinningInput {
+            positions: p.positions.as_ref().unwrap(),
+            normals: &normals,
+            tangents: &tangents,
+            segments: [s.segments[0].bytes(), s.segments[1].bytes()],
+            influences: s.influences.bytes(),
+            object_pose: core::array::from_fn(|i| {
+                u32::from_be_bytes(transform[4 * i..4 * i + 4].try_into().unwrap())
+            }),
+        },
+        DEFORMATION_BUDGET,
+    )
+    .unwrap();
+    assert_eq!(
+        *admitted.draws[0].partitions[0].positions,
+        expected.positions
+    );
+    assert_ne!(expected.positions, **p.positions.as_ref().unwrap());
+
+    // Admitted but unqualified casters refuse; none is drawn unskinned.
+    assert_eq!(
+        plan(source, &wind_pass(0x28, 1), true),
+        Err(ShadowRunRefusal::Skinning)
+    );
+    let mut instanced = transform;
+    instanced[0x6f] = 1;
+    assert_eq!(
+        plan(
+            CasterSource {
+                transform: Some(&instanced),
+                ..source
+            },
+            &pass,
+            true
+        ),
+        Err(ShadowRunRefusal::Skinning)
+    );
+    let mut bare = skinnable(4);
+    bare.skinning = None;
+    let bare = vec![bare];
+    assert_eq!(
+        plan(
+            CasterSource {
+                partitions: Some(&bare),
+                ..source
+            },
+            &pass,
+            true
+        ),
+        Err(ShadowRunRefusal::Skinning)
+    );
+    // Only group 7 is admitted; other skinned groups stay refused.
+    assert!(matches!(
+        plan(
+            CasterSource {
+                census_group: 5,
+                mesh_group: Some(5),
+                ..source
+            },
+            &pass,
+            true
+        ),
+        Err(ShadowRunRefusal::Behaviour(ShadowError::ItemRefused(_)))
+    ));
+}
+
+#[test]
+fn a_group_three_record_with_palette_controls_is_not_deformed() {
+    let clean = vec![deformable(4)];
+    let mut partition = deformable(4);
+    partition.record[0x30 + 8 * 3 + 3] = 48;
+    let partitions = vec![partition];
+    let transform = transform(0x100);
+    let material = vec![0u8; 96];
+    let source = CasterSource {
+        census_group: 3,
+        route: DepthItemRoute::Prepare,
+        mesh_group: Some(3),
+        geometry: Some(GeometrySource::StaticPartitions {
+            first: 0x2000,
+            count: 1,
+        }),
+        transform: Some(&transform),
+        partitions: Some(&partitions),
+        mbi: &NO_MBI,
+        material: Some(&material),
+    };
+    assert_eq!(
+        plan_shadow_casters(
+            0,
+            MASK,
+            &[source],
+            &wind_pass(8, 2),
+            &PipelineState::default(),
+            &LayoutAssumptions::default(),
+            &ShadowRunPolicy::default()
+        ),
+        Err(ShadowRunRefusal::Deformation)
+    );
+    // The same caster without the palette controls deforms.
+    let plan = plan_shadow_casters(
+        0,
+        MASK,
+        &[CasterSource {
+            partitions: Some(&clean),
+            ..source
+        }],
+        &wind_pass(8, 2),
+        &PipelineState::default(),
+        &LayoutAssumptions::default(),
+        &ShadowRunPolicy::default(),
+    )
+    .unwrap();
+    assert_eq!(plan.deformed, 1);
 }
