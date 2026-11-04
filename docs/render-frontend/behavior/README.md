@@ -32,6 +32,15 @@ documentation or captures.
 | [noninstanced-deformation.md](noninstanced-deformation.md) | Group-3 wind and group-4 ripple | Group 4 complete; group 3 awaits constants ruling |
 | [group-zero-deformation.md](group-zero-deformation.md) | Group-0 instance expansion and wind | Awaits constants ruling |
 
+### Planning and setup
+
+| Specification | Behaviour | Status |
+| --- | --- | --- |
+| [texture-unit-controls.md](texture-unit-controls.md) | Texture unit decoding and native sampler translation | Complete |
+| [material-setup.md](material-setup.md) | Setup command banks and register knowledge | Complete |
+| [main-group-transitions.md](main-group-transitions.md) | Fixed-function state across mesh groups | Complete |
+| [scene-plan.md](scene-plan.md) | Main scene planning | Complete for the planner; depends on unpublished specs |
+
 Each document's "Open questions" section lists what is still undecided. A *Partial* status means
 some behaviour depends on evidence or a ruling that is not yet available; the document says which.
 
