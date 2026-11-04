@@ -38,7 +38,9 @@ memory layout, register use or call order.
 The workspace, pin overlay, `MAG_EXTENSIONS`, `--receipt-extra`, lift hook modules and runtime
 callbacks (BUILDING.md, "Extending a build") must stay inert by default: with none of them set, the
 build, its outputs and its receipts are unchanged. Keep them generic. They name no particular
-extension, and code that uses them lives outside this repository.
+extension. Code that uses them lives outside this repository, except in-repository code that is
+off by default (such as the opt-in render adapter), which may register through them; with it
+disabled, the extension points stay unused and inert.
 
 ## Testing
 
