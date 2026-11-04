@@ -939,6 +939,13 @@ static int submit_scene_owned(frontend_vk *c, const mag_native_scene *scene, mag
         status = MAG_NATIVE_DEVICE_FAILED;
         goto fail;
     }
+    /* Marked timed only once the queue accepted it (below). */
+    slot->timed = 0;
+    const int timed = c->timing_enabled && slot->timestamps;
+    if (timed) {
+        c->vkCmdResetQueryPool(slot->command, slot->timestamps, 0, 2);
+        c->vkCmdWriteTimestamp(slot->command, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, slot->timestamps, 0);
+    }
     VkMemoryBarrier host = {.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
                             .srcAccessMask = VK_ACCESS_HOST_WRITE_BIT,
                             .dstAccessMask = VK_ACCESS_UNIFORM_READ_BIT | VK_ACCESS_SHADER_READ_BIT |
@@ -1070,6 +1077,8 @@ static int submit_scene_owned(frontend_vk *c, const mag_native_scene *scene, mag
     /* A resident image's next use starts from the layout this one leaves. */
     for(uint32_t i=0;i<slot->scene_image_count;++i)if(slot->scene_images[i].resident_hit)
         slot->scene_images[i].resident->layout=slot->scene_images[i].layout;
+    if (timed)
+        c->vkCmdWriteTimestamp(slot->command, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, slot->timestamps, 1);
     if (c->vkEndCommandBuffer(slot->command) != VK_SUCCESS) {
         status = MAG_NATIVE_DEVICE_FAILED;
         goto fail;
@@ -1114,6 +1123,7 @@ static int submit_scene_owned(frontend_vk *c, const mag_native_scene *scene, mag
         c->failed = 1;
         return MAG_NATIVE_INDETERMINATE;
     }
+    slot->timed = timed;
     /* Accepted by the queue: the images it uploads may now be reused. */
     for (uint32_t i = 0; i < slot->scene_image_count; ++i)
         if (slot->scene_images[i].resident_candidate) {

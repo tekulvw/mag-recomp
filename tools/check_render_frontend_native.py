@@ -12,6 +12,7 @@ import os
 import struct
 from pathlib import Path
 import platform
+import re
 import subprocess
 import sys
 
@@ -129,11 +130,11 @@ def check(args):
     run(configure)
     run(["cmake", "--build", args.build_dir, "--parallel", "4"])
     executable = args.build_dir / "native_regression"
-    def execute(mode):
+    def execute(mode, extra=None):
         arguments = {"owner": ["--owner-contract"], "compute": [args.shader_root / "copy_transform"],
                      "draw": ["--draw", args.shader_root], "draw-no-readback": ["--draw-no-readback", args.shader_root]}[mode]
         if args.backend == "vulkan": arguments = [mode, str(args.vendor_id), str(args.device_id)]
-        result = run([executable, *arguments], timeout=20, env=environment)
+        result = run([executable, *arguments], timeout=20, env=dict(environment, **(extra or {})))
         if any(marker in result.stdout + result.stderr for marker in ("VUID-", "SYNC-HAZARD", "THREADING ERROR")): raise RuntimeError("Vulkan validation rejected native execution:\n" + result.stdout + result.stderr)
         return result
     owner, native = execute("owner"), execute("compute")
@@ -142,7 +143,11 @@ def check(args):
                     retained_before_terminal=352, retained_after_terminal=0, upload_bytes=624)
     if any(receipt.get(key) != value for key, value in expected.items()):
         raise RuntimeError(f"invalid extracted native receipt: {receipt}")
-    draw, without_copy = execute("draw"), execute("draw-no-readback")
+    # Vulkan: the draw run also times its scene submissions on the GPU.
+    timing = {"MAG_RENDER_NATIVE_GPU_TIMING": "1"} if args.backend == "vulkan" else None
+    draw, without_copy = execute("draw", timing), execute("draw-no-readback")
+    if timing and not re.search(r"\[mag native gpu timing\] .*available=1 .*gpu_ms=[0-9.]+ backend=vulkan", draw.stderr):
+        raise RuntimeError("Vulkan GPU timing printed no available measurement:\n" + draw.stderr)
     draw_receipt, no_copy_receipt = json.loads(draw.stdout), json.loads(without_copy.stdout)
     for result, diagnostic in ((draw_receipt, True), (no_copy_receipt, False)):
         expected_draw = dict(status=0, submitted=2, completed=2, pending=0,
