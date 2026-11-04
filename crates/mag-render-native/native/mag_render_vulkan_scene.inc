@@ -456,6 +456,9 @@ static int scene_graphics_create_layout(void *opaque, const mag_native_scene_gra
         p->explicit_raster=1;p->raster=*state;
         const VkCullModeFlags culls[]={VK_CULL_MODE_NONE,VK_CULL_MODE_FRONT_BIT,VK_CULL_MODE_BACK_BIT};
         raster.cullMode=culls[state->cull_mode];raster.frontFace=state->front_face?VK_FRONT_FACE_CLOCKWISE:VK_FRONT_FACE_COUNTER_CLOCKWISE;
+        raster.depthBiasEnable=state->bias_enabled?VK_TRUE:VK_FALSE;
+        raster.depthBiasConstantFactor=state->bias_enabled?state->bias_constant:0.f;
+        raster.depthBiasSlopeFactor=state->bias_enabled?state->bias_slope:0.f;
         depth_state.depthTestEnable=state->depth_enabled&&desc->depth_format;
         depth_state.depthWriteEnable=state->depth_enabled&&desc->depth_format&&state->depth_write;
         const VkCompareOp compares[]={VK_COMPARE_OP_NEVER,VK_COMPARE_OP_LESS,VK_COMPARE_OP_EQUAL,VK_COMPARE_OP_LESS_OR_EQUAL,

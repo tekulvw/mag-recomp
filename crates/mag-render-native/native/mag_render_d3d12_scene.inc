@@ -26,6 +26,10 @@ static int scene_graphics_layout(Context *c,
      ((raster->front_stencil.reference&255u)!=(raster->back_stencil.reference&255u)||
       (raster->front_stencil.read_mask&255u)!=(raster->back_stencil.read_mask&255u)||
       (raster->front_stencil.write_mask&255u)!=(raster->back_stencil.write_mask&255u)))return MAG_NATIVE_UNSUPPORTED;
+  /* D3D12's constant depth bias is an integer count of the minimum resolvable
+   * depth difference; a fractional or out-of-range constant has no exact form. */
+  if(raster&&raster->bias_enabled&&(!(raster->bias_constant>=-16777216.f&&raster->bias_constant<=16777216.f)||
+     raster->bias_constant!=(float)(int32_t)raster->bias_constant))return MAG_NATIVE_UNSUPPORTED;
   try {
     auto p = std::make_shared<Pipeline>();
     p->graphics = true;
@@ -222,6 +226,11 @@ static int scene_graphics_layout(Context *c,
       const D3D12_CULL_MODE culls[]={D3D12_CULL_MODE_NONE,D3D12_CULL_MODE_FRONT,D3D12_CULL_MODE_BACK};
       gpu.RasterizerState.CullMode=culls[raster->cull_mode];
       gpu.RasterizerState.FrontCounterClockwise=raster->front_face==MAG_NATIVE_FRONT_CCW;
+      if(raster->bias_enabled){
+        gpu.RasterizerState.DepthBias=(INT)raster->bias_constant;
+        gpu.RasterizerState.SlopeScaledDepthBias=raster->bias_slope;
+        gpu.RasterizerState.DepthBiasClamp=0.f;
+      }
       const D3D12_COMPARISON_FUNC full_compares[]={D3D12_COMPARISON_FUNC_NEVER,D3D12_COMPARISON_FUNC_LESS,D3D12_COMPARISON_FUNC_EQUAL,D3D12_COMPARISON_FUNC_LESS_EQUAL,
         D3D12_COMPARISON_FUNC_GREATER,D3D12_COMPARISON_FUNC_NOT_EQUAL,D3D12_COMPARISON_FUNC_GREATER_EQUAL,D3D12_COMPARISON_FUNC_ALWAYS};
       gpu.DepthStencilState.DepthEnable=raster->depth_enabled&&desc->depth_format;
