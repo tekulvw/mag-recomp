@@ -30,6 +30,18 @@ Current contents:
   and RSX sampler state, all over explicitly known prior state;
 - `mesh_sources`, `partition_inputs`, `material_capture`: owned mesh and
   partition headers and the packed-input read sets planned from them.
+- `cohort`, `main_flow`: owned retained-visibility records and the per-item
+  Main route chosen from the material group and pass control;
+- `geometry_bindings`: source-qualified vertex bindings, custom and built-in
+  output layouts and auxiliary/optional vertex arrays;
+- `source`, `views`, `shadow_owner`, `configuration`, `shadow_call`: the
+  Shadow corner helper inputs, its view-corner geometry, the owner's cascade
+  fits, and the configuration lifetime and helper-call publication protocols;
+- `ffi`: pointer-free C entry points for the configuration and Shadow call
+  protocols (`mag_render_adapter_config_event`,
+  `mag_render_adapter_config_snapshot`, `mag_render_adapter_shadow_call`).
+  Each returns its "not ready" result and records nothing while the master
+  switch is off.
 
 With the `owned-scene` feature (which needs the pinned native compiler
 libraries of `mag-render-programs`):
@@ -39,6 +51,6 @@ libraries of `mag-render-programs`):
   frontend packet records.
 
 Fragment builtin requests are not published yet. Nothing in this crate runs
-unless a host calls it. The C exports are
-`mag_render_adapter_enabled`, `mag_render_adapter_enable` and
-`mag_original_work_sha256_file`.
+unless a host calls it. The C exports are `mag_render_adapter_enabled`,
+`mag_render_adapter_enable`, `mag_original_work_sha256_file` and the `ffi`
+entry points above.

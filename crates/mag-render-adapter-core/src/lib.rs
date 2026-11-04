@@ -13,9 +13,15 @@
 
 #[allow(unsafe_code)] // Lifetime erasure of scoped jobs; join waits for every job.
 pub mod capture_pool;
+pub mod cohort;
+pub mod configuration;
 pub mod error;
 pub mod fast_hash;
+#[allow(unsafe_code)] // Fixed-size, pointer-free C exports; no unsafe memory operations.
+pub mod ffi;
+pub mod geometry_bindings;
 pub mod guest_memory;
+pub mod main_flow;
 pub mod material_capture;
 pub mod material_constants;
 pub mod material_float;
@@ -29,6 +35,10 @@ pub mod original_hash_ffi;
 pub mod partition_inputs;
 #[allow(unsafe_code)] // Unmangled C exports of the switch only.
 pub mod runtime;
+pub mod shadow_call;
+pub mod shadow_owner;
+pub mod source;
+pub mod views;
 
 #[cfg(feature = "owned-scene")]
 pub mod scene_programs;
