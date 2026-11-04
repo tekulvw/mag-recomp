@@ -29,6 +29,8 @@ pub mod cohort_resources;
 pub mod decoded_geometry_cache;
 pub mod deformation;
 pub mod depth_materials;
+#[allow(unsafe_code)] // Synchronous qualified source copy; no retained guest pointer.
+pub mod depth_source_ffi;
 pub mod depth_sources;
 pub mod geometry_attributes;
 pub mod geometry_streams;

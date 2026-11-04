@@ -45,6 +45,9 @@ Current contents:
   inputs and auxiliary records, and its group-twelve compact texture inputs;
 - `client_scene`: a position-only client scene prepared from the captured
   geometry, with every omission kept explicit;
+- `depth_source_ffi`: the C entry point that copies one depth pre-pass's
+  sources (`mag_render_adapter_depth_sources`). It returns its refused result
+  and records nothing while the master switch is off;
 - `capture_view`: optional copy-free comparison of guest spans through
   read-only views the host registers
   (`PS3_RENDER_CAPTURE_VIEW_VALIDATION=1`, default off).
@@ -52,7 +55,9 @@ Current contents:
 The core modules these build on are re-exported under their own names, so the
 whole adapter is addressable from this crate. Nothing here runs unless a host
 calls it; per-frame host entry points check the core crate's default-off
-master switch.
+master switch. The C exports are `mag_render_adapter_depth_sources` and the
+one-time view registrations `mag_render_adapter_set_located_view` and
+`mag_render_adapter_set_guest_view`.
 
 ```sh
 cargo fmt --manifest-path crates/mag-render-adapter-scene/Cargo.toml --check
