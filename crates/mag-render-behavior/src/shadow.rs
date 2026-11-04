@@ -2,57 +2,62 @@
 //!
 //! The specification is partial. This module implements:
 //!
-//! - the two cascade runs and caster selection by the run's enabled-group mask;
+//! - the two cascade runs, their cohort camera slots and semaphore offsets, and caster selection
+//!   by the run's enabled-group mask;
 //! - the cascade views: plane corners, axial centres, the bounding-sphere fit and the refresh
 //!   rule;
 //! - the routing of a caster onto Main's geometry preparation;
-//! - the fixed-function state the run builds, as a set of methods whose values are unknown;
-//! - the native-replacement contract (the Depth-style terminal obligations and completion
-//!   ordering), as a decision that keeps the original job.
+//! - the pass state the run writes (depth-only, less-or-equal with writes, no blend, alpha test or
+//!   colour), the native draw state, the vertex arrays and the per-draw constant rows;
+//! - the shared 2048×1024 shadow surface and its two halves;
+//! - the native-replacement contract: the obligations, the ring-generation release rule, the
+//!   side-slot continuation, the writer publication and the completion ordering, behind a
+//!   decision that keeps the original job.
 //!
-//! Every open question of the specification stays an explicit [`ShadowQuestion`] refusal: the
-//! state values, the light view, the map layout, the colour target, the constant rows, the
-//! terminal segment, the technique outcome, the cohort camera, groups outside the mask and the
-//! group-7 skinning admission. Nothing here is wired into the frontend; [`ShadowSwitch`] is off
-//! by default and, while any blocking question is open, [`ownership`] always keeps the original
-//! job.
+//! Every question the specification still lists as open stays an explicit [`ShadowQuestion`]
+//! refusal: the depth bias, the light view, the cascade-half assignment with viewport, scissor
+//! and stencil clear, row 42, the per-item child work, groups outside the mask, group-7 skinning,
+//! the unit-1 import identity and the shadow-resolve draws. The exact command words of a segment
+//! belong to the shared native ring writer and are not re-encoded here. Nothing here is wired into
+//! the frontend; [`ShadowSwitch`] is off by default and, while any blocking question is open,
+//! [`ownership`] always keeps the original job.
 
 use crate::material_sources::GeometrySource;
-use crate::setup::PipelineState;
+use crate::setup::{Comparison, PipelineState};
+use crate::vertex_inputs::VertexBinding;
 
-/// The open questions of `shadow-pass.md`, by number.
+/// The questions `shadow-pass.md` still lists as open, by number. Former questions 4, 6 and 8
+/// are settled.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ShadowQuestion {
-    /// 1: the values of the state the run builds, and whether they vary per run, group or
-    /// material.
-    StateValues = 1,
-    /// 2: how a cascade sphere becomes an orthographic light view.
+    /// 1: whether a depth bias is in effect at run start, and its factor and units.
+    DepthBias = 1,
+    /// 2: how a cascade sphere becomes the light view that rows 3–6 carry.
     LightView = 2,
-    /// 3: the shadow map layout, size, format, viewport and scissor.
-    MapLayout = 3,
-    /// 4: whether a colour target is bound and read.
-    ColourTarget = 4,
-    /// 5: which vertex constant rows the one-, two- and eight-row uploads write.
-    ConstantRows = 5,
-    /// 6: the exact terminal command-ring segment of a run.
-    TerminalSegment = 6,
-    /// 7: which technique the shadow pass object selects, and discarding casters.
-    TechniqueSelection = 7,
-    /// 8: the cohort camera index of each run's caster list, and disjointness.
-    FamiliesAndCameras = 8,
+    /// 3: which surface half belongs to which cascade, each run's viewport and scissor, and the
+    /// stencil clear value.
+    CascadeHalves = 3,
+    /// 5: what vertex constant row 42 holds.
+    RowFortyTwo = 5,
+    /// 7: the per-item child work: technique selection, programs and per-material state.
+    ChildWork = 7,
     /// 9: whether any setting enables groups outside `0xFE`.
     GroupsOutsideMask = 9,
     /// 10: the group-7 skinning admission conditions.
     GroupSevenSkinning = 10,
+    /// 11: whether `PARAMS+0x1520` names exactly the depth target the runs render into.
+    UnitOneImport = 11,
+    /// 12: how the shadow-resolve draws split by cascade.
+    ShadowResolveDraws = 12,
 }
 
 /// The questions that block native ownership of a run's output.
 pub const OWNERSHIP_BLOCKERS: [ShadowQuestion; 5] = [
-    ShadowQuestion::StateValues,
     ShadowQuestion::LightView,
-    ShadowQuestion::MapLayout,
-    ShadowQuestion::ConstantRows,
-    ShadowQuestion::TerminalSegment,
+    ShadowQuestion::CascadeHalves,
+    ShadowQuestion::RowFortyTwo,
+    ShadowQuestion::ChildWork,
+    ShadowQuestion::UnitOneImport,
 ];
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -64,6 +69,8 @@ pub enum ShadowError {
     CascadeDeclined(&'static str),
     /// An item a shared specification refuses.
     ItemRefused(&'static str),
+    /// Encoded by the shared native ring writer, not by this module.
+    RingWriter,
 }
 
 // --- Runs and caster selection -----------------------------------------------------------------
@@ -151,9 +158,24 @@ pub fn caster_items(mask: u16, groups: &[u32]) -> Result<Vec<usize>, ShadowError
         .collect())
 }
 
-/// The cohort camera index of a run's caster list: open question 8.
-pub fn run_camera(_run: &CascadeRun) -> Result<usize, ShadowError> {
-    Err(ShadowError::Unresolved(ShadowQuestion::FamiliesAndCameras))
+/// The cohort camera slot of a run's caster list: slot 1 for cascade 0 and slot 2 for cascade 1
+/// (Main uses slot 3). The two lists are not disjoint: an item may be drawn by both runs.
+pub fn run_camera(run: &CascadeRun) -> usize {
+    run.cascade as usize + 1
+}
+
+/// The progress semaphore offsets that identify the runs: `0x490` for cascade 0 and `0x4A0` for
+/// cascade 1.
+pub const SEMAPHORE_OFFSETS: [u32; 2] = [0x490, 0x4a0];
+/// The Depth job's progress semaphore offset, for comparison.
+pub const DEPTH_SEMAPHORE_OFFSET: u32 = 0x4b0;
+
+/// The run a progress semaphore offset identifies.
+pub fn run_for_semaphore(offset: u32) -> Option<CascadeRun> {
+    SEMAPHORE_OFFSETS
+        .iter()
+        .position(|o| *o == offset)
+        .map(|cascade| RUNS[cascade])
 }
 
 // --- Cascade views -----------------------------------------------------------------------------
@@ -343,14 +365,70 @@ pub const MAP_DESCRIPTOR: u32 = 0x1520;
 /// The shadow texture transforms of cascades 0 and 1, at `PARAMS + 0xD0` and `PARAMS + 0xB50`.
 pub const CASCADE_TRANSFORMS: [u32; 2] = [0xd0, 0xb50];
 
-/// Where cascade `k` is written in the shadow map: open question 3.
-pub fn cascade_region(_cascade: usize) -> Result<[u32; 4], ShadowError> {
-    Err(ShadowError::Unresolved(ShadowQuestion::MapLayout))
+/// The shared depth surface both cascade runs render into.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ShadowSurface {
+    pub width: u32,
+    pub height: u32,
+    /// Z24S8.
+    pub depth_stencil: bool,
+    pub tiled: bool,
+    /// Depth clear value, once per frame in the clear group at the start of the frame.
+    pub depth_clear: f32,
 }
 
-/// Whether a colour target is bound during the runs: open question 4.
-pub fn colour_target() -> Result<bool, ShadowError> {
-    Err(ShadowError::Unresolved(ShadowQuestion::ColourTarget))
+pub const SHADOW_SURFACE: ShadowSurface = ShadowSurface {
+    width: 2048,
+    height: 1024,
+    depth_stencil: true,
+    tiled: true,
+    depth_clear: 1.0,
+};
+
+/// The two 1024×1024 halves `(x, y, width, height)`: x 0–1023 and x 1024–2047. Which cascade
+/// uses which is open question 3, see [`cascade_region`].
+pub const SURFACE_HALVES: [[u32; 4]; 2] = [[0, 0, 1024, 1024], [1024, 0, 1024, 1024]];
+
+/// The viewport depth transform: z scale 0.5 and z offset 0.5 (clip −1…1 to window 0…1).
+pub const DEPTH_TRANSFORM: (f32, f32) = (0.5, 0.5);
+
+/// The half cascade `k` renders into: open question 3.
+pub fn cascade_region(_cascade: usize) -> Result<[u32; 4], ShadowError> {
+    Err(ShadowError::Unresolved(ShadowQuestion::CascadeHalves))
+}
+
+/// A run's viewport and scissor: open question 3.
+pub fn run_viewport(_cascade: usize) -> Result<[u32; 4], ShadowError> {
+    Err(ShadowError::Unresolved(ShadowQuestion::CascadeHalves))
+}
+
+/// The stencil clear value: open question 3.
+pub fn stencil_clear() -> Result<u32, ShadowError> {
+    Err(ShadowError::Unresolved(ShadowQuestion::CascadeHalves))
+}
+
+/// The colour target bound during the pass aliases the depth surface's memory and is nominally
+/// A8R8G8B8, but colour mask 0 means it is never written.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ColourTarget {
+    pub aliases_depth: bool,
+    pub written: bool,
+}
+
+pub const COLOUR_TARGET: ColourTarget = ColourTarget {
+    aliases_depth: true,
+    written: false,
+};
+
+/// Whether a native pass may replace the image Main's lighting unit 1 imports: not until open
+/// question 11 shows that `PARAMS+0x1520` names exactly the surface the runs render into.
+pub fn replace_unit_one_image() -> Result<(), ShadowError> {
+    Err(ShadowError::Unresolved(ShadowQuestion::UnitOneImport))
+}
+
+/// Which cascade each shadow-resolve draw resolves: open question 12.
+pub fn resolve_draw_cascades() -> Result<Vec<usize>, ShadowError> {
+    Err(ShadowError::Unresolved(ShadowQuestion::ShadowResolveDraws))
 }
 
 // --- Fixed-function state ----------------------------------------------------------------------
@@ -393,53 +471,119 @@ pub mod methods {
     pub const DEPTH_ONLY_REPORTS: [u32; 2] = [0x17c8, 0x1800];
 }
 
-/// Every method of the run's own fixed-function state.
-pub fn run_state_methods() -> Vec<u32> {
+/// The pass state the run writes once, in the order the specification lists it. The colour and
+/// MRT masks are written all-on and then immediately off; the net effect is depth-only rendering.
+pub fn run_state_values() -> Vec<(u32, u32)> {
     use methods::*;
-    let mut all = vec![ALPHA_TEST, BLEND_ENABLE, COLOUR_MASK, STENCIL_ENABLE];
-    all.extend(FRONT_STENCIL);
-    all.extend(BACK_STENCIL);
-    all.extend([
-        MRT_COLOUR_MASK,
-        DEPTH_FUNCTION,
-        DEPTH_WRITE,
-        DEPTH_TEST,
-        OFFSET_FACTOR,
-        OFFSET_BIAS,
-        SHADER_PACKER,
-    ]);
+    vec![
+        (SHADER_PACKER, 0),
+        (DEPTH_TEST, 1),
+        (DEPTH_WRITE, 1),
+        (DEPTH_FUNCTION, 0x0203),
+        (BLEND_ENABLE, 0),
+        (ALPHA_TEST, 0),
+        (COLOUR_MASK, 0x0101_0101),
+        (COLOUR_MASK, 0),
+        (MRT_COLOUR_MASK, 0xfff0),
+        (MRT_COLOUR_MASK, 0),
+    ]
+}
+
+/// Every method the run writes for its pass state.
+pub fn run_state_methods() -> Vec<u32> {
+    let mut all: Vec<u32> = run_state_values().iter().map(|(m, _)| *m).collect();
+    all.dedup();
     all
 }
 
-/// The state after the run's own writes, as far as it is known: every field the run writes
-/// becomes unknown, because the values are open question 1. Fields the run does not write keep
-/// their inherited knowledge.
+/// Methods the job can emit but no recorded run used: stencil and polygon offset. A native pass
+/// does not write them.
+pub fn static_only_methods() -> Vec<u32> {
+    use methods::*;
+    let mut all = vec![STENCIL_ENABLE];
+    all.extend(FRONT_STENCIL);
+    all.extend(BACK_STENCIL);
+    all.extend([OFFSET_FACTOR, OFFSET_BIAS]);
+    all
+}
+
+/// The state after the run's own writes. Fields the run does not write (stencil, polygon offset,
+/// cull, the surface) keep their inherited knowledge.
 pub fn after_run_state(state: &PipelineState) -> PipelineState {
     PipelineState {
-        alpha_test: None,
-        blend_enable: None,
-        colour_masks: None,
-        stencil_enable: None,
-        front_stencil: None,
-        back_stencil: None,
-        depth_comparison: None,
-        depth_write: None,
-        depth_test: None,
-        offset_factor: None,
-        offset_units: None,
+        srgb_output: Some(false),
+        depth_test: Some(true),
+        depth_write: Some(true),
+        depth_comparison: Comparison::from_code(0x0203),
+        blend_enable: Some(false),
+        alpha_test: Some(false),
+        colour_masks: Some([0; 4]),
         ..*state
     }
 }
 
-/// The values of the run's fixed-function state: open question 1.
-pub fn run_state_values() -> Result<Vec<(u32, u32)>, ShadowError> {
-    Err(ShadowError::Unresolved(ShadowQuestion::StateValues))
+/// The state a native pass draws with: the run's writes, with the stencil test off as in the
+/// pass. Any depth bias stays the inherited state's (open question 1), so an unknown inherited
+/// bias leaves the draw state incomplete rather than guessed.
+pub fn native_pass_state(inherited: &PipelineState) -> PipelineState {
+    PipelineState {
+        stencil_enable: Some(false),
+        ..after_run_state(inherited)
+    }
 }
 
-/// The rows of the vertex constant uploads, including the eight-row light transform: open
-/// question 5 (and 2 for the transform's values).
-pub fn constant_rows() -> Result<[u32; 3], ShadowError> {
-    Err(ShadowError::Unresolved(ShadowQuestion::ConstantRows))
+/// Whether a depth bias is set at run start, and its factor and units: open question 1.
+pub fn depth_bias() -> Result<(u32, u32), ShadowError> {
+    Err(ShadowError::Unresolved(ShadowQuestion::DepthBias))
+}
+
+/// Vertex arrays 1–15 are disabled once per run with format `0x2` (float, size 0), and the
+/// frequency divider is cleared.
+pub const DISABLED_ARRAY_FORMAT: u32 = 0x2;
+
+/// The disabled arrays `(slot, format)`.
+pub fn disabled_arrays() -> Vec<(u32, u32)> {
+    (1..16).map(|slot| (slot, DISABLED_ARRAY_FORMAT)).collect()
+}
+
+/// Only vertex array 0, the positions, is enabled per draw.
+pub const ENABLED_ARRAYS: u16 = 0x0001;
+
+/// The position-only output binding of a caster: the first semantic-1 binding to slot 0. The
+/// partition's stream dictates its format and stride.
+pub fn position_binding(outputs: &[VertexBinding]) -> Result<VertexBinding, ShadowError> {
+    outputs
+        .iter()
+        .find(|b| b.semantic == 1 && b.slot == 0)
+        .copied()
+        .ok_or(ShadowError::ItemRefused("no position binding in slot 0"))
+}
+
+/// The vertex constant rows each draw writes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DrawConstantRows {
+    /// Rows 3–6: the draw's four transform rows. Their construction is open question 2.
+    pub transform: [u32; 4],
+    /// Row 24, when it changes: the binding row of `material-values.md`.
+    pub binding: u32,
+    /// Row 42, when it changes: opaque, open question 5.
+    pub opaque: u32,
+}
+
+pub const DRAW_CONSTANT_ROWS: DrawConstantRows = DrawConstantRows {
+    transform: [3, 4, 5, 6],
+    binding: 24,
+    opaque: 42,
+};
+
+/// The values of the transform rows 3–6: open question 2.
+pub fn transform_rows(_fit: &SphereFit) -> Result<[[u32; 4]; 4], ShadowError> {
+    Err(ShadowError::Unresolved(ShadowQuestion::LightView))
+}
+
+/// The value of row 42: open question 5.
+pub fn row_forty_two() -> Result<[u32; 4], ShadowError> {
+    Err(ShadowError::Unresolved(ShadowQuestion::RowFortyTwo))
 }
 
 // --- Caster preparation ------------------------------------------------------------------------
@@ -479,10 +623,11 @@ pub fn caster_preparation(
     }
 }
 
-/// The technique outcome for each group, including discarding casters: open question 7.
-/// Selection itself is `material_sources::item_sources` with the run's own pass object.
+/// The technique, programs and per-material state of a caster, which the per-item child jobs
+/// supply: open question 7. Selection inputs follow `material_sources::item_sources` with the
+/// run's own pass object.
 pub fn technique_outcome(_mesh_group: u16) -> Result<bool, ShadowError> {
-    Err(ShadowError::Unresolved(ShadowQuestion::TechniqueSelection))
+    Err(ShadowError::Unresolved(ShadowQuestion::ChildWork))
 }
 
 // --- Native-replacement contract ---------------------------------------------------------------
@@ -515,14 +660,107 @@ pub const OBLIGATIONS: [Obligation; 8] = [
     Obligation::TextureReadRelease,
 ];
 
-/// The exact segment an obligation writes. The segment words, final state, continuation and
-/// texture-read semaphore offset and value are open question 6.
+/// The exact command words of a segment. They are the shared native ring writer's; this module
+/// states the rules they follow ([`release_value`], [`Ring`], [`continuation_target`],
+/// [`writer_publication`]) but does not re-encode the words.
 pub fn obligation_words(
     _obligation: Obligation,
     _empty_run: bool,
 ) -> Result<Vec<u32>, ShadowError> {
-    Err(ShadowError::Unresolved(ShadowQuestion::TerminalSegment))
+    Err(ShadowError::RingWriter)
 }
+
+/// The largest command segment; each ends in a jump to the next.
+pub const SEGMENT_BYTES: u32 = 8 << 10;
+/// One segment descriptor per segment in the writer's descriptor table.
+pub const SEGMENT_DESCRIPTOR_BYTES: u32 = 32;
+/// The closing segment.
+pub const TERMINAL_SEGMENT_BYTES: u32 = 128;
+
+/// The elements of the closing segment, in order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TerminalElement {
+    NoOperation,
+    SemaphoreOffset,
+    TextureReadRelease,
+    JumpToContinuation,
+}
+
+pub const TERMINAL_SEGMENT: [TerminalElement; 4] = [
+    TerminalElement::NoOperation,
+    TerminalElement::SemaphoreOffset,
+    TerminalElement::TextureReadRelease,
+    TerminalElement::JumpToContinuation,
+];
+
+/// A texture-read semaphore release value: the ring offset of the word after the release in the
+/// low 30 bits, and the ring generation in force when it is written in bits 30–31.
+pub fn release_value(next_word_offset: u32, generation: u8) -> u32 {
+    (next_word_offset & 0x3fff_ffff) | (((generation & 3) as u32) << 30)
+}
+
+/// The ring generation: a 2-bit counter kept in the writer's epoch word, advanced modulo 4 each
+/// time the ring wraps back to its start.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Ring {
+    pub generation: u8,
+}
+
+impl Ring {
+    /// The generation read from the epoch word.
+    pub fn from_epoch(epoch: u32) -> Self {
+        Self {
+            generation: (epoch & 3) as u8,
+        }
+    }
+
+    /// The release value for a word at `next_word_offset` under the current generation.
+    pub fn release(&self, next_word_offset: u32) -> u32 {
+        release_value(next_word_offset, self.generation)
+    }
+
+    /// The ring wrapped back to its start.
+    pub fn wrap(&mut self) {
+        self.generation = (self.generation + 1) & 3;
+    }
+
+    /// The epoch word after the run. A run that did not wrap leaves it unchanged.
+    pub fn epoch(&self) -> u32 {
+        self.generation as u32
+    }
+}
+
+/// The closing jump of a Shadow run (side slots 1 and 2): the writer's address base plus the
+/// run's continuation offset, whether or not the run wrapped the ring. (Main's slot 0 jumps to
+/// the ring start only on a wrap.)
+pub fn continuation_target(address_base: u32, continuation_offset: u32) -> u32 {
+    address_base.wrapping_add(continuation_offset)
+}
+
+/// What the run publishes after each batch of segments.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WriterPublication {
+    /// The new ring write offset, to the put word.
+    pub put: u32,
+    /// The writer slot's word: `offset | 2`.
+    pub slot_word: u32,
+    /// The epoch word: the current ring generation.
+    pub epoch: u32,
+    /// The next-writer-state record: begin, end, current, `0xFFFFFFFF`.
+    pub next_state: [u32; 4],
+}
+
+pub fn writer_publication(offset: u32, ring: &Ring, begin: u32, end: u32) -> WriterPublication {
+    WriterPublication {
+        put: offset,
+        slot_word: offset | 2,
+        epoch: ring.epoch(),
+        next_state: [begin, end, offset, 0xffff_ffff],
+    }
+}
+
+/// A native run does not create the per-item child jobs: their work is part of the native draw.
+pub const CREATES_CHILD_JOBS: bool = false;
 
 /// The opt-in switch for a native Shadow pass. Off by default.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -631,10 +869,6 @@ mod tests {
                 Err(ShadowError::Unresolved(ShadowQuestion::GroupsOutsideMask))
             );
         }
-        assert_eq!(
-            run_camera(&RUNS[0]),
-            Err(ShadowError::Unresolved(ShadowQuestion::FamiliesAndCameras))
-        );
         assert!(caster_items(0xfe, &[3, 1]).is_err());
     }
 
@@ -778,44 +1012,183 @@ mod tests {
     }
 
     #[test]
-    fn run_state_methods_and_values() {
-        let all = run_state_methods();
-        assert_eq!(all.len(), 4 + 7 + 7 + 7);
-        let mut unique = all.clone();
-        unique.sort_unstable();
-        unique.dedup();
-        assert_eq!(unique.len(), all.len());
-        assert_eq!(
-            run_state_values(),
-            Err(ShadowError::Unresolved(ShadowQuestion::StateValues))
-        );
-        // After the run, the fields it writes are unknown; the others are inherited.
-        let state = PipelineState {
+    fn runs_cameras_and_semaphores() {
+        assert_eq!(run_camera(&RUNS[0]), 1);
+        assert_eq!(run_camera(&RUNS[1]), 2);
+        assert_eq!(run_for_semaphore(0x490), Some(RUNS[0]));
+        assert_eq!(run_for_semaphore(0x4a0), Some(RUNS[1]));
+        assert_eq!(run_for_semaphore(DEPTH_SEMAPHORE_OFFSET), None);
+    }
+
+    #[test]
+    fn run_state_values_and_native_state() {
+        let values = run_state_values();
+        assert_eq!(values.len(), 10);
+        assert_eq!(values[0], (methods::SHADER_PACKER, 0));
+        assert_eq!(values[3], (methods::DEPTH_FUNCTION, 0x203));
+        // The masks end off.
+        let last = |method: u32| values.iter().rev().find(|(m, _)| *m == method).unwrap().1;
+        assert_eq!(last(methods::COLOUR_MASK), 0);
+        assert_eq!(last(methods::MRT_COLOUR_MASK), 0);
+        assert_eq!(run_state_methods().len(), 8);
+        for method in static_only_methods() {
+            assert!(!run_state_methods().contains(&method));
+        }
+        // The run's writes are known afterwards; stencil, offset and cull stay inherited.
+        let inherited = PipelineState {
             alpha_test: Some(true),
-            depth_test: Some(true),
+            blend_enable: Some(true),
+            stencil_enable: Some(true),
             cull_enable: Some(false),
-            offset_factor: Some(1),
+            offset_factor: Some(7),
             polygon_offset_fill: Some(true),
             ..PipelineState::default()
         };
-        let after = after_run_state(&state);
-        assert_eq!(after.alpha_test, None);
-        assert_eq!(after.depth_test, None);
-        assert_eq!(after.offset_factor, None);
+        let after = after_run_state(&inherited);
+        assert_eq!(after.alpha_test, Some(false));
+        assert_eq!(after.blend_enable, Some(false));
+        assert_eq!(after.depth_test, Some(true));
+        assert_eq!(after.depth_write, Some(true));
+        assert_eq!(after.depth_comparison, Some(Comparison::LessOrEqual));
+        assert_eq!(after.colour_masks, Some([0; 4]));
+        assert_eq!(after.srgb_output, Some(false));
+        assert_eq!(after.stencil_enable, Some(true));
         assert_eq!(after.cull_enable, Some(false));
-        assert_eq!(after.polygon_offset_fill, Some(true));
+        assert_eq!(after.offset_factor, Some(7));
+        // The native pass draws with the stencil test off and the inherited bias.
+        let native = native_pass_state(&inherited);
+        assert_eq!(native.stencil_enable, Some(false));
         assert_eq!(
-            constant_rows(),
-            Err(ShadowError::Unresolved(ShadowQuestion::ConstantRows))
+            (native.offset_factor, native.polygon_offset_fill),
+            (Some(7), Some(true))
         );
         assert_eq!(
-            cascade_region(0),
-            Err(ShadowError::Unresolved(ShadowQuestion::MapLayout))
+            native_pass_state(&PipelineState::default()).offset_factor,
+            None
         );
         assert_eq!(
-            colour_target(),
-            Err(ShadowError::Unresolved(ShadowQuestion::ColourTarget))
+            depth_bias(),
+            Err(ShadowError::Unresolved(ShadowQuestion::DepthBias))
         );
+    }
+
+    #[test]
+    fn vertex_arrays_and_constant_rows() {
+        let disabled = disabled_arrays();
+        assert_eq!(disabled.len(), 15);
+        assert!(
+            disabled
+                .iter()
+                .all(|&(slot, format)| (1..16).contains(&slot) && format == 0x2)
+        );
+        assert_eq!(ENABLED_ARRAYS, 1);
+        let position = VertexBinding {
+            declaration: 0,
+            semantic: 1,
+            slot: 0,
+            format: 2,
+            components: 3,
+        };
+        let normal = VertexBinding {
+            semantic: 2,
+            slot: 2,
+            ..position
+        };
+        assert_eq!(position_binding(&[normal, position]), Ok(position));
+        assert!(position_binding(&[normal]).is_err());
+        assert_eq!(DRAW_CONSTANT_ROWS.transform, [3, 4, 5, 6]);
+        assert_eq!(
+            (DRAW_CONSTANT_ROWS.binding, DRAW_CONSTANT_ROWS.opaque),
+            (24, 42)
+        );
+        assert_eq!(
+            row_forty_two(),
+            Err(ShadowError::Unresolved(ShadowQuestion::RowFortyTwo))
+        );
+        assert_eq!(
+            transform_rows(&SphereFit {
+                centre_distance: 1.0,
+                radius: 1.0
+            }),
+            Err(ShadowError::Unresolved(ShadowQuestion::LightView))
+        );
+    }
+
+    #[test]
+    fn shared_surface_and_halves() {
+        assert_eq!((SHADOW_SURFACE.width, SHADOW_SURFACE.height), (2048, 1024));
+        assert_eq!(SHADOW_SURFACE.depth_clear, 1.0);
+        // The halves tile the surface without overlap.
+        assert_eq!(
+            SURFACE_HALVES[0][0] + SURFACE_HALVES[0][2],
+            SURFACE_HALVES[1][0]
+        );
+        assert_eq!(
+            SURFACE_HALVES[1][0] + SURFACE_HALVES[1][2],
+            SHADOW_SURFACE.width
+        );
+        assert!(SURFACE_HALVES.iter().all(|h| h[3] == SHADOW_SURFACE.height));
+        assert_eq!(DEPTH_TRANSFORM, (0.5, 0.5));
+        const { assert!(!COLOUR_TARGET.written) };
+        for result in [cascade_region(0), run_viewport(1)] {
+            assert_eq!(
+                result,
+                Err(ShadowError::Unresolved(ShadowQuestion::CascadeHalves))
+            );
+        }
+        assert_eq!(
+            stencil_clear(),
+            Err(ShadowError::Unresolved(ShadowQuestion::CascadeHalves))
+        );
+        assert_eq!(
+            replace_unit_one_image(),
+            Err(ShadowError::Unresolved(ShadowQuestion::UnitOneImport))
+        );
+        assert_eq!(
+            resolve_draw_cascades(),
+            Err(ShadowError::Unresolved(ShadowQuestion::ShadowResolveDraws))
+        );
+    }
+
+    #[test]
+    fn v7_ring_generation() {
+        // Generation 0b10, no wrap: every release carries 0b10 and the epoch is unchanged.
+        let ring = Ring::from_epoch(0b10);
+        assert!(
+            [0x40u32, 0x2000, 0x3fff_fff0]
+                .iter()
+                .all(|&o| ring.release(o) >> 30 == 0b10)
+        );
+        assert_eq!(ring.epoch(), 0b10);
+        // Generation 0b11 and one wrap: 0b11 before, 0b00 after, epoch 0b00.
+        let mut ring = Ring::from_epoch(0b11);
+        let before = ring.release(0x7f00);
+        ring.wrap();
+        let after = ring.release(0x40);
+        assert_eq!((before >> 30, after >> 30), (0b11, 0b00));
+        assert_eq!(ring.epoch(), 0b00);
+        assert_eq!(release_value(0x001230, 0b11), 0xc000_1230);
+        // The offset keeps only its low 30 bits.
+        assert_eq!(release_value(0xffff_ffff, 0), 0x3fff_ffff);
+    }
+
+    #[test]
+    fn continuation_and_publication() {
+        // Side slots always return through the continuation, wrapped or not.
+        assert_eq!(continuation_target(0x1000_0000, 0x3400), 0x1000_3400);
+        let ring = Ring::from_epoch(1);
+        let publication = writer_publication(0x2340, &ring, 0x100, 0x8000);
+        assert_eq!(publication.put, 0x2340);
+        assert_eq!(publication.slot_word, 0x2342);
+        assert_eq!(publication.epoch, 1);
+        assert_eq!(publication.next_state, [0x100, 0x8000, 0x2340, 0xffff_ffff]);
+        assert_eq!(TERMINAL_SEGMENT_BYTES, 128);
+        assert_eq!(
+            TERMINAL_SEGMENT.last(),
+            Some(&TerminalElement::JumpToContinuation)
+        );
+        assert_eq!(SEGMENT_BYTES, 8192);
+        const { assert!(!CREATES_CHILD_JOBS) };
     }
 
     #[test]
@@ -857,7 +1230,7 @@ mod tests {
         }
         assert_eq!(
             technique_outcome(3),
-            Err(ShadowError::Unresolved(ShadowQuestion::TechniqueSelection))
+            Err(ShadowError::Unresolved(ShadowQuestion::ChildWork))
         );
     }
 
@@ -885,7 +1258,7 @@ mod tests {
             for empty in [false, true] {
                 assert_eq!(
                     obligation_words(obligation, empty),
-                    Err(ShadowError::Unresolved(ShadowQuestion::TerminalSegment))
+                    Err(ShadowError::RingWriter)
                 );
             }
         }
