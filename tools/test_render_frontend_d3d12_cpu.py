@@ -94,7 +94,7 @@ def check(args):
         sources.add(FIXTURES / "test_vulkan_import_cpu.inc")
         sources.update(NATIVE / name for name in ("mag_render_vulkan.c", "mag_render_vulkan_scene.inc",
             "mag_render_vulkan_sampler.inc", "mag_render_vulkan_batch.inc", "mag_render_vulkan.h", "mag_render_native_internal.h",
-            "mag_render_vulkan_import.inc", "mag_render_vulkan_image.h", "mag_render_vulkan_image_validate.h"))
+            "mag_render_vulkan_import.inc", "mag_render_vulkan_resident.inc", "mag_render_vulkan_image.h", "mag_render_vulkan_image_validate.h"))
     for name, inputs in fixtures:
         binary = args.output_dir / (name + (".exe" if windows else ""))
         c_only = all(path.suffix == ".c" for path in inputs)

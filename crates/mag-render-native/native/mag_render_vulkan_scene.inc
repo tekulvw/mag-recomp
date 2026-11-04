@@ -824,7 +824,20 @@ static int submit_scene_owned(frontend_vk *c, const mag_native_scene *scene, mag
             im->layout=VK_IMAGE_LAYOUT_GENERAL;im->aspect=borrowed->metadata.aspect;
             im->mip_count=im->layers=1;im->borrowed=borrowed;++borrowed->references;
             status=scene_image_views(c,desc,&shape,im);
-        }else status=scene_image_create(c,desc,&shape,scene_image_usage(scene,i),im);
+        }else{
+            frontend_vk_resident *hit=NULL;
+            const int candidate=c->resident_enabled&&desc->upload.id&&!resident_attached(scene,i);
+            if(candidate)hit=resident_find(c,desc,&shape);
+            if(hit){
+                /* Its contents are this upload: no allocation, no copy. */
+                im->image=hit->image;im->resident=hit;im->resident_hit=1;im->layout=hit->layout;
+                im->aspect=hit->aspect;im->mip_count=hit->mip_count;im->layers=hit->layers;
+                status=scene_image_views(c,desc,&shape,im);
+            }else{
+                status=scene_image_create(c,desc,&shape,scene_image_usage(scene,i),im);
+                im->resident_candidate=(uint8_t)candidate;
+            }
+        }
         if(status)goto fail;
     }
     status=scene_views_create(c,slot,scene,v3);if(status)goto fail;
@@ -937,7 +950,7 @@ static int submit_scene_owned(frontend_vk *c, const mag_native_scene *scene, mag
                                 VK_PIPELINE_STAGE_VERTEX_INPUT_BIT,
                             0, 1, &host, 0, NULL, 0, NULL);
     for (uint32_t i = 0; i < scene->image_count; ++i)
-        if (scene->images[i].upload.id) {
+        if (scene->images[i].upload.id && !slot->scene_images[i].resident_hit) {
             const mag_native_scene_image *im = &scene->images[i];
             scene_image_transition(c, slot, i, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                                    VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
@@ -1054,6 +1067,9 @@ static int submit_scene_owned(frontend_vk *c, const mag_native_scene *scene, mag
     for(uint32_t i=0;i<slot->scene_image_count;++i)if(slot->scene_images[i].borrowed)
         scene_image_transition(c,slot,i,VK_IMAGE_LAYOUT_GENERAL,
             VK_ACCESS_MEMORY_READ_BIT|VK_ACCESS_MEMORY_WRITE_BIT,VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+    /* A resident image's next use starts from the layout this one leaves. */
+    for(uint32_t i=0;i<slot->scene_image_count;++i)if(slot->scene_images[i].resident_hit)
+        slot->scene_images[i].resident->layout=slot->scene_images[i].layout;
     if (c->vkEndCommandBuffer(slot->command) != VK_SUCCESS) {
         status = MAG_NATIVE_DEVICE_FAILED;
         goto fail;
@@ -1098,6 +1114,18 @@ static int submit_scene_owned(frontend_vk *c, const mag_native_scene *scene, mag
         c->failed = 1;
         return MAG_NATIVE_INDETERMINATE;
     }
+    /* Accepted by the queue: the images it uploads may now be reused. */
+    for (uint32_t i = 0; i < slot->scene_image_count; ++i)
+        if (slot->scene_images[i].resident_candidate) {
+            slot->scene_images[i].resident_candidate = 0;
+            mag_native_scene_image_layout shape = scene_image_shape(v3, i);
+            resident_insert(c, &slot->scene_images[i], &scene->images[i], &shape);
+        }
+    if (c->resident_enabled && c->resident_report && (c->next_submission <= 4 || c->next_submission % 120 == 0))
+        fprintf(stderr, "[mag native resident images] submission=%llu hits=%llu identity_hits=%llu misses=%llu entries=%u bytes=%llu evictions=%llu backend=vulkan\n",
+                (unsigned long long)c->next_submission, (unsigned long long)c->resident_hits,
+                (unsigned long long)c->resident_identity_hits, (unsigned long long)c->resident_misses,
+                c->resident_entries, (unsigned long long)c->resident_bytes, (unsigned long long)c->resident_evictions);
     memory_report(c);
     return MAG_NATIVE_OK;
 fail:
