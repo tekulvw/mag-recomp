@@ -19,7 +19,7 @@ permissions:
 # The exact candidate SDK the frontend's SDK-facing checks use (the Windows CPU
 # interop step and the compat fixture syntax check). One place to change it.
 env:
-  MAG_RENDER_CANDIDATE_SDK: 0c1c978945e41593dbfb355c2a519f5dc955b1ca
+  MAG_RENDER_CANDIDATE_SDK: c782315806c45627b7dd52fa36e874d977223b53
 
 jobs:
   native:
@@ -214,7 +214,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends pkg-config libvulkan-dev
+          sudo apt-get install -y --no-install-recommends pkg-config libvulkan-dev libsdl2-dev
       - name: Pinned Rust toolchain
         run: rustup toolchain install 1.99.0 --profile minimal --component rustfmt --component clippy
       - name: Locked native crate dependencies
@@ -239,7 +239,7 @@ jobs:
       # cargo; syntax-check them against the candidate SDK so a broken fixture
       # cannot pass CI. No shaders, GPU or link.
       - name: Candidate SDK for compat fixture syntax
-        if: runner.os == 'macOS'
+        if: runner.os != 'Windows'
         uses: actions/checkout@v4
         with:
           repository: tekulvw/ps3recomp
@@ -249,6 +249,9 @@ jobs:
       - name: Compat fixture syntax (Metal)
         if: runner.os == 'macOS'
         run: python tools/check_render_frontend_native.py --backend metal --compile-only --sdk-source build/compat-sdk-source
+      - name: Compat fixture syntax (Vulkan)
+        if: runner.os == 'Linux'
+        run: python tools/check_render_frontend_native.py --backend vulkan --compile-only --sdk-source build/compat-sdk-source
 
   owned-program-targets:
     name: Owned program compiler (${{ matrix.os }})
