@@ -1178,7 +1178,8 @@ static void reservation_release(frontend_vk *c){
  * without the lease, in submit_scene_v5. */
 static int reserve_scene(void *opaque,const mag_native_scene_import *imports,uint32_t count,mag_native_ticket *out){
  frontend_vk *c=opaque;
- if(!c->order_ok)return VK_REFUSE(MAG_NATIVE_UNSUPPORTED);
+ /* Not a refusal: no queue order here; the commit is synchronous. */
+ if(!c->order_ok)return MAG_NATIVE_UNSUPPORTED;
  if(c->failed||c->next_submission==UINT64_MAX)return MAG_NATIVE_DEVICE_FAILED;
  if(c->reserved||(c->slots[0].occupied&&c->slots[1].occupied))return MAG_NATIVE_BUSY;
  for(uint32_t i=0;i<count;++i)for(uint32_t j=0;j<i;++j)if(imports[j].image==imports[i].image)return VK_REFUSE(MAG_NATIVE_INVALID);

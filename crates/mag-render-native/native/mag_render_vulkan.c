@@ -502,8 +502,11 @@ static unsigned long long vk_refusal_count;
 #define VK_REFUSE(status) (vk_refusal_file = __FILE__, vk_refusal_line = __LINE__, (status))
 static void vk_refusal_begin(void) { vk_refusal_file = NULL; vk_refusal_line = 0; }
 static int vk_refusal_end(const char *operation, int status) {
-    /* BUSY and STALE are ordinary back-pressure and lifetime answers. */
+    /* BUSY and STALE are ordinary back-pressure and lifetime answers; an
+     * unattributed UNSUPPORTED from a reservation means only that this host
+     * has no queue order (the commit is then synchronous). */
     if (status >= 0 || status == MAG_NATIVE_BUSY || status == MAG_NATIVE_STALE) return status;
+    if (status == MAG_NATIVE_UNSUPPORTED && !vk_refusal_file && !strcmp(operation, "reserve_scene")) return status;
     ++vk_refusal_count;
     if (vk_refusal_count <= 16 || vk_refusal_count % 256 == 0) {
         const char *file = vk_refusal_file ? vk_refusal_file : "unattributed";
@@ -530,6 +533,7 @@ VK_REPORTED(submit_scene_v3, (void *o, const mag_native_scene_v3 *d, const mag_n
 VK_REPORTED(submit_scene_v4, (void *o, const mag_native_scene_v4 *d, const mag_native_image *i, const MagRenderHostFrame *f, mag_native_ticket *t), (o, d, i, f, t))
 VK_REPORTED(submit_scene_v5, (void *o, const mag_native_scene_v5 *d, const mag_native_image *i, const MagRenderHostFrame *f, mag_native_ticket *t), (o, d, i, f, t))
 VK_REPORTED(reserve_scene, (void *o, const mag_native_scene_import *im, uint32_t n, mag_native_ticket *t), (o, im, n, t))
+VK_REPORTED(sampler_create, (void *o, const mag_native_sampler_desc *d, mag_native_sampler *s), (o, d, s))
 VK_REPORTED(image_import, (void *o, const MagRenderHostImage *h, mag_native_image *i), (o, h, i))
 VK_REPORTED(image_import_certified, (void *o, const mag_native_image_certificate *c, mag_native_image *i), (o, c, i))
 /* Designated: every operation this backend lacks is an explicit NULL, which
@@ -544,7 +548,7 @@ static const mag_native_ops operations = {
     .scene_graphics_create = reported_scene_graphics_create, .submit_scene = reported_submit_scene, .image_import = reported_image_import,
     .image_release = image_release, .submit_scene_target = NULL, .submit_scene_frame = NULL,
     .scene_graphics_create_v2 = reported_scene_graphics_create_v2, .scene_graphics_create_v3 = reported_scene_graphics_create_v3,
-    .sampler_create = sampler_create, .sampler_release = sampler_release, .submit_scene_v2 = reported_submit_scene_v2,
+    .sampler_create = reported_sampler_create, .sampler_release = sampler_release, .submit_scene_v2 = reported_submit_scene_v2,
     .submit_scene_v3 = reported_submit_scene_v3, .submit_scene_v4 = reported_submit_scene_v4,
     .image_import_certified = reported_image_import_certified, .scene_graphics_create_aux = NULL,
     .submit_scene_v5 = reported_submit_scene_v5, .reserve_scene = reported_reserve_scene, .abandon_scene_reservation = abandon_scene_reservation,
