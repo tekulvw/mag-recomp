@@ -2041,6 +2041,33 @@ impl ScenePacket {
         }
         Ok(())
     }
+    /// Admission policy for `Desc.flags` bit 0 (producer-declared unresolved
+    /// items). The producer may keep items it could not prepare as intended,
+    /// draw-required items with unresolved obligations and no draws; they are
+    /// omitted, not drawn, and stay visible in the receipt (`omitted_items`,
+    /// `unresolved_obligations`). A draw with unresolved obligations would
+    /// render with unknown state, so admission still refuses it, and refuses
+    /// any other flag bit. Returns the union of the items' obligations.
+    fn admission_obligations(&self) -> Result<u64, (&'static str, u64)> {
+        if self.flags & !1 != 0 {
+            return Err(("admit/flags", u64::from(self.flags)));
+        }
+        if self.flags & 1 == 0 {
+            return Ok(0);
+        }
+        if let Some(d) = self
+            .passes
+            .iter()
+            .flat_map(|p| p.draws.iter())
+            .find(|d| d.obligations != 0)
+        {
+            return Err(("admit/draw-obligations", d.obligations));
+        }
+        Ok(self
+            .items
+            .iter()
+            .fold(0, |all, i| all | i.unresolved_obligations))
+    }
     fn account_source_no_draw(&self, admitted: &mut BTreeSet<(u32, u64)>, actual_draws: usize) {
         let draw_items = admitted.len();
         let mut counts = [0u64; 5];
@@ -2991,15 +3018,9 @@ pub(crate) fn admit(
                     )
                 })?;
         }
-        if packet.flags != 0 {
-            return Err(packet_failure(
-                packet.source,
-                "admit/flags",
-                None,
-                packet.flags,
-                -2,
-            ));
-        }
+        let item_obligations = packet
+            .admission_obligations()
+            .map_err(|(stage, detail)| packet_failure(packet.source, stage, None, detail, -2))?;
         let language = match s.native_backend {
             1 => 1,
             2 => 3,
@@ -3082,6 +3103,7 @@ pub(crate) fn admit(
             admitted_items: admitted.len() as u64,
             omitted_items: packet.intended - admitted.len() as u64,
             draws: identities.len() as u64,
+            unresolved_obligations: item_obligations,
             ..Receipt::default()
         };
         let output = packet.images.get(packet.output as usize).ok_or(-1)?.desc;
@@ -4175,6 +4197,34 @@ pub(crate) mod packet_tests {
         packet.flags = 1;
         packet.items[1].unresolved_obligations = 16;
         packet.validate(32, 1 << 20).unwrap();
+    }
+    /// A producer-declared unresolved item (bit 0, no draw) is admitted and
+    /// its obligations reach the receipt; unresolved draws and unknown flag
+    /// bits are still refused at admission.
+    #[test]
+    fn admission_accepts_declared_unresolved_items_but_not_unresolved_draws() {
+        let mut packet = fixture();
+        assert_eq!(packet.admission_obligations(), Ok(0));
+        packet.items.push(raw::Item {
+            pass: 0,
+            reserved: raw::ITEM_DRAW_REQUIRED,
+            source_item: 1,
+            unresolved_obligations: 16,
+        });
+        packet.intended = 2;
+        packet.flags = 1;
+        packet.validate(32, 1 << 20).unwrap();
+        assert_eq!(packet.admission_obligations(), Ok(16));
+        packet.items[1].unresolved_obligations = 0x10001;
+        assert_eq!(packet.admission_obligations(), Ok(0x10001));
+        packet.passes[0].draws[0].obligations = 4;
+        assert_eq!(
+            packet.admission_obligations(),
+            Err(("admit/draw-obligations", 4))
+        );
+        packet.passes[0].draws[0].obligations = 0;
+        packet.flags = 3;
+        assert_eq!(packet.admission_obligations(), Err(("admit/flags", 3)));
     }
     #[test]
     fn real_scene_validation_rejects_uninitialized_or_wrong_stage_bindings() {
