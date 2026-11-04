@@ -22,14 +22,12 @@ impl Rng {
     }
 
     /// Uniform in `[lo, hi)`.
-    #[allow(dead_code)]
     pub(crate) fn range_f64(&mut self, lo: f64, hi: f64) -> f64 {
         let unit = (self.next_u64() >> 11) as f64 / (1u64 << 53) as f64;
         lo + (hi - lo) * unit
     }
 
     /// The binary32 value nearest a uniform sample in `[lo, hi)`.
-    #[allow(dead_code)]
     pub(crate) fn range_f32(&mut self, lo: f32, hi: f32) -> f32 {
         self.range_f64(lo as f64, hi as f64) as f32
     }
