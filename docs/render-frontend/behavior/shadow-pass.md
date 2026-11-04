@@ -51,7 +51,8 @@ input, not assume `0xFE`.
 ### Caster lists
 
 Each run consumes a visibility cohort: the sorted per-group item lists that the game's sort job
-produced for that run's family. The cohort, item, draw-batch (MBI) and transform formats are the
+produced for that run's family. Cascade 0 uses cohort camera slot 1 and cascade 1 uses camera slot 2
+(Main uses slot 3). The cohort, item, draw-batch (MBI) and transform formats are the
 same as Main's ([scene-plan.md](scene-plan.md), [material-sources.md](material-sources.md),
 `mag-render-adapter-core::cohort`). The run's item budget is the sum of the cohort's group counts
 for the enabled groups only. Items are drawn in cohort order: ascending group, then sorted order
@@ -103,6 +104,19 @@ reimplemented as owned native state in `mag-render-adapter-core` (`views`, `shad
    question 2).
 
 ### Shadow map texture
+
+Main's lighting producer samples two depth sources. They are different things:
+
+- **Unit 0** is the *scene* depth: Main's own depth buffer, read through the descriptor at
+  `RENDERER+0x3120` or `+0x3140` as a packed Z24S8 alias ([main-producer-inputs.md](main-producer-inputs.md)).
+  It is not a cascade map.
+- **Unit 1** is the *shadow map*: the full descriptor at `PARAMS+0x1520`, sampled with depth
+  comparison. Its two per-cascade transforms project the reconstructed scene position into it.
+
+Whether the image `PARAMS+0x1520` names is exactly the depth target the two Shadow runs render
+into is the key edge between this pass and Main. It is expected but not yet confirmed (open
+question 11). Until it is confirmed, a native Shadow pass must not replace the image that unit 1
+imports.
 
 The map is described by the full texture descriptor at `PARAMS+0x1520`
 ([material-producers.md](material-producers.md)), where `PARAMS` is the shadow/parameter object.
@@ -210,6 +224,18 @@ pass.
 
 ## Open questions
 
+**Which claims depend on the recording.**
+
+- *Established without it:* the invocation and group mask; the cohort camera slots; the shared
+  source formats; the cascade-view behaviour; the set of emitted methods; and that unit 0 of the
+  lighting producer is scene depth, not a cascade map.
+- *Depend on the recording:* every state value; the light transform rows; the map layout and target
+  setup; the terminal segment; technique selection; and the claim that `PARAMS+0x1520` names the
+  Shadow runs' target.
+
+Observed cost, for orientation: in Training the PPU waits about 1.8 ms on cascade 0 and about 4.3 ms
+on cascade 1, about 6.1 ms of a 29 ms update.
+
 Questions 1, 4, 5, 6, 7 and 8 can all be settled by one job-IO recording of the Shadow job, taken
 the same way as the Main recording: set `MAG_JOB_IO_ENTRY` to the payload entry `0x12F68`, and
 record both runs of several updates in a scene with visible shadows. Run the recording through
@@ -245,3 +271,8 @@ command words with their input provenance, and so the state values and their ite
 10. **Group 7 skinning admission.** `skinning-deformation.md` admits group 11 only. The group-7
     admission conditions (geometry mode, worker control, palette inputs) need their own statement
     before group-7 casters can be prepared natively.
+11. **Unit-1 import identity.** Compare the shadow map descriptor at `PARAMS+0x1520` (location,
+    offset, pitch, size, format) against the depth surface bound for the two Shadow runs, in the
+    same update. If it matches, the native Shadow pass writes the image that Main's lighting unit 1
+    imports. Also check whether the game's post-join cascade-target record and handle write change
+    which image that descriptor names.
