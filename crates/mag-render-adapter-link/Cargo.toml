@@ -1,0 +1,27 @@
+[package]
+name = "mag-render-adapter-link"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99"
+license = "MIT"
+description = "One static library holding the native frontend and the game render adapter"
+
+[lib]
+name = "mag_render_adapter_link"
+crate-type = ["staticlib"]
+
+[features]
+default = []
+metal = ["mag-render-native/metal"]
+vulkan = ["mag-render-native/vulkan"]
+d3d12 = ["mag-render-native/d3d12"]
+
+[dependencies]
+mag-render-adapter-core = { path = "../mag-render-adapter-core" }
+mag-render-native = { path = "../mag-render-native" }
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[profile.release]
+panic = "unwind"
