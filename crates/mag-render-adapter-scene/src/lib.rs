@@ -16,13 +16,22 @@
 // The core modules this crate builds on, re-exported so the whole adapter is
 // addressable from one crate under the module names its code uses.
 pub use mag_render_adapter_core::{
-    error, fast_hash, geometry_bindings, guest_memory, mesh_sources, partition_inputs,
+    capture_pool, cohort, error, fast_hash, geometry_bindings, guest_memory, main_flow,
+    material_constants, material_programs, mesh_sources, partition_inputs,
 };
 
 pub mod capture_memo;
+#[allow(unsafe_code)] // Calls the bridge's registered read-only views inside one capture call.
+pub mod capture_view;
+pub mod cohort_geometry;
+pub mod cohort_resources;
 pub mod decoded_geometry_cache;
+pub mod deformation;
+pub mod depth_materials;
+pub mod depth_sources;
 pub mod geometry_attributes;
 pub mod geometry_streams;
+pub mod material_sources;
 pub mod material_textures;
 pub mod shared_scene_sources;
 pub mod source_acquisition;

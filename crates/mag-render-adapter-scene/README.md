@@ -28,7 +28,22 @@ Current contents:
   stream decoding (positions, indices, instance rows, descriptor-driven
   attributes) and a content-qualified cache of decoded rows. Packed normals
   (codec 9) are decoded by `mag_render_behavior::normals`, within the
-  tolerance of `geometry-normals.md`.
+  tolerance of `geometry-normals.md`;
+- `material_sources`, `cohort_resources`: raw material, mesh and partition
+  resolution for the retained visibility cohort;
+- `cohort_geometry` (with `direct` and `static_geometry`): per-item geometry
+  capture for Main, including direct draws and the undeformed static path;
+- `deformation`: the capture's group 0, 3/4 and palette-skinning (groups 7
+  and 11) call sites. They check the capture's budget and bank populations and
+  then call the single shared entry point in
+  `mag_render_behavior_glue::deformation`, so Main and the depth pre-pass get
+  identical positions. Results are the behaviour crate's native arithmetic
+  within the tolerances of its deformation specifications;
+- `depth_sources`, `depth_materials`: the depth pre-pass inputs and its
+  selected-material programs and fragment builtin requests;
+- `capture_view`: optional copy-free comparison of guest spans through
+  read-only views the host registers
+  (`PS3_RENDER_CAPTURE_VIEW_VALIDATION=1`, default off).
 
 The core modules these build on are re-exported under their own names, so the
 whole adapter is addressable from this crate. Nothing here runs unless a host

@@ -50,7 +50,8 @@ libraries of `mag-render-programs`):
 - `scene_raster`, `scene_viewport`: effective raster and viewport state as
   frontend packet records.
 
-Fragment builtin requests are not published yet. Nothing in this crate runs
-unless a host calls it. The C exports are `mag_render_adapter_enabled`,
+`material_constants` also decodes a material's fragment builtin requests
+(kinds 3, 4, 31 and 32 of `fragment-builtins.md`) and prepares their rows.
+Nothing in this crate runs unless a host calls it. The C exports are `mag_render_adapter_enabled`,
 `mag_render_adapter_enable`, `mag_original_work_sha256_file` and the `ffi`
 entry points above.

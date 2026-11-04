@@ -2,8 +2,15 @@
 //!
 //! Fragment structure and inline values are separate immutable/instance data.
 //! No patched shader bytes, command stream or original worker is produced.
-//! Fragment builtin requests are handled separately and are not part of this
-//! module.
+//! Fragment builtin requests are decoded in the `builtins` submodule and
+//! re-exported here.
+
+#[path = "material_builtins.rs"]
+mod builtins;
+pub use builtins::{
+    BuiltinError, BuiltinPassValues, FragmentBuiltinRequest, RoleValues, animated_rows_31,
+    animated_rows_32, decode_fragment_builtin_requests, prepare_fragment_builtin_rows,
+};
 
 pub type ConstantWords = [u32; 4];
 use crate::material_float as source_float;

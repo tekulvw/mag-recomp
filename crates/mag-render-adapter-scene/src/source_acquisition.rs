@@ -179,10 +179,6 @@ fn count(update: impl FnOnce(&mut AcquisitionStats)) {
         s.set(v);
     });
 }
-#[expect(
-    dead_code,
-    reason = "called by the source FFI layer, which is migrated later"
-)]
 pub(crate) fn count_view(equal: bool, bytes: usize) {
     count(|s| {
         if equal {
