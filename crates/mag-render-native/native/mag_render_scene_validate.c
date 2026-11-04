@@ -316,7 +316,7 @@ static int scene_validate(const mag_native_scene *s, const mag_native_scene_regi
                 return status;
             if(v4&&p->depth.image!=MAG_NATIVE_SCENE_NONE&&p->depth.load==MAG_NATIVE_SCENE_DISCARD_LOAD){
                 const mag_native_raster_state *state=NULL;
-                int status=registry4->raster(r->context,d->pipeline,&state);if(status)return status;
+                int raster_status=registry4->raster(r->context,d->pipeline,&state);if(raster_status)return raster_status;
                 if(state?(state->depth_enabled&&state->depth_compare!=MAG_NATIVE_COMPARE_ALWAYS&&state->depth_compare!=MAG_NATIVE_COMPARE_NEVER):
                     (g&&g->depth_compare!=MAG_NATIVE_SCENE_DEPTH_DISABLED&&g->depth_compare!=MAG_NATIVE_SCENE_DEPTH_ALWAYS))return MAG_NATIVE_INVALID;
             }
