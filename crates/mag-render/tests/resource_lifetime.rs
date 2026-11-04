@@ -343,3 +343,30 @@ fn cache_namespace_is_stable_across_updates_and_slot_generations() {
     assert_eq!(key.resource_id.slot, replaced.resource_id.slot);
     assert_ne!(key.resource_id.generation, replaced.resource_id.generation);
 }
+#[test]
+fn shared_bytes_are_adopted_without_copy_and_never_written_in_place() {
+    use std::sync::{Arc, Weak};
+    let source: Arc<Vec<u8>> = Arc::new(vec![1, 2, 3, 4]);
+    let weak: Weak<Vec<u8>> = Arc::downgrade(&source);
+    let mut s = store(4, 64);
+    let v = s
+        .apply(ResourceDelta::CreateShared {
+            bytes: SharedBytes::new(source.clone()),
+        })
+        .unwrap();
+    let lease = s.lease(v).unwrap();
+    // The snapshot is the shared allocation itself.
+    assert_eq!(lease.bytes().as_ptr(), source.as_ptr());
+    assert_eq!(s.stats().bytes_copied, 0);
+    assert_eq!(s.stats().resident_bytes, 4);
+    // An update copies (copy on write); the shared bytes stay unchanged.
+    drop(lease);
+    let v2 = patch(&mut s, v, 1, &[9]).unwrap();
+    assert_eq!(s.stats().bytes_copied, 4);
+    assert_eq!(&source[..], &[1, 2, 3, 4]);
+    assert_eq!(s.lease(v2).unwrap().bytes(), &[1, 9, 3, 4]);
+    // Retiring the store's version drops its reference to the shared bytes.
+    s.retire(v2).unwrap();
+    drop(source);
+    assert!(weak.upgrade().is_none());
+}
