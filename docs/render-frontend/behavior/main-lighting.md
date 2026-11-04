@@ -114,9 +114,12 @@ triangle list of these three vertices. The constants are copied bit for bit.
 - Any image previously associated with units 0 and 1 is forgotten. Each unit the lighting fragment
   program samples must be bound to an image whose provenance matches that unit's (source address,
   descriptor) exactly. That image must be a single-sample, single-layer 2D image with the
-  descriptor's size and mip count. A depth image is never bound through an ordinary colour view;
-  depth-as-colour needs the explicit depth classification in
-  [main-producer-inputs.md](main-producer-inputs.md).
+  descriptor's size and mip count. Binding is purely by provenance: the producer does not classify
+  depth itself. The list of producer texture bindings already contains, for a depth-classified
+  request, a colour image derived from the depth plane ("Producer texture bindings" in
+  [main-producer-inputs.md](main-producer-inputs.md)). This applies to both units, including unit
+  1's full descriptor, which is matched by its compact form. A binding whose image has a depth
+  packet format is a decline.
 - The lighting fragment program may sample only units 0 and 1. It may not discard fragments, and
   its header flags (bits 1–3 of the header `+8` word) must be zero.
 
@@ -140,8 +143,23 @@ conversion off.
 
 Each draw's target must already have initialised colour (its existing contents are kept, not
 cleared) and an initialised depth plane, plus an initialised stencil plane if it has one.
-The bound colour and depth images must match the surface's format and size. Every fixed-function
-field the draw depends on must be known; unknown inherited state is a decline.
+The bound colour and depth images must match the surface's format and size.
+
+Each draw's raster state is translated as in [raster-state.md](raster-state.md), with triangles,
+one sample, colour attachment 0, no bias clamp and an unobserved blend constant. Every known-field
+bit must be set and no obligation may remain; otherwise decline. Given the writes above, the fields
+this producer leaves to inherited state, which must therefore be known, are:
+
+- front face (needed for the cull bit, even with culling off);
+- stencil test enable; if it is enabled, the two-sided flag and the stencil faces the raster
+  rules need (front face only when two-sided is off, both faces when it is on), including their
+  write masks for the precondition above;
+- polygon-offset fill enable, which must be known *disabled*, because no bias clamp is supplied
+  and so an enabled offset can never be fully known.
+
+Every other raster field (cull enable, depth test, depth write, blending, colour mask, depth bounds,
+topology, samples) is written by this producer. The shader controls additionally use the alpha-test
+and sRGB-output state, which this producer writes, and texture units 0 and 1, which it sets.
 
 ### State after the producer
 
@@ -155,7 +173,9 @@ Decline, with no draw and no state change visible to later Main work, when:
 
 - the projection block or the parameter object address is not 16-byte aligned, or any of `V_ONE`,
   `BASIS_A`, `BASIS_B`, `BASIS_C` is not 16-byte aligned;
-- any element of `M`, `P0`, `P1` or `o` is not finite;
+- any of the 16 stored elements of `M`, `P0` or `P1`, or any of the four lanes of `o`, is not
+  finite. This is intentional: column 3 of `M` and `o[3]` do not affect any output, but a
+  non-finite value there signals corrupt input, and the conservative choice is to decline;
 - `det = 0`, or any element of `Inv` is not finite (singular or overflowing camera);
 - any fragment constant, `width`, `height` or bound is not finite;
 - any triangle constant is not finite;
@@ -163,8 +183,8 @@ Decline, with no draw and no state change visible to later Main work, when:
 - a required image binding is missing or mismatched, or the target is not initialised;
 - the stencil precondition above fails.
 
-NaN in a lane that the formulas do not read (column 3 of `M` above row 3; lanes 1–3 of the basis
-vectors) is ignored. Signed zero inputs are accepted. Subnormal inputs are accepted and treated as
+Lanes 1–3 of `BASIS_A`, `BASIS_B` and `BASIS_C` are not read and are not checked. Lane 0 of each
+is checked only through the finiteness of the results. Signed zero inputs are accepted. Subnormal inputs are accepted and treated as
 their values; the tolerance below applies.
 
 ## Tolerance
@@ -211,7 +231,8 @@ All of these are exactly representable, so a correct implementation reproduces t
 
 **L3: singular camera.** `M` row 2 `= (0, 0, 0, 0)`. Expected: decline.
 
-**L4: ignored lane.** As L1 with `M[0][3] = NaN`. Expected: same outputs as L1.
+**L4: checked and ignored lanes.** As L1 with `M[0][3] = NaN`: decline. As L1 with `o[3] = ∞`:
+decline. As L1 with lane 1 of `BASIS_A` = NaN: same outputs as L1.
 
 **L5: extent.** `p_far = 100`, `p_slope = 0.5`, `p_aspect = 1.75`. Row 4 = `(87.5, 50, +0, +0)`.
 

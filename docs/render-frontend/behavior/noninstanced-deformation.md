@@ -20,7 +20,7 @@ Out of scope: the vertex program, culling, and the other groups. Group 0 is in
 | Pass present | the item's pass record address is non-zero |
 | No optional per-vertex post-processing | if draw-batch byte `+0x1B` bit 0 is clear, `draw-batch byte +0x18 >> 2` must be 0; if the bit is set the count is 0 |
 | No skinning palette | partition record `u32 +0x48` and `u32 +0x50` are both 0 |
-| Geometry mode | `mode = (pass +0x230 OR (primary material +0x58 bit 0 ? 0x20 : 0)) AND NOT 0x2` is 8, 10 or `0x28` |
+| Geometry mode | `mode = (pass +0x230 OR (primary material +0x58 bit 0 ? 0x20 : 0)) AND NOT 0x2` is 8 or `0x28`. Bit 1 is ignored, so raw modes 8, 10, `0x28` and `0x2A` qualify. |
 | Worker control | `min(pass +0x22C, primary material +0x58 bit 0 ? 1 : 2)` equals 1 when `mode = 0x28` and 2 otherwise |
 | Group 4 has tangents | a tangent bank (semantic 3) exists |
 
@@ -66,9 +66,17 @@ Per item:
 
 - `f = M1.x · ω0`
 - `A1 = M0.x · ω2`, `A2 = M0.y · ω3`
-- five positive constants `KA1`, `KA2`, `KB1`, `KB2`, `KC3`, each between 0.1 and 2, fixed in the
-  retail program and not stored in guest data (open question 1). `KA1` and `KB1` are the same
-  constants as in group 0.
+- five wind tuning constants. These are this implementation's own chosen values, tuned for visual
+  equivalence with the game's sway; they are not the game's values, which are not stored in guest
+  data:
+  - `KA1 = 0.38` and `KA2 = 0.19`: phase rates of the two waves that drive the vertical
+    displacement;
+  - `KB1 = 2.0` and `KB2 = 0.81`: phase rates of the two waves that drive the horizontal
+    displacement;
+  - `KC3 = 0.335`: base coupling of the summed position into the horizontal waves' phase.
+
+  Each is used as the binary32 value nearest the decimal shown. `KA1`, `KB1` and `KC3` are the
+  same values as group 0's `KA1`, `KB1` and `KC`.
 
 Per vertex:
 
@@ -168,7 +176,11 @@ ripple while letting an implementation evaluate phases in binary32.
 The list in [group-zero-deformation.md](group-zero-deformation.md#consequences-of-non-bit-exact-output)
 applies unchanged: depth EQUAL against a pre-pass computed by a different evaluation, shadow-pass
 consistency, the determinism requirement (inline and deferred preparation must agree bit-for-bit),
-differential tests with tolerances, and no caching on produced vertex values. In addition, the
+differential tests with tolerances, and no caching on produced vertex values. As for group 0, the
+group-3 tuning constants are this implementation's own, so group-3 displacement is compared
+against the original program only for visual equivalence: the same displacement envelopes
+(`[0, 2]·|g·N|` horizontally and `[0, 2]·|(1 - W.z)·A2|` vertically), wave rates within 3%, and a
+phase that may drift over time. Group 4 uses no tuning constants and keeps the numeric tolerances. In addition, the
 pass-through banks must stay bit-exact, because other passes may decode the same banks
 independently and must see identical normals and tangents.
 
@@ -194,7 +206,15 @@ The first row checks that z uses `N.y` (here -1) and not `N.z` (here 9).
 `θ = 0`, `T = (0, 0, 0)`, `W = (1, 0, 0, ·)`, `P = (1, 0, 0, 1)`, `N = (1, 0, 0)`, `A1 = A2 = 1`,
 `f` arbitrary. Then `a = 0`, `b = KC3`, and the expected position is `(1 + wb, wa, 0, 1)` with
 `wb = wave(KB1·KC3; f) + wave(KB2·KC3; f)` and `wa = 2·wave(0; f)` (so `wa = 2` for `f = 0.5`).
-Use it once the constants are ruled on.
+Here `KB1·KC3 = 0.67` and `KB2·KC3 = 0.27135`.
+
+| `f` | `wb` | `wa` | expected position |
+| --- | --- | --- | --- |
+| 0.5 | 0.7042977 | 2 | (1.7042977, 2, 0, 1) |
+| 1 | 1.7377023 | 0 | (2.7377023, 0, 0, 1) |
+
+Values are rounded to seven decimals. An implementation must agree within the position
+tolerance.
 
 ### NI-3: group 4, simple ripple
 
@@ -247,12 +267,8 @@ expected position `(0.5, 1, 0.25, 1)`.
 
 ## Open questions
 
-1. **Group-3 constants `KA1`, `KA2`, `KB1`, `KB2`, `KC3`.** Fixed values of the retail program with
-   no guest-data location. They are decimal tuning values, so this specification does not state
-   them. A user ruling is needed on whether they may be published here. `KC3` is within one
-   binary32 ULP of group 0's `KC`, so one shared value is within tolerance.
-2. **Optional per-vertex post-processing and palette inputs.** Items with a non-zero optional count
+1. **Optional per-vertex post-processing and palette inputs.** Items with a non-zero optional count
    or a non-zero palette length are refused. Their behaviour has not been specified.
-3. **Coupling.** The attribute bank decoders (including the spherical normal codec in
+2. **Coupling.** The attribute bank decoders (including the spherical normal codec in
    [geometry-normals.md](geometry-normals.md)) and the primary-before-secondary declaration rule are
    shared with the other geometry specifications.

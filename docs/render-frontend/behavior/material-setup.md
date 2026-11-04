@@ -152,6 +152,11 @@ covering exactly this method list in this order:
   `k = (method − 0x1f00) / 4`, the destination is row `load + k / 4`, lane `k % 4`. A row of 512 or
   more fails with `Value { method: 0x1efc, value: load }`. The load register is not advanced by
   these writes.
+- A *non-incrementing* packet that targets a vertex constant data method with more than one payload
+  word fails with `RepeatedConstantData { method }`, and knowledge is unchanged. Under the rule above every word would land in the same lane,
+  and real hardware may instead advance through the constant window. The two readings disagree, so
+  the frontend declines instead of guessing (see Open questions). A non-incrementing constant packet
+  with exactly one word is accepted. Incrementing packets are unaffected.
 - Every write, whatever its class, then becomes the known value of its method.
 - Every obligation is appended to the result in write order.
 - After all writes, the pipeline decode (section 3) must succeed on the new knowledge. Only then is
@@ -293,7 +298,9 @@ Memory images list (IO offset: word).
 4. Vertex constants. Methods `0x1efc = 510`, then an incrementing 8-word packet at `0x1f00` with
    values 1..8: rows 510 = `[1, 2, 3, 4]`, 511 = `[5, 6, 7, 8]`, row 0 unknown. With `0x1efc =
    511`: `Value { method: 0x1efc, value: 511 }`, knowledge unchanged. A `0x1f00` write without any
-   `0x1efc`: `MissingConstantLoad`.
+   `0x1efc`: `MissingConstantLoad`. With `0x1efc = 4`, a non-incrementing packet at `0x1f00` with
+   one word `7`: row 4 lane 0 = 7. With two words: `RepeatedConstantData { method: 0x1f00 }`,
+   knowledge unchanged.
 5. Colour masks. `0x324 = 0x01000100`, `0x370 = 0x00001230`: masks `[10, 9, 1, 8]`.
 6. Blend. `0x314 = 0x03030302`, `0x318 = 0x00010001`, `0x320 = 0x800b8006`: colour source
    source-alpha, alpha source one-minus-source-alpha, both destinations one; colour equation add,
@@ -321,6 +328,7 @@ Memory images list (IO offset: word).
   observed. A bank that writes constants with two packets and no intervening `0x1efc` write would
   expose the difference; whether retail produces one is unmeasured. Until settled, a replacement
   should refuse a second constant-data packet that is not preceded by a `0x1efc` write in the same
-  bank, rather than guess.
+  bank, rather than guess. A single non-incrementing constant packet with several words raises the
+  same question within one packet; it is refused (`RepeatedConstantData`) for the same reason.
 - The obligation classes are an analysis aid. Whether every "state only" register is safe to
   apply out of order relative to the obligations is a planner question, not settled here.

@@ -52,7 +52,10 @@ Steps run in this order. "Stop" means the producer ends with no further effects.
    (bits 24–27) to 1, which selects nearest filtering. This change applies only to the copy bound
    here; the lighting producer's own earlier binding is unaffected. Bind it to unit 1 with the image
    whose provenance matches the unmodified (source address, descriptor). A missing image is a
-   decline.
+   decline. As for the lighting producer, binding is by provenance only: a depth-classified
+   lighting source already has a derived colour image in the binding list ("Producer texture
+   bindings" in [main-producer-inputs.md](main-producer-inputs.md)), and a binding whose image has a
+   depth packet format is a decline.
 9. **Vertex constants.** Apply the fog vertex program's static constants, then write vertex
    constant rows 0 and 1 from the fog values. The fog-value rows win where both write.
 10. The fog fragment program may sample only units 0 and 1; otherwise decline.
@@ -72,8 +75,15 @@ Steps run in this order. "Stop" means the producer ends with no further effects.
       must have write mask 0. Otherwise decline.
     - The target must have initialised colour (kept, not cleared). If it has depth or stencil
       planes, they must be initialised.
-    - If the fragment program samples unit 0 and the unit-0 image is the target's own colour image,
-      decline. A read-modify-write of the same image is not supported.
+    - **Scene-colour feedback.** Draw 0 always targets the current surface, and unit 0 samples that
+      same surface's colour, so any fog program that samples unit 0 reads the image it writes. This
+      is the intended fog behaviour: it reads the scene colour and writes the fogged colour back.
+      A native draw must never sample its own colour attachment. Draw 0 must instead sample a
+      snapshot of the current surface's colour taken after all earlier work and immediately before
+      draw 0. Draw 1 writes a different surface, so it samples the current surface's colour as it is
+      after draw 0, through an ordinary view. An implementation that cannot take the snapshot must
+      decline. That decline is the current state of the adapter, so today every fog program that
+      samples unit 0 declines.
     - Fragment constants are the fog fragment rows. Geometry is the full-screen triangle of
       [main-lighting.md](main-lighting.md).
 13. **After the draws.** Depth-bounds test off, then the stencil footer. The current values of
@@ -118,8 +128,9 @@ discards, the current surface is (`i = 0`, requested role 1), and lighting ran.
 7. **Inherited bounds.** Fog control `0x400` set, inherited depth-bounds enable false: draw 0 runs
    with bounds off, but the bounds range is still set to the fog bounds. Inherited enable unknown:
    decline.
-8. **Feedback.** Fragment program samples unit 0, and the current surface's colour image is also
-   draw 0's target colour image. Expected: decline.
+8. **Feedback.** Fragment program samples unit 0. Draw 0 targets the current surface and samples
+   a snapshot of its colour taken immediately before draw 0, never the attachment itself. Draw 1
+   samples the current surface's colour after draw 0. Without snapshot support: decline.
 9. **Restore.** After success, the current surface is `select(0, 1)`. Depth bounds off, stencil off,
    two-sided stencil off.
 10. **Single draw.** Bank zero disabled. Exactly one draw. The stencil state is not changed before
@@ -130,3 +141,7 @@ discards, the current surface is (`i = 0`, requested role 1), and lighting ran.
 1. The inherited depth-bounds enable used when fog control bit `0x400` is set comes from state
    before Main. Which earlier producer last set it is not established in general. The current rule
    is to decline when it is unknown.
+2. The snapshot rule assumes each fog fragment reads the scene colour only at its own pixel, or
+   that RSX texture reads during draw 0 never observe draw 0's own writes. Either way a
+   before-draw snapshot gives the same result. A program that reads neighbouring pixels while the
+   original hardware observed partial writes would differ; no such case is known.

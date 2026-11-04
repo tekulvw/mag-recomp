@@ -19,7 +19,7 @@ adjustment, culling, and other palette formats or options (refused, see Admissio
 | Skinned source | object transform byte `+0x6F` is not 1 and primary material `u32 +0x58` bit `0x20` is set; otherwise refuse "palette inputs" |
 | Pass present | the item's pass record address is non-zero |
 | No optional per-vertex post-processing | as for groups 3 and 4: `draw-batch byte +0x18 >> 2` is 0, or draw-batch byte `+0x1B` bit 0 is set |
-| Geometry mode | `(pass +0x230 OR (material +0x58 bit 0 ? 0x20 : 0)) AND NOT 0x2` is 8 or 10 |
+| Geometry mode | `(pass +0x230 OR (material +0x58 bit 0 ? 0x20 : 0)) AND NOT 0x2` is 8. Bit 1 is ignored, so a raw mode of 8 or 10 qualifies. |
 | Worker control | `min(pass +0x22C, material +0x58 bit 0 ? 1 : 2)` equals 2 |
 | Standard skinning configuration | the partition's configuration stream (stream 19) has at least 16 bytes, byte 0 is `0x83`, byte 6 is 17, byte 7 is 0, and bytes 12 to 15 are `0xFF` |
 | Palette lengths fit 16 bits | high 16 bits of partition `u32 +0x48` and `u32 +0x50` are zero; otherwise refuse "unsupported control" for that slot |

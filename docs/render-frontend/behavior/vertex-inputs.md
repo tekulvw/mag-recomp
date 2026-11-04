@@ -86,7 +86,8 @@ Every native attribute is four 32-bit floats.
 Build a table of 16 optional sources:
 
 1. With a group-zero preparation, slot 12 starts as its prepared colour rows. They count as a
-   binding with format 2 and four components.
+   binding with format 2, four components and declaration ordinal 0. Any auxiliary binding to slot
+   12, successful or failed, therefore replaces them, and an output binding always does.
 2. Take the auxiliary attributes: the preparation's when a direct or group-zero preparation is
    present, otherwise the draw's own. If the draw's own auxiliary attributes are unavailable, that
    is a *source bindings* error. Walk the successful auxiliary bindings, then the failed ones. A
@@ -106,6 +107,10 @@ Preparation consistency, checked first:
 - a group-zero and a non-instanced preparation together are also *conflicting preparation*;
 - a refused group-zero or non-instanced preparation is an error of that kind;
 - missing output bindings, without a direct preparation, are a *source bindings* error.
+
+A direct preparation is either present or absent here. A direct draw whose preparation was refused
+never reaches vertex-input packing, because the direct-draw geometry stage refuses the item first.
+So there is no direct-preparation refusal error at this step.
 
 For a GPU-produced group-zero preparation the mask is the one the GPU plan declares, and the table
 above is not built.
@@ -131,6 +136,9 @@ naming the lowest missing slot. For each required slot, in ascending order:
       bank is the first semantic-4 bank in the primary list, otherwise in the secondary list. A
       failed bank is a *failed semantic* error. Every row's first three lanes must be finite with
       magnitude at most 1; lane 3 is not checked;
+      If those static-source conditions do not hold, semantic 4 is an *unprepared primary
+      semantic* error. If they hold but neither list has a semantic-4 bank, it is a *missing
+      semantic* error;
     - any other semantic → *unprepared primary semantic*;
   - **no non-instanced preparation, semantic not 1** → *unprepared primary semantic*. A raw
     normal, tangent or weight bank is not the post-deformation value the program reads;

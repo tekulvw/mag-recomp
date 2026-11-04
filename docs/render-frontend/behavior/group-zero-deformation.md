@@ -118,8 +118,15 @@ symmetry of `tri`), its values lie in `[0, 1]`, and its slope with respect to `�
 
 - `f = ω0 · M1.x` (wind frequency)
 - `A1 = M0.x · ω2` and `A2 = M0.y · ω3` (wind amplitudes)
-- three wind coefficients `KA1`, `KC` and `KB1`. They are fixed positive constants of the retail
-  program, each between 0.1 and 2, and are not stored in guest data. See open question 3.
+- three wind tuning coefficients. These are this implementation's own chosen values, tuned for
+  visual equivalence with the game's sway; they are not the game's values, which are not stored in
+  guest data:
+  - `KA1 = 0.38`: phase rate of the slow wave, which runs along the horizontal position;
+  - `KB1 = 2.0`: phase rate of the fast wave;
+  - `KC = 0.335`: weight of the summed position in the fast wave's phase.
+
+  Each is used as the binary32 value nearest the decimal shown. Group 3 uses the same `KA1`, `KB1`
+  and `KC` ([noninstanced-deformation.md](noninstanced-deformation.md)).
 
 ### Per instance `i` (0-based, in row order)
 
@@ -228,7 +235,9 @@ These places previously relied on, or could rely on, exact equality of produced 
 1. **Depth EQUAL against a separate depth pre-pass.** Main draws that test depth EQUAL rely on an
    earlier pass having written the same depths. If that pass uses a different evaluation of these
    formulas (the recompiled original Depth/DepthNormal job, the GPU kernel variant, or any other
-   code path), pixels will fail the test and the surface will show holes or z-fighting. Every pass
+   code path), pixels will fail the test. The recompiled original job also uses the game's own wind
+   coefficients, not the tuning values above, so for wind items its depths differ by more than
+   rounding and the surface will show holes or z-fighting. Every pass
    whose depth must coincide with Main for the same item and view must consume the same produced
    position array, or the comparison must be relaxed explicitly (for example to LEQUAL) and the
    relaxation recorded as a fidelity reduction.
@@ -239,9 +248,14 @@ These places previously relied on, or could rely on, exact equality of produced 
    preparation of the same item must agree bit-for-bit, because (1) depends on it.
 4. **CPU and GPU variants.** A CPU and a GPU implementation may legitimately differ within the
    tolerance. They must not be mixed for one item across passes that rely on (1).
-5. **Differential tests.** Comparisons against the original program (kept outside this
-   repository) must use the tolerances above, not bit equality, for positions. Colour rows and
-   indices remain exact comparisons.
+5. **Differential tests.** The tolerances above are against the formulas in this document. Against
+   the original program (kept outside this repository) the wind displacement is not numerically
+   comparable, because the tuning coefficients differ. There, visual equivalence is the criterion:
+   - with zero elapsed phase and zero wind amplitude, positions agree within the tolerances above;
+   - with wind, each vertex's displacement stays within the same envelope `[0, |A1| + |A2|]·|1 - w3|`
+     along the same normal lanes, and the wave rates differ by at most 3%, so the sway has the same
+     amplitude and character but drifts in phase over time.
+   Colour rows and indices remain exact comparisons.
 6. **Caches and deduplication.** No current cache keys on produced vertex values. Any future
    content hash or deduplication over produced positions must not assume equality between results
    from different implementations or code paths.
@@ -314,8 +328,16 @@ term of the position tolerance instead.
 
 `P = (1, 0, 0)`, `o = 0`, `σ = 1`, identity quaternion, `θ = 0`, `w3 = 0`, `N = (1, 0, 0)`. Then
 `B = (1, 0, 0)`, `α = KA1`, `β = KB1·KC`, and the expected position is
-`(1 + D, 0, D, 1)` with `D = A1·wave(KB1·KC; f) + A2·wave(KA1; f)`. Use it once the constants are
-ruled on (open question 3).
+`(1 + D, 0, D, 1)` with `D = A1·wave(KB1·KC; f) + A2·wave(KA1; f)`. Take `M0 = (1, 1, ·, ·)`,
+`ω2 = ω3 = 1` (so `A1 = A2 = 1`), `ω0 = 1` and `M1.x = f`. Then `β = 0.67` and `α = 0.38` (each to binary32 precision).
+
+| `f` | `wave(β; f)` | `wave(α; f)` | `D` | expected position |
+| --- | --- | --- | --- | --- |
+| 0.5 | 0.2681920 | 0.1451520 | 0.4133441 | (1.4133441, 0, 0.4133441, 1) |
+| 1 | 0.7583361 | 0.4700160 | 1.2283521 | (2.2283521, 0, 1.2283521, 1) |
+
+Values are the exact-arithmetic results for the binary32 inputs, rounded to seven decimals. An
+implementation must agree within the position tolerance.
 
 ### GZ-7: refusals
 
@@ -333,11 +355,6 @@ ruled on (open question 3).
    fade multipliers or starts below `2^-14`.
 2. **Colour frequency 0 and 1.** For these values the colour index depends on a base index
    inherited from earlier state, which has not been specified. They are refused.
-3. **Wind constants `KA1`, `KC`, `KB1`.** These are fixed values of the retail program with no
-   guest-data location an implementation could read. They are decimal tuning values, not evident
-   mathematical constants, so this specification does not state them. A user ruling is needed on
-   whether their values may be published in this specification. (`KA1` and `KB1` are shared with
-   group 3; `KC` equals group 3's `KC3` to within one binary32 ULP.)
-4. **Coupling to other specifications.** The geometry stream codecs (positions, normals, weights,
+3. **Coupling to other specifications.** The geometry stream codecs (positions, normals, weights,
    instance-row location), the auxiliary attribute expansion for the other slots, and the pass
    route rule (`+0x144`) are specified elsewhere or still need specifications.
