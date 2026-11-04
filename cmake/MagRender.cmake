@@ -4,6 +4,7 @@ option(MAG_RENDER_FRONTEND_NATIVE "Link the frontend-owned native renderer and h
 if(MAG_RENDER_FRONTEND_NATIVE AND NOT MAG_RENDER_FRONTEND_RUST)
     message(FATAL_ERROR "MAG_RENDER_FRONTEND_NATIVE requires MAG_RENDER_FRONTEND_RUST")
 endif()
+include("${CMAKE_CURRENT_LIST_DIR}/MagRenderAdapter.cmake")
 
 function(mag_enable_render_frontend target)
     set(MAG_RENDER_RECEIPT_EXTRA "" PARENT_SCOPE)
@@ -50,6 +51,12 @@ function(mag_enable_render_frontend target)
         endif()
         set(_cargo_features --features "${_backend}")
     endif()
+    # With the adapter, Cargo builds one archive holding the native frontend and the adapter crates.
+    set(_build_crate "${_crate}")
+    if(MAG_RENDER_ADAPTER)
+        set(_build_crate "${_root}/crates/mag-render-adapter-link")
+        set(_library_name mag_render_adapter_link)
+    endif()
     set(_cargo_output "${CMAKE_CURRENT_BINARY_DIR}/rust-render")
     if(WIN32)
         set(_library "${_cargo_output}/release/${_library_name}.lib")
@@ -69,10 +76,16 @@ function(mag_enable_render_frontend target)
             "${_root}/src/mag_render_client.h" "${_root}/src/mag_render_scene_packet.h"
             "${_root}/crates/mag-render/Cargo.toml" "${_root}/crates/mag-render/Cargo.lock")
     endif()
+    if(MAG_RENDER_ADAPTER)
+        file(GLOB_RECURSE _adapter_sources CONFIGURE_DEPENDS
+            "${_root}/crates/mag-render-adapter-core/src/*.rs" "${_build_crate}/src/*.rs")
+        list(APPEND _extra_dependencies ${_adapter_sources} "${_root}/crates/mag-render-adapter-core/Cargo.toml"
+            "${_build_crate}/Cargo.toml" "${_build_crate}/Cargo.lock")
+    endif()
     add_custom_command(OUTPUT "${_library}"
         COMMAND "${CMAKE_COMMAND}" -E env "RUSTUP_TOOLCHAIN=${_channel}"
             "CARGO_TARGET_DIR=${_cargo_output}" "RUSTC=${MAG_RENDER_RUSTC}" ${_native_environment}
-            "${MAG_RENDER_CARGO}" build --manifest-path "${_crate}/Cargo.toml" --lib --release --locked --offline ${_cargo_features}
+            "${MAG_RENDER_CARGO}" build --manifest-path "${_build_crate}/Cargo.toml" --lib --release --locked --offline ${_cargo_features}
         WORKING_DIRECTORY "${_root}"
         DEPENDS ${_rust_sources} ${_extra_dependencies} "${_crate}/Cargo.toml" "${_crate}/Cargo.lock" "${_root}/rust-toolchain.toml"
         VERBATIM)
@@ -117,6 +130,17 @@ function(mag_enable_render_frontend target)
             "rust-render-client-vertex=${_root}/shaders/render_frontend/scene_vertex.wgsl"
             "rust-render-client-fragment=${_root}/shaders/render_frontend/scene_fragment.wgsl")
     endif()
+    set(_adapter_receipt "")
+    if(MAG_RENDER_ADAPTER)
+        mag_render_adapter_apply(${target} "${_root}")
+        set(_adapter_receipt ${MAG_RENDER_ADAPTER_RECEIPT_EXTRA}
+            "rust-render-adapter-core-sources=${_root}/crates/mag-render-adapter-core/src"
+            "rust-render-adapter-core-manifest=${_root}/crates/mag-render-adapter-core/Cargo.toml"
+            "rust-render-adapter-link-sources=${_build_crate}/src"
+            "rust-render-adapter-link-manifest=${_build_crate}/Cargo.toml"
+            "rust-render-adapter-link-lock=${_build_crate}/Cargo.lock"
+            "rust-render-adapter-build=${CMAKE_CURRENT_FUNCTION_LIST_DIR}/MagRenderAdapter.cmake")
+    endif()
     set(MAG_RENDER_RECEIPT_EXTRA
         "rust-render-abi-sources=${_root}/crates/mag-render-abi/src"
         "rust-render-abi-manifest=${_root}/crates/mag-render-abi/Cargo.toml"
@@ -128,5 +152,6 @@ function(mag_enable_render_frontend target)
         "rust-render-header=${_root}/src/mag_render_frontend.h"
         "rust-render-library=${_library}"
         ${_native_receipt}
+        ${_adapter_receipt}
         PARENT_SCOPE)
 endfunction()

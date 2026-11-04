@@ -112,6 +112,35 @@ fn noninstanced_site_returns_the_shared_banks_and_keeps_its_refusals() {
         prepare_noninstanced_geometry(input, usize::MAX),
         Err(NoninstancedGeometryError::Deform(_))
     ));
+    // So is a non-finite result from finite inputs: a wind amplitude whose
+    // displacement does not fit binary32.
+    let positions = bank(16, 11, 1.0);
+    let normals = vec![bits([1.0, 1.0, 0.0, 0.0]); 16];
+    let weights = vec![bits([1.0, 0.0, 0.0, 0.0]); 16];
+    let overflow = NoninstancedGeometryInput {
+        group: 3,
+        positions: &positions,
+        normals: &normals,
+        weights: &weights,
+        tangents: None,
+        material_rows: [
+            bits([3.0e38, 1.0, 0.0, 0.0]),
+            bits([1.0, 0.0, 0.0, 0.0]),
+            [0; 4],
+        ],
+        wind: [1.0f32, 0.0, 3.0, 1.0, 0.25].map(f32::to_bits),
+        object_origin: [0; 3],
+    };
+    assert_eq!(
+        validate_noninstanced_geometry(&overflow, usize::MAX),
+        Ok(())
+    );
+    assert!(matches!(
+        prepare_noninstanced_geometry(overflow, usize::MAX),
+        Err(NoninstancedGeometryError::Deform(
+            noninstanced::DeformError::NonFinite(noninstanced::DeformWord::Output { .. })
+        ))
+    ));
 }
 
 fn palette(matrices: usize) -> Vec<u8> {

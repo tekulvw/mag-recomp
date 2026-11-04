@@ -4,6 +4,7 @@
 //! | Module | Role |
 //! | --- | --- |
 //! | [`abi`] | the pointer-bearing packet records from an owned arena |
+//! | [`builtins`] | kind-31/32 animated fragment built-in rows from decoded role values |
 //! | [`memory`] | `GuestSnapshot` as a behaviour `GuestMemory` |
 //! | [`cohort`] | owned cohort records as planner inputs |
 //! | [`packet`] | plan steps and producer passes as packet entries |
@@ -18,6 +19,7 @@
 //! coefficients.
 
 pub mod abi;
+pub mod builtins;
 pub mod cohort;
 pub mod deformation;
 pub mod memory;

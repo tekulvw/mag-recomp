@@ -111,6 +111,46 @@ Receipts add seven extension inputs: `rust-render-sources`, `rust-render-manifes
 archive to the binary. This build provenance is separate from proof of rendering removal or GPU
 completion.
 
+### Build with the game adapter
+
+`-DMAG_RENDER_ADAPTER=ON` (default `OFF`, needs `MAG_RENDER_FRONTEND_NATIVE=ON` and
+`MAG_IMAGE=mage_g`) links the adapter crates and the bridges its source hooks call. Point
+`RECOMP_DIR` at a lift prepared by `tools/render_hooks/prepare.py` (see
+[Source hooks](#source-hooks)) and fetch the link crate's dependencies once:
+
+```sh
+cargo fetch --manifest-path crates/mag-render-adapter-link/Cargo.toml --locked
+```
+
+Cargo then builds `crates/mag-render-adapter-link`, one static library that holds
+`mag-render-native` and `mag-render-adapter-core` from this checkout, in place of the native
+frontend library. Two Rust static libraries in one executable would each carry the standard library
+and clash at link time.
+
+| Option | Adds | Status |
+| --- | --- | --- |
+| `MAG_RENDER_ADAPTER` | configuration lifetime observer (`src/render_adapter`) | available |
+| `MAG_RENDER_ADAPTER_SHADOW_VIEW` | Shadow view-corner observer | available |
+| `MAG_RENDER_ADAPTER_COHORT` | retained cohort observer | refused at configure until its bridge is published |
+| `MAG_RENDER_ADAPTER_UI_HANDOFF` | native scene handoff before the UI (needs `COHORT`) | refused at configure: needs `libs/video/rsx_native_handoff.h`, which the pinned runtime lacks, and its bridge |
+
+At configure time the option reads the `render_adapter_hooks` record in `RECOMP_DIR`. It refuses a
+lift without the record, one prepared without an enabled stage, and one prepared by different
+hook tools, by file set or by SHA-256. Only the lifted files the tool rewrote get the stage guards
+and the bridge include directory, so the other generated translation units keep their compile
+commands. Receipts add the bridges, every hook tool file, the adapter-core and link crate
+sources, manifests and lock, and `cmake/MagRenderAdapter.cmake`; like every receipt extra they
+record content hashes, not paths.
+
+The adapter also has a single runtime master switch, off by default: `MAG_RENDER_ADAPTER=1` in the
+environment, or `mag_render_adapter_enable()` before the first frame. While it is off, every
+bridge entry point that a hook reaches returns at once and the adapter's C entry points return
+their "not ready" results, so an adapter build behaves like the original program.
+
+With `MAG_RENDER_ADAPTER` off, CMake defines the options and does nothing else: it reads no lift
+record, adds no source, definition, library or receipt entry, and builds the native frontend
+library as before.
+
 ## Synthetic verification
 
 From the repository root, with CMake, Ninja, a native C++ compiler and the pinned Rust toolchain:

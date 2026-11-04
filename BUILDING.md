@@ -206,7 +206,7 @@ off by default.
 | CMake extensions | `-DMAG_EXTENSIONS=a.cmake;b.cmake`: each file is included after the `MagRecomp` target exists, with `MAG_TARGET` set, and may append `name=path` to `MAG_RECEIPT_EXTRA` |
 | Receipt extras | `tools/provenance.py --receipt-extra NAME=PATH` (fed from `MAG_RECEIPT_EXTRA`) records a file's or directory's hashes under `extensions` |
 | Lift hooks | `tools/lift.py --hook MODULE` or `MAG_LIFT_HOOKS`: each module's `instrument_source(source)` runs after the built-in hooks |
-| Runtime callbacks | `src/mag_extension.h`: register a `MagExtensionCallbacks` from a static constructor to receive start, frame, trace and payload callbacks |
+| Runtime callbacks | `src/mag_extension.h`: register a `MagExtensionCallbacks` from a static constructor to receive start, frame, trace and payload callbacks. Several extensions may each register prepare, start, frame and stop callbacks (stop runs in reverse order); the trace and payload slots have one owner each |
 
 ## Tests
 

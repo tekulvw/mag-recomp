@@ -11,6 +11,9 @@ name = "mag_render_adapter_scene"
 
 [features]
 default = []
+# Owned program compilation of material draws; needs the pinned native
+# compiler libraries of `mag-render-programs`.
+owned-programs = ["dep:mag-render-programs", "mag-render-adapter-core/owned-programs"]
 
 [dependencies]
 mag-render-adapter-core = { path = "../mag-render-adapter-core" }
@@ -18,6 +21,7 @@ mag-render-adapter-core = { path = "../mag-render-adapter-core" }
 mag-render-behavior = { path = "../mag-render-behavior" }
 # The one shared deformation entry point for Main and the depth pre-pass.
 mag-render-behavior-glue = { path = "../mag-render-behavior-glue" }
+mag-render-programs = { path = "../mag-render-programs", optional = true, features = ["native-compiler"] }
 sha2 = "=0.10.9"
 
 [lints.rust]
