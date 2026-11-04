@@ -24,6 +24,7 @@
 //! | [`program_compilation`] | `program-compilation.md` (frontend side of the translator contract) |
 //! | [`vertex_inputs`] | `vertex-inputs.md` |
 //! | [`raster`] | `raster-state.md` |
+//! | [`scene_plan`] | `scene-plan.md` (planner core) |
 //! | [`waveform`] | helpers defined in `group-zero-deformation.md` |
 //!
 //! Floating-point outputs use ordinary native arithmetic. They are checked against the
@@ -44,6 +45,7 @@ pub mod producer;
 pub mod producers;
 pub mod program_compilation;
 pub mod raster;
+pub mod scene_plan;
 pub mod setup;
 pub mod skinning;
 pub mod surfaces;
