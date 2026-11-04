@@ -41,6 +41,15 @@ Current contents:
   within the tolerances of its deformation specifications;
 - `depth_sources`, `depth_materials`: the depth pre-pass inputs and its
   selected-material programs and fragment builtin requests;
+- `shadow_run`: the adapter from one captured Shadow run (the Depth source
+  capture of its cohort camera slot) to the native depth-only cascade pass.
+  `mag_render_behavior::shadow` describes the pass and routes each caster.
+  Geometry is the run's retained immutable partitions, and the transform follows
+  Main's rule (the four vectors in the item's transform record). Questions the
+  behaviour crate leaves open are decided here and stated in the module: the
+  transform rows, row 42 (unused), culling (`CullPolicy`) and undeformed groups
+  3 and 4. Unprepared casters refuse the run unless the caller chooses to omit
+  and list them;
 - `capture_view`: optional copy-free comparison of guest spans through
   read-only views the host registers
   (`PS3_RENDER_CAPTURE_VIEW_VALIDATION=1`, default off).

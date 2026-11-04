@@ -33,5 +33,6 @@ pub mod geometry_attributes;
 pub mod geometry_streams;
 pub mod material_sources;
 pub mod material_textures;
+pub mod shadow_run;
 pub mod shared_scene_sources;
 pub mod source_acquisition;
