@@ -671,9 +671,13 @@ static int metal_scene_owned(void *opaque, const mag_native_scene *scene, mag_na
                 [e setFrontFacingWinding:pipeline->raster.front_face?MTLWindingClockwise:MTLWindingCounterClockwise];
                 [e setBlendColorRed:pipeline->raster.blend_constant[0] green:pipeline->raster.blend_constant[1]
                     blue:pipeline->raster.blend_constant[2] alpha:pipeline->raster.blend_constant[3]];
+                /* Encoder state persists across draws: always set the bias. */
+                if(pipeline->raster.bias_enabled)[e setDepthBias:pipeline->raster.bias_constant slopeScale:pipeline->raster.bias_slope clamp:0];
+                else [e setDepthBias:0 slopeScale:0 clamp:0];
             }else{
                 [e setCullMode:MTLCullModeNone];
                 [e setFrontFacingWinding:MTLWindingClockwise];
+                [e setDepthBias:0 slopeScale:0 clamp:0];
             }
             MagRenderBuffer *v = find_buffer(c, d->vertices), *i = find_buffer(c, d->indices);
             [e setVertexBuffer:v->gpu offset:d->vertex_offset atIndex:16];

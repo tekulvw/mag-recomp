@@ -16,8 +16,12 @@ int mag_native_raster_validate(const mag_native_raster_state *s) {
         !isfinite(s->bias_slope) || !isfinite(s->bias_clamp))
         return MAG_NATIVE_INVALID;
     if (s->known_fields != MAG_NATIVE_RASTER_KNOWN_ALL || s->unresolved_obligations ||
-        s->bias_enabled || s->topology || s->samples != 1 ||
-        s->cull_mode == MAG_NATIVE_CULL_BOTH)
+        s->topology || s->samples != 1 || s->cull_mode == MAG_NATIVE_CULL_BOTH)
+        return MAG_NATIVE_UNSUPPORTED;
+    /* Depth bias: constant (in units of the minimum resolvable depth
+     * difference) plus slope factor, as every backend applies it. A clamp is
+     * not part of the portable subset (it needs an optional Vulkan feature). */
+    if (s->bias_enabled && s->bias_clamp != 0)
         return MAG_NATIVE_UNSUPPORTED;
     if(s->depth_bounds_enabled&&(s->depth_bounds_min<0||s->depth_bounds_max>1||s->depth_bounds_min>s->depth_bounds_max))return MAG_NATIVE_INVALID;
     /* D3D forbids COLOR factors for the alpha equation and source-alpha-saturate

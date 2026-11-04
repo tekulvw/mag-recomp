@@ -2781,6 +2781,10 @@ impl PipelineCache {
         for f in s.blend_constant {
             key.extend(f.to_bits().to_le_bytes());
         }
+        words(&mut key, &[s.bias_enabled]);
+        for f in [s.bias_constant, s.bias_slope, s.bias_clamp] {
+            key.extend(f.to_bits().to_le_bytes());
+        }
         for a in &p.attributes {
             words(&mut key, &[a.location, a.format, a.offset, a.reserved])
         }
@@ -4150,8 +4154,18 @@ pub(crate) mod packet_tests {
         s.depth_bounds_min = 0.;
         s.depth_bounds_max = 1.;
         s.depth_bounds_enabled = 0;
+        // Depth bias (constant plus slope) is supported; a clamp is not.
         s.bias_enabled = 1;
+        s.bias_constant = -100.;
+        s.bias_slope = -1.;
+        assert_eq!(raster(&s), Ok(()));
+        s.bias_clamp = 0.5;
         assert_eq!(raster(&s), Err(-2));
+        s.bias_clamp = 0.;
+        s.bias_constant = f32::NAN;
+        assert_eq!(raster(&s), Err(-1));
+        s.bias_constant = 0.;
+        s.bias_slope = 0.;
         s.bias_enabled = 0;
         s.blend_enabled = 1;
         s.src_rgb = 10;
