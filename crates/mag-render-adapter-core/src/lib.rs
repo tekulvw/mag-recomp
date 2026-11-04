@@ -1,0 +1,23 @@
+//! Portable parts of the MAG render adapter.
+//!
+//! The adapter reads the game's render sources from guest memory and prepares
+//! owned scenes for the frontend. This crate holds the parts that depend only
+//! on public interface facts (RSX method layout, guest data-structure layouts
+//! needed to read and write guest memory) and on behaviour specified in our own
+//! words. It contains no game content and no code derived from the original
+//! program; see `docs/native-graphics-reimplementation-method.md`.
+//!
+//! Nothing here runs unless a host calls it. Per-frame entry points also check
+//! the default-off master switch in [`runtime`].
+#![deny(unsafe_code)]
+
+#[allow(unsafe_code)] // Lifetime erasure of scoped jobs; join waits for every job.
+pub mod capture_pool;
+pub mod error;
+pub mod fast_hash;
+pub mod guest_memory;
+pub mod material_float;
+#[allow(unsafe_code)] // Bounded caller-owned path/output; no retained pointer.
+pub mod original_hash_ffi;
+#[allow(unsafe_code)] // Unmangled C exports of the switch only.
+pub mod runtime;

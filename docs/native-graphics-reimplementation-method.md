@@ -5,7 +5,7 @@ Native replacements for the retail SPU render jobs (MaterialFlush Main, DepthNor
 ## Rules
 
 1. **Two steps: analysis, then implementation.** The analysis step may read the original code (disassembly, SDK-lifted C, decompiler output) and development-build debug information to understand behavior and data structures. Its product is a written behavioral specification in our own words. The implementation step works from that specification.
-2. **Nothing copied from original code enters Git.** Disassembly, decompiler output, instruction or function hashes, constant tables, embedded strings and byte dumps stay in private scratch space. Documents describe behavior in original wording; guest data-structure layouts are stated only as the interface facts needed to read and write guest memory.
+2. **Nothing copied from original code enters Git.** Disassembly, decompiler output, instruction hashes, constant tables, embedded strings and byte dumps stay in private scratch space. Documents describe behavior in original wording; guest data-structure layouts are stated only as the interface facts needed to read and write guest memory. Identities that verify inputs (file SHA-256 hashes, sizes, offsets, addresses and generated-function hashes keyed by address, as in `tools/occlusion_store_hooks.py`) are allowed; they never explain behavior.
 3. **Specification content.** For each job, write a behavioral specification: guest-visible inputs (job header, descriptors, source buffers), guest-visible outputs (command words, tables, markers), ordering and completion rules, and error/edge cases. Public hardware formats (RSX/GCM method layout) are cited as interface facts. The specification states *what*, never the original's step order, register use or control flow.
 4. **Implement from the specification.** The implementation chooses its own algorithms, data layout, batching and parallelism. Structural similarity to the original is a defect to remove, not a goal.
 5. **The original is a test oracle.** Differential tests run the original module in the SDK interpreter on privately held bytes and compare observable results (output memory, commands, completion state) against the native result. Tests contain generators and comparisons, never the original's code.
@@ -14,6 +14,6 @@ Native replacements for the retail SPU render jobs (MaterialFlush Main, DepthNor
 
 ## Status
 
-This repository contains no native render-job replacements: every SPU job runs as the recompiled original program. New native code must be developed under this method from the start.
+Every SPU job still runs as the recompiled original program by default. The game render adapter's publishable parts are moving into `crates/mag-render-adapter-core` (see [the frontend guide](render-frontend.md#game-adapter)); they are opt-in, off by default, and limited to code that depends only on interface facts and on behavior specified in our own words. Adapter code that was organised around original functions, call order or local-store layout is re-specified and reimplemented under this method before it is published. New native code must be developed under this method from the start.
 
 Black-box capture and analysis tools: `tools/jobio.py` (recording reader), `tools/jobio_provenance.py` (output-to-input relations), `tools/jobio_rules.py` (item-level rule mining with held-out scoring).
