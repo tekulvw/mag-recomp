@@ -4,7 +4,7 @@ This document describes how `crates/mag-render-behavior` (the clean-room impleme
 specifications in [behavior/](behavior/README.md)) plugs into the public adapter core
 (`crates/mag-render-adapter-core`) and the frontend packet ABI (`crates/mag-render-abi`). It names
 only public crates and public interface facts. The parts that can be built from public crates alone
-live in `crates/mag-render-behavior-glue` (added in the following PR); everything else is the adapter's integration work.
+live in `crates/mag-render-behavior-glue`; everything else is the adapter's integration work.
 
 ## Layers
 
@@ -78,9 +78,12 @@ vertex uniform tail), the vertex and index buffers (`vertex_inputs`), and textur
 producers. It holds:
 
 - images keyed by exact provenance (source address and eight descriptor words). Entries come from
-  the producer texture bindings after `effects::validate_producer_bindings`, and from images that
-  earlier producers in this packet wrote;
-- classified depth planes keyed by (location, offset, pitch, width, height);
+  the producer texture binding list (`surfaces::plan_producer_bindings`: a depth-classified
+  request is listed with its derived colour image, any other request with its imported guest
+  image), validated by `effects::validate_producer_bindings`, and from images that earlier
+  producers in this packet wrote. Producers bind only by provenance and decline a depth image;
+- colour snapshots per surface record, for the fog producer's draw 0, which samples the surface
+  it writes. Without a snapshot, a fog program that samples unit 0 declines;
 - per surface record address, the `TargetInfo` built from the supplied `SurfaceBinding`, with
   initialisation flags that are updated as passes write planes.
 
@@ -122,9 +125,9 @@ So:
   because the function is deterministic;
 - a test asserts that the depth and Main consumers of one item receive bit-identical positions.
 
-Group 3 and group 0 still refuse with `HeldWindConstants` until the specification's coefficient
-values are published. When they are, they go into the same shared function, and the same test
-covers them.
+Groups 0 and 3 use this implementation's own wind tuning values. The recompiled original depth job
+uses the game's values, so for wind items only this shared path can feed a depth pass that Main
+tests for equality. Tests cover groups 0, 3, 4 and 11.
 
 ## Not covered yet
 
@@ -132,4 +135,3 @@ covers them.
   the native worker. That belongs to the adapter's packet builder.
 - Native shader lowering and the stored-depth Metal variant (`mag-render-programs` with
   `native-compiler`).
-- Group 0 and group 3 deformation, pending the coefficient values.

@@ -527,10 +527,12 @@ pub fn acquire_with_budget<M: GuestMemory + ?Sized>(
                 length: offset,
             })
     };
-    let depth_distance = reader.bytes(at(r::DEPTH_DISTANCE)?, 20)?;
-    let fog_block = reader.words::<16>(at(r::FOG_BLOCK)?)?;
+    // Read order: projection, depth distance, fog block and downsample record, surface table,
+    // target-state block, then the separately read fields after it.
     let projection_address = at(r::PROJECTION)?;
     let projection = reader.bytes(projection_address, r::PROJECTION_SIZE)?;
+    let depth_distance = reader.bytes(at(r::DEPTH_DISTANCE)?, 20)?;
+    let fog_block = reader.words::<16>(at(r::FOG_BLOCK)?)?;
     let downsample_record = reader.surface(at(r::DOWNSAMPLE_RECORD)?)?;
     let mut surface_table = Vec::with_capacity(8);
     for position in 0..8 {
@@ -543,9 +545,11 @@ pub fn acquire_with_budget<M: GuestMemory + ?Sized>(
         address: base + offset,
         value: be_words::<8>(&target_state, field(offset)),
     };
+    let surface_branch = reader.word(at(r::SURFACE_BRANCH)?)?;
     let selection = reader.words::<3>(at(r::SELECTION_CONTROLS)?)?;
     let fog_controls = reader.word(at(r::FOG_CONTROLS)?)?;
-    let bytes_329c = reader.bytes(at(r::SRGB)?, 4)?;
+    let srgb = reader.bytes(at(r::SRGB)?, 1)?[0];
+    let bank_bytes = reader.bytes(at(r::STENCIL_BRANCH)?, 3)?;
     let renderer = RendererObject {
         address: base,
         depth_distance_a: Tagged {
@@ -573,14 +577,14 @@ pub fn acquire_with_budget<M: GuestMemory + ?Sized>(
         }),
         lighting_source_bank_zero: descriptor(r::LIGHTING_SOURCE_BANK_ZERO),
         lighting_source_no_bank_zero: descriptor(r::LIGHTING_SOURCE_NO_BANK_ZERO),
-        surface_branch: be_u32(&target_state, field(r::SURFACE_BRANCH)),
+        surface_branch,
         explicit_width: be_u32(&target_state, field(r::EXPLICIT_WIDTH)),
         explicit_height: be_u32(&target_state, field(r::EXPLICIT_HEIGHT)),
         selection_controls: selection.value,
         fog_controls,
-        srgb: bytes_329c[0],
-        stencil_branch: bytes_329c[1],
-        aa_enable: bytes_329c[3],
+        srgb,
+        stencil_branch: bank_bytes[0],
+        aa_enable: bank_bytes[2],
     };
 
     // Jitter, parameters and common vertex constants.

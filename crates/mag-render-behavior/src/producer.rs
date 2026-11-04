@@ -6,9 +6,7 @@
 //! match what the specification requires.
 
 use crate::setup::{PipelineState, StencilFace};
-use crate::surfaces::{
-    DepthSource, DescriptorFields, NativeViewport, SelectedSurface, SurfaceError,
-};
+use crate::surfaces::{DescriptorFields, NativeViewport, SelectedSurface, SurfaceError};
 
 /// What the caller knows about an image it can bind.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -44,10 +42,15 @@ pub struct TargetInfo {
 pub trait ProducerResources {
     /// The image whose provenance is exactly (`source_address`, `descriptor`).
     fn image(&self, source_address: u32, descriptor: &[u32; 8]) -> Option<ImageInfo>;
-    /// The image of a classified depth plane.
-    fn depth_plane(&self, source: &DepthSource) -> Option<ImageInfo>;
     /// The images behind the surface record at `record_address`.
     fn target(&self, record_address: u32) -> Option<TargetInfo>;
+    /// A snapshot of the colour of the surface at `record_address`, taken after all earlier work
+    /// and immediately before the next draw. `None` when snapshots are not supported, which
+    /// makes a producer that needs one decline.
+    fn colour_snapshot(&self, record_address: u32) -> Option<ImageInfo> {
+        let _ = record_address;
+        None
+    }
 }
 
 /// What the program decode contract reports about a fragment program.
@@ -157,8 +160,6 @@ pub struct TextureBinding {
     pub descriptor: [u32; 8],
     pub border: Option<u32>,
     pub image: ImageInfo,
-    /// Set when the image is a classified depth plane.
-    pub depth_source: Option<DepthSource>,
 }
 
 /// One full-screen producer draw, in its own pass.
@@ -269,14 +270,56 @@ pub fn check_draw_state(state: &PipelineState) -> Result<(), ProducerError> {
     }
     let stencil = known(state.stencil_enable, "stencil enable")?;
     if stencil {
-        known(state.two_sided_stencil, "two-sided stencil")?;
+        let two_sided = known(state.two_sided_stencil, "two-sided stencil")?;
         let front = known(state.front_stencil, "front stencil")?;
-        let back = known(state.back_stencil, "back stencil")?;
-        if bounds && (front.write_mask != 0 || back.write_mask != 0) {
+        // The back face matters only when two-sided stencil is on.
+        let back_writes = match (two_sided, state.back_stencil) {
+            (true, None) => return Err(ProducerError::UnknownState("back stencil")),
+            (_, Some(back)) => back.write_mask,
+            (false, None) => 0,
+        };
+        if bounds && (front.write_mask != 0 || back_writes != 0) {
             return Err(ProducerError::StencilWrites);
         }
     }
+    raster_complete(state, None).map_err(ProducerError::UnknownState)?;
     Ok(())
+}
+
+/// The producer raster rule: translate with triangles, one sample, colour attachment 0, the
+/// given bias clamp and an unobserved blend constant; every known-field bit must be set and no
+/// obligation may remain. Returns the name of the first incomplete field otherwise.
+pub fn raster_complete(
+    state: &PipelineState,
+    bias_clamp: Option<u32>,
+) -> Result<mag_render_abi::packet::RasterState, &'static str> {
+    use crate::raster::*;
+    let inputs = RasterDrawInputs {
+        topology: Some(Topology::Triangles),
+        samples: Some(1),
+        colour_attachment: 0,
+        blend_constant: BlendConstant::Unobserved,
+        bias_clamp,
+        obligations: 0,
+    };
+    let raster = translate(state, &inputs).map_err(|_| "raster translation")?;
+    for (bit, name) in [
+        (KNOWN_CULL, "cull"),
+        (KNOWN_DEPTH, "depth"),
+        (KNOWN_BLEND, "blend"),
+        (KNOWN_COLOUR_MASK, "colour mask"),
+        (KNOWN_STENCIL, "stencil"),
+        (KNOWN_DEPTH_BOUNDS, "depth bounds"),
+        (KNOWN_BIAS, "polygon offset"),
+    ] {
+        if raster.known_fields & bit == 0 {
+            return Err(name);
+        }
+    }
+    if raster.unresolved_obligations != 0 {
+        return Err("blend constant");
+    }
+    Ok(raster)
 }
 
 /// Sets comparison, reference and read mask on a known stencil face, keeping operations and
@@ -324,7 +367,7 @@ pub(crate) mod tests {
     #[derive(Default)]
     pub(crate) struct Resources {
         pub(crate) images: BTreeMap<(u32, [u32; 8]), ImageInfo>,
-        pub(crate) depth: Option<ImageInfo>,
+        pub(crate) snapshots: BTreeMap<u32, ImageInfo>,
         pub(crate) targets: BTreeMap<u32, TargetInfo>,
     }
 
@@ -332,8 +375,8 @@ pub(crate) mod tests {
         fn image(&self, source_address: u32, descriptor: &[u32; 8]) -> Option<ImageInfo> {
             self.images.get(&(source_address, *descriptor)).copied()
         }
-        fn depth_plane(&self, _source: &DepthSource) -> Option<ImageInfo> {
-            self.depth
+        fn colour_snapshot(&self, record_address: u32) -> Option<ImageInfo> {
+            self.snapshots.get(&record_address).copied()
         }
         fn target(&self, record_address: u32) -> Option<TargetInfo> {
             self.targets.get(&record_address).copied()
@@ -418,7 +461,7 @@ pub(crate) mod tests {
 
     #[test]
     fn draw_state_requirements() {
-        let state = known_state();
+        let state = fullscreen_state(&known_state(), 15);
         assert_eq!(check_draw_state(&state), Ok(()));
         let unknown = PipelineState {
             srgb_output: None,
@@ -430,9 +473,16 @@ pub(crate) mod tests {
         );
         let stencil_unknown_face = PipelineState {
             stencil_enable: Some(true),
+            two_sided_stencil: Some(true),
             back_stencil: None,
             ..state
         };
+        // One-sided stencil does not need the back face.
+        let one_sided = PipelineState {
+            two_sided_stencil: Some(false),
+            ..stencil_unknown_face
+        };
+        assert_eq!(check_draw_state(&one_sided), Ok(()));
         assert_eq!(
             check_draw_state(&stencil_unknown_face),
             Err(ProducerError::UnknownState("back stencil"))
@@ -450,6 +500,15 @@ pub(crate) mod tests {
             ..writes
         };
         assert_eq!(check_draw_state(&masked), Ok(()));
+        // Raster completeness: offset fill must be known disabled.
+        let fill = PipelineState {
+            polygon_offset_fill: Some(true),
+            ..state
+        };
+        assert_eq!(
+            check_draw_state(&fill),
+            Err(ProducerError::UnknownState("polygon offset"))
+        );
     }
 
     #[test]

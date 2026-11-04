@@ -10,7 +10,8 @@ use crate::guest::{be_u16, be_u32};
 use std::collections::HashMap;
 
 /// Sanitisation threshold for fragment constant lanes.
-pub const SANITISE_LIMIT: f64 = 3.0e38;
+/// The binary32 value nearest `3.0e38`; a lane whose magnitude equals it is kept.
+pub const SANITISE_LIMIT: u32 = 0x7f61_b1e6;
 /// The flat variant's colour.
 pub const FLAT_COLOUR: [f32; 4] = [0.65, 0.7, 0.75, 0.125];
 
@@ -170,7 +171,7 @@ pub fn slot_domain(writes: &[(u32, [u32; 4])]) -> usize {
 pub fn sanitise(row: [u32; 4], replaced: &mut u32) -> [u32; 4] {
     row.map(|word| {
         let value = f32::from_bits(word);
-        if value.is_nan() || (value as f64).abs() > SANITISE_LIMIT {
+        if value.is_nan() || value.abs() > f32::from_bits(SANITISE_LIMIT) {
             *replaced += 1;
             0
         } else {
@@ -179,24 +180,27 @@ pub fn sanitise(row: [u32; 4], replaced: &mut u32) -> [u32; 4] {
     })
 }
 
-/// Evaluates inline rows: seeds, then writes in order (later wins), then sanitisation.
+/// Evaluates inline rows: sanitised seeds, then sanitised writes in order (later wins).
+/// The count is of replacements in the inputs: every seed lane, even when later overwritten, plus
+/// each write's lanes once per write, however many rows the write maps to.
 pub fn evaluate_inline_rows(
     layout: &InlineLayout,
     map: &[Vec<usize>],
     writes: &[(u32, [u32; 4])],
 ) -> Result<(Vec<[u32; 4]>, u32), CompileError> {
-    let mut rows: Vec<[u32; 4]> = layout.rows.iter().map(|(_, seed)| *seed).collect();
+    let mut replaced = 0;
+    let mut rows: Vec<[u32; 4]> = layout
+        .rows
+        .iter()
+        .map(|(_, seed)| sanitise(*seed, &mut replaced))
+        .collect();
     for (slot, value) in writes {
         let targets = map.get(*slot as usize).ok_or(CompileError::Mapping)?;
+        let value = sanitise(*value, &mut replaced);
         for row in targets {
-            rows[*row] = *value;
+            rows[*row] = value;
         }
     }
-    let mut replaced = 0;
-    let rows = rows
-        .into_iter()
-        .map(|row| sanitise(row, &mut replaced))
-        .collect();
     Ok((rows, replaced))
 }
 
@@ -705,6 +709,31 @@ mod tests {
             0
         );
         assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn sanitise_threshold_and_counting() {
+        let limit = SANITISE_LIMIT;
+        let mut count = 0;
+        assert_eq!(
+            sanitise([limit, limit | 0x8000_0000, limit + 1, 0], &mut count),
+            [limit, limit | 0x8000_0000, 0, 0]
+        );
+        assert_eq!(count, 1);
+        // Seeds count even when overwritten; a write counts once although it maps to two rows,
+        // and an overwritten write still counts.
+        let mut p = Vec::new();
+        p.extend(instruction(false, true, false));
+        p.extend(constant([f32::NAN.to_bits(), 1, 2, 3]));
+        p.extend(instruction(true, true, false));
+        p.extend(constant([4, 5, 6, 7]));
+        let layout = inline_layout(&p).unwrap();
+        let map = relocation_map(&directory(&[&[1, 3]]), &layout, 1).unwrap();
+        let nan_write = [f32::NAN.to_bits(), 0, 0, 0];
+        let (rows, replaced) =
+            evaluate_inline_rows(&layout, &map, &[(0, nan_write), (0, [9; 4])]).unwrap();
+        assert_eq!(rows, vec![[9; 4], [9; 4]]);
+        assert_eq!(replaced, 2);
     }
 
     #[test]

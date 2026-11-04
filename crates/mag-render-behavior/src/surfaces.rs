@@ -262,6 +262,10 @@ pub enum SurfaceError {
     ScissorOutside,
     DepthAsColour,
     InvalidLocation(u32),
+    /// A considered candidate whose colour DMA context is neither local nor main memory.
+    InvalidDma {
+        address: u32,
+    },
     AmbiguousSource,
     UnsupportedDepthSource,
     /// Main cannot run its producers with this setup record or invocation.
@@ -499,36 +503,35 @@ pub fn associate_colour(
     }
     let location = Location::from_descriptor(descriptor[1])
         .ok_or(SurfaceError::InvalidLocation(d.location_bits))?;
-    let key = |record: &SurfaceRecord| {
-        (
-            Location::from_dma(record.colour_dma()),
-            record.colour_offset(),
-            record.colour_pitch(),
-            record.colour_format(),
-            record.physical_size(),
-        )
-    };
-    let wanted = (
-        Some(location),
-        d.offset,
-        d.pitch,
-        format,
-        Some((d.width, d.height)),
-    );
-    let mut first: Option<usize> = None;
-    for (position, (_, record)) in candidates.iter().enumerate() {
-        if key(record) != wanted {
+    // Candidates with the mapped colour format are considered in order; others are skipped
+    // without looking at their mode. The image a match describes is identified by (location,
+    // offset, pitch, format, physical size, sample grid); matches agree on the first five by
+    // construction, so they can only differ in their sample grid.
+    let mut first: Option<(usize, (u32, u32))> = None;
+    for (position, (address, record)) in candidates.iter().enumerate() {
+        if record.colour_format() != format {
+            continue;
+        }
+        let grid = record.sample_grid().ok_or(SurfaceError::UnsupportedAa {
+            address: *address,
+            mode: record.aa_mode(),
+        })?;
+        let dma = Location::from_dma(record.colour_dma())
+            .ok_or(SurfaceError::InvalidDma { address: *address })?;
+        let matches = record.physical_size() == Some((d.width, d.height))
+            && dma == location
+            && record.colour_offset() == d.offset
+            && record.colour_pitch() == d.pitch;
+        if !matches {
             continue;
         }
         match first {
-            None => first = Some(position),
-            Some(earlier) if key(&candidates[earlier].1) != key(record) => {
-                return Err(SurfaceError::AmbiguousSource);
-            }
+            None => first = Some((position, grid)),
+            Some((_, earlier)) if earlier != grid => return Err(SurfaceError::AmbiguousSource),
             Some(_) => {}
         }
     }
-    Ok(first)
+    Ok(first.map(|(position, _)| position))
 }
 
 /// How the depth plane of a lighting source is read.
@@ -647,6 +650,86 @@ impl LightingSources {
             }
         }
     }
+}
+
+/// One producer texture request: lighting units 0 and 1, group-twelve units 11 to 13.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ProducerTextureRequest {
+    pub unit: u32,
+    pub source_address: u32,
+    /// The unmodified compact descriptor.
+    pub descriptor: [u32; 8],
+}
+
+/// What a producer texture request is bound to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BindingSource {
+    /// A colour image derived from a depth plane, by index into the derived list.
+    Derived(usize),
+    /// The guest image the descriptor describes, imported normally.
+    Guest,
+}
+
+/// A colour image derived from a depth plane with one encoding and one size.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DerivedImage {
+    pub source: DepthSource,
+}
+
+/// The producer texture binding list, built before any producer runs.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProducerBindingPlan {
+    pub requests: Vec<(ProducerTextureRequest, BindingSource)>,
+    pub derived: Vec<DerivedImage>,
+}
+
+/// The two lighting requests: unit 0 compact, unit 1 by the compact form of its full descriptor.
+pub fn lighting_requests(inputs: &ProducerInputs) -> [ProducerTextureRequest; 2] {
+    let sources = LightingSources::of(inputs);
+    [0, 1].map(|unit| {
+        let compact = sources.compact(unit);
+        ProducerTextureRequest {
+            unit,
+            source_address: compact.address,
+            descriptor: compact.value,
+        }
+    })
+}
+
+/// Classifies every producer texture request and shares derived images between requests with
+/// the same depth plane, encoding and image size. An unsupported classification fails the list.
+pub fn plan_producer_bindings(
+    renderer: &RendererObject,
+    requests: &[ProducerTextureRequest],
+) -> Result<ProducerBindingPlan, SurfaceError> {
+    let mut plan = ProducerBindingPlan {
+        requests: Vec::new(),
+        derived: Vec::new(),
+    };
+    for request in requests {
+        let binding = match classify_depth(renderer, &request.descriptor, request.source_address) {
+            DepthClass::Unsupported => return Err(SurfaceError::UnsupportedDepthSource),
+            DepthClass::NotDepth => BindingSource::Guest,
+            DepthClass::Depth(source) => {
+                let key =
+                    |s: &DepthSource| (s.kind, s.location, s.offset, s.pitch, s.width, s.height);
+                let index = match plan
+                    .derived
+                    .iter()
+                    .position(|d| key(&d.source) == key(&source))
+                {
+                    Some(index) => index,
+                    None => {
+                        plan.derived.push(DerivedImage { source });
+                        plan.derived.len() - 1
+                    }
+                };
+                BindingSource::Derived(index)
+            }
+        };
+        plan.requests.push((*request, binding));
+    }
+    Ok(plan)
 }
 
 /// One surface Main needs before it starts.
@@ -1060,6 +1143,106 @@ pub(crate) mod tests {
             (0x3000, colour_record()),
         ];
         assert_eq!(associate_colour(&colour_descriptor(), &two), Ok(Some(1)));
+    }
+
+    #[test]
+    fn vectors_11_to_13_ambiguity_aa_and_negative_zero() {
+        let mut second = record(2560, 720, 8, 2, 0);
+        second.words[8] = 0x7c_0000;
+        second.words[4] = 10240;
+        assert_eq!(
+            associate_colour(
+                &colour_descriptor(),
+                &[(0x1000, colour_record()), (0x2000, second)]
+            ),
+            Err(SurfaceError::AmbiguousSource)
+        );
+        let mut other_format = second;
+        other_format.words[3] = (other_format.words[3] & !0x1f) | 11;
+        assert_eq!(
+            associate_colour(
+                &colour_descriptor(),
+                &[(0x1000, colour_record()), (0x2000, other_format)]
+            ),
+            Ok(Some(0))
+        );
+        let unsupported = record(1280, 720, 8, 2, 2);
+        assert_eq!(
+            associate_colour(
+                &colour_descriptor(),
+                &[(0x1000, colour_record()), (0x3000, unsupported)]
+            ),
+            Err(SurfaceError::UnsupportedAa {
+                address: 0x3000,
+                mode: 2
+            })
+        );
+        let skipped = record(1280, 720, 11, 2, 2);
+        assert_eq!(
+            associate_colour(
+                &colour_descriptor(),
+                &[(0x1000, colour_record()), (0x3000, skipped)]
+            ),
+            Ok(Some(0))
+        );
+        let mut bad_dma = colour_record();
+        bad_dma.words[12] = 0x1234;
+        assert_eq!(
+            associate_colour(&colour_descriptor(), &[(0x4000, bad_dma)]),
+            Err(SurfaceError::InvalidDma { address: 0x4000 })
+        );
+        let s = surface(record(1280, 720, 8, 2, 0));
+        let mut c = constants([0.0, 0.0]);
+        c.clip_min = -0.0;
+        let v = source_viewport(&s, &c).unwrap();
+        assert!(surface_target_viewport(&s, &v, (1280, 720)).is_ok());
+    }
+
+    #[test]
+    fn producer_binding_list() {
+        let mut inputs = inputs_for_requirements();
+        let r = &mut inputs.renderer;
+        r.downsample_record.value = record(1280, 720, 8, 2, 0);
+        r.downsample_record.value.words[16] = 0x40_0000;
+        r.downsample_record.value.words[17] = 5120;
+        // Lighting unit 0 at +0x3140: a packed alias of the downsample record's depth plane.
+        r.lighting_source_no_bank_zero.value =
+            [0x40_0000, 0x0001_8521, 0, 0, 0, 0, (1280 << 16) | 720, 5120];
+        let [unit0, unit1] = lighting_requests(&inputs);
+        // A group-twelve request naming the same plane natively, and one naming a colour image.
+        let native = ProducerTextureRequest {
+            unit: 12,
+            source_address: 0x9000,
+            descriptor: [0x40_0000, 0x0001_9021, 0, 0, 0, 0, (1280 << 16) | 720, 5120],
+        };
+        let alias_again = ProducerTextureRequest {
+            unit: 13,
+            source_address: unit0.source_address,
+            descriptor: unit0.descriptor,
+        };
+        let plan =
+            plan_producer_bindings(&inputs.renderer, &[unit0, unit1, native, alias_again]).unwrap();
+        assert_eq!(plan.requests[0].1, BindingSource::Derived(0));
+        assert_eq!(plan.requests[1].1, BindingSource::Guest);
+        assert_eq!(
+            plan.requests[2].1,
+            BindingSource::Derived(1),
+            "a different encoding is a different image"
+        );
+        assert_eq!(
+            plan.requests[3].1,
+            BindingSource::Derived(0),
+            "same plane, encoding and size share one image"
+        );
+        assert_eq!(plan.derived.len(), 2);
+        let float_depth = ProducerTextureRequest {
+            descriptor: [0, 0x0001_9121, 0, 0, 0, 0, 0x0001_0001, 4],
+            ..native
+        };
+        assert_eq!(
+            plan_producer_bindings(&inputs.renderer, &[float_depth]),
+            Err(SurfaceError::UnsupportedDepthSource)
+        );
     }
 
     #[test]

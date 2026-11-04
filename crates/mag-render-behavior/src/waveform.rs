@@ -2,6 +2,15 @@
 //! `group-zero-deformation.md`, used unchanged by `noninstanced-deformation.md`). They involve no
 //! game-chosen constants.
 
+/// Wind tuning coefficients. These are this implementation's own values, chosen for visual
+/// equivalence with the game's sway; they are not the game's. Each is the binary32 value nearest
+/// the decimal. Group 0 uses `KA1`, `KB1` and `KC`; group 3 uses all five (`KC3 = KC`).
+pub const KA1: f32 = 0.38;
+pub const KA2: f32 = 0.19;
+pub const KB1: f32 = 2.0;
+pub const KB2: f32 = 0.81;
+pub const KC: f32 = 0.335;
+
 /// `frac(x) = x − floor(x)`, in `[0, 1)`.
 pub fn frac(x: f64) -> f64 {
     let f = x - x.floor();

@@ -113,6 +113,7 @@ mod tests {
                     material_flags: 0,
                     mbi: [0; 32],
                     transform: None::<TransformRecord>,
+                    parameter_column: mag_render_behavior::material_values::ParameterColumn::Unused,
                     mesh_constant: [0; 4],
                     pass: PassValues {
                         depth_anchor: 0,

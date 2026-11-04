@@ -161,6 +161,10 @@ pub fn run_fog<R: ProducerResources + ?Sized>(
     let lighting_image = resources
         .image(lighting.address, &lighting.value)
         .ok_or(ProducerError::MissingImage { unit: 1 })?;
+    // Binding is by provenance only; a depth image cannot be read through a colour view.
+    if lighting_image.depth {
+        return Err(ProducerError::MismatchedImage { unit: 1 });
+    }
     units[1].apply_compact(&descriptor1);
 
     let mut textures = Vec::new();
@@ -171,7 +175,6 @@ pub fn run_fog<R: ProducerResources + ?Sized>(
             descriptor: descriptor0,
             border: units[0].border,
             image: scene_image,
-            depth_source: None,
         });
     }
     if usage.samples(1) {
@@ -181,7 +184,6 @@ pub fn run_fog<R: ProducerResources + ?Sized>(
             descriptor: descriptor1,
             border: units[1].border,
             image: lighting_image,
-            depth_source: None,
         });
     }
 
@@ -234,10 +236,20 @@ pub fn run_fog<R: ProducerResources + ?Sized>(
         }
         check_draw_state(&draw_state)?;
         let info = check_target(resources, &target)?;
+        // Draw 0 writes the current surface, so when unit 0 is sampled it reads a snapshot of
+        // that surface's colour taken immediately before the draw, never the attachment. Draw 1
+        // writes another surface and reads the current surface's colour as it is after draw 0.
+        let mut draw_textures = textures.clone();
         if usage.samples(0) && info.colour_image.map(|image| image.id) == Some(scene_image.id) {
-            return Err(ProducerError::Feedback {
-                address: target.address,
-            });
+            let snapshot =
+                resources
+                    .colour_snapshot(surface.address)
+                    .ok_or(ProducerError::Feedback {
+                        address: target.address,
+                    })?;
+            if let Some(binding) = draw_textures.iter_mut().find(|t| t.unit == 0) {
+                binding.image = snapshot;
+            }
         }
         let source = if number == 0 {
             explicit_viewport(
@@ -255,7 +267,7 @@ pub fn run_fog<R: ProducerResources + ?Sized>(
             state: draw_state,
             vertices: triangle,
             fragment_rows: values.fragment_rows.clone(),
-            textures: textures.clone(),
+            textures: draw_textures,
         });
         last = draw_state;
     }
@@ -626,6 +638,57 @@ mod tests {
             Err(ProducerError::Feedback {
                 address: fog.current.surface.address
             })
+        );
+    }
+
+    #[test]
+    fn vector_8_snapshot_and_depth_bindings() {
+        let (inputs, mut fog, mut resources) = setup(true, 0.0);
+        fog.usage = [Some(BOTH); 2];
+        let snapshot = ImageInfo {
+            id: 4242,
+            width: 1280,
+            height: 720,
+            mip_count: 1,
+            samples: 1,
+            layers: 1,
+            two_dimensional: true,
+            depth: false,
+        };
+        resources
+            .snapshots
+            .insert(fog.current.surface.address, snapshot);
+        let out = run_fog(
+            &inputs,
+            &fog,
+            &Default::default(),
+            &stencil_state(),
+            &resources,
+        )
+        .unwrap();
+        let unit0 =
+            |draw: &ProducerDraw| draw.textures.iter().find(|t| t.unit == 0).unwrap().image.id;
+        // Draw 0 samples the snapshot; draw 1 samples the current surface's colour itself.
+        assert_eq!(unit0(&out.draws[0]), 4242);
+        let scene = resources.targets[&fog.current.surface.address]
+            .colour_image
+            .unwrap()
+            .id;
+        assert_eq!(unit0(&out.draws[1]), scene);
+        // A lighting-source binding whose image is a depth image declines.
+        let (inputs, fog, mut resources) = setup(true, 0.0);
+        for image in resources.images.values_mut() {
+            image.depth = true;
+        }
+        assert_eq!(
+            run_fog(
+                &inputs,
+                &fog,
+                &Default::default(),
+                &stencil_state(),
+                &resources
+            ),
+            Err(ProducerError::MismatchedImage { unit: 1 })
         );
     }
 

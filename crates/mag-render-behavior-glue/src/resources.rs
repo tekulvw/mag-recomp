@@ -2,7 +2,6 @@
 
 use mag_render_behavior::effects::{PacketImageInfo, ProducerTextureBinding, SurfaceBinding};
 use mag_render_behavior::producer::{ImageInfo, ProducerResources, TargetInfo};
-use mag_render_behavior::surfaces::DepthSource;
 use std::collections::HashMap;
 
 /// Packet formats that are depth formats.
@@ -10,23 +9,11 @@ fn is_depth_format(format: u32) -> bool {
     matches!(format, 2 | 15 | 16)
 }
 
-type DepthKey = (u32, u32, u32, u32, u32);
-
-fn depth_key(source: &DepthSource) -> DepthKey {
-    (
-        source.location as u32,
-        source.offset,
-        source.pitch,
-        source.width,
-        source.height,
-    )
-}
-
 /// Images and targets known to the packet being built, looked up only by exact keys.
 #[derive(Clone, Debug, Default)]
 pub struct ImageTable {
     images: HashMap<(u32, [u32; 8]), ImageInfo>,
-    depth_planes: HashMap<DepthKey, ImageInfo>,
+    snapshots: HashMap<u32, ImageInfo>,
     targets: HashMap<u32, TargetInfo>,
 }
 
@@ -63,9 +50,9 @@ impl ImageTable {
         );
     }
 
-    /// Records the image of a classified depth plane.
-    pub fn insert_depth_plane(&mut self, source: &DepthSource, image: ImageInfo) {
-        self.depth_planes.insert(depth_key(source), image);
+    /// Records a colour snapshot of a surface, taken immediately before the next draw.
+    pub fn insert_snapshot(&mut self, record_address: u32, image: ImageInfo) {
+        self.snapshots.insert(record_address, image);
     }
 
     /// Records the images behind a surface record. `rsx_colour_format` and `rsx_depth_format`
@@ -116,8 +103,8 @@ impl ProducerResources for ImageTable {
         self.images.get(&(source_address, *descriptor)).copied()
     }
 
-    fn depth_plane(&self, source: &DepthSource) -> Option<ImageInfo> {
-        self.depth_planes.get(&depth_key(source)).copied()
+    fn colour_snapshot(&self, record_address: u32) -> Option<ImageInfo> {
+        self.snapshots.get(&record_address).copied()
     }
 
     fn target(&self, record_address: u32) -> Option<TargetInfo> {
@@ -129,7 +116,6 @@ impl ProducerResources for ImageTable {
 mod tests {
     use super::*;
     use mag_render_behavior::effects::{AttachmentImage, LoadOp};
-    use mag_render_behavior::surfaces::{DepthPlaneKind, Location};
 
     const WORDS: [u32; 8] = [0x2000, 0x0001_a522, 0, 0, 0, 0, 0x00a0_005a, 0];
 
@@ -178,7 +164,7 @@ mod tests {
     }
 
     #[test]
-    fn targets_and_depth_planes() {
+    fn targets_and_snapshots() {
         let mut table = ImageTable::new();
         let binding = SurfaceBinding {
             address: 0x1000,
@@ -208,33 +194,18 @@ mod tests {
         table.mark_written(0x1000, false, true, false);
         assert!(table.target(0x1000).unwrap().depth_initialised);
         assert!(table.target(0x2000).is_none());
-        let source = DepthSource {
-            kind: DepthPlaneKind::NormalisedDepth,
-            location: Location::Local,
-            offset: 0x40_0000,
-            pitch: 5120,
-            width: 1280,
-            height: 720,
-            owner: None,
-        };
-        let image = ImageInfo {
+        let snapshot = ImageInfo {
             id: 9,
-            width: 1280,
-            height: 720,
+            width: 640,
+            height: 180,
             mip_count: 1,
             samples: 1,
             layers: 1,
             two_dimensional: true,
-            depth: true,
+            depth: false,
         };
-        table.insert_depth_plane(&source, image);
-        assert_eq!(table.depth_plane(&source), Some(image));
-        assert_eq!(
-            table.depth_plane(&DepthSource {
-                pitch: 2560,
-                ..source
-            }),
-            None
-        );
+        assert_eq!(table.colour_snapshot(0x1000), None);
+        table.insert_snapshot(0x1000, snapshot);
+        assert_eq!(table.colour_snapshot(0x1000), Some(snapshot));
     }
 }

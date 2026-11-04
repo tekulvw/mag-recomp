@@ -8,8 +8,8 @@ use crate::producer::{
 use crate::producers::ProducerInputs;
 use crate::setup::{Comparison, PipelineState};
 use crate::surfaces::{
-    DepthClass, LightingSources, ViewportConstants, classify_depth, explicit_viewport, select,
-    source_viewport, surface_target_viewport,
+    LightingSources, ViewportConstants, explicit_viewport, select, source_viewport,
+    surface_target_viewport,
 };
 use crate::texture::TextureUnitRecord;
 
@@ -115,11 +115,9 @@ pub fn window_depth(z: f64, zh: f64, pa: f64, pb: f64, pc: f64, pd: f64) -> f64 
 pub fn lighting_constants(i: &LightingMathInputs) -> Result<LightingConstants, ProducerError> {
     // Column 3 of M above row 3 is never read, so it is not checked. Lanes 1–3 of the basis
     // vectors are not part of these inputs.
-    let camera_checked = (0..16).filter(|index| !(index % 4 == 3 && index / 4 < 3));
-    if camera_checked
-        .map(|index| i.camera[index])
-        .any(|v| !v.is_finite())
-    {
+    // Every stored element of M is checked, including column 3, which no output uses: a
+    // non-finite value there signals corrupt input.
+    if i.camera.iter().any(|v| !v.is_finite()) {
         return Err(ProducerError::NonFinite("camera matrix"));
     }
     if i.transform0
@@ -295,17 +293,25 @@ pub fn run_lighting<R: ProducerResources + ?Sized>(
     let s = &inputs.scalars;
     let triangle = fullscreen_triangle(s.t_lo.value, s.t_hi.value, s.t_far.value, s.t_uvfar.value)?;
 
-    // Stencil precondition: a depth-bounds rejection must not be able to change stencil.
+    // Stencil precondition: a depth-bounds rejection must not be able to change stencil. The back
+    // face is needed only when two-sided stencil is on.
     match state.stencil_enable {
         None => return Err(ProducerError::UnknownState("stencil enable")),
         Some(true) => {
+            let two_sided = state
+                .two_sided_stencil
+                .ok_or(ProducerError::UnknownState("two-sided stencil"))?;
             let front = state
                 .front_stencil
                 .ok_or(ProducerError::UnknownState("front stencil"))?;
-            let back = state
-                .back_stencil
-                .ok_or(ProducerError::UnknownState("back stencil"))?;
-            if front.write_mask != 0 || back.write_mask != 0 {
+            // The back face must be known when two-sided stencil is on; a known back face with
+            // writes declines either way (the precondition names both faces).
+            let back_writes = match (two_sided, state.back_stencil) {
+                (true, None) => return Err(ProducerError::UnknownState("back stencil")),
+                (_, Some(back)) => back.write_mask,
+                (false, None) => 0,
+            };
+            if front.write_mask != 0 || back_writes != 0 {
                 return Err(ProducerError::StencilWrites);
             }
         }
@@ -320,66 +326,26 @@ pub fn run_lighting<R: ProducerResources + ?Sized>(
     unit1.apply_full(&sources.unit1.value);
     unit1.border = Some(0xffff_ffff);
     let mut textures = Vec::new();
-    if usage.samples(0) {
-        let tagged = sources.unit0;
-        let binding = match classify_depth(&inputs.renderer, &tagged.value, tagged.address) {
-            DepthClass::Unsupported => {
-                return Err(ProducerError::UnsupportedDepthSource { unit: 0 });
-            }
-            DepthClass::Depth(source) => {
-                let image = resources
-                    .depth_plane(&source)
-                    .ok_or(ProducerError::MissingImage { unit: 0 })?;
-                if !image.depth {
-                    return Err(ProducerError::MismatchedImage { unit: 0 });
-                }
-                check_sampled_image(0, &image, &tagged.value)?;
-                TextureBinding {
-                    unit: 0,
-                    source_address: tagged.address,
-                    descriptor: tagged.value,
-                    border: None,
-                    image,
-                    depth_source: Some(source),
-                }
-            }
-            DepthClass::NotDepth => {
-                let image = resources
-                    .image(tagged.address, &tagged.value)
-                    .ok_or(ProducerError::MissingImage { unit: 0 })?;
-                if image.depth {
-                    return Err(ProducerError::MismatchedImage { unit: 0 });
-                }
-                check_sampled_image(0, &image, &tagged.value)?;
-                TextureBinding {
-                    unit: 0,
-                    source_address: tagged.address,
-                    descriptor: tagged.value,
-                    border: None,
-                    image,
-                    depth_source: None,
-                }
-            }
-        };
-        textures.push(binding);
-    }
-    if usage.samples(1) {
-        let compact = sources.compact(1);
+    // Binding is by provenance only. A depth-classified request already has a derived colour
+    // image in the producer binding list; a binding whose image is a depth image declines.
+    for unit in [0u32, 1] {
+        if !usage.samples(unit) {
+            continue;
+        }
+        let compact = sources.compact(unit);
         let image = resources
             .image(compact.address, &compact.value)
-            .ok_or(ProducerError::MissingImage { unit: 1 })?;
-        let depth_format = (0x90..=0x93).contains(&((compact.value[1] >> 8) & 0x9f));
-        if image.depth && !depth_format {
-            return Err(ProducerError::MismatchedImage { unit: 1 });
+            .ok_or(ProducerError::MissingImage { unit })?;
+        if image.depth {
+            return Err(ProducerError::MismatchedImage { unit });
         }
-        check_sampled_image(1, &image, &compact.value)?;
+        check_sampled_image(unit, &image, &compact.value)?;
         textures.push(TextureBinding {
-            unit: 1,
+            unit,
             source_address: compact.address,
             descriptor: compact.value,
-            border: unit1.border,
+            border: if unit == 1 { unit1.border } else { None },
             image,
-            depth_source: None,
         });
     }
 
@@ -571,10 +537,29 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn l4_ignored_lane() {
+    fn l4_checked_and_ignored_lanes() {
         let mut inputs = math();
         inputs.camera[3] = f32::NAN;
-        assert_eq!(lighting_constants(&inputs), lighting_constants(&math()));
+        assert_eq!(
+            lighting_constants(&inputs),
+            Err(ProducerError::NonFinite("camera matrix"))
+        );
+        let mut inputs = math();
+        inputs.v_one[3] = f32::INFINITY;
+        assert_eq!(
+            lighting_constants(&inputs),
+            Err(ProducerError::NonFinite("V_ONE"))
+        );
+        // Lane 1 of BASIS_A is not read.
+        let mut producer = producer_inputs(false);
+        producer.basis_a = VectorConstant::Read(Tagged {
+            address: 0x40_0000,
+            value: [0.5f32.to_bits(), f32::NAN.to_bits(), 0, 0],
+        });
+        assert_eq!(
+            lighting_math_inputs(&producer).map(|m| lighting_constants(&m)),
+            Ok(lighting_constants(&math()))
+        );
         // Row 3, column 3 is not exempt.
         let mut inputs = math();
         inputs.camera[15] = f32::INFINITY;
@@ -1178,11 +1163,12 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn depth_sources_on_unit_zero() {
+    fn bindings_are_by_provenance_only() {
         let mut inputs = producer_inputs(false);
         let state = known_state();
-        // Native depth through the explicit classification.
-        inputs.renderer.lighting_source_no_bank_zero.value = [
+        // A depth-classified lighting source binds to the derived colour image listed under its
+        // exact provenance.
+        let descriptor = [
             0x40_0000,
             0x0001_9021,
             0,
@@ -1192,34 +1178,74 @@ pub(crate) mod tests {
             (1280 << 16) | 720,
             5120,
         ];
+        inputs.renderer.lighting_source_no_bank_zero.value = descriptor;
         let mut resources = resources_for(&inputs);
-        assert_eq!(
-            run_lighting(&inputs, Some(BOTH), &state, &resources),
-            Err(ProducerError::MissingImage { unit: 0 })
+        let address = inputs.renderer.lighting_source().address;
+        resources.images.insert(
+            (address, descriptor),
+            ImageInfo {
+                depth: false,
+                ..image_for(&descriptor, 7)
+            },
         );
-        resources.depth = Some(ImageInfo {
-            depth: true,
-            ..image_for(&inputs.renderer.lighting_source_no_bank_zero.value, 7)
-        });
         let out = run_lighting(&inputs, Some(BOTH), &state, &resources).unwrap();
-        assert!(out.draws[0].textures[0].depth_source.is_some());
-        // A packed alias: A8R8G8B8 at +0x3140 naming the downsample record's Z24S8 plane.
-        let mut alias = inputs.clone();
-        let mut owner = crate::surfaces::tests::record(1280, 720, 8, 2, 0);
-        owner.words[16] = 0x40_0000;
-        owner.words[17] = 5120;
-        alias.renderer.downsample_record.value = owner;
-        alias.renderer.lighting_source_no_bank_zero.value[1] = 0x0001_8521;
-        let out = run_lighting(&alias, Some(BOTH), &state, &resources).unwrap();
-        assert_eq!(
-            out.draws[0].textures[0].depth_source.unwrap().kind,
-            crate::surfaces::DepthPlaneKind::PackedAlias
+        assert_eq!(out.draws[0].textures[0].image.id, 7);
+        // A binding whose image has a depth format declines.
+        resources.images.insert(
+            (address, descriptor),
+            ImageInfo {
+                depth: true,
+                ..image_for(&descriptor, 7)
+            },
         );
-        // Float depth is unsupported.
-        inputs.renderer.lighting_source_no_bank_zero.value[1] = 0x0001_9121;
         assert_eq!(
             run_lighting(&inputs, Some(BOTH), &state, &resources),
-            Err(ProducerError::UnsupportedDepthSource { unit: 0 })
+            Err(ProducerError::MismatchedImage { unit: 0 })
         );
+        // So does unit 1.
+        let inputs = producer_inputs(false);
+        let mut resources = resources_for(&inputs);
+        for image in resources.images.values_mut() {
+            image.depth = image.id == 101;
+        }
+        assert_eq!(
+            run_lighting(&inputs, Some(BOTH), &state, &resources),
+            Err(ProducerError::MismatchedImage { unit: 1 })
+        );
+    }
+
+    #[test]
+    fn raster_requirements() {
+        let inputs = producer_inputs(false);
+        let resources = resources_for(&inputs);
+        // Polygon-offset fill must be known disabled: with no bias clamp an enabled offset is
+        // never fully known.
+        let fill = PipelineState {
+            polygon_offset_fill: Some(true),
+            offset_factor: Some(0),
+            offset_units: Some(0),
+            ..known_state()
+        };
+        assert_eq!(
+            run_lighting(&inputs, Some(BOTH), &fill, &resources),
+            Err(ProducerError::UnknownState("polygon offset"))
+        );
+        let unknown_front = PipelineState {
+            front_face: None,
+            ..known_state()
+        };
+        assert_eq!(
+            run_lighting(&inputs, Some(BOTH), &unknown_front, &resources),
+            Err(ProducerError::UnknownState("cull"))
+        );
+        // One-sided stencil needs only the front face.
+        let one_sided = PipelineState {
+            stencil_enable: Some(true),
+            two_sided_stencil: Some(false),
+            front_stencil: Some(face(0)),
+            back_stencil: None,
+            ..known_state()
+        };
+        assert!(run_lighting(&inputs, Some(BOTH), &one_sided, &resources).is_ok());
     }
 }

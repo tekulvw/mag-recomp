@@ -19,7 +19,8 @@
 //! | [`producer`] | shared full-screen producer pieces |
 //! | [`normals`] | `geometry-normals.md` |
 //! | [`skinning`] | `skinning-deformation.md` |
-//! | [`noninstanced`] | `noninstanced-deformation.md` (group 4; group 3 is held) |
+//! | [`noninstanced`] | `noninstanced-deformation.md` (groups 3 and 4) |
+//! | [`group_zero`] | `group-zero-deformation.md` |
 //! | [`material_values`] | `material-values.md` |
 //! | [`program_compilation`] | `program-compilation.md` (frontend side of the translator contract) |
 //! | [`vertex_inputs`] | `vertex-inputs.md` |
@@ -30,7 +31,7 @@
 //! | [`quincunx`] | `main-quincunx.md` (nearest-sample approximation, labelled) |
 //! | [`downsample`] | `main-downsample.md` |
 //! | [`finish`] | `main-finish.md` |
-//! | [`waveform`] | helpers defined in `group-zero-deformation.md` |
+//! | [`waveform`] | helpers and wind tuning values from `group-zero-deformation.md` |
 //!
 //! Floating-point outputs use ordinary native arithmetic. They are checked against the
 //! tolerances each specification states, never against a particular evaluation order.
@@ -44,6 +45,7 @@ pub mod finish;
 pub mod fog;
 pub mod fog_values;
 pub mod group_twelve;
+pub mod group_zero;
 pub mod guest;
 pub mod lighting;
 pub mod material_values;
