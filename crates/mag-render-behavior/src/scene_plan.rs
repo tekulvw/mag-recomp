@@ -1137,11 +1137,9 @@ mod tests {
         let items = [
             item(0, 0, transform(0x3f80_0000), 3),
             item(12, 12, transform(0x4000_0000), 3),
-            item(15, 15, transform(0x4040_0000), 3),
+            item(13, 13, transform(0x4040_0000), 3),
         ];
-        // Group 15 is a special route; stop before it to observe the events up to group 13
-        // and check the full order with a group-13 item instead.
-        let (steps, _) = traverse(&items[..2], &event_setup(), 3).unwrap();
+        let (steps, stats) = traverse(&items, &event_setup(), 3).unwrap();
         assert_eq!(
             events(&steps),
             vec![
@@ -1154,7 +1152,8 @@ mod tests {
                     target: 0xb00
                 },
                 ProducerEvent::Group12Textures,
-                ProducerEvent::Finish { previous_group: 12 },
+                ProducerEvent::Group13 { target: 0xc00 },
+                ProducerEvent::Finish { previous_group: 13 },
             ]
         );
         let water = steps
@@ -1165,25 +1164,27 @@ mod tests {
             steps[water - 1],
             PlanStep::Event(ProducerEvent::Group12Textures)
         );
-        assert_eq!(
-            steps.iter().filter(|s| **s == PlanStep::OpenPass).count(),
-            2
-        );
-        // Group 15 events are raised by the transition before the special route refuses.
-        let error = traverse(&items, &event_setup(), 3);
-        assert_eq!(error, Err(PlanError::Unsupported("special Main caller")));
-        let thirteen = [
-            item(0, 0, transform(0x3f80_0000), 3),
-            item(12, 12, transform(0x4000_0000), 3),
-            item(13, 13, transform(0x4040_0000), 3),
-        ];
-        let (steps, stats) = traverse(&thirteen, &event_setup(), 3).unwrap();
-        assert_eq!(events(&steps)[3], ProducerEvent::Group13 { target: 0xc00 });
+        // Passes: before item 0, after Group12Textures, after Group13.
         assert_eq!(
             steps.iter().filter(|s| **s == PlanStep::OpenPass).count(),
             3
         );
         assert_eq!(stats.emitted_items, 3);
+        // The finish's remaining transitions from 13 to 15 raise Group15{1, 0xd00}.
+        assert_eq!(
+            events(&transition_steps(13, 15, &event_setup())),
+            vec![ProducerEvent::Group15 {
+                slot: 1,
+                target: 0xd00
+            }]
+        );
+        // An item in group 15 is refused as a special route instead.
+        let mut fifteen = items.to_vec();
+        fifteen[2] = item(15, 15, transform(0x4040_0000), 3);
+        assert_eq!(
+            traverse(&fifteen, &event_setup(), 3),
+            Err(PlanError::Unsupported("special Main caller"))
+        );
         // Transitions run once per group, after that group's events.
         let transitions: Vec<_> = steps
             .iter()

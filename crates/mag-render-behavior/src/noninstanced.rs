@@ -1,10 +1,10 @@
-//! Group-4 ripple deformation (`noninstanced-deformation.md`).
+//! Group-3 wind and group-4 ripple deformation (`noninstanced-deformation.md`).
 //!
-//! Group 3 (wind) needs five fixed coefficients of the retail program that are awaiting a user
-//! ruling on publication. Group-3 items go through every check that needs no arithmetic and are
-//! then refused with [`DeformError::HeldWindConstants`].
+//! This is the single deformation for these groups. Every pass whose depth must coincide with
+//! Main (the depth pre-pass in particular) must use these positions, or call this function with
+//! the same inputs, so that depth-equal tests hold.
 
-use crate::waveform::{frac, ripple};
+use crate::waveform::{KA1, KA2, KB1, KB2, KC, frac, ripple, wave};
 
 /// The guest fields that decide whether an item is admitted.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -80,13 +80,9 @@ pub enum DeformError {
     GeometryMode(u32),
     WorkerControl(u32),
     MissingTangent,
-    Population {
-        semantic: u32,
-    },
+    Population { semantic: u32 },
     Budget,
     NonFinite(DeformWord),
-    /// Group 3 needs the held wind constants.
-    HeldWindConstants,
 }
 
 /// Checks admission. Returns the group (3 or 4).
@@ -105,7 +101,7 @@ pub fn admit_noninstanced(a: &DeformationAdmission) -> Result<u32, DeformError> 
     }
     let material_bit0 = a.material_flags & 1 != 0;
     let mode = (a.pass_mode | if material_bit0 { 0x20 } else { 0 }) & !0x2;
-    if !matches!(mode, 8 | 10 | 0x28) {
+    if !matches!(mode, 8 | 0x28) {
         return Err(DeformError::GeometryMode(mode));
     }
     let workers = a.pass_workers.min(if material_bit0 { 1 } else { 2 });
@@ -164,6 +160,52 @@ fn check_lanes(
         }
     }
     Ok(())
+}
+
+/// Group 3: displacement along normal lanes x and y and a fixed vertical lane.
+fn wind(i: &DeformationInputs<'_>) -> Result<DeformedBanks, DeformError> {
+    let w = |index: usize| f(i.wind[index]) as f64;
+    let m = |row: usize, lane: usize| f(i.material[row][lane]) as f64;
+    let (frequency, a1, a2, theta) = (m(1, 0) * w(0), m(0, 0) * w(2), m(0, 1) * w(3), w(4));
+    let sum: f64 = i.origin.iter().map(|word| f(*word) as f64).sum();
+    let k = |c: f32| c as f64;
+    let mut positions = Vec::with_capacity(i.positions.len());
+    for vertex in 0..i.positions.len() {
+        let lane = |bank: &[[u32; 4]], l: usize| f(bank[vertex][l]) as f64;
+        let p = [0, 1, 2].map(|l| lane(i.positions, l));
+        let (nx, ny) = (lane(i.normals, 0), lane(i.normals, 1));
+        let weights = [0, 1, 2].map(|l| lane(i.weights, l));
+        let t = weights[1] + sum;
+        let a = theta + t;
+        let b = theta + (k(KC) + t) * (p[0] + p[1] + p[2]);
+        let wb = wave(k(KB1) * b, frequency) + wave(k(KB2) * b, frequency);
+        let wa = wave(k(KA1) * a, frequency) + wave(k(KA2) * a, frequency);
+        let g = weights[0] * a1;
+        let out = [
+            p[0] + wb * g * nx,
+            p[1] + wa * (1.0 - weights[2]) * a2,
+            p[2] + wb * g * ny,
+        ];
+        let mut row = [0u32; 4];
+        for l in 0..3 {
+            let value = out[l] as f32;
+            if !value.is_finite() {
+                return Err(DeformError::NonFinite(DeformWord::Output {
+                    vertex,
+                    lane: l,
+                }));
+            }
+            row[l] = value.to_bits();
+        }
+        row[3] = i.positions[vertex][3];
+        positions.push(row);
+    }
+    Ok(DeformedBanks {
+        positions,
+        normals: i.normals.to_vec(),
+        weights: i.weights.to_vec(),
+        tangents: None,
+    })
 }
 
 /// Deforms one item. All-or-nothing.
@@ -236,7 +278,7 @@ pub fn deform(
     }
 
     if !group4 {
-        return Err(DeformError::HeldWindConstants);
+        return wind(i);
     }
     let tangents = i.tangents.expect("checked above");
     let m = |row: usize, lane: usize| f(i.material[row][lane]) as f64;
@@ -510,25 +552,143 @@ mod tests {
         assert_eq!(budget, Err(DeformError::Budget));
     }
 
-    #[test]
-    fn group_three_is_held_after_checks() {
-        // Unused lanes with arbitrary bits do not refuse; the item then reaches the held stub.
-        let group3 = Item {
+    fn group3(
+        position: [f32; 4],
+        normal: [f32; 4],
+        weight: [f32; 4],
+        m0: [f32; 2],
+        m1x: f32,
+        wind: [f32; 5],
+    ) -> Item {
+        Item {
             group: 3,
+            wind,
+            material: [[m0[0], m0[1], 0.0, 0.0], [m1x, 0.0, 0.0, 0.0], [0.0; 4]],
+            origin: [0.0; 3],
+            position,
+            normal,
+            weight,
             tangent: None,
-            ..Item::ni3()
-        };
-        let result = group3.run_raw(|o| {
-            o.normals[0][2] = 0xffff_ffff;
-            o.normals[0][3] = 0xffff_ffff;
-            o.weights[0][3] = 0xffff_ffff;
-            o.material[0][2] = 0xffff_ffff;
-            o.material[0][3] = 0xffff_ffff;
-            o.material[1][1..].fill(0xffff_ffff);
-            o.material[2] = [0xffff_ffff; 4];
-            o.wind[1] = 0xffff_ffff;
-        });
-        assert_eq!(result, Err(DeformError::HeldWindConstants));
+        }
+    }
+
+    #[test]
+    fn ni1_group_three_phases_free_of_constants() {
+        for (m1x, expected) in [(0.5, [1.5, -0.75, -1.0, 1.0]), (1.0, [1.0, -1.0, 0.0, 1.0])] {
+            let item = group3(
+                [1.0, -1.0, 0.0, 1.0],
+                [0.5, -1.0, 9.0, 0.0],
+                [1.0, 0.0, 0.5, 0.0],
+                [0.5, 1.0],
+                m1x,
+                [1.0, 0.0, 1.0, 0.25, 0.0],
+            );
+            let out = item.run().unwrap();
+            assert_eq!(position(&out), expected);
+            assert!(out.tangents.is_none());
+        }
+    }
+
+    #[test]
+    fn ni2_group_three_closed_form() {
+        for (frequency, expected) in [
+            (0.5, [1.704_297_7, 2.0, 0.0, 1.0]),
+            (1.0, [2.737_702_3, 0.0, 0.0, 1.0]),
+        ] {
+            let item = group3(
+                [1.0, 0.0, 0.0, 1.0],
+                [1.0, 0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0, 0.0],
+                [1.0, 1.0],
+                frequency,
+                [1.0, 0.0, 1.0, 1.0, 0.0],
+            );
+            let got = position(&item.run().unwrap());
+            for lane in 0..4 {
+                assert!(
+                    (got[lane] - expected[lane]).abs() <= 1e-6,
+                    "f {frequency}: {got:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn group_three_unread_lanes_do_not_refuse() {
+        let item = group3(
+            [0.3, 0.2, 0.1, 1.0],
+            [0.6, 0.8, 0.0, 0.0],
+            [0.7, 0.2, 0.4, 0.0],
+            [0.5, 0.25],
+            0.8,
+            [1.0, 0.0, 0.5, 0.75, 12.5],
+        );
+        let clean = item.run().unwrap();
+        let noisy = item
+            .run_raw(|o| {
+                o.normals[0][2] = 0xffff_ffff;
+                o.normals[0][3] = 0xffff_ffff;
+                o.weights[0][3] = 0xffff_ffff;
+                o.material[0][2] = 0xffff_ffff;
+                o.material[0][3] = 0xffff_ffff;
+                o.material[1][1..].fill(0xffff_ffff);
+                o.material[2] = [0xffff_ffff; 4];
+                o.wind[1] = 0xffff_ffff;
+            })
+            .unwrap();
+        assert_eq!(noisy.positions, clean.positions);
+        assert_eq!(noisy.normals[0][2], 0xffff_ffff);
+        assert_eq!(noisy.weights[0][3], 0xffff_ffff);
+        assert_ne!(
+            clean.positions[0],
+            [0.3f32, 0.2, 0.1, 1.0].map(f32::to_bits)
+        );
+    }
+
+    /// Property: group-3 displacement stays inside its envelopes, `[0, 2]·|g·N|` horizontally and
+    /// `[0, 2]·|(1 − W.z)·A2|` vertically.
+    #[test]
+    fn property_group_three_envelopes() {
+        let mut rng = Rng::new(62);
+        for _ in 0..5_000 {
+            let mut r = |lo: f32, hi: f32| rng.range_f32(lo, hi);
+            let item = group3(
+                [r(-10.0, 10.0), r(-10.0, 10.0), r(-10.0, 10.0), 1.0],
+                [r(-1.0, 1.0), r(-1.0, 1.0), r(-1.0, 1.0), 0.0],
+                [r(0.0, 1.0), r(0.0, 1.0), r(0.0, 1.0), 0.0],
+                [r(-2.0, 2.0), r(-2.0, 2.0)],
+                r(-2.0, 2.0),
+                [
+                    r(-2.0, 2.0),
+                    0.0,
+                    r(-2.0, 2.0),
+                    r(-2.0, 2.0),
+                    r(-100.0, 100.0),
+                ],
+            );
+            let got = position(&item.run().unwrap());
+            let (p, n, w, m, wind) = (
+                item.position,
+                item.normal,
+                item.weight,
+                item.material,
+                item.wind,
+            );
+            let g = (w[0] * m[0][0] * wind[2]) as f64;
+            let vertical = ((1.0 - w[2]) * m[0][1] * wind[3]) as f64;
+            let slack = 1e-5 * (1.0 + p.iter().map(|v| v.abs() as f64).sum::<f64>());
+            let within = |delta: f64, scale: f64| {
+                let (lo, hi) = if scale >= 0.0 {
+                    (0.0, 2.0 * scale)
+                } else {
+                    (2.0 * scale, 0.0)
+                };
+                delta >= lo - slack && delta <= hi + slack
+            };
+            assert!(within((got[0] - p[0]) as f64, g * n[0] as f64));
+            assert!(within((got[1] - p[1]) as f64, vertical));
+            assert!(within((got[2] - p[2]) as f64, g * n[1] as f64));
+        }
     }
 
     fn admission() -> DeformationAdmission {

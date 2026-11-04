@@ -123,7 +123,8 @@ pub fn admit_skinning(a: &SkinningAdmission) -> Result<PaletteLocation, Skinning
     }
     let material_bit0 = a.material_flags & 1 != 0;
     let mode = (a.pass_mode | if material_bit0 { 0x20 } else { 0 }) & !0x2;
-    if mode != 8 && mode != 10 {
+    // Bit 1 is cleared, so raw modes 8 and 10 both qualify.
+    if mode != 8 {
         return Err(SkinningError::GeometryMode(mode));
     }
     let workers = a.pass_workers.min(if material_bit0 { 1 } else { 2 });

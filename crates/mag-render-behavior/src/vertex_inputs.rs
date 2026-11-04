@@ -106,7 +106,8 @@ pub struct VertexDraw<'a> {
     pub secondary: AttributeList<'a>,
     pub positions: Rows<'a>,
     pub raw_indices: &'a [u16],
-    pub direct: Prepared<DirectPreparation<'a>>,
+    /// A direct preparation is present or absent; a refused one never reaches packing.
+    pub direct: Option<DirectPreparation<'a>>,
     pub group_zero: Prepared<GroupZeroPreparation<'a>>,
     pub non_instanced: Prepared<NonInstancedPreparation<'a>>,
 }
@@ -114,7 +115,6 @@ pub struct VertexDraw<'a> {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum VertexInputError {
     SourceBindings,
-    DirectPreparation,
     GroupZeroPreparation(String),
     NonInstancedPreparation,
     ConflictingPreparation,
@@ -255,10 +255,7 @@ struct Table<'a> {
 
 fn build_table<'a>(draw: &VertexDraw<'a>) -> Result<Table<'a>, VertexInputError> {
     let present = |refused: bool, present: bool| refused || present;
-    let direct = present(
-        matches!(draw.direct, Prepared::Refused),
-        matches!(draw.direct, Prepared::Present(_)),
-    );
+    let direct = draw.direct.is_some();
     let zero = present(
         matches!(draw.group_zero, Prepared::Refused),
         matches!(draw.group_zero, Prepared::Present(_)),
@@ -269,9 +266,6 @@ fn build_table<'a>(draw: &VertexDraw<'a>) -> Result<Table<'a>, VertexInputError>
     );
     if (direct && (zero || non)) || (zero && non) {
         return Err(VertexInputError::ConflictingPreparation);
-    }
-    if matches!(draw.direct, Prepared::Refused) {
-        return Err(VertexInputError::DirectPreparation);
     }
     if matches!(draw.group_zero, Prepared::Refused) {
         return Err(VertexInputError::GroupZeroPreparation("refused".into()));
@@ -310,7 +304,7 @@ fn build_table<'a>(draw: &VertexDraw<'a>) -> Result<Table<'a>, VertexInputError>
         });
     }
     let auxiliary = match (&draw.direct, &draw.group_zero) {
-        (Prepared::Present(prep), _) => &prep.auxiliary,
+        (Some(prep), _) => &prep.auxiliary,
         (_, Prepared::Present(prep)) => &prep.auxiliary,
         _ => draw
             .auxiliary
@@ -466,7 +460,7 @@ pub fn plan_vertex_inputs<'a>(
     }
 
     let count = match (&draw.direct, &draw.non_instanced, &draw.group_zero) {
-        (Prepared::Present(direct), _, _) => direct.vertex_count,
+        (Some(direct), _, _) => direct.vertex_count,
         (_, Prepared::Present(non), _) => non.positions.len(),
         (_, _, Prepared::Present(zero)) => zero.positions.len(),
         _ => draw.positions.len(),
@@ -503,7 +497,7 @@ pub fn plan_vertex_inputs<'a>(
     }
 
     let indices: Vec<u32> = match (&draw.direct, &draw.group_zero) {
-        (Prepared::Present(direct), _) => direct.indices.to_vec(),
+        (Some(direct), _) => direct.indices.to_vec(),
         (_, Prepared::Present(zero)) => zero.indices.to_vec(),
         _ => draw.raw_indices.iter().map(|i| *i as u32).collect(),
     };
@@ -592,7 +586,7 @@ mod tests {
             secondary: AttributeList::Absent,
             positions: &POSITIONS,
             raw_indices: &[0, 1, 2],
-            direct: Prepared::Absent,
+            direct: None,
             group_zero: Prepared::Absent,
             non_instanced: Prepared::Absent,
         }
@@ -824,10 +818,61 @@ mod tests {
     }
 
     #[test]
+    fn semantic_four_missing_or_unprepared_and_slot_twelve_replacement() {
+        let t = texcoords();
+        let mut draw = base(&t);
+        draw.output_bindings
+            .as_mut()
+            .unwrap()
+            .push(binding(1, 4, 6, 2, 4));
+        draw.non_instanced = Prepared::Present(non_instanced(&POSITIONS, &[]));
+        // Static-source conditions hold but no list has a semantic-4 bank.
+        assert_eq!(
+            pack_vertex_inputs(&draw, 0x0041, 1 << 20),
+            Err(VertexInputError::MissingSemantic {
+                slot: 6,
+                semantic: 4
+            })
+        );
+        // Conditions unmet (mesh group 3).
+        if let Prepared::Present(prep) = &mut draw.non_instanced {
+            prep.mesh_group = 3;
+        }
+        assert_eq!(
+            pack_vertex_inputs(&draw, 0x0041, 1 << 20),
+            Err(VertexInputError::UnpreparedPrimarySemantic {
+                slot: 6,
+                semantic: 4
+            })
+        );
+        // Any auxiliary binding to slot 12 replaces the prepared group-zero colours.
+        let colours = [row([0.5; 4]); 3];
+        let other = [row([0.25; 4]); 3];
+        let mut draw = base(&t);
+        draw.auxiliary
+            .as_mut()
+            .unwrap()
+            .decoded
+            .push(AuxiliaryAttribute {
+                binding: binding(0, 7, 12, 2, 4),
+                rows: &other,
+            });
+        draw.group_zero = Prepared::Present(GroupZeroPreparation {
+            positions: &POSITIONS,
+            indices: &[0, 1, 2],
+            colours: &colours,
+            auxiliary: draw.auxiliary.clone().unwrap(),
+            gpu: None,
+        });
+        let out = pack_vertex_inputs(&draw, 0x1001, 1 << 20).unwrap();
+        assert_eq!(words(&out.vertices[16..32]), other[0].to_vec());
+    }
+
+    #[test]
     fn v12_conflict_and_refusals() {
         let t = texcoords();
         let mut draw = base(&t);
-        draw.direct = Prepared::Present(DirectPreparation {
+        draw.direct = Some(DirectPreparation {
             auxiliary: AuxiliarySet::default(),
             vertex_count: 3,
             indices: &[0],

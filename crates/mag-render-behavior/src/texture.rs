@@ -312,8 +312,8 @@ pub fn decode(record: &TextureUnitRecord) -> Result<DecodedUnit, DecodeError> {
         let Some(sel) = selector[channel] else {
             continue;
         };
-        // A lane that resolves to the constant one (formats 0x81 and 0x94) is not a physical
-        // channel; see the expand vector in the specification.
+        // Physical means the resolved source is a colour component. A lane that is itself the
+        // constant one (lane 0 of formats 0x81 and 0x94) is not physical.
         if !remap[channel].is_colour() {
             continue;
         }
@@ -376,7 +376,10 @@ pub fn max_anisotropy(code: u32) -> Result<f32, SamplerError> {
 }
 
 fn sampler_wrap(axis: AxisAddressing, index: usize) -> Result<u32, SamplerError> {
-    // Open question (recorded): the refusal applies to every axis, observed or not, as written.
+    // An unobserved axis is never refused, whatever its raw code, and encodes as clamp to edge.
+    if !axis.observed {
+        return Ok(0);
+    }
     match axis.mode() {
         Some(WrapMode::Clamp)
         | Some(WrapMode::MirrorOnceToEdge)
@@ -388,9 +391,6 @@ fn sampler_wrap(axis: AxisAddressing, index: usize) -> Result<u32, SamplerError>
             });
         }
         _ => {}
-    }
-    if !axis.observed {
-        return Ok(0);
     }
     Ok(match axis.mode() {
         Some(WrapMode::Repeat) => 1,
@@ -685,6 +685,28 @@ mod tests {
                 Err(SamplerError::UnsupportedAddressing { .. })
             ));
         }
+    }
+
+    #[test]
+    fn vector_4_unobserved_axes_and_check_order() {
+        // r mirror once to edge on a 2-D unit: r is unobserved, accepted, native r wrap 0.
+        let c = enabled(with(2, 0x0006_0301));
+        assert_eq!(native_sampler(&c).unwrap().wrap_r, 0);
+        // Wrap codes are checked before filters.
+        let mut words = with(2, 0x0000_0309);
+        words[5] = 0x0706_1f80;
+        assert_eq!(decode(&unit(words)), Err(DecodeError::Wrap(9)));
+        // Then minification before magnification, then remap.
+        let mut words = with(5, 0x0700_0000);
+        words[4] = 0xc000;
+        assert_eq!(decode(&unit(words)), Err(DecodeError::MinFilter(0)));
+        let mut words = with(5, 0x0706_0000);
+        words[4] = 0xc000;
+        assert_eq!(decode(&unit(words)), Err(DecodeError::MagFilter(7)));
+        // A disabled unit makes no further check.
+        let mut words = with(2, 0x0000_0309);
+        words[3] = 0;
+        assert_eq!(decode(&unit(words)), Ok(DecodedUnit::Disabled(words)));
     }
 
     #[test]

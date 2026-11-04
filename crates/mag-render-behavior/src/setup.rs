@@ -280,6 +280,10 @@ pub enum ApplyError {
     UnconfirmedConstantLoad {
         packet: u32,
     },
+    /// A non-incrementing packet writes a constant data method more than once.
+    RepeatedConstantData {
+        method: u32,
+    },
     Value {
         method: u32,
         value: u32,
@@ -349,6 +353,16 @@ impl KnownRegisters {
                 load_written_since = true;
             }
             if (0x1f00..=0x1f7c).contains(&write.method) {
+                let repeated = bank.methods.iter().any(|other| {
+                    other.packet == write.packet
+                        && other.method == write.method
+                        && other.offset != write.offset
+                });
+                if repeated {
+                    return Err(ApplyError::RepeatedConstantData {
+                        method: write.method,
+                    });
+                }
                 if last_constant_packet.is_some_and(|packet| packet != write.packet)
                     && !load_written_since
                 {
@@ -1253,6 +1267,36 @@ mod tests {
         assert_eq!(
             KnownRegisters::new().apply(&missing),
             Err(ApplyError::MissingConstantLoad)
+        );
+    }
+
+    #[test]
+    fn vector_4_non_incrementing_constant_packets() {
+        let one = bank(&[(0, 0x1efc, 4), (0, 0x1f00, 7)]);
+        let mut known = KnownRegisters::new();
+        known.apply(&one).unwrap();
+        assert_eq!(known.constant(4, 0), Some(7));
+        let mut two = bank(&[(0, 0x1efc, 4), (0, 0x1f00, 7), (0, 0x1f00, 8)]);
+        two.methods[2].packet = 1;
+        let mut fresh = KnownRegisters::new();
+        assert_eq!(
+            fresh.apply(&two),
+            Err(ApplyError::RepeatedConstantData { method: 0x1f00 })
+        );
+        assert_eq!(fresh, KnownRegisters::new());
+        // Copied from guest memory: a non-incrementing two-word packet.
+        let memory = memory(&[
+            (0x1000, 0x0004_1efc),
+            (0x1004, 4),
+            (0x1008, 0x4008_1f00),
+            (0x100c, 1),
+            (0x1010, 2),
+            (0x1014, 0x0002_0000),
+        ]);
+        let copied = copy_setup_bank(&memory, 0x1000, 100, 4).unwrap();
+        assert_eq!(
+            KnownRegisters::new().apply(&copied),
+            Err(ApplyError::RepeatedConstantData { method: 0x1f00 })
         );
     }
 

@@ -3,9 +3,13 @@
 //! Group 1's depth-equal test needs the depth pre-pass and Main to see bit-identical positions
 //! for every deformed item. Each item's prepared banks are computed once, by the single
 //! behaviour-crate function for its group, and both passes receive the same shared result
-//! (including the same refusal). Group 0 and group 3 join here when their wind coefficients
-//! are published; until then the behaviour crate refuses them.
+//! (including the same refusal). Groups 0 and 3 use this implementation's own wind tuning
+//! values; the recompiled original depth job uses the game's, so for wind items only this shared
+//! path can feed a depth pass that Main tests for equality.
 
+use mag_render_behavior::group_zero::{
+    GroupZeroError, GroupZeroInputs, GroupZeroOutput, deform_group_zero,
+};
 use mag_render_behavior::noninstanced::{DeformError, DeformationInputs, DeformedBanks, deform};
 use mag_render_behavior::skinning::{SkinnedBanks, SkinningError, SkinningInputs, skin};
 use std::collections::HashMap;
@@ -22,12 +26,16 @@ pub struct DeformationKey {
 /// A prepared item: the deformed banks of its group.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Prepared {
+    /// Groups 3 (wind) and 4 (ripple).
     Ripple(DeformedBanks),
+    /// Group 0 (instanced wind).
+    GroupZero(GroupZeroOutput),
     Skinned(SkinnedBanks),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PreparationError {
+    GroupZero(GroupZeroError),
     Noninstanced(DeformError),
     Skinning(SkinningError),
 }
@@ -81,6 +89,16 @@ pub fn noninstanced(
     deform(inputs, max_vertices)
         .map(Prepared::Ripple)
         .map_err(PreparationError::Noninstanced)
+}
+
+/// The shared group-0 instance and wind deformation.
+pub fn group_zero(
+    inputs: &GroupZeroInputs<'_>,
+    max_vertices: u64,
+) -> Result<Prepared, PreparationError> {
+    deform_group_zero(inputs, max_vertices)
+        .map(Prepared::GroupZero)
+        .map_err(PreparationError::GroupZero)
 }
 
 /// The shared group-11 skinning.
@@ -171,19 +189,107 @@ mod tests {
             partition: 0,
         };
         let mut bad = inputs(&item);
-        bad.group = 3;
+        bad.group = 11;
         let first = store.prepare(key, || noninstanced(&bad, DEFAULT_MAX_VERTICES));
         assert_eq!(
             *first,
-            Err(PreparationError::Noninstanced(
-                DeformError::HeldWindConstants
-            ))
+            Err(PreparationError::Noninstanced(DeformError::Group))
         );
         let second = store.prepare(key, || unreachable!("prepared once"));
         assert!(Arc::ptr_eq(&first, &second));
         store.clear();
         let other = store.prepare(key, || noninstanced(&inputs(&item), DEFAULT_MAX_VERTICES));
         assert!(other.is_ok());
+    }
+
+    /// Wind items (group 3): the depth pre-pass and Main see bit-identical positions.
+    #[test]
+    fn depth_and_main_see_identical_group_three_positions() {
+        let item = ripple_item();
+        let mut wind = inputs(&item);
+        wind.group = 3;
+        wind.tangents = None;
+        wind.wind = [
+            0.8f32.to_bits(),
+            0,
+            0.5f32.to_bits(),
+            0.25f32.to_bits(),
+            1234.5f32.to_bits(),
+        ];
+        let key = DeformationKey {
+            cohort: 3,
+            item: 2,
+            partition: 0,
+        };
+        let mut store = DeformationStore::new();
+        let depth = store.prepare(key, || noninstanced(&wind, DEFAULT_MAX_VERTICES));
+        let main = store.prepare(key, || noninstanced(&wind, DEFAULT_MAX_VERTICES));
+        assert!(Arc::ptr_eq(&depth, &main));
+        let Ok(Prepared::Ripple(shared)) = &*main else {
+            panic!("wind expected")
+        };
+        let Ok(Prepared::Ripple(own)) = noninstanced(&wind, DEFAULT_MAX_VERTICES) else {
+            panic!("wind expected")
+        };
+        assert_eq!(shared.positions, own.positions);
+        assert_ne!(shared.positions, item.positions);
+    }
+
+    /// Wind items (group 0): the depth pre-pass and Main see bit-identical positions.
+    #[test]
+    fn depth_and_main_see_identical_group_zero_positions() {
+        let positions: Vec<[u32; 4]> = (0..16)
+            .map(|i| bits([i as f32 * 0.1, 0.5, i as f32 * -0.2, 1.0]))
+            .collect();
+        let normals = vec![bits([0.6, 0.8, 0.0, 0.0]); 16];
+        let weights = vec![bits([0.0, 0.0, 0.0, 0.25]); 16];
+        let indices: Vec<u16> = (0..16).collect();
+        let instances = [
+            [0x4200u16, 0, 0, 0x3c00, 0, 0, 0x3c00, 0x3c00],
+            [0, 0x3800, 0xbc00, 0x3800, 0, 0, 0, 0x3c00],
+        ];
+        let pool = [[10u8, 20, 30, 40]; 64];
+        let identity =
+            |row: usize| std::array::from_fn(|lane| if lane == row { 1f32.to_bits() } else { 0 });
+        let zero = GroupZeroInputs {
+            wind: [
+                0.7f32.to_bits(),
+                0,
+                0.5f32.to_bits(),
+                0.5f32.to_bits(),
+                98.25f32.to_bits(),
+            ],
+            material: [bits([0.5, 1.0, 0.0, 0.0]), bits([1.3, 0.0, 0.0, 0.0])],
+            object: [0, 0, 0, 1f32.to_bits(), 0, 0, 0, 1f32.to_bits()],
+            fade: [0, 0],
+            environment: [identity(0), identity(1), identity(2), identity(3)],
+            instances: &instances,
+            colour_frequency: 3,
+            batch_max: 255,
+            colour_pool: &pool,
+            positions: &positions,
+            normals: &normals,
+            weights: &weights,
+            indices: &indices,
+        };
+        let key = DeformationKey {
+            cohort: 4,
+            item: 0,
+            partition: 1,
+        };
+        let mut store = DeformationStore::new();
+        let depth = store.prepare(key, || group_zero(&zero, 1 << 20));
+        let main = store.prepare(key, || group_zero(&zero, 1 << 20));
+        assert!(Arc::ptr_eq(&depth, &main));
+        assert_eq!(store.runs(), 1);
+        let Ok(Prepared::GroupZero(shared)) = &*main else {
+            panic!("group zero expected")
+        };
+        let Ok(Prepared::GroupZero(own)) = group_zero(&zero, 1 << 20) else {
+            panic!("group zero expected")
+        };
+        assert_eq!(shared.positions, own.positions);
+        assert_eq!(shared.positions.len(), 32);
     }
 
     #[test]

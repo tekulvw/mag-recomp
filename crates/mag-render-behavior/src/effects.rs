@@ -416,44 +416,15 @@ pub fn producer_viewport(
     })
 }
 
-/// Producer raster requirements: every recorded field known after the producer's writes.
-/// Polygon offset needs its enable, and when enabled its units and factor; the bias clamp is a
-/// draw input and is only required when the producer supplies one.
+/// Producer raster requirements (`main-effects.md`, common contract): every recorded raster
+/// field known after the producer's writes and no obligation, with triangles, one sample, an
+/// unobserved blend constant and the producer's bias clamp, if it supplies one. Without a clamp,
+/// polygon-offset fill must be known disabled.
 pub fn producer_raster(
     state: &PipelineState,
     bias_clamp: Option<u32>,
 ) -> Result<mag_render_abi::packet::RasterState, EffectsError> {
-    let inputs = crate::raster::RasterDrawInputs {
-        topology: Some(crate::raster::Topology::Triangles),
-        samples: Some(1),
-        colour_attachment: 0,
-        blend_constant: BlendConstant::Unknown,
-        bias_clamp,
-        obligations: 0,
-    };
-    let raster = crate::raster::translate(state, &inputs)
-        .map_err(|_| EffectsError::Raster("translation"))?;
-    use crate::raster::*;
-    for (bit, name) in [
-        (KNOWN_CULL, "cull"),
-        (KNOWN_DEPTH, "depth"),
-        (KNOWN_BLEND, "blend"),
-        (KNOWN_COLOUR_MASK, "colour mask"),
-        (KNOWN_STENCIL, "stencil"),
-        (KNOWN_DEPTH_BOUNDS, "depth bounds"),
-    ] {
-        if raster.known_fields & bit == 0 {
-            return Err(EffectsError::Raster(name));
-        }
-    }
-    match state.polygon_offset_fill {
-        None => return Err(EffectsError::Raster("polygon offset")),
-        Some(true) if state.offset_units.is_none() || state.offset_factor.is_none() => {
-            return Err(EffectsError::Raster("polygon offset"));
-        }
-        _ => {}
-    }
-    Ok(raster)
+    crate::producer::raster_complete(state, bias_clamp).map_err(EffectsError::Raster)
 }
 
 /// Sets min/mag to NEAREST.
@@ -858,13 +829,13 @@ pub(crate) mod tests {
         0,
     ];
 
-    /// A fully known state for producer draws, with depth bounds on, offset fill on and a
+    /// A fully known state for producer draws, with depth bounds on, offset fill off and a
     /// counter-clockwise front face.
     pub(crate) fn producer_state() -> PipelineState {
         PipelineState {
             depth_bounds_enable: Some(true),
             depth_bounds: Some([0, 0x3f80_0000]),
-            polygon_offset_fill: Some(true),
+            polygon_offset_fill: Some(false),
             offset_factor: Some(0),
             offset_units: Some(0),
             front_face: Some(crate::setup::FrontFace::CounterClockwise),
@@ -919,7 +890,24 @@ pub(crate) mod tests {
         );
         assert_eq!(
             (s.depth_bounds_enable, s.polygon_offset_fill),
-            (Some(true), Some(true))
+            (Some(true), Some(false))
+        );
+        // Vector 9: from a state with offset fill on and no bias clamp, the draw is refused.
+        let fill_on = PipelineState {
+            polygon_offset_fill: Some(true),
+            ..producer_state()
+        };
+        assert_eq!(
+            stencil_mask(
+                &r,
+                true,
+                &usage,
+                &bindings,
+                &constants(),
+                &fill_on,
+                &Default::default()
+            ),
+            Err(EffectsError::Raster("polygon offset"))
         );
         // After the draw.
         assert_eq!(out.state.front_stencil.unwrap().write_mask, 0);

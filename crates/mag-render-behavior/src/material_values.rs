@@ -369,6 +369,49 @@ impl PassValues {
     }
 }
 
+/// The item's parameter column, read with its sources.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ParameterColumn {
+    /// The sources were read under technique flags with bit 27 clear: no column was recorded.
+    Unused,
+    /// Rows 44 and 45: the column read from the table, or the null rows.
+    Rows([[u32; 4]; 2]),
+}
+
+/// Reads the parameter column when the technique flags have bit 27 set. An unreadable column
+/// block fails with the read error.
+pub fn read_parameter_column<M: GuestMemory + ?Sized>(
+    memory: &M,
+    technique_flags: u64,
+    mbi: &[u8; 32],
+    table_base: u32,
+) -> Result<ParameterColumn, MaterialError> {
+    if technique_flags & (1 << 27) == 0 {
+        return Ok(ParameterColumn::Unused);
+    }
+    let index = (u32::from_be_bytes([mbi[24], mbi[25], mbi[26], mbi[27]]) >> 15) & 0x7ff;
+    if index == 0 || table_base == 0 {
+        return Ok(ParameterColumn::Rows(NULL_PARAMETER_COLUMN));
+    }
+    let address = table_base
+        .checked_add(128 * ((index - 1) / 4))
+        .ok_or_else(|| MaterialError::Read(format!("parameter column at {table_base:#x}")))?;
+    let bytes = memory
+        .read(address, 128)
+        .map_err(|e| MaterialError::Read(e.to_string()))?;
+    if bytes.len() != 128 {
+        return Err(MaterialError::Read(format!(
+            "short parameter column at {address:#x}"
+        )));
+    }
+    let column = ((index - 1) % 4) as usize;
+    let words: [u32; 8] = std::array::from_fn(|row| be_u32(&bytes, 16 * row + 4 * column));
+    Ok(ParameterColumn::Rows([
+        [words[0], words[1], words[2], words[3]],
+        [words[4], words[5], words[6], words[7]],
+    ]))
+}
+
 /// Everything one prepared item's composition needs besides guest reads.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ItemInputs<'a> {
@@ -379,6 +422,8 @@ pub struct ItemInputs<'a> {
     pub material_flags: u32,
     pub mbi: [u8; 32],
     pub transform: Option<TransformRecord>,
+    /// The parameter column read with the sources (`read_parameter_column`).
+    pub parameter_column: ParameterColumn,
     pub mesh_constant: [u32; 4],
     pub pass: PassValues,
     /// The vertex program's static constant rows, in program order.
@@ -556,25 +601,10 @@ impl MaterialValueState {
         let bit = |n: u32| flags & (1 << n) != 0;
         let mbi24 = u32::from_be_bytes(item.mbi[24..28].try_into().expect("four bytes"));
 
-        // 1. Parameter column.
+        // 1. Parameter column, read with the item's sources.
         if bit(27) {
-            let index = (mbi24 >> 15) & 0x7ff;
-            let base = item.pass.parameter_column_base;
-            let rows = if index == 0 || base == 0 {
-                NULL_PARAMETER_COLUMN
-            } else {
-                let address = base
-                    .checked_add(128 * ((index - 1) / 4))
-                    .ok_or(MaterialError::MissingParameters)?;
-                let bytes =
-                    read_bytes(memory, address, 128).ok_or(MaterialError::MissingParameters)?;
-                let column = ((index - 1) % 4) as usize;
-                let words: [u32; 8] =
-                    std::array::from_fn(|row| be_u32(&bytes, 16 * row + 4 * column));
-                [
-                    [words[0], words[1], words[2], words[3]],
-                    [words[4], words[5], words[6], words[7]],
-                ]
+            let ParameterColumn::Rows(rows) = item.parameter_column else {
+                return Err(MaterialError::MissingParameters);
             };
             self.bank.write(44, rows[0])?;
             self.bank.write(45, rows[1])?;
@@ -629,29 +659,28 @@ impl MaterialValueState {
                 self.bank.rows[row as usize] = self.staging[row as usize];
             }
         }
-        // 6. Transform rows.
-        let q = transform.quaternion.map(|w| domain(w, "quaternion"));
-        let q = [q[0].clone()?, q[1].clone()?, q[2].clone()?, q[3].clone()?];
-        let s = domain(transform.scale, "scale")?;
-        let rotation = scaled_rotation(q, s);
-        let t_rows: [[u32; 4]; 3] = {
-            let mut rows = [[0u32; 4]; 3];
-            for r in 0..3 {
-                for c in 0..3 {
-                    rows[r][c] = narrow(rotation[r][c], "transform")?;
-                }
-                rows[r][3] = transform.translation[r];
+        // 6. Transform rows. The domain rule applies only to values this item computes with;
+        // everything else is copied bit for bit.
+        let rotation = if bit(6) || bit(7) {
+            let mut q = [0.0f64; 4];
+            for (lane, word) in transform.quaternion.iter().enumerate() {
+                q[lane] = domain(*word, "quaternion")?;
             }
-            rows
+            let s = domain(transform.scale, "scale")?;
+            Some(scaled_rotation(q, s))
+        } else {
+            None
         };
         if bit(7) {
-            for (r, row) in t_rows.iter().enumerate() {
-                self.bank.write(r as u32, *row)?;
+            let rotation = rotation.expect("computed for bit 7");
+            for r in 0..3 {
+                let mut row = [0u32; 4];
+                for c in 0..3 {
+                    row[c] = narrow(rotation[r][c], "transform")?;
+                }
+                row[3] = transform.translation[r];
+                self.bank.write(r as u32, row)?;
             }
-        }
-        let mut p = [[0.0f64; 4]; 4];
-        for (index, word) in transform.matrix.iter().enumerate() {
-            p[index / 4][index % 4] = domain(*word, "P")?;
         }
         let adjust = if group_is_eleven(item.identity.group) {
             let a = domain(item.pass.depth_anchor, "depth anchor")?;
@@ -661,33 +690,30 @@ impl MaterialValueState {
             None
         };
         for r in 0..4 {
-            let mut row = [0u32; 4];
-            for l in 0..4 {
-                let value = match (l, adjust) {
-                    (2, Some((a, k))) => p[r][2] * k + p[r][3] * (a * k - a),
-                    _ => p[r][l],
-                };
-                row[l] = narrow(value, "P")?;
+            let mut row: [u32; 4] = std::array::from_fn(|l| transform.matrix[4 * r + l]);
+            if let Some((a, k)) = adjust {
+                let p2 = domain(row[2], "P")?;
+                let p3 = domain(row[3], "P")?;
+                row[2] = narrow(p2 * k + p3 * (a * k - a), "P")?;
             }
             self.bank.write(3 + r as u32, row)?;
         }
         if bit(6) {
+            let rotation = rotation.expect("computed for bit 6");
             let mut w = [[0.0f64; 4]; 4];
             for (index, word) in item.pass.view.iter().enumerate() {
                 w[index / 4][index % 4] = domain(*word, "view")?;
             }
-            let t4: [[f64; 4]; 4] = std::array::from_fn(|r| {
-                if r == 3 {
-                    [0.0, 0.0, 0.0, 1.0]
-                } else {
-                    [
-                        rotation[r][0],
-                        rotation[r][1],
-                        rotation[r][2],
-                        f32::from_bits(transform.translation[r]) as f64,
-                    ]
-                }
-            });
+            let mut t4 = [[0.0f64; 4]; 4];
+            for r in 0..3 {
+                t4[r] = [
+                    rotation[r][0],
+                    rotation[r][1],
+                    rotation[r][2],
+                    domain(transform.translation[r], "translation")?,
+                ];
+            }
+            t4[3] = [0.0, 0.0, 0.0, 1.0];
             for c in 0..3 {
                 let mut row = [0u32; 4];
                 for l in 0..4 {
@@ -795,6 +821,7 @@ mod tests {
             material_flags: 0,
             mbi: [0; 32],
             transform: Some(transform(IDENTITY_Q, [0.0; 3], 1.0)),
+            parameter_column: ParameterColumn::Unused,
             mesh_constant: [1, 2, 3, 4],
             pass: pass(),
             static_rows: &[],
@@ -913,16 +940,29 @@ mod tests {
         let base = 0x8000;
         let words: Vec<u32> = (0..64).collect();
         memory.put_words(base, &words);
-        let mut i = item(2, 1 << 27, 1);
-        i.pass.parameter_column_base = base;
-        i.mbi[24..28].copy_from_slice(&0x0003_0000u32.to_be_bytes());
+        let flags = 1u64 << 27;
+        let mut mbi = [0u8; 32];
+        mbi[24..28].copy_from_slice(&0x0003_0000u32.to_be_bytes());
+        // idx 6: block 1 (base + 128), column 1.
+        let column = read_parameter_column(&memory, flags, &mbi, base).unwrap();
+        assert_eq!(
+            column,
+            ParameterColumn::Rows([[33, 37, 41, 45], [49, 53, 57, 61]])
+        );
+        let mut i = item(2, flags, 1);
+        i.parameter_column = column;
         let mut state = started();
         state.compose(&i, &memory).unwrap();
-        // idx 6: block 1 (base + 128), column 1.
         assert_eq!(state.bank.row(44), Some([33, 37, 41, 45]));
         assert_eq!(state.bank.row(45), Some([49, 53, 57, 61]));
-        // No column, or no table: the null rows.
-        i.mbi[24..28].fill(0);
+        // No column index, or no table: the null rows.
+        let null = ParameterColumn::Rows(NULL_PARAMETER_COLUMN);
+        assert_eq!(
+            read_parameter_column(&memory, flags, &[0; 32], base),
+            Ok(null)
+        );
+        assert_eq!(read_parameter_column(&memory, flags, &mbi, 0), Ok(null));
+        i.parameter_column = null;
         state.compose(&i, &memory).unwrap();
         assert_eq!(
             state.bank.row(44).map(|r| r.map(f32::from_bits)),
@@ -932,20 +972,61 @@ mod tests {
             state.bank.row(45).map(|r| r.map(f32::from_bits)),
             Some([1.0, 0.0, 0.0, 0.0])
         );
-        i.mbi[24..28].copy_from_slice(&0x0003_0000u32.to_be_bytes());
-        i.pass.parameter_column_base = 0;
-        state.compose(&i, &memory).unwrap();
+        // Sources read with bit 27 clear record no column; composing with bit 27 set then fails.
         assert_eq!(
-            state.bank.row(45).map(|r| r.map(f32::from_bits)),
-            Some([1.0, 0.0, 0.0, 0.0])
+            read_parameter_column(&memory, 0, &mbi, base),
+            Ok(ParameterColumn::Unused)
         );
-        // An unreadable block.
-        i.pass.parameter_column_base = base;
-        i.mbi[24..28].copy_from_slice(&0x0300_0000u32.to_be_bytes());
+        i.parameter_column = ParameterColumn::Unused;
         assert_eq!(
             state.compose(&i, &memory),
             Err(MaterialError::MissingParameters)
         );
+        // An unreadable block fails with the read error, not as unused.
+        mbi[24..28].copy_from_slice(&0x0300_0000u32.to_be_bytes());
+        assert!(matches!(
+            read_parameter_column(&memory, flags, &mbi, base),
+            Err(MaterialError::Read(_))
+        ));
+    }
+
+    #[test]
+    fn domain_rule_applies_only_to_computed_values() {
+        let nan = f32::NAN.to_bits();
+        let mut state = started();
+        // Not computed: a NaN quaternion, translation or P lane is copied.
+        let mut i = item(2, 0, 1);
+        let mut t = transform([f32::NAN, 0.0, 0.0, 1.0], [f32::NAN, 0.0, 0.0], 1.0);
+        t.matrix[2] = nan;
+        i.transform = Some(t);
+        compose(&mut state, &i).unwrap();
+        assert_eq!(state.bank.row(3).unwrap()[2], nan);
+        // With bit 7 the quaternion is computed with; the translation is still copied.
+        i.technique.flags = 1 << 7;
+        assert_eq!(
+            compose(&mut state, &i),
+            Err(MaterialError::Domain("quaternion"))
+        );
+        let mut t = transform(IDENTITY_Q, [f32::NAN, 0.0, 0.0], 1.0);
+        i.transform = Some(t);
+        compose(&mut state, &i).unwrap();
+        assert_eq!(state.bank.row(0).unwrap()[3], nan);
+        // With bit 6 the translation is computed with.
+        i.technique.flags = 1 << 6;
+        assert_eq!(
+            compose(&mut state, &i),
+            Err(MaterialError::Domain("translation"))
+        );
+        // Group 11: lanes 2 and 3 are computed with, lanes 0 and 1 are copied.
+        t.translation = [0; 3];
+        t.matrix[0] = nan;
+        let mut g11 = item(11, 0, 1);
+        g11.transform = Some(t);
+        compose(&mut state, &g11).unwrap();
+        assert_eq!(state.bank.row(3).unwrap()[0], nan);
+        t.matrix[3] = nan;
+        g11.transform = Some(t);
+        assert_eq!(compose(&mut state, &g11), Err(MaterialError::Domain("P")));
     }
 
     #[test]
@@ -1187,7 +1268,7 @@ mod tests {
             Err(MaterialError::MissingTransform)
         );
         assert_eq!(state, before);
-        let mut bad = item(2, 0, 9);
+        let mut bad = item(2, 1 << 7, 9);
         bad.transform = Some(transform([f32::NAN, 0.0, 0.0, 1.0], [0.0; 3], 1.0));
         assert_eq!(
             compose(&mut state, &bad),
