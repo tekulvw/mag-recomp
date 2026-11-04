@@ -1,0 +1,25 @@
+[package]
+name = "mag-render-adapter-core"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99"
+license = "MIT"
+description = "Portable parts of the MAG render adapter: checked guest reads, caches and RSX state handling"
+
+[lib]
+name = "mag_render_adapter_core"
+
+[features]
+default = []
+# Owned NV40 program compilation; needs the pinned native compiler libraries.
+owned-programs = ["dep:mag-render-programs"]
+# Owned scene transport records for the frontend packet ABI.
+owned-scene = ["owned-programs", "dep:mag-render-abi"]
+
+[dependencies]
+mag-render-abi = { path = "../mag-render-abi", optional = true }
+mag-render-programs = { path = "../mag-render-programs", optional = true, features = ["native-compiler"] }
+sha2 = "=0.10.9"
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
