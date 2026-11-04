@@ -203,8 +203,8 @@ pub struct Stream {
 
 /// Plans slot `k` of `partition`: length and address replacements and the control check.
 ///
-/// The unsupported-control rule applies where the slot's length is its control word. Slots whose
-/// length the table replaces (10–16 and 18) never use the control as a length.
+/// The unsupported-control rule applies where the slot's length is its control word: slots 0–9,
+/// 17 and 19–23. The control words of slots 10–16 and 18 are never checked or used.
 pub fn plan_slot(
     partition: &PartitionRecord,
     bases: &StreamBases,
@@ -467,7 +467,9 @@ fn lane_bytes(codec: u8) -> Option<usize> {
     })
 }
 
-/// Byte count a declaration reads per vertex, or `None` for an unsupported codec.
+/// Byte count a declaration reads per vertex, or `None` for an unsupported codec. Codecs 6 and 9
+/// always read their whole packed field, whatever the component count, so a codec-9 refusal
+/// fails the declaration even when every lane it affects would be discarded.
 fn bytes_read(d: &Declaration) -> Option<usize> {
     match d.codec {
         6 => Some(4),
@@ -1372,6 +1374,93 @@ mod tests {
         assert_eq!(
             decode_partition(&p, &built_in).unwrap().secondary,
             DecodedList::Failed(StreamError::BuiltinSecondary(0))
+        );
+    }
+
+    #[test]
+    fn v17_control_check_scope() {
+        let mut memory = SparseMemory::new();
+        memory.put(0x5000, &[7; 0x40]);
+        let mut p = record();
+        set_slot(&mut p, 10, 0x0001_0000, 0x5000);
+        p.bytes[0x0a..0x0c].copy_from_slice(&0x40u16.to_be_bytes());
+        set_slot(&mut p, 5, 0x0001_0000, 0x6000);
+        let streams = read_partition_streams(&memory, &p, &StreamBases::default(), 1 << 20);
+        assert_eq!(streams.slot(10), Ok(&stream(0x5000, &[7; 0x40])));
+        assert_eq!(
+            streams.slot(5),
+            Err(StreamError::UnsupportedControl {
+                slot: 5,
+                control: 0x0001_0000
+            })
+        );
+        // The replaced-length slots never check their control words.
+        for k in [11, 12, 13, 14, 15, 16, 18] {
+            set_slot(&mut p, k, 0xffff_ffff, 0);
+            assert!(
+                plan_slot(&p, &StreamBases::default(), k).is_ok(),
+                "slot {k}"
+            );
+        }
+    }
+
+    #[test]
+    fn v18_secondary_per_declaration() {
+        let (table, vertex) = vector_ten(3);
+        let mut primary = table[..16].to_vec();
+        primary[0] = 1;
+        let mut secondary_table = vec![2u8, 16, 0, 0, 0, 0, 0, 0];
+        secondary_table.extend([0, 8, 3, 2, 12, 0, 0, 0]);
+        secondary_table.extend([0, 2, 4, 3, 16, 0, 0, 0]);
+        let mut memory = SparseMemory::new();
+        memory.put(0x10_0000, &vertex);
+        memory.put(0x30_0000, &configuration(255, 1, 0));
+        memory.put(0x31_0000, &primary);
+        memory.put(0x32_0000, &secondary_table);
+        memory.put(0x33_0000, &[0; 16]);
+        let mut p = record();
+        set_slot(&mut p, 7, vertex.len() as u32, 0x10_0000);
+        set_slot(&mut p, 19, 16, 0x30_0000);
+        set_slot(&mut p, 20, 16, 0x31_0000);
+        set_slot(&mut p, 21, secondary_table.len() as u32, 0x32_0000);
+        set_slot(&mut p, 10, 0, 0x33_0000);
+        p.bytes[0x0a..0x0c].copy_from_slice(&16u16.to_be_bytes());
+        let streams = read_partition_streams(&memory, &p, &StreamBases::default(), 1 << 20);
+        let geometry = decode_partition(&p, &streams).unwrap();
+        let DecodedList::Declarations(list) = &geometry.secondary else {
+            panic!("the list succeeds")
+        };
+        assert_eq!(list[0].rows, Err(StreamError::UnsupportedEncoding(8)));
+        assert_eq!(list[1].rows, Ok(vec![[0; 4]]));
+        // An unreadable slot-21 table fails the whole list.
+        set_slot(&mut p, 21, secondary_table.len() as u32, 0x34_0000);
+        let streams = read_partition_streams(&memory, &p, &StreamBases::default(), 1 << 20);
+        assert!(matches!(
+            decode_partition(&p, &streams).unwrap().secondary,
+            DecodedList::Failed(StreamError::Read(_))
+        ));
+    }
+
+    #[test]
+    fn v19_packed_position_below_three_components() {
+        let word = 0x0020_03ffu32.to_be_bytes();
+        assert_eq!(one(6, &word, 1, 1), [1.0, 0.0, 0.0, 1.0]);
+        // The whole 4-byte field must lie in the stream although only x is kept.
+        let d = decl(0, 6, 1, 1, 4);
+        assert_eq!(
+            decode_declaration(&d, 16, &stream(0x10_0000, &word[..2]), 1),
+            Err(StreamError::SourceExtent("declaration bytes"))
+        );
+        // Codec 9: the whole field is decoded, so a selector refusal fails the declaration even
+        // when no decoded lane is kept, and the field must fit.
+        let d = decl(0, 9, 0, 1, 3);
+        assert_eq!(
+            decode_declaration(&d, 16, &stream(0x10_0000, &[0, 0, 12]), 1),
+            Err(StreamError::Normal(NormalError::UnqualifiedSelector(12)))
+        );
+        assert_eq!(
+            decode_declaration(&d, 16, &stream(0x10_0000, &[0, 0]), 1),
+            Err(StreamError::SourceExtent("declaration bytes"))
         );
     }
 

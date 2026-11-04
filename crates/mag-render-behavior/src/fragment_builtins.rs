@@ -18,7 +18,8 @@ pub enum BuiltinError {
     Domain(&'static str),
     /// A computed result whose exact value is not a finite binary32.
     Overflow(&'static str),
-    /// A pass value could not be read.
+    /// A pass value could not be read, including `t` at `PASS+0x1E0` when a kind-31/32 request
+    /// needs it. This is the item's read failure, not an unqualified kind.
     PassRead(String),
 }
 
