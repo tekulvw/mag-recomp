@@ -23,6 +23,15 @@ documentation or captures.
 | [main-downsample.md](main-downsample.md) | Group-15 depth downsample | Partial |
 | [main-finish.md](main-finish.md) | End-of-Main transitions and final state | Partial |
 
+### Deformation
+
+| Specification | Behaviour | Status |
+| --- | --- | --- |
+| [geometry-normals.md](geometry-normals.md) | Three-byte packed normal format | Complete |
+| [skinning-deformation.md](skinning-deformation.md) | Group-11 skinning | Complete; two cases may be refused |
+| [noninstanced-deformation.md](noninstanced-deformation.md) | Group-3 wind and group-4 ripple | Group 4 complete; group 3 awaits constants ruling |
+| [group-zero-deformation.md](group-zero-deformation.md) | Group-0 instance expansion and wind | Awaits constants ruling |
+
 Each document's "Open questions" section lists what is still undecided. A *Partial* status means
 some behaviour depends on evidence or a ruling that is not yet available; the document says which.
 
