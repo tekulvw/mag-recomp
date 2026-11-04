@@ -62,6 +62,7 @@ typedef struct frontend_vk_slot {
     mag_native_sampler_entry *sampler_entries[MAG_NATIVE_MAX_SAMPLERS];uint32_t sampler_count;
     VkImage color,depth;VkDeviceMemory color_memory,depth_memory;VkDeviceSize color_bytes,depth_bytes;
     VkImageView color_view,depth_view;VkFramebuffer framebuffer;
+    VkQueryPool timestamps; int timed;   /* MAG_RENDER_NATIVE_GPU_TIMING: scene start/end */
 } frontend_vk_slot;
 typedef struct frontend_vk {
     mag_native_vulkan_owner owner;
@@ -76,6 +77,12 @@ typedef struct frontend_vk {
      * and still holds, and scene submissions for the periodic report. */
     uint64_t allocated_bytes, scene_submissions;
     uint32_t memory_report_every;
+    /* MAG_RENDER_NATIVE_GPU_TIMING=1: GPU time of each scene submission from
+     * two timestamps, reported in the Metal backend's line format. */
+    int timing_enabled; uint32_t timing_samples; uint64_t timestamp_mask; double timestamp_ns;
+    PFN_vkCreateQueryPool vkCreateQueryPool; PFN_vkDestroyQueryPool vkDestroyQueryPool;
+    PFN_vkCmdResetQueryPool vkCmdResetQueryPool; PFN_vkCmdWriteTimestamp vkCmdWriteTimestamp;
+    PFN_vkGetQueryPoolResults vkGetQueryPoolResults;
     /* Reserved-order submission (reserve_scene): the host's queue order, and
      * the one outstanding reservation's imports, validated under the lease. */
     MagRenderVulkanQueueOrder order;
@@ -455,6 +462,7 @@ static int submit(void *opaque,const mag_native_frame *frame,mag_native_ticket *
     int result=submit_owned(c,frame,out);
     c->owner.host.end(c->owner.host.userdata,c->owner.host.lifetime);return result;
 }
+static void timing_report(frontend_vk *c,frontend_vk_slot *slot,VkResult status);
 static int poll(void *opaque, mag_native_event *events, uint32_t capacity, uint32_t *count) {
     frontend_vk *c = opaque; int fault = 0;
     for (unsigned i = 0; i < 2; ++i) {
@@ -464,6 +472,7 @@ static int poll(void *opaque, mag_native_event *events, uint32_t capacity, uint3
         if (result != VK_SUCCESS) { c->failed = fault = 1; continue; }
         if (*count == capacity) continue;
         events[(*count)++] = (mag_native_event){sizeof(*events), 1, slot->ticket, 1, 1, VK_SUCCESS, 0};
+        timing_report(c, slot, result);
         slot_release(c, slot);
     }
     /* Never return an error alongside a consumed once-only valid receipt: the
@@ -481,6 +490,7 @@ static int close_context(void *opaque) {
         if (slot->descriptors) c->vkDestroyDescriptorPool(c->owner.device, slot->descriptors, NULL);
         if (slot->pool) c->vkDestroyCommandPool(c->owner.device, slot->pool, NULL);
         if (slot->fence) c->vkDestroyFence(c->owner.device, slot->fence, NULL);
+        if (slot->timestamps) c->vkDestroyQueryPool(c->owner.device, slot->timestamps, NULL);
     }
     int sampler_status=mag_native_sampler_registry_close(&c->samplers);if(sampler_status)return sampler_status;
     while (c->buffers) buffer_dispose(c, c->buffers);
@@ -553,6 +563,53 @@ static const mag_native_ops operations = {
     .image_import_certified = reported_image_import_certified, .scene_graphics_create_aux = NULL,
     .submit_scene_v5 = reported_submit_scene_v5, .reserve_scene = reported_reserve_scene, .abandon_scene_reservation = abandon_scene_reservation,
     .buffer_write = buffer_write, .scene_chunk_stats = NULL, .memory_stats = memory_stats};
+/* Opt-in GPU timing. Unavailable timing is said once, never silently absent. */
+static void timing_setup(frontend_vk *c,const MagRenderHostOwner *host){
+    const char *timing=getenv("MAG_RENDER_NATIVE_GPU_TIMING");
+    if(!timing||strcmp(timing,"1"))return;
+    const char *reason=NULL;
+    PFN_vkGetPhysicalDeviceQueueFamilyProperties families=(PFN_vkGetPhysicalDeviceQueueFamilyProperties)
+        host->get_instance_proc(host->instance,"vkGetPhysicalDeviceQueueFamilyProperties");
+    uint32_t count=0,bits=0;
+    if(families){families((VkPhysicalDevice)host->physical_device,&count,NULL);
+        VkQueueFamilyProperties *props=count?calloc(count,sizeof(*props)):NULL;
+        if(props){families((VkPhysicalDevice)host->physical_device,&count,props);
+            if(host->queue_family<count)bits=props[host->queue_family].timestampValidBits;
+            free(props);}}
+#define TIMING_LOAD(name) c->name=(PFN_##name)host->get_device_proc(host->device,#name);if(!c->name&&!reason)reason="missing " #name;
+    TIMING_LOAD(vkCreateQueryPool) TIMING_LOAD(vkDestroyQueryPool) TIMING_LOAD(vkCmdResetQueryPool)
+    TIMING_LOAD(vkCmdWriteTimestamp) TIMING_LOAD(vkGetQueryPoolResults)
+#undef TIMING_LOAD
+    if(!reason&&!bits)reason="queue family has no timestamps";
+    if(!reason&&c->owner.properties.limits.timestampPeriod<=0)reason="no timestamp period";
+    VkQueryPoolCreateInfo info={.sType=VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO,.queryType=VK_QUERY_TYPE_TIMESTAMP,.queryCount=2};
+    for(unsigned i=0;i<2&&!reason;++i)
+        if(c->vkCreateQueryPool(c->owner.device,&info,NULL,&c->slots[i].timestamps)!=VK_SUCCESS)reason="query pool creation failed";
+    if(reason){
+        for(unsigned i=0;i<2;++i)if(c->slots[i].timestamps){c->vkDestroyQueryPool(c->owner.device,c->slots[i].timestamps,NULL);c->slots[i].timestamps=VK_NULL_HANDLE;}
+        fprintf(stderr,"[mag native gpu timing] unavailable backend=vulkan reason=%s\n",reason);return;
+    }
+    c->timestamp_mask=bits>=64?~0ull:((1ull<<bits)-1);
+    c->timestamp_ns=c->owner.properties.limits.timestampPeriod;
+    c->timing_enabled=1;
+}
+/* After a timed slot's fence signalled: one line per submission, the first
+ * 256, as the Metal backend reports them (seconds on the device's clock). */
+static void timing_report(frontend_vk *c,frontend_vk_slot *slot,VkResult status){
+    if(!slot->timed)return;
+    slot->timed=0;
+    if(c->timing_samples>=256)return;
+    ++c->timing_samples;
+    uint64_t ticks[2]={0,0};
+    const int read=status==VK_SUCCESS&&c->vkGetQueryPoolResults(c->owner.device,slot->timestamps,0,2,sizeof(ticks),ticks,
+        sizeof(ticks[0]),VK_QUERY_RESULT_64_BIT)==VK_SUCCESS;
+    const double start=read?(double)(ticks[0]&c->timestamp_mask)*c->timestamp_ns*1e-9:0,
+                 end=read?(double)(ticks[1]&c->timestamp_mask)*c->timestamp_ns*1e-9:0;
+    const int available=read&&end>=start&&start>0;
+    fprintf(stderr,"[mag native gpu timing] generation=%llu ticket=%llu status=%u available=%d gpu_start_seconds=%.9f gpu_end_seconds=%.9f gpu_ms=%.6f backend=vulkan\n",
+        (unsigned long long)slot->ticket.device_generation,(unsigned long long)slot->ticket.submission_id,(unsigned)status,
+        available,start,end,available?(end-start)*1000.0:-1.0);
+}
 static int vulkan_create(const MagRenderHostOwner *host,uint64_t known,uint64_t enabled,mag_native_device **out) {
     if (!host || !out || host->backend!=MAG_RENDER_HOST_VULKAN) return MAG_NATIVE_INVALID;
     *out=NULL;int status=host->retain(host->userdata,host->lifetime);
@@ -597,6 +654,7 @@ static int vulkan_create(const MagRenderHostOwner *host,uint64_t known,uint64_t 
         if(result==VK_SUCCESS){slot->descriptor_sets=160;slot->descriptor_counts[0]=2048;slot->descriptor_counts[1]=2048;slot->descriptor_counts[2]=1024;slot->descriptor_counts[3]=1024;}
         if(result!=VK_SUCCESS) {close_context(c);return MAG_NATIVE_ALLOCATION_FAILED;}
     }
+    timing_setup(c,host);
     *out=mag_native_wrap(&operations,c);if(!*out) {close_context(c);return MAG_NATIVE_ALLOCATION_FAILED;}
     return MAG_NATIVE_OK;
 }
