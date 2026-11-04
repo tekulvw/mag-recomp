@@ -25,7 +25,8 @@ Out of scope: the vertex program, culling, and the other groups. Group 0 is in
 | Group 4 has tangents | a tangent bank (semantic 3) exists |
 
 The primary material fallback (96 bytes from the draw-batch 24-bit address when no material copy
-exists) is the same as for group 0. Any failed condition is a visible, typed refusal of this
+exists) is the same as for group 0. That address rule is the general primary-material rule for
+every mesh group ([material-sources.md](material-sources.md)). Any failed condition is a visible, typed refusal of this
 preparation.
 
 ## Inputs
@@ -271,4 +272,4 @@ expected position `(0.5, 1, 0.25, 1)`.
    or a non-zero palette length are refused. Their behaviour has not been specified.
 2. **Coupling.** The attribute bank decoders (including the spherical normal codec in
    [geometry-normals.md](geometry-normals.md)) and the primary-before-secondary declaration rule are
-   shared with the other geometry specifications.
+   in [geometry-streams.md](geometry-streams.md).

@@ -7,8 +7,7 @@ unit direction with a handedness sign, referred to here as codec 9. The decoder 
 value: a unit vector in lanes 0 to 2 and ±1 in lane 3. It is used for normals and tangents in the
 primary and secondary attribute banks that feed every deformation specification.
 
-Out of scope: how a stream, stride and per-vertex offset are located (geometry stream
-specification), and the component-default policy applied when a position-semantic consumer reads
+Out of scope: how a stream, stride and per-vertex offset are located ([geometry-streams.md](geometry-streams.md)), and the component-default policy applied when a position-semantic consumer reads
 fewer than four components (lanes past the declared count become 0, and lane 3 becomes 1).
 
 ## Inputs

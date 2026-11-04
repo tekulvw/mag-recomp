@@ -202,6 +202,6 @@ matrix 1 and use influence `(255, 1)` and zeros: `p = (0, 0, 0, 1)` → `(1, 2, 
 3. **Weight constant.** The weight scale is stated as exactly `1/255`. The retail program's value
    differs from the correctly rounded `1/255` by about one binary32 ULP. That is inside the
    tolerance and needs no ruling unless bit-exact output is ever required.
-4. **Coupling.** The stream descriptor convention (where stream 5 and stream 19 are found in the
-   partition record) and the attribute bank decoders are shared with the geometry stream
-   specifications.
+4. **Coupling.** Where streams 3, 4, 5 and 19 are found in the partition record, and the attribute
+   bank decoders, are in [geometry-streams.md](geometry-streams.md). The palette control words at
+   partition `+0x48` and `+0x50` are the control words of slots 3 and 4.

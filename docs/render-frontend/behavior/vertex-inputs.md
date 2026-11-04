@@ -10,7 +10,8 @@ and the Main planner ([scene-plan.md](scene-plan.md)) use.
 
 Applies to retail v1.0. Out of scope:
 
-- how attribute banks are decoded from partition streams (the geometry stream codecs);
+- how attribute banks are decoded from partition streams ([geometry-streams.md](geometry-streams.md)).
+  The primary and secondary banks used below follow its "Looking up a semantic" rule;
 - the deformation that produces prepared banks ([group-zero-deformation.md](group-zero-deformation.md),
   [noninstanced-deformation.md](noninstanced-deformation.md),
   [skinning-deformation.md](skinning-deformation.md));
@@ -55,6 +56,23 @@ A draw supplies:
     attributes. It may instead be GPU-produced (below);
   - *non-instanced*: prepared positions, normals, weights and optionally tangents, plus the
     preparation's mesh group, geometry mode and static-source facts.
+
+**Skinned items** (group 11, [skinning-deformation.md](skinning-deformation.md)) have no
+preparation kind of their own. A successful skinning result enters vertex-input packing as a
+*non-instanced* preparation with:
+
+- mesh group 11 and the item's geometry mode;
+- positions: the skinned positions;
+- normals: the skinned normals;
+- tangents: the skinned tangents, always present;
+- weights: empty. Skinning consumes the source weights, so a program that reads semantic 9 gets a
+  *missing semantic* error for that slot;
+- no static-source facts. A program that reads semantic 4 gets an *unprepared primary semantic*
+  error, because the static-source conditions cannot hold.
+
+A refused skinning result is a refused non-instanced preparation. The skinned banks must not be
+replaced by the raw source banks, and the normals and tangents must not be left empty when the
+skinning result has them.
 
 A preparation may itself be a recorded refusal. Using a refused preparation is an error.
 
@@ -248,6 +266,12 @@ Notation: rows are written as floats; bytes are little-endian.
     preparation*.
 13. **Group-zero colour.** A group-zero preparation with colour rows, and no other slot-12 binding.
     Expected: bit 12 set, and slot 12 rows are the prepared colours.
+
+14. **Skinned preparation.** A group-11 skinning result with 3 vertices (positions, normals and
+    tangents present) and output bindings for semantics 1 (slot 0), 2 (slot 2) and 3 (slot 6):
+    effective mask `0x45`, and slots 0, 2 and 6 are the skinned positions, normals and tangents.
+    The same draw with an output binding for semantic 9: *missing semantic* for that slot. With
+    semantic 4: *unprepared primary semantic*.
 
 ## Open questions
 

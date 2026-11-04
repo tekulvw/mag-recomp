@@ -39,7 +39,8 @@ not evidence of malformed data.
 If the primary material copy is unavailable, 96 bytes are read from the 24-bit guest address in
 bytes `+0x06..+0x08` of the draw-batch record (low byte zero), provided
 `(draw-batch u32 +0x1C AND 0x1FF) × 16 ≥ 96`; otherwise the preparation is refused as
-"missing material".
+"missing material". That address is the general primary-material rule for every mesh group, not
+a group-0 special case ([material-sources.md](material-sources.md)).
 
 ## Inputs
 
@@ -48,6 +49,7 @@ All fields are big-endian.
 | Object | Field | Meaning |
 | --- | --- | --- |
 | Pass record (688 bytes) | `+0x238` `u32` | guest address of the 128-byte view environment record |
+| | `+0x284` `u32` | geometry resource base `G` (a guest address) |
 | | `+0x260` `f32` | wind frequency factor `ω0` |
 | | `+0x264` `f32` | unused by this behaviour |
 | | `+0x268` `f32` | first wind amplitude factor `ω2` |
@@ -66,10 +68,27 @@ All fields are big-endian.
 | View environment record (128 bytes) | `+0x40` `f32` ×4 | row `E3` (x, y, z, w). Rows at `+0x10`, `+0x20`, `+0x30` do not affect any output but must be finite |
 | Mesh record (192 bytes) | `+0x34` `u32` | low 16 bits: colour frequency `F` |
 | Partition record (544 bytes) | `+0xFC` `u32` | batch maximum `Bmax` |
-| Instance rows | `16 × I` bytes at resource base + offset | one row per instance (decoding below) |
-| Colour pool | `4 × C` bytes | `C` entries of four unsigned bytes R, G, B, A (`C` defined below) |
-| Partition vertex banks | semantics 1, 2, 9 | positions `P` (xyz), normals `N` (xyz), weights `W` (lane 3 = `w3`), each with `V` entries, decoded by the geometry stream codecs |
+| Instance rows | `16 × I` bytes at the instance-row address (below) | one row per instance (decoding below) |
+| Colour pool | `4 × C` bytes at the colour-pool location (below) | `C` entries of four unsigned bytes R, G, B, A (`C` defined below) |
+| Partition vertex banks | semantics 1, 2, 9 | positions `P` (xyz), normals `N` (xyz), weights `W` (lane 3 = `w3`), each with `V` entries, decoded as in [geometry-streams.md](geometry-streams.md) |
 | Partition index list | `u16` × `K` | triangle indices into `0..V-1` |
+
+### Guest addresses of the instance rows and colour pool
+
+- **Instance rows.** The address is `G + (u32 transform+0x60 AND 0x7FFFFFFF)`, computed modulo
+  `2^32`. `G` is the pass record's geometry resource base at `+0x284`. The `16 × I` bytes are read
+  from that guest address.
+- **Colour pool.** `u32 transform+0x64` names an RSX memory location, not a guest address. Bit 31
+  selects the location: 0 is local video memory and 1 is main memory. Bits 0–30 are the byte
+  offset in that location. The location and offset are turned into guest addresses with the same
+  rule the RSX uses for texture and vertex data, through the GCM address map:
+  - local video memory: the offset is added to the base of the RSX local-memory mapping;
+  - main memory: the offset is an RSX I/O offset, translated through the GCM I/O mapping table.
+    That table maps 1 MiB I/O pages to guest pages that need not be contiguous, so a pool that
+    crosses a page boundary is read page by page, each piece at its own translated address.
+
+  An offset with no mapping, or a range that runs past a mapped area, fails the preparation as a
+  source read error.
 
 When a semantic is declared in both the primary and the secondary declaration lists, the first
 primary declaration wins, including when its decode failed (then this preparation is refused).
@@ -347,6 +366,17 @@ implementation must agree within the position tolerance.
 - `F = 1` → colour frequency.
 - Environment row `E1.y` = NaN → unqualified float, even though `E1` does not affect any output.
 
+### GZ-8: instance-row and colour-pool addresses
+
+- `G = 0x10000000`, `transform+0x60 = 0x80001230`: the instance rows are read from `0x10001230`.
+  `transform+0x60 = 0x00001230` (bit 31 clear): refused before any read.
+- `transform+0x64 = 0x80200010`: main memory, I/O offset `0x200010`. If I/O page 2 maps to guest
+  address `0x30500000`, the pool starts at `0x30500010`.
+- `transform+0x64 = 0x802FFFF8` with `C = 4` (16 bytes), page 2 mapped to `0x30500000` and page 3
+  to `0x30900000`: bytes 0–7 come from `0x305FFFF8` and bytes 8–15 from `0x30900000`.
+- `transform+0x64 = 0x00000400`: local video memory, offset `0x400` from the local-memory base.
+- An unmapped I/O page: refused as a source read error.
+
 ## Open questions
 
 1. **Subnormal fade halves.** The current reference decodes a subnormal half-float (`E = 0`,
@@ -355,6 +385,7 @@ implementation must agree within the position tolerance.
    fade multipliers or starts below `2^-14`.
 2. **Colour frequency 0 and 1.** For these values the colour index depends on a base index
    inherited from earlier state, which has not been specified. They are refused.
-3. **Coupling to other specifications.** The geometry stream codecs (positions, normals, weights,
-   instance-row location), the auxiliary attribute expansion for the other slots, and the pass
-   route rule (`+0x144`) are specified elsewhere or still need specifications.
+3. **Coupling to other specifications.** The geometry stream codecs are in
+   [geometry-streams.md](geometry-streams.md), and the instance-row location is above. The
+   auxiliary attribute expansion for the other slots, and the pass route rule (`+0x144`), are
+   specified elsewhere or still need specifications.
