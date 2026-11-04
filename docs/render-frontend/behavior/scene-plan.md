@@ -25,9 +25,9 @@ These behaviours are used here but specified elsewhere or not yet specified:
 | Setup-bank copy and register knowledge | [material-setup.md](material-setup.md) |
 | Texture-unit decode, native sampler, view remap, depth comparison | [texture-unit-controls.md](texture-unit-controls.md) |
 | Producer events (what each one records) | [main-effects.md](main-effects.md) and the producer specifications it lists |
-| Material value composition (vertex/fragment constants, current attributes, update-only observation) | not yet public |
-| Program compilation, vertex-input packing, effective vertex-array mask | not yet public |
-| Raster-state translation from pipeline state | not yet public |
+| Material value composition (vertex/fragment constants, current attributes, update-only observation) | [material-values.md](material-values.md) |
+| Program compilation, vertex-input packing, effective vertex-array mask | [program-compilation.md](program-compilation.md), [vertex-inputs.md](vertex-inputs.md) |
+| Raster-state translation from pipeline state | [raster-state.md](raster-state.md) |
 | Viewport mapping (viewport, shader scale/offset, sample grid) | [main-producer-inputs.md](main-producer-inputs.md), "Mapping a source viewport to a native target" |
 
 ## Inputs
