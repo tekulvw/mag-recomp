@@ -62,6 +62,12 @@ supply their guest inputs.
 | [geometry-streams.md](geometry-streams.md) | Partition stream roles, attribute codecs, counts and the large-stream rule | Complete |
 | [fragment-builtins.md](fragment-builtins.md) | Fragment built-in rows | Complete (kind 31 uses own tuning values) |
 
+### Passes
+
+| Specification | Behaviour | Status |
+| --- | --- | --- |
+| [shadow-pass.md](shadow-pass.md) | Shadow pass: cascade views, caster selection, emitted state, shadow map and obligations | Partial: state values, map layout and terminal segment need a job-IO recording |
+
 Each document's "Open questions" section lists what is still undecided. A *Partial* status means
 some behaviour depends on evidence or a ruling that is not yet available; the document says which.
 
