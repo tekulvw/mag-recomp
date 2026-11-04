@@ -253,3 +253,36 @@ void mag_render_test_owner_close(int drained) {
     }
     rsx_vulkan_backend_shutdown();
 }
+/* The host side of reserved queue order, as the client bridge provides it:
+ * the SDK's provider, copied into the layout-identical public descriptor. */
+#include "mag_render_host_owner.h"
+#include "mag_render_host_image.h"
+int mag_render_host_vulkan_queue_order(MagRenderVulkanQueueOrder *out) {
+    _Static_assert(sizeof(MagRenderVulkanQueueOrder) == sizeof(rsx_native_queue_order), "queue order layout");
+    if (!out || out->abi_version != MAG_RENDER_HOST_QUEUE_ORDER_ABI || out->struct_size != sizeof(*out)) return -1;
+    rsx_native_queue_order order = {.abi_version = RSX_NATIVE_QUEUE_ORDER_ABI, .struct_size = sizeof(order)};
+    const int status = rsx_vulkan_backend_queue_order(&order);
+    if (!status) memcpy(out, &order, sizeof(order));
+    return status;
+}
+/* An original-engine colour target the native side may import, and its
+ * centre pixel (R,G,B,A bytes) read back through the engine. */
+static uint32_t native_scene_target;
+int mag_render_test_owner_image(MagRenderHostImage *out) {
+    _Static_assert(sizeof(MagRenderHostImage) == sizeof(rsx_native_image), "host image layout");
+    native_scene_target = s_vk_engine_backend.color_target_create(NULL, RSX_BE_FMT_R8G8B8A8, 64, 64, NULL, 0);
+    if (!native_scene_target) return -1;
+    rsx_native_image image = {.abi_version = 1, .struct_size = sizeof(image)};
+    const int status = rsx_vulkan_backend_borrow_image(borrowed.lifetime, native_scene_target, &image);
+    if (!status) memcpy(out, &image, sizeof(image));
+    rsx_draw_engine_flush();
+    return status;
+}
+uint32_t mag_render_test_owner_pixel(void) {
+    uint32_t pixel = 0;
+    s_vk_engine_backend.readback(NULL, native_scene_target, 32, 32, 1, 1, &pixel, 4);
+    return pixel;
+}
+void mag_render_test_owner_clear(const float rgba[4]) {
+    s_vk_engine_backend.clear_color(NULL, native_scene_target, rgba);
+}

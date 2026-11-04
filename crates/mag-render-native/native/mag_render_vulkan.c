@@ -4,6 +4,8 @@
 #include "mag_render_vulkan.h"
 #include "mag_render_native_internal.h"
 #include "mag_render_sampler_registry.h"
+#include "mag_render_host_owner.h"
+#include "mag_render_scene_validate.h"
 #include <math.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -73,10 +75,23 @@ typedef struct frontend_vk {
      * and still holds, and scene submissions for the periodic report. */
     uint64_t allocated_bytes, scene_submissions;
     uint32_t memory_report_every;
+    /* Reserved-order submission (reserve_scene): the host's queue order, and
+     * the one outstanding reservation's imports, validated under the lease. */
+    MagRenderVulkanQueueOrder order;
+    int order_ok, reserved, reserved_encoding;
+    uint64_t reserved_token;
+    uint32_t reserved_count;
+    mag_native_scene_import reserved_imports[MAG_NATIVE_SCENE_MAX_IMAGES];
+    mag_native_import_info reserved_info[MAG_NATIVE_SCENE_MAX_IMAGES];
+    mag_native_ticket reserved_ticket;
 #define DECLARE(name) PFN_##name name;
     FRONTEND_VK_FUNCTIONS(DECLARE)
 #undef DECLARE
 } frontend_vk;
+/* Provided by the host when it supports reserved queue order. */
+#if defined(__GNUC__) || defined(__clang__)
+#pragma weak mag_render_host_vulkan_queue_order
+#endif
 static void imported_image_unpin(frontend_vk *,frontend_vk_imported_image *);
 static void imported_image_dispose(frontend_vk *,frontend_vk_imported_image *);
 /* Every device allocation of this context goes through these two, so the
@@ -451,6 +466,7 @@ static int poll(void *opaque, mag_native_event *events, uint32_t capacity, uint3
 }
 static int close_context(void *opaque) {
     frontend_vk *c = opaque;
+    if (c->reserved) return MAG_NATIVE_BUSY;
     for (unsigned i=0;i<2;++i) if (c->slots[i].occupied) return MAG_NATIVE_BUSY;
     for (unsigned i = 0; i < 2; ++i) {
         frontend_vk_slot *slot = &c->slots[i]; if (slot->occupied) slot_release(c, slot);
@@ -472,9 +488,10 @@ static int close_context(void *opaque) {
 #include "mag_render_vulkan_import.inc"
 #include "mag_render_vulkan_scene.inc"
 /* Designated: every operation this backend lacks is an explicit NULL, which
- * the wrapper reports as UNSUPPORTED (reserve_scene: the reserved-order
- * commit then falls back to the synchronous one; scene_chunk_stats: Metal's
- * chunked encoding only). */
+ * the wrapper reports as UNSUPPORTED (scene_chunk_stats: Metal's chunked
+ * encoding only). reserve_scene reports UNSUPPORTED itself unless
+ * MAG_RENDER_VULKAN_RESERVED_COMMIT=1 and the host provides a queue order;
+ * the reserved-order commit then falls back to the synchronous one. */
 static const mag_native_ops operations = {
     .caps = caps, .buffer_create = buffer_create, .buffer_release = buffer_release, .buffer_read = buffer_read,
     .pipeline_create = pipeline_create, .pipeline_release = pipeline_release, .submit = submit, .poll = poll,
@@ -485,7 +502,7 @@ static const mag_native_ops operations = {
     .sampler_create = sampler_create, .sampler_release = sampler_release, .submit_scene_v2 = submit_scene_v2,
     .submit_scene_v3 = submit_scene_v3, .submit_scene_v4 = submit_scene_v4,
     .image_import_certified = image_import_certified, .scene_graphics_create_aux = NULL,
-    .submit_scene_v5 = submit_scene_v5, .reserve_scene = NULL, .abandon_scene_reservation = NULL,
+    .submit_scene_v5 = submit_scene_v5, .reserve_scene = reserve_scene, .abandon_scene_reservation = abandon_scene_reservation,
     .buffer_write = buffer_write, .scene_chunk_stats = NULL, .memory_stats = memory_stats};
 static int vulkan_create(const MagRenderHostOwner *host,uint64_t known,uint64_t enabled,mag_native_device **out) {
     if (!host || !out || host->backend!=MAG_RENDER_HOST_VULKAN) return MAG_NATIVE_INVALID;
@@ -498,6 +515,15 @@ static int vulkan_create(const MagRenderHostOwner *host,uint64_t known,uint64_t 
     frontend_vk *c=calloc(1,sizeof(*c));if (!c) {host->release(host->userdata,host->lifetime);return MAG_NATIVE_ALLOCATION_FAILED;}
     c->known_features=known;c->enabled_features=enabled;
     { const char *memory=getenv("MAG_RENDER_GPU_MEMORY_REPORT"); c->memory_report_every=memory&&!strcmp(memory,"0")?0u:120u; }
+    /* Opt-in (MAG_RENDER_VULKAN_RESERVED_COMMIT=1) while it is measured:
+     * otherwise reservations stay UNSUPPORTED and the reserved-order commit
+     * falls back to the synchronous one, as before. */
+    const char *reserved = getenv("MAG_RENDER_VULKAN_RESERVED_COMMIT");
+    if (reserved && !strcmp(reserved, "1") && mag_render_host_vulkan_queue_order) {
+        c->order = (MagRenderVulkanQueueOrder){.abi_version = MAG_RENDER_HOST_QUEUE_ORDER_ABI, .struct_size = sizeof(c->order)};
+        c->order_ok = mag_render_host_vulkan_queue_order(&c->order) == 0 && c->order.lifetime == host->lifetime &&
+                      c->order.reserve && c->order.submit;
+    }
     c->owner.host=*host;c->owner.device=(VkDevice)host->device;c->owner.queue=(VkQueue)host->queue;c->owner.queue_family=host->queue_family;
     properties((VkPhysicalDevice)host->physical_device,&c->owner.properties);memory((VkPhysicalDevice)host->physical_device,&c->owner.memory);
     if (c->owner.properties.apiVersion<VK_API_VERSION_1_1) {close_context(c);return MAG_NATIVE_UNSUPPORTED;}

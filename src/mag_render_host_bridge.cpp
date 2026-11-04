@@ -126,6 +126,29 @@ extern "C" int mag_render_frontend_borrow_owner_v2(MagRenderHostOwnerV2 *out) {
     return status;
 #endif
 }
+/* The SDK's reserved queue order for the Vulkan native backend, which looks
+ * this up (weakly) when a device is created. Hosts without it report
+ * UNSUPPORTED and the native backend keeps synchronous commits. */
+extern "C" int mag_render_host_vulkan_queue_order(MagRenderVulkanQueueOrder *out) {
+    if (!out || out->abi_version != MAG_RENDER_HOST_QUEUE_ORDER_ABI || out->struct_size != sizeof(*out))
+        return -1;
+#if !defined(__APPLE__) && !defined(_WIN32) && defined(RSX_NATIVE_QUEUE_ORDER_ABI)
+    static_assert(sizeof(MagRenderVulkanQueueOrder) == sizeof(rsx_native_queue_order));
+    static_assert(offsetof(MagRenderVulkanQueueOrder, lifetime) == offsetof(rsx_native_queue_order, lifetime));
+    static_assert(offsetof(MagRenderVulkanQueueOrder, userdata) == offsetof(rsx_native_queue_order, userdata));
+    static_assert(offsetof(MagRenderVulkanQueueOrder, reserve) == offsetof(rsx_native_queue_order, reserve));
+    static_assert(offsetof(MagRenderVulkanQueueOrder, submit) == offsetof(rsx_native_queue_order, submit));
+    rsx_native_queue_order order = {};
+    order.abi_version = RSX_NATIVE_QUEUE_ORDER_ABI;
+    order.struct_size = sizeof(order);
+    const int status = rsx_vulkan_backend_queue_order(&order);
+    if (!status)
+        std::memcpy(out, &order, sizeof(order));
+    return status;
+#else
+    return -2;
+#endif
+}
 extern "C" int mag_render_frontend_borrow_image(uint64_t life, uint32_t surface, MagRenderHostImage *out) {
     if (!out || out->abi_version != MAG_RENDER_HOST_IMAGE_ABI || out->struct_size != sizeof(*out))
         return -1;
