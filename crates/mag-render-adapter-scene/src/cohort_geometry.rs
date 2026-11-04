@@ -6,6 +6,8 @@
 //! which calls the one shared behaviour-crate implementation.
 #[path = "direct_draw_geometry.rs"]
 pub mod direct;
+#[path = "main_geometry_qualification.rs"]
+pub mod qualification;
 #[path = "static_geometry.rs"]
 pub mod static_geometry;
 use crate::{

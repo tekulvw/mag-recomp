@@ -17,7 +17,8 @@
 // addressable from one crate under the module names its code uses.
 pub use mag_render_adapter_core::{
     capture_pool, cohort, error, fast_hash, geometry_bindings, guest_memory, main_flow,
-    material_capture, material_constants, material_programs, mesh_sources, partition_inputs,
+    material_capture, material_constants, material_pipeline, material_programs,
+    material_shader_math, material_state, mesh_sources, partition_inputs,
 };
 
 pub mod capture_memo;
@@ -35,9 +36,14 @@ pub mod depth_sources;
 pub mod fragment_builtin_rows;
 pub mod geometry_attributes;
 pub mod geometry_streams;
+#[cfg(feature = "owned-programs")]
+pub mod material_compile;
 pub mod material_finish;
 pub mod material_group_twelve;
 pub mod material_sources;
 pub mod material_textures;
+pub mod material_values;
+pub mod materials;
 pub mod shared_scene_sources;
 pub mod source_acquisition;
+pub mod vertex_inputs;

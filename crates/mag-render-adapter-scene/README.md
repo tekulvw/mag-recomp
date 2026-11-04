@@ -45,12 +45,24 @@ Current contents:
   inputs and auxiliary records, and its group-twelve compact texture inputs;
 - `client_scene`: a position-only client scene prepared from the captured
   geometry, with every omission kept explicit;
+- `fragment_builtin_rows`: fragment constant rows for a material's decoded
+  built-in requests; the animated kinds 31 and 32 come from the behaviour
+  crate (`glue::builtins`) with its scale factors;
+- `materials`, `material_values`: the Main material capture and its ordered
+  material values. The pass's setup banks are copied by
+  `mag_render_behavior::setup` through the capture's charged located reader;
+- `vertex_inputs`, `cohort_geometry::qualification`: canonical vertex inputs
+  from the owned streams, and the Main geometry qualification of an item;
 - `depth_source_ffi`: the C entry point that copies one depth pre-pass's
   sources (`mag_render_adapter_depth_sources`). It returns its refused result
   and records nothing while the master switch is off;
 - `capture_view`: optional copy-free comparison of guest spans through
   read-only views the host registers
   (`PS3_RENDER_CAPTURE_VIEW_VALIDATION=1`, default off).
+
+With the `owned-programs` feature (which needs the pinned native compiler
+libraries of `mag-render-programs`), `material_compile` compiles a material
+draw's programs, with its fragment, vertex and plan-reuse caches.
 
 The core modules these build on are re-exported under their own names, so the
 whole adapter is addressable from this crate. Nothing here runs unless a host
