@@ -25,7 +25,7 @@
     X(vkCreateImageView) X(vkDestroyImageView) X(vkCreateFramebuffer) X(vkDestroyFramebuffer) \
     X(vkCmdBeginRenderPass) X(vkCmdEndRenderPass) X(vkCmdSetViewport) X(vkCmdSetScissor) \
     X(vkCmdBindVertexBuffers) X(vkCmdBindIndexBuffer) X(vkCmdDrawIndexed) X(vkCmdCopyImageToBuffer) \
-    X(vkCreateSampler) X(vkDestroySampler) X(vkCmdCopyBufferToImage)
+    X(vkCreateSampler) X(vkDestroySampler) X(vkCmdCopyBufferToImage) X(vkCmdSetDepthBounds)
 
 typedef struct frontend_vk_family {
     uint64_t id, last_version; uint32_t public_versions; struct frontend_vk_family *next;

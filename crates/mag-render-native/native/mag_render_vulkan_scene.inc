@@ -477,9 +477,15 @@ static int scene_graphics_create_layout(void *opaque, const mag_native_scene_gra
         blend.colorBlendOp=equations[state->rgb_equation];blend.alphaBlendOp=equations[state->alpha_equation];
         memcpy(color_blend.blendConstants,state->blend_constant,sizeof(color_blend.blendConstants));
     }
-    VkDynamicState states[2] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+    /* Stored-depth bounds: the device's depth bounds test, with each draw's
+     * range set dynamically. It passes exactly when min <= stored <= max for
+     * the depth already in the attachment, the predicate Metal evaluates on
+     * its stored-depth snapshot (the pass writes no depth, so they agree). */
+    const int bounds = state && state->depth_bounds_enabled;
+    if (bounds) depth_state.depthBoundsTestEnable = VK_TRUE, depth_state.minDepthBounds = 0.0f, depth_state.maxDepthBounds = 1.0f;
+    VkDynamicState states[3] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR, VK_DYNAMIC_STATE_DEPTH_BOUNDS};
     VkPipelineDynamicStateCreateInfo dynamic = {.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
-                                                .dynamicStateCount = 2,
+                                                .dynamicStateCount = bounds ? 3u : 2u,
                                                 .pDynamicStates = states};
     VkGraphicsPipelineCreateInfo pipeline = {.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
                                              .stageCount = desc->fragment.source_length ? 2u : 1u,
@@ -545,7 +551,11 @@ static int scene_graphics_create_v2(void *opaque, const mag_native_scene_graphic
 }
 static int scene_graphics_create_v3(void *opaque,const mag_native_scene_graphics_v3_desc *desc,mag_native_pipeline *out){
     int status=mag_native_scene_graphics_v3_validate(desc);if(status)return status;
-    if(desc->raster.depth_bounds_enabled)return MAG_NATIVE_UNSUPPORTED;
+    /* Bounds need the enabled depthBounds feature of this very owner device;
+     * the bounds-gated program itself is the ordinary one (no Metal aux). */
+    if(desc->raster.depth_bounds_enabled&&(!desc->base.base.depth_format||
+       !(((frontend_vk*)opaque)->known_features&((frontend_vk*)opaque)->enabled_features&MAG_RENDER_HOST_FEATURE_DEPTH_BOUNDS)))
+        return MAG_NATIVE_UNSUPPORTED;
     mag_native_scene_graphics_desc schema;mag_native_scene_graphics_v3_schema(desc,&schema);
     return scene_graphics_create_layout(opaque,&schema,desc->base.attributes,desc->base.attribute_count,desc->base.binding_model,&desc->raster,out);
 }
@@ -759,7 +769,18 @@ static int submit_scene_owned(frontend_vk *c, const mag_native_scene *scene, mag
             if(!v5&&(color->width!=depth->width||color->height!=depth->height))return MAG_NATIVE_UNSUPPORTED;
         }
     }
-    if(v5)for(uint32_t i=0;i<v5->bounds_count;++i)if(v5->bounds[i].enabled)return MAG_NATIVE_UNSUPPORTED;
+    /* Bounds-tested draws: the shared validator already required a loaded
+     * depth attachment, no stencil writes and ranges inside [0, 1]; as on
+     * Metal, the draw must also leave the depth unwritten. */
+    if(v5&&v5->bounds_count){
+        uint32_t flat=0;
+        for(uint32_t n=0;n<scene->pass_count;++n)for(uint32_t j=0;j<scene->passes[n].draw_count;++j,++flat){
+            if(!v5->bounds[flat].enabled)continue;
+            const frontend_vk_pipeline *p=pipeline_find(c,scene->passes[n].draws[j].pipeline);
+            if(!p||!p->explicit_raster||!p->raster.depth_bounds_enabled)return MAG_NATIVE_INVALID;
+            if(p->raster.depth_enabled&&p->raster.depth_write)return MAG_NATIVE_UNSUPPORTED;
+        }
+    }
     status=scene_filter_capabilities(c,scene,v3,sampler_table);
     if(status)return status;
     status=scene_viewport_capabilities(c,scene,v3);
@@ -1000,6 +1021,8 @@ static int submit_scene_owned(frontend_vk *c, const mag_native_scene *scene, mag
             const mag_native_scene_draw *d = &p->draws[j];
             frontend_vk_pipeline *pipeline = pipeline_find(c, d->pipeline);
             c->vkCmdBindPipeline(slot->command, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline->gpu);
+            if(v5&&v5->bounds_count&&v5->bounds[draw_count].enabled)
+                c->vkCmdSetDepthBounds(slot->command,v5->bounds[draw_count].minimum,v5->bounds[draw_count].maximum);
             c->vkCmdBindDescriptorSets(slot->command, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline->layout, 0, 2,
                                        draw_sets[draw_count++], 0, NULL);
             VkBuffer vertex = buffer_find(c, d->vertices)->gpu;

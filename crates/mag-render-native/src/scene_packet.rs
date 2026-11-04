@@ -1195,8 +1195,12 @@ impl ScenePacket {
                     )
                 })?)
             };
+            // A Metal stored-depth program always carries bounds. Bounds without
+            // it are the backend's own depth bounds test (Vulkan), which the
+            // native pipeline admits only on a device with that feature; Metal
+            // refuses such a pipeline itself.
             let aux = fp.is_some_and(|f| f.flags == raw::PROGRAM_STORED_DEPTH_AUX);
-            if aux != (p.state.depth_bounds_enabled != 0)
+            if aux && p.state.depth_bounds_enabled == 0
                 || aux
                     && (p.binding_model != 1
                         || p.textures
@@ -4115,7 +4119,9 @@ pub(crate) mod packet_tests {
         let mut s = packet.pipelines[0].state;
         s.depth_bounds_enabled = 1;
         packet.pipelines[0].state = s;
-        assert_eq!(packet.validate(32, 1 << 20), Err(-2));
+        // Bounds with an ordinary fragment program: the backend's own depth
+        // bounds test (Vulkan) admits it; Metal's pipeline creation refuses it.
+        assert_eq!(packet.validate(32, 1 << 20), Ok(()));
         s.depth_bounds_min = 0.8;
         s.depth_bounds_max = 0.2;
         assert_eq!(raster(&s), Err(-1));
@@ -4834,8 +4840,14 @@ pub(crate) mod packet_tests {
                 .is_err()
         );
         packet.pipelines[0].state.depth_write = 0;
+        // Ordinary program with bounds: left to the backend's bounds test.
         packet.programs[1].flags = 0;
+        assert_eq!(packet.validate(32, 1 << 20), Ok(()));
+        // A stored-depth program always carries bounds.
+        packet.programs[1].flags = 1;
+        packet.pipelines[0].state.depth_bounds_enabled = 0;
         assert_eq!(packet.validate(32, 1 << 20), Err(-2));
+        packet.pipelines[0].state.depth_bounds_enabled = 1;
         packet.programs[1].flags = 2;
         assert_eq!(packet.validate(32, 1 << 20), Err(-1));
         packet.programs[1].flags = 1;

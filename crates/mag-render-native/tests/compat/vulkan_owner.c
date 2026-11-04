@@ -286,3 +286,11 @@ uint32_t mag_render_test_owner_pixel(void) {
 void mag_render_test_owner_clear(const float rgba[4]) {
     s_vk_engine_backend.clear_color(NULL, native_scene_target, rgba);
 }
+/* The owner with its enabled-device facts (depth bounds, BC, anisotropy). */
+int mag_render_test_owner_v2(MagRenderHostOwnerV2 *out) {
+    _Static_assert(sizeof(MagRenderHostOwnerV2) == sizeof(rsx_native_owner_v2), "owner v2 layout");
+    rsx_native_owner_v2 owner = {.abi_version = 2, .struct_size = sizeof(owner)};
+    const int status = rsx_vulkan_backend_borrow_owner_v2(&owner);
+    if (!status) memcpy(out, &owner, sizeof(owner));
+    return status;
+}
