@@ -22,7 +22,23 @@ Current contents:
   patterns. Its reciprocal-estimate table is reproduced from ps3recomp
   (`runtime/spu/spu_helpers.h`) under its MIT licence; see
   [`LICENSE.ps3recomp`](../../LICENSE.ps3recomp).
+- `material_constants`, `material_shader_math`: material parameter values,
+  fragment constant layout and current vertex attributes, in that number model;
+- `material_programs`: owned shader inputs from a selected technique resource;
+- `material_state`, `material_pipeline` (with `material_pipeline::sampler`):
+  primary-material alpha/cull/blend rules, per-group Main fixed-function state
+  and RSX sampler state, all over explicitly known prior state;
+- `mesh_sources`, `partition_inputs`, `material_capture`: owned mesh and
+  partition headers and the packed-input read sets planned from them.
 
-Nothing in this crate runs unless a host calls it. The C exports are
+With the `owned-scene` feature (which needs the pinned native compiler
+libraries of `mag-render-programs`):
+
+- `scene_programs`: transport of owned compiler output to the frontend worker;
+- `scene_raster`, `scene_viewport`: effective raster and viewport state as
+  frontend packet records.
+
+Fragment builtin requests are not published yet. Nothing in this crate runs
+unless a host calls it. The C exports are
 `mag_render_adapter_enabled`, `mag_render_adapter_enable` and
 `mag_original_work_sha256_file`.

@@ -16,8 +16,23 @@ pub mod capture_pool;
 pub mod error;
 pub mod fast_hash;
 pub mod guest_memory;
+pub mod material_capture;
+pub mod material_constants;
 pub mod material_float;
+pub mod material_pipeline;
+pub mod material_programs;
+pub mod material_shader_math;
+pub mod material_state;
+pub mod mesh_sources;
 #[allow(unsafe_code)] // Bounded caller-owned path/output; no retained pointer.
 pub mod original_hash_ffi;
+pub mod partition_inputs;
 #[allow(unsafe_code)] // Unmangled C exports of the switch only.
 pub mod runtime;
+
+#[cfg(feature = "owned-scene")]
+pub mod scene_programs;
+#[cfg(feature = "owned-scene")]
+pub mod scene_raster;
+#[cfg(feature = "owned-scene")]
+pub mod scene_viewport;

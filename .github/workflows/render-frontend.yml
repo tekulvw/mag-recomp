@@ -336,6 +336,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends spirv-tools
           cargo test --manifest-path crates/mag-render-programs/Cargo.toml --features native-compiler --locked --offline --test native_compile -- --ignored
+      - name: Fetch locked adapter core dependencies
+        run: cargo fetch --manifest-path crates/mag-render-adapter-core/Cargo.toml --locked
+      - name: Adapter core owned-scene tests
+        run: cargo test --manifest-path crates/mag-render-adapter-core/Cargo.toml --features owned-scene --locked --offline
+      - name: Adapter core owned-scene Clippy
+        run: cargo clippy --manifest-path crates/mag-render-adapter-core/Cargo.toml --features owned-scene --all-targets --locked --offline -- -D warnings
 
   vulkan-sdk-cpu:
     name: Vulkan SDK provider and bridge (CPU only)
