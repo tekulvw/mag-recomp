@@ -58,7 +58,10 @@ error. The number of records followed is bounded by an implementation-defined bu
 ### Stream slots
 
 A slot's control word is its byte length. A control with any of bits 16–31 set is an
-*unsupported control* error for that slot. A control of 0 means the stream is empty; nothing is read
+*unsupported control* error for that slot. The check applies only where the length *is* the
+control word: slots 0–9, 17 and 19–23 in the table below (for slots 3, 4 and 17 only the address is
+replaced). The control words of slots 10–16 and 18 are never checked or used, because their lengths
+are replaced by a 16-bit size or by 0. A control of 0 means the stream is empty; nothing is read
 and the address is kept only as identity.
 
 Some slots have their length or address replaced before reading:
@@ -207,8 +210,11 @@ formats with the same numbers: RSX format 1 is `v/32767`, and RSX CMP is `x/1023
 **Lanes decoded:**
 
 - **Semantic 1 (positions):** lanes `0 .. min(c, 4) − 1` are decoded. Lanes 0–2 beyond that are
-  `+0`, and lane 3 is `1.0`. Codec 6 decodes x, y and z, then zeroes those of x, y, z at or beyond
-  `c`. Codec 9 zeroes lanes at or beyond `c`, except that lane 3 becomes `1.0`.
+  `+0`, and lane 3 is `1.0`. Codecs 6 and 9 always read and decode their whole packed field (4 and
+  3 bytes), even when `c < 3`. Codec 6 then zeroes those of x, y, z at or beyond `c`. Codec 9 zeroes
+  lanes at or beyond `c`, except that lane 3 becomes `1.0`. Because the whole field is decoded, a
+  codec-9 refusal (selector or magnitude) fails the declaration even if every lane it affects would
+  be discarded, and the whole field must lie inside the stream.
 - **Any other semantic:** all four lanes are decoded from consecutive bytes, whatever `c` says.
   Codec 6 gives `(x, y, z, 1)` and codec 9 its four lanes. Lanes beyond `c` therefore hold the
   following bytes of the vertex, decoded with the same codec. They have no defined meaning, but
@@ -236,7 +242,12 @@ slot 10's address, with `V` rows. Its own address gives the alignment phase. Err
 
 - a nonzero second or third chunk size is *split input chunks*, which is unsupported;
 - configuration byte 3 other than 255 is *built-in secondary*, which is unsupported;
-- a read or decode failure of the table or data fails the secondary list as a whole.
+- a read failure of the slot-21 table or of the slot-10 data, or a failure to parse the table
+  header and declarations, fails the secondary list as a whole.
+
+Nothing else fails the whole list. A declaration whose decode fails (unsupported codec, extent,
+unclassified semantic, normal-codec refusal) is recorded as that declaration's failure, exactly as
+in the primary list. The other declarations still decode.
 
 ### Looking up a semantic
 
@@ -346,6 +357,14 @@ on decoded values.
     *unsupported position encoding*, and the partition has no geometry.
 16. **Secondary admission.** `+0x0A = 0x40`, `+0x0C = 0x10`: *split input chunks*. With `+0x0C = 0`
     and configuration byte 3 = 0: *built-in secondary*.
+17. **Control check scope.** Slot 10's control word is `0x00010000` and `u16 +0x0A = 0x40`: no
+    error, and 64 bytes are read. Slot 5's control word is `0x00010000`: *unsupported control*
+    (slot 5).
+18. **Secondary per declaration.** Secondary table with declaration 0 codec 8 (unsupported) and
+    declaration 1 codec 2: the list succeeds, with declaration 0 failed and declaration 1 decoded.
+    Slot-21 table unreadable: the whole list fails.
+19. **Packed position below three components.** Semantic 1, codec 6, `c = 1`, word `0x002003FF`:
+    `(1.0, 0, 0, 1.0)`. The 4-byte field must fit in the stream even though only x is kept.
 
 ## Open questions
 

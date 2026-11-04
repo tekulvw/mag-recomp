@@ -113,6 +113,10 @@ Four rows at slots `L`, `L+1`, `L+2`, `L+3`: row `j` is words `4j … 4j+3` of `
 
 ### Role values (kinds 31 and 32)
 
+The role records are scanned only when the item has at least one kind-31 or kind-32 request whose
+destination is fragment constants. Otherwise they are not read, so a role table that is out of
+bounds cannot fail an item without such a request.
+
 Scan parameter records `0 … u8(MAT+0x52) − 1` in order. Note that this count is separate from the
 ordinary parameter record count. For each record with role `r < 8`, read its value words:
 
@@ -169,8 +173,8 @@ therefore win over ordinary rows at the same slot.
 | --- | --- |
 | Any read outside `MAT` or `CHUNK` (tables, records, destination word, role values) | *bounds* error |
 | `m ≥ 32`; kind 4 with `L > 1020`; kind 31 or 32 overrunning slot 1023 | *mapping* error |
-| Kind 31 or 32 with a missing role, or with `t` unavailable | *unqualified kind 31/32* error for the item |
-| A pass value that cannot be read | the item's capture fails |
+| Kind 31 or 32 with a missing role, or with `t` not supplied to the composition | *unqualified kind 31/32* error for the item |
+| A pass value that cannot be read, including `t` at `PASS+0x1E0` when a kind-31/32 request needs it | the item's capture fails with that read error (not *unqualified*) |
 | Kind 3, 4, 31 or 32 aimed at a non-fragment destination | no write, no error |
 | Any other kind | no-op, no read, no error |
 

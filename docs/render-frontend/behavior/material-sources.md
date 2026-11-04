@@ -140,8 +140,14 @@ that fits inside the chunk.
 | fragment program object `FP` | `FD+16` | 24-byte header |
 
 No two of these regions may overlap. The regions are: the first 4 bytes, `A`, `B`, `VD`, `FD`, both
-object headers, and the vertex constant registers, values and instructions. Decoding the two objects
-is the published `material_programs` contract. This document uses only the fragment object's
+object headers, and the vertex constant registers, values and instructions. Empty regions are
+ignored. This is one check over all ten regions together: every pair is compared, including a
+vertex constant or instruction region against `A`, `B`, `VD`, `FD`, the first 4 bytes or the
+fragment header. An implementation may split the work, for example checking the records and headers
+while walking the chunk and the vertex object's own regions in the program decode. In that case it
+must also check the vertex object's registers, values and instructions against the walked records,
+because neither half alone covers those pairs. Decoding the two objects is the published
+`material_programs` contract. This document uses only the fragment object's
 microcode length (`u32 FP+0`, nonzero) and its storage word (`u32 FP+12`).
 
 ### Fragment microcode (asset bank)
@@ -229,6 +235,10 @@ No arithmetic on floating-point values. Every field is used or copied exactly.
      `MBI+0x1B` bit 0 clear → skinned partitions, palette `0x00ABCDE0`. The same with transform
      `+0x6F = 1` → instanced direct draw.
 9. **Override.** `PASS+0x190 = 2`: every item fails with `UnqualifiedOverride(2)`.
+10. **Cross-overlap.** A chunk whose vertex instruction region overlaps record `B`, while every
+    header and record is otherwise disjoint and the vertex object's own regions are mutually
+    disjoint: the item fails (program error, overlap). Checking only the records and headers, or
+    only the vertex object's internal regions, would miss this case.
 
 ## Open questions
 
