@@ -20,6 +20,10 @@ d3d12 = []
 mag-render-abi = { path = "../mag-render-abi" }
 mag-render = { path = "../mag-render", features = ["sdk-compute"] }
 
+[[test]]
+name = "thread_stack_tls"
+harness = false
+
 [build-dependencies]
 mag-render-shaders = { path = "../mag-render-shaders" }
 

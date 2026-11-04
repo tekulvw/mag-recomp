@@ -295,4 +295,6 @@ mod client;
 
 pub mod host_frame;
 
+pub mod thread_stack;
+
 pub mod worker;
