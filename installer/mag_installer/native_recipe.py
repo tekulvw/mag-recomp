@@ -202,7 +202,8 @@ def build_plan(config, workspace):
            '--work', workspace.parent / 'logs/dispatcher-splice',
            '--elf', disc / 'bin/mage_g.elf', '--inventory', workspace / 'analysis/retail-v1.0/mage_g',
            '--nonlocal-profile', workspace / 'profiles/retail-v1.0-nonlocal.json',
-           '--before-sdk', sdk['lifter-ppu'], '--after-sdk', sdk['runtime'],
+           # The after lifter is a tagged fix on the pinned PPU lifter, fetched with it.
+           '--before-sdk', sdk['lifter-ppu'], '--after-sdk', sdk['lifter-ppu'],
            '--profile', workspace / 'profiles/retail-v1.0-ppu-jumptable-splice.json')
     script('worker-spu', 'spu_lift.py', '--output', paths['worker-spu'])
     script('engine-spu', 'engine_spu_lift.py', '--output', paths['engine-spu'])

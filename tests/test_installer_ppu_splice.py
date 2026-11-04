@@ -44,7 +44,7 @@ class InstallerPPUSpliceTests(unittest.TestCase):
         old, new = lifter(before), lifter(after)
         profile = {'format':1, 'elf_sha256':tool.digest(elf), 'function':'func_00001000', 'body_sha256':sha(after.encode()),
                    'decoder_sha256':sha(b'decoder fixture'), 'parser_sha256':sha(b'parser fixture'), 'before':{'revision':'a'*40, 'lifter_sha256':sha(old)},
-                   'after':{'revision':'b'*40, 'lifter_sha256':sha(new)}, 'reason':'synthetic dispatcher correction'}
+                   'after':{'revision':'b'*40, 'tag':'mag-recomp/lifter-synthetic', 'lifter_sha256':sha(new)}, 'reason':'synthetic dispatcher correction'}
         def pinned(sdk, revision, path, expected):
             data = (b'decoder fixture' if path.endswith('ppu_disasm.py') else b'parser fixture' if path.endswith('elf_parser.py')
                     else old if revision == 'a'*40 else new)
@@ -57,8 +57,10 @@ class InstallerPPUSpliceTests(unittest.TestCase):
     def test_reproduces_only_named_function_and_records_pins(self):
         with tempfile.TemporaryDirectory() as temp:
             args, pinned, before, after, other = self.fixture(Path(temp))
-            with patch.object(tool, 'pinned_blob', side_effect=pinned) as read:
+            with patch.object(tool, 'pinned_blob', side_effect=pinned) as read, \
+                    patch.object(tool, 'tag_commit', return_value='b'*40) as tag:
                 output = tool.prepare(**args)
+            tag.assert_called_once_with(args['after_sdk'], 'mag-recomp/lifter-synthetic')
             self.assertEqual((output/'ppu_recomp_000.cpp').read_text(), after+other)
             self.assertEqual((args['base']/'ppu_recomp_000.cpp').read_text(), before+other)
             record = json.loads((output/'provenance.json').read_text())
@@ -86,5 +88,15 @@ class InstallerPPUSpliceTests(unittest.TestCase):
                 profile = copy.deepcopy(args['profile']); args['profile'] = profile
                 if what == 'lifter': profile['after']['lifter_sha256'] = '0'*64
                 else: profile['body_sha256'] = '0'*64
-                with patch.object(tool, 'pinned_blob', side_effect=pinned), self.assertRaisesRegex(ValueError, 'hash mismatch|reviewed body'):
+                with patch.object(tool, 'pinned_blob', side_effect=pinned), patch.object(tool, 'tag_commit', return_value='b'*40), \
+                        self.assertRaisesRegex(ValueError, 'hash mismatch|reviewed body'):
                     tool.prepare(**args)
+
+    def test_rejects_an_after_tag_that_names_another_commit(self):
+        with tempfile.TemporaryDirectory() as temp:
+            args, pinned, *_ = self.fixture(Path(temp))
+            for found in (None, 'c'*40):
+                with self.subTest(found=found), patch.object(tool, 'pinned_blob', side_effect=pinned) as read, \
+                        patch.object(tool, 'tag_commit', return_value=found), self.assertRaisesRegex(ValueError, 'after lifter tag'):
+                    tool.prepare(**args)
+                read.assert_not_called()
