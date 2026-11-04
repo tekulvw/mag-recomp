@@ -41,6 +41,7 @@ def check(args):
         ("scene_lit_fragment", "fragment", "frag", "ps_6_0"),
         ("scene_cutout_fragment", "fragment", "frag", "ps_6_0"),
         ("scene_fragment", "fragment", "frag", "ps_6_0"),
+        ("scene_textured_fragment", "fragment", "frag", "ps_6_0"),
     ):
         directory = args.output_dir / name
         run([args.shader_tool, "--source", ROOT / f"shaders/render_frontend/{name}.wgsl",

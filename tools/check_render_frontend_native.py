@@ -66,7 +66,8 @@ def source_inputs(sdk, backend):
 def shader_header(shader_root, output):
     text = ['#include <stddef.h>', '#include "mag_render_batch.h"', 'typedef struct mag_native_fixture_shader { const void *source; uint64_t length; const char *entry; const mag_native_binding_layout *bindings; uint32_t binding_count, threads[3]; } mag_native_fixture_shader;']
     for name, stage in (("copy_transform", "compute"), ("scene_transform", "compute"), ("scene_prepare", "compute"),
-                        ("scene_vertex", "vertex"), ("scene_fragment", "fragment")):
+                        ("scene_vertex", "vertex"), ("scene_fragment", "fragment"),
+                        ("scene_lit_vertex", "vertex"), ("scene_textured_fragment", "fragment")):
         root = shader_root / name
         manifest = json.loads((root / "manifest.json").read_text())
         if manifest["schema_version"] != 1 or manifest["stage"] != stage:
@@ -172,7 +173,7 @@ def check(args):
                 full_m2="pending", native=receipt, draw=draw_receipt, draw_no_readback=no_copy_receipt, owner_stdout=owner.stdout,
                 native_stderr=native.stderr + owner.stderr + draw.stderr + without_copy.stderr, naga_version=manifest["naga_version"],
                 source_sha256=before, shader_sha256={f"{shader_name}/{name}": digest(args.shader_root / shader_name / name)
-                    for shader_name in ("copy_transform", "scene_transform", "scene_prepare", "scene_vertex", "scene_fragment")
+                    for shader_name in ("copy_transform", "scene_transform", "scene_prepare", "scene_vertex", "scene_fragment", "scene_lit_vertex", "scene_textured_fragment")
                     for name in (("shader.metal" if args.backend == "metal" else "shader.spv"), "manifest.json")},
                 executable_sha256=digest(executable),
                 host=dict(system=platform.system(), machine=platform.machine(), release=platform.release()))

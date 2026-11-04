@@ -324,6 +324,104 @@ static void check_depth_bounds(void) {
     assert(mag_native_close(device) == 0);
     fprintf(stderr, "[depth bounds] hardware bounds test matches the inclusive stored-depth predicate\n");
 }
+/* Resident uploaded images (MAG_RENDER_VULKAN_RESIDENT_IMAGES=1): an 8x8
+ * texture sampled into an 8x8 target, submitted four times -- from upload
+ * buffer A, from a different buffer B with the same bytes (content hit),
+ * from buffer C with other bytes (miss) and from A again (identity hit). Each
+ * readback shows that submission's own texture, and the cache holds exactly
+ * the two distinct images. */
+static uint32_t textured_scene(mag_native_device *device, mag_native_pipeline pipeline, mag_native_buffer upload,
+                               mag_native_buffer view, mag_native_buffer vertices, mag_native_buffer indices) {
+    enum { W = 8, H = 8 };
+    mag_native_buffer_desc rd = {sizeof(rd), 1, W * H * 4, NULL};
+    mag_native_buffer readback = {0};
+    assert(mag_native_buffer_create(device, &rd, &readback) == 0);
+    mag_native_scene_image images[2] = {{MAG_NATIVE_SCENE_RGBA8, W, H, 0, {0}}, {MAG_NATIVE_SCENE_RGBA8, W, H, 0, upload}};
+    mag_native_scene_buffer_binding buffer = {MAG_NATIVE_SCENE_VERTEX, 0, {0, 0, view, 0, 32}};
+    mag_native_scene_texture_binding texture = {MAG_NATIVE_SCENE_FRAGMENT, 1, 2, 1, MAG_NATIVE_SCENE_NEAREST, 0};
+    mag_native_scene_draw draw = {0};
+    draw.pipeline = pipeline; draw.vertices = vertices; draw.indices = indices;
+    draw.vertex_length = 6 * 16; draw.index_length = 6 * 4; draw.index_count = 6;
+    draw.buffer_count = 1; draw.buffers = &buffer; draw.texture_count = 1; draw.textures = &texture;
+    mag_native_scene_pass pass = {{0}};
+    pass.color.image = 0; pass.color.load = MAG_NATIVE_SCENE_CLEAR; pass.depth.image = MAG_NATIVE_SCENE_NONE;
+    pass.draws = &draw; pass.draw_count = 1;
+    mag_native_batch_resource resources[5] = {{vertices, MAG_NATIVE_UPLOAD, 0}, {indices, MAG_NATIVE_UPLOAD, 0},
+                                              {view, MAG_NATIVE_UPLOAD, 0}, {upload, MAG_NATIVE_UPLOAD, 0},
+                                              {readback, MAG_NATIVE_READBACK, 0}};
+    mag_native_scene scene = {0};
+    scene.struct_size = sizeof(scene); scene.abi_version = 1;
+    scene.resources = resources; scene.resource_count = 5;
+    scene.images = images; scene.image_count = 2; scene.passes = &pass; scene.pass_count = 1;
+    scene.output_image = 0; scene.diagnostic_readback = readback;
+    mag_native_ticket ticket = {0};
+    const int status = mag_native_submit_scene(device, &scene, &ticket);
+    if (status) fprintf(stderr, "[resident images] submit status=%d\n", status);
+    assert(status == 0);
+    int done = 0;
+    for (int i = 0; i < 2000 && !done; ++i) {
+        mag_native_event event = {0}; uint32_t count = 0;
+        assert(mag_native_poll(device, &event, 1, &count) == 0);
+        if (count) { assert(event.succeeded); done = 1; } else usleep(1000);
+    }
+    assert(done);
+    uint32_t px[W * H];
+    assert(mag_native_buffer_read(device, readback, 0, px, sizeof px) == 0);
+    for (unsigned i = 1; i < W * H; ++i) assert(px[i] == px[0]);    /* solid texture */
+    assert(mag_native_buffer_release(device, readback) == 0);
+    return px[0];
+}
+static void check_resident_images(const MagRenderHostOwner *owner) {
+    setenv("MAG_RENDER_VULKAN_RESIDENT_IMAGES", "1", 1);
+    mag_native_device *device = NULL;
+    assert(mag_native_create(owner, &device) == 0);
+    unsetenv("MAG_RENDER_VULKAN_RESIDENT_IMAGES");
+    static const mag_native_scene_texture_layout texture_layout = {MAG_NATIVE_SCENE_FRAGMENT, 1, 2, MAG_NATIVE_SCENE_RGBA8, 0, 0};
+    assert(scene_lit_vertex_fixture.binding_count == 1);
+    const mag_native_scene_buffer_layout buffer_layout = {MAG_NATIVE_SCENE_VERTEX, 0, scene_lit_vertex_fixture.bindings[0]};
+    mag_native_scene_graphics_desc g = {0};
+    g.struct_size = sizeof(g); g.abi_version = 1;
+    g.vertex = stage(&scene_lit_vertex_fixture); g.fragment = stage(&scene_textured_fragment_fixture);
+    g.vertex_stride = 16; g.color_format = MAG_NATIVE_SCENE_RGBA8; g.depth_format = 0;
+    g.depth_compare = MAG_NATIVE_SCENE_DEPTH_DISABLED;
+    g.buffers = &buffer_layout; g.buffer_count = 1; g.textures = &texture_layout; g.texture_count = 1;
+    mag_native_pipeline pipeline = {0};
+    assert(mag_native_scene_graphics_create(device, &g, &pipeline) == 0);
+    float quad[6][4] = {{-1,-1,0,1},{1,-1,0,1},{-1,1,0,1},{1,-1,0,1},{1,1,0,1},{-1,1,0,1}};
+    uint32_t idx[6] = {0, 1, 2, 3, 4, 5};
+    float view_data[8] = {1, 1, 1, 1, 0, 0, 0, 0};
+    uint8_t red[256], green[256];
+    for (unsigned i = 0; i < 64; ++i) {
+        red[4*i] = 0xff; red[4*i+1] = 0; red[4*i+2] = 0; red[4*i+3] = 0xff;
+        green[4*i] = 0; green[4*i+1] = 0xff; green[4*i+2] = 0; green[4*i+3] = 0xff;
+    }
+    mag_native_buffer vb = {0}, ib = {0}, view = {0}, a = {0}, b = {0}, cbuf = {0};
+    mag_native_buffer_desc d;
+    d = (mag_native_buffer_desc){sizeof(d), 1, sizeof quad, quad}; assert(mag_native_buffer_create(device, &d, &vb) == 0);
+    d = (mag_native_buffer_desc){sizeof(d), 1, sizeof idx, idx}; assert(mag_native_buffer_create(device, &d, &ib) == 0);
+    d = (mag_native_buffer_desc){sizeof(d), 1, sizeof view_data, view_data}; assert(mag_native_buffer_create(device, &d, &view) == 0);
+    d = (mag_native_buffer_desc){sizeof(d), 1, sizeof red, red}; assert(mag_native_buffer_create(device, &d, &a) == 0);
+    assert(mag_native_buffer_create(device, &d, &b) == 0);
+    d = (mag_native_buffer_desc){sizeof(d), 1, sizeof green, green}; assert(mag_native_buffer_create(device, &d, &cbuf) == 0);
+    uint64_t census[MAG_NATIVE_MEMORY_STATS];
+    const uint32_t r = 0xff0000ffu, gr = 0xff00ff00u;
+    assert(textured_scene(device, pipeline, a, view, vb, ib) == r);
+    assert(mag_native_memory_stats(device, census, MAG_NATIVE_MEMORY_STATS) == 0 && census[4] == 1);
+    const uint64_t after_first = census[0];
+    assert(textured_scene(device, pipeline, b, view, vb, ib) == r);      /* same bytes, other buffer */
+    assert(mag_native_memory_stats(device, census, MAG_NATIVE_MEMORY_STATS) == 0 && census[4] == 1 && census[0] == after_first);
+    assert(textured_scene(device, pipeline, cbuf, view, vb, ib) == gr);  /* other bytes */
+    assert(mag_native_memory_stats(device, census, MAG_NATIVE_MEMORY_STATS) == 0 && census[4] == 2 && census[0] > after_first);
+    const uint64_t two = census[0];
+    assert(textured_scene(device, pipeline, a, view, vb, ib) == r);      /* identity */
+    assert(mag_native_memory_stats(device, census, MAG_NATIVE_MEMORY_STATS) == 0 && census[4] == 2 && census[0] == two);
+    fprintf(stderr, "[resident images] 4 submissions, 2 resident images, allocated %.1f KiB; content and identity hits reuse them\n",
+            (double)census[0] / 1024.0);
+    mag_native_buffer refs[6] = {vb, ib, view, a, b, cbuf};
+    for (unsigned i = 0; i < 6; ++i) assert(mag_native_buffer_release(device, refs[i]) == 0);
+    assert(mag_native_pipeline_release(device, pipeline) == 0);
+    assert(mag_native_close(device) == 0);
+}
 int main(int argc, char **argv) {
     if (argc != 4) {
         fprintf(stderr, "usage: native_regression owner|compute|draw|draw-no-readback VENDOR DEVICE\n");
@@ -347,6 +445,7 @@ int main(int argc, char **argv) {
         MagRenderHostImage target = {.abi_version = 1, .struct_size = sizeof(target)};
         assert(mag_render_test_owner_image(&target) == 0);
         check_reserved_submission(&owner, &target);
+        check_resident_images(&owner);
     }
     if (!strcmp(argv[1], "draw")) check_depth_bounds();
     if (mag_render_test_owner_gate()) {
