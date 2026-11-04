@@ -71,8 +71,10 @@ Steps run in this order. "Stop" means the producer ends with no further effects.
       first.
     - For every draw: depth test off, depth write off, alpha test off, blending off, culling off,
       colour write mask all channels.
-    - When the depth-bounds test is on for a draw, the stencil test must be disabled or both faces
-      must have write mask 0. Otherwise decline.
+    - When the depth-bounds test is on for a draw, the stencil-write precondition of
+      [main-lighting.md](main-lighting.md) must hold: stencil known disabled, or front face known
+      with write mask 0, back face required only when two-sided stencil is on, and a known back
+      face with writes declines even when two-sided is off. Otherwise decline.
     - The target must have initialised colour (kept, not cleared). If it has depth or stencil
       planes, they must be initialised.
     - **Scene-colour feedback.** Draw 0 always targets the current surface, and unit 0 samples that

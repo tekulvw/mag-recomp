@@ -19,6 +19,11 @@ fragment row writes (material values), and packing vertex data ([vertex-inputs.m
 
 ### Technique sources
 
+For Main material draws, the technique chunk, the selected technique and the fragment microcode
+(asset-bank base plus the fragment's storage offset) are located as in
+[material-sources.md](material-sources.md). Producer programs come from the registries in
+[material-producers.md](material-producers.md).
+
 From the decoded vertex program object (format in [material-producers.md](material-producers.md)
 and the program-object decode):
 
@@ -203,6 +208,24 @@ Rows are four little-endian `u32` words (16 bytes).
 Each size must equal the translator's `constant_buffer_bytes` for that stage, otherwise *uniform
 layout*.
 
+### Packet vertex attributes
+
+The vertex data handed to the packet may contain more attributes than the compiled vertex program
+reads. For example, a producer payload always carries position and texture coordinate, and the
+effective vertex-array mask counts every enabled slot. The packet pipeline does not describe them
+all. Its vertex attributes are exactly the program's *reflected* inputs, in reflection order:
+
+- For each reflected input location `l` (below 16, no duplicates, otherwise *reflection*), the
+  vertex data must provide exactly one attribute at `l`. None, or more than one, is a *reflection*
+  error. The packet attribute is `(l, float4, that attribute's byte offset)`.
+- Provided attributes that the program does not reflect are left out of the pipeline description.
+  The vertex stride and vertex bytes stay those of the complete vertex data, so their offsets do
+  not move.
+
+The pipeline's attributes therefore equal the reflected inputs exactly, which is what the packet
+validator checks. The effective vertex-array mask is a separate draw-state value used for the
+*array mask mismatch* check above; it is not the attribute list.
+
 ### Native lowering and the stored-depth variant
 
 Both translated programs are lowered to native code by `mag-render-programs`. A lowering failure
@@ -301,6 +324,10 @@ and replaces whole lanes. Every packed word is a bit-exact copy of an input word
     vertex-bank values. The second compile reuses the translation; its vertex uniform reflects the
     new values. If the second bank lacks a read row, it fails with *unknown vertex constant* even
     though the translation was reused.
+13. **Reflected attributes only.** Vertex data with attributes at locations 0 (offset 0) and 8
+    (offset 16), stride 32, for a program that reflects only input 0: the packet pipeline has one
+    attribute `(0, float4, 0)` and stride 32. For a program that reflects inputs 0 and 3: a
+    *reflection* error, because no attribute is at 3.
 
 ## Open questions
 

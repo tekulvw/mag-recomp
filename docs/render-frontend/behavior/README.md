@@ -29,8 +29,8 @@ documentation or captures.
 | --- | --- | --- |
 | [geometry-normals.md](geometry-normals.md) | Three-byte packed normal format | Complete |
 | [skinning-deformation.md](skinning-deformation.md) | Group-11 skinning | Complete; two cases may be refused |
-| [noninstanced-deformation.md](noninstanced-deformation.md) | Group-3 wind and group-4 ripple | Group 4 complete; group 3 awaits constants ruling |
-| [group-zero-deformation.md](group-zero-deformation.md) | Group-0 instance expansion and wind | Awaits constants ruling |
+| [noninstanced-deformation.md](noninstanced-deformation.md) | Group-3 wind and group-4 ripple | Complete (group 3 uses this implementation's own tuning values) |
+| [group-zero-deformation.md](group-zero-deformation.md) | Group-0 instance expansion and wind | Complete (own tuning values) |
 
 ### Planning and setup
 
@@ -44,14 +44,23 @@ documentation or captures.
 ### Planner dependencies
 
 These four specifications are the next implementation batch. Implement them before
-[scene-plan.md](scene-plan.md), which depends on all four.
+[scene-plan.md](scene-plan.md), which depends on all four. The three source specifications below
+supply their guest inputs.
 
 | Specification | Behaviour | Status |
 | --- | --- | --- |
-| [material-values.md](material-values.md) | Material value composition: constants, current attributes, per-item rows | Complete; fragment built-in rows not yet specified |
+| [material-values.md](material-values.md) | Material value composition: constants, current attributes, per-item rows | Complete |
 | [program-compilation.md](program-compilation.md) | Program compilation contract, fragment inline constants, uniform layouts, cache identities | Complete |
 | [vertex-inputs.md](vertex-inputs.md) | Vertex-input selection, effective array mask and interleaving | Complete |
 | [raster-state.md](raster-state.md) | Raster-state translation into the packet ABI | Complete |
+
+### Guest sources
+
+| Specification | Behaviour | Status |
+| --- | --- | --- |
+| [material-sources.md](material-sources.md) | Mesh record, primary material, technique chunk and selection, fragment microcode, primary flags and alpha, geometry-source dispatch | Complete |
+| [geometry-streams.md](geometry-streams.md) | Partition stream roles, attribute codecs, counts and the large-stream rule | Complete |
+| [fragment-builtins.md](fragment-builtins.md) | Fragment built-in rows | Complete (kind 31 uses own tuning values) |
 
 Each document's "Open questions" section lists what is still undecided. A *Partial* status means
 some behaviour depends on evidence or a ruling that is not yet available; the document says which.

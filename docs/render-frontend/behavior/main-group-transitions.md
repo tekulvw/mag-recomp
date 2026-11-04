@@ -30,7 +30,9 @@ depth control, and the setup-bank references. From the Main pass object:
 The water rows are copied as raw words, row 0 from `+0x19c..+0x1ab` and row 1 from
 `+0x1ac..+0x1bb`, each row as four big-endian words.
 
-A primary material contributes a flags byte and an alpha byte, and the pass has a render mode
+A primary material contributes its flags word (`u32 material+0x58`; bits 0, 1 and 11 are used
+below) and its alpha byte (`u8 material+0x5C`), located as in
+[material-sources.md](material-sources.md), and the pass has a render mode
 (0..15). Those values reach this specification already decoded.
 
 ## Outputs

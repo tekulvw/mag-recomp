@@ -17,9 +17,9 @@ The planner calls this once per prepared item and once per update-only item, in 
 Out of scope:
 
 - technique selection and the guest location of the cohort item, mesh and technique objects
-  (material-source specification, not yet public);
-- fragment built-in rows, which this specification takes as an input list (built-in
-  specification, not yet public);
+  ([material-sources.md](material-sources.md));
+- fragment built-in rows, which this specification takes as an input list
+  ([fragment-builtins.md](fragment-builtins.md));
 - the program decode that yields a vertex program's static constant rows.
 
 ## Inputs
@@ -71,7 +71,9 @@ Any other type is an error.
 - The selected technique's identity: its program chunk address, its selector, and the material
   address.
 - The vertex program's static constant rows `(row, four words)`, in program order.
-- The fragment built-in rows, as an ordered list of `(fragment row, four words)` writes.
+- The fragment built-in rows, as an ordered list of `(fragment row, four words)` writes
+  ([fragment-builtins.md](fragment-builtins.md)). A composition that leaves them out is incomplete
+  whenever the technique has built-in records.
 - The carried state from the previous item.
 
 ## Outputs
@@ -319,7 +321,7 @@ sub-micrometre placement error at game scale.
    that refusing them is acceptable.
 3. **Reduced-fidelity omission.** An opt-in diagnostic mode drops two kinds of computed fragment
    built-in rows that have no consumer in a flat program. Any later exact fragment program then
-   forces a fresh binding. This mode depends on the unpublished built-in specification and is out
+   forces a fresh binding. This mode depends on [fragment-builtins.md](fragment-builtins.md) and is out
    of scope here.
 4. **Matrix current attributes.** Parameters of types 8–10 aimed at current attributes are refused.
    Their register addressing has not been established.

@@ -125,7 +125,12 @@ triangle list of these three vertices. The constants are copied bit for bit.
 
 ### Fixed-function state before the first draw
 
-Precondition: the stencil test is disabled, or it is enabled and both faces have write mask 0.
+Precondition (the *stencil-write precondition*): the stencil test is known disabled, or it is enabled and no stencil face that can be used
+has writes. Precisely: the stencil enable must be known, and when it is on the front face must be
+known with write mask 0. The back face is required (known, write mask 0) only when two-sided
+stencil is on. When two-sided stencil is off, an unknown back face is accepted, but a *known* back
+face with a nonzero write mask is still a decline, so that later enabling two-sided stencil cannot
+expose writes. The two-sided flag must be known when stencil is on.
 Otherwise decline, because a depth-bounds rejection must not be able to change stencil.
 Also decline if the bounds are not finite or `bounds[0] > bounds[1]`.
 
@@ -153,7 +158,7 @@ this producer leaves to inherited state, which must therefore be known, are:
 - front face (needed for the cull bit, even with culling off);
 - stencil test enable; if it is enabled, the two-sided flag and the stencil faces the raster
   rules need (front face only when two-sided is off, both faces when it is on), including their
-  write masks for the precondition above;
+  write masks for the stencil-write precondition above;
 - polygon-offset fill enable, which must be known *disabled*, because no bias clamp is supplied
   and so an enabled offset can never be fully known.
 
@@ -249,8 +254,10 @@ decline. As L1 with lane 1 of `BASIS_A` = NaN: same outputs as L1.
 **L8: zero distance.** `r_a = r_b = 0`, `LOFF = 0`. `PA / 0` is infinite, so the bound is not
 finite. Expected: decline.
 
-**L9: stencil precondition.** Stencil enabled, front write mask 0, back write mask 0xFF. Expected:
-decline. Both masks 0: accepted.
+**L9: stencil precondition.** Stencil enabled, two-sided on, front write mask 0, back write mask
+0xFF: decline. Both masks 0: accepted. Two-sided off, front write mask 0, back face unknown:
+accepted. Two-sided off, front write mask 0, back face known with write mask 0xFF: decline.
+Two-sided on, back face unknown: decline. Stencil enable unknown: decline.
 
 **L10: draw count.** Bank zero disabled: one draw, target `select(1, 1)` (which resolves to role
 2), and the state after the producer has stencil disabled. Bank zero enabled: two draws, and the

@@ -227,7 +227,10 @@ before compilation; no other material constants are applied. After translation:
 **Vertex data.** Vertices have two attributes: position `(x, y, z, w)` at input 0 and texture
 coordinate `(s, t, r, q)` at input 8. In the packet they are interleaved with a 32-byte stride:
 position at byte 0, texture coordinate at byte 16, each lane a little-endian `f32`. The enabled
-vertex array mask is `0x101` (inputs 0 and 8).
+vertex array mask is `0x101` (inputs 0 and 8). The packet pipeline still lists only the inputs the
+compiled vertex program reflects, which may be just input 0 ("Packet vertex attributes" in
+[program-compilation.md](program-compilation.md)). The 32-byte stride and both attributes stay in
+the vertex data either way.
 
 The full-screen **quad** (four vertices, indices `0,1,2, 0,2,3`):
 
