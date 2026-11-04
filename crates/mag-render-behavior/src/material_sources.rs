@@ -4,10 +4,10 @@
 //! mesh record, primary material, technique chunk and fragment microcode, and chooses its geometry
 //! source. An item error never stops other items.
 //!
-//! The technique chunk walk here follows the links to both program objects and checks the record
-//! regions this specification names. The vertex object's constant and instruction regions, and the
-//! decode of both objects, are the published `material_programs` contract, which the caller runs
-//! on the same chunk bytes.
+//! The technique chunk walk here follows the links to both program objects and checks, as one
+//! pairwise overlap check, all ten regions this specification names, including the vertex
+//! object's constant registers, values and instructions. Decoding both objects is the published
+//! `material_programs` contract, which the caller runs on the same chunk bytes.
 
 use crate::guest::{GuestMemory, SourceError, be_u16, be_u32};
 
@@ -203,7 +203,15 @@ pub fn walk_chunk(chunk: &[u8]) -> Result<FragmentObject, MaterialSourceError> {
     let vp = link(vd, 16, 24)?;
     let fd = link(b, 16, 20)?;
     let fp = link(fd, 16, 24)?;
-    let regions = [
+    // The vertex object's own regions (the object layout of `material-producers.md`):
+    // `k` constant registers of 4 bytes after the header, their 16-byte values from the next
+    // 16-byte boundary, and `n` 16-byte instructions at byte offset `o`. All offsets are from
+    // the object's start.
+    let half = |at: usize| u16::from_be_bytes([chunk[at], chunk[at + 1]]) as usize;
+    let (n, o, k) = (half(vp), half(vp + 18), half(vp + 22));
+    let registers_end = 24 + 4 * k;
+    let values_start = registers_end.next_multiple_of(16);
+    let mut regions = vec![
         (0, 4),
         (a, 16),
         (b, 20),
@@ -211,7 +219,19 @@ pub fn walk_chunk(chunk: &[u8]) -> Result<FragmentObject, MaterialSourceError> {
         (fd, 20),
         (vp, 24),
         (fp, 24),
+        (vp + 24, 4 * k),
+        (vp + values_start, 16 * k),
+        (vp + o, 16 * n),
     ];
+    for &(start, size) in &regions[7..] {
+        if size != 0 && start + size > chunk.len() {
+            return Err(MaterialSourceError::Program(
+                "vertex object outside the chunk",
+            ));
+        }
+    }
+    // One check over all ten regions together; empty regions are ignored.
+    regions.retain(|&(_, size)| size != 0);
     for (i, &(start, size)) in regions.iter().enumerate() {
         for &(other, other_size) in &regions[i + 1..] {
             if start < other + other_size && other < start + size {
@@ -601,6 +621,52 @@ mod tests {
         assert_eq!(
             walk_chunk(&overlap),
             Err(MaterialSourceError::Program("overlapping records"))
+        );
+        // Vector 10 (cross-overlap): a vertex instruction region overlapping a walked record,
+        // with every record and header otherwise disjoint. Links point forward, so the record
+        // after the vertex object is the fragment descriptor, moved here to 0xA0..0xB4.
+        let vp = 0x80;
+        let mut cross = good.clone();
+        cross[0x20 + 16..0x20 + 20].copy_from_slice(&0x80u32.to_be_bytes());
+        cross[0xa0 + 16..0xa0 + 20].copy_from_slice(&0x20u32.to_be_bytes());
+        assert!(walk_chunk(&cross).is_ok());
+        // One instruction at o = 0x18: 0x98..0xA8 overlaps the descriptor.
+        cross[vp..vp + 2].copy_from_slice(&1u16.to_be_bytes());
+        cross[vp + 18..vp + 20].copy_from_slice(&0x18u16.to_be_bytes());
+        assert_eq!(
+            walk_chunk(&cross),
+            Err(MaterialSourceError::Program("overlapping records"))
+        );
+        // Instructions over the fragment header (o = 0x40: 0xC0..0xD0).
+        let mut cross = good.clone();
+        cross[vp..vp + 2].copy_from_slice(&1u16.to_be_bytes());
+        cross[vp + 18..vp + 20].copy_from_slice(&0x40u16.to_be_bytes());
+        assert_eq!(
+            walk_chunk(&cross),
+            Err(MaterialSourceError::Program("overlapping records"))
+        );
+        // The same instructions at o = 0x18 (0x98..0xA8) overlap nothing.
+        cross[vp + 18..vp + 20].copy_from_slice(&0x18u16.to_be_bytes());
+        assert!(walk_chunk(&cross).is_ok());
+        // Constant registers and values: k = 2 gives registers 0x98..0xA0 and values
+        // 0xA0..0xC0, which run into the fragment header only with k = 3 (values to 0xD0).
+        let mut constants = good.clone();
+        constants[vp + 22..vp + 24].copy_from_slice(&2u16.to_be_bytes());
+        assert!(walk_chunk(&constants).is_ok());
+        constants[vp + 22..vp + 24].copy_from_slice(&3u16.to_be_bytes());
+        assert_eq!(
+            walk_chunk(&constants),
+            Err(MaterialSourceError::Program("overlapping records"))
+        );
+        // A vertex object region past the chunk.
+        let mut long = good.clone();
+        long[vp..vp + 2].copy_from_slice(&64u16.to_be_bytes());
+        long[vp + 18..vp + 20].copy_from_slice(&0x18u16.to_be_bytes());
+        assert_eq!(
+            walk_chunk(&long),
+            Err(MaterialSourceError::Program(
+                "vertex object outside the chunk"
+            ))
         );
         let empty = chunk(0, 2);
         assert_eq!(
