@@ -8,9 +8,20 @@ name: Installers
 # to rebuild and attach installers for an existing release: the source kit is
 # built from that tag's source, with this commit's installer tooling.
 # Docs-only changes build nothing that ships; skip them (CI capacity is limited).
+# Pull requests build installers only when an installer input changes: the
+# installer itself, its CI scripts, the pins, the tools it runs and the build
+# recipe. Every push to main still builds everything, so anything a filtered
+# pull request misses is caught there.
 on:
   pull_request:
-    paths-ignore: ['docs/**', '**/*.md']
+    paths:
+      - 'installer/**'
+      - '.github/scripts/**'
+      - '.github/workflows/installers.yml'
+      - 'profiles/**'
+      - 'tools/**'
+      - 'CMakeLists.txt'
+      - 'cmake/**'
   push:
     branches: [main]
     paths-ignore: ['docs/**', '**/*.md']
