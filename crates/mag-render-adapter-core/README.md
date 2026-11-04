@@ -41,7 +41,14 @@ Current contents:
   protocols (`mag_render_adapter_config_event`,
   `mag_render_adapter_config_snapshot`, `mag_render_adapter_shadow_call`).
   Each returns its "not ready" result and records nothing while the master
-  switch is off.
+  switch is off;
+- `rsx_state_preamble`: a state-only replay of recorded RSX method writes. It
+  classifies NV4097 methods (program, vertex constants, vertex input, texture
+  binding, raster, attachment, or work: clear, primitive, draw,
+  synchronisation, no-operation), keeps the requested state classes in source
+  order, merges increasing runs into incrementing packets, and ends the block
+  in a return so it can be called. Unclassified methods, other subchannels and
+  overflow are refused before any output.
 
 With the `owned-scene` feature (which needs the pinned native compiler
 libraries of `mag-render-programs`):

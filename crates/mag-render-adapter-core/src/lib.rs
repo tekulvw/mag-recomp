@@ -33,6 +33,7 @@ pub mod mesh_sources;
 #[allow(unsafe_code)] // Bounded caller-owned path/output; no retained pointer.
 pub mod original_hash_ffi;
 pub mod partition_inputs;
+pub mod rsx_state_preamble;
 #[allow(unsafe_code)] // Unmangled C exports of the switch only.
 pub mod runtime;
 pub mod shadow_call;
