@@ -32,6 +32,7 @@ pub mod depth_materials;
 #[allow(unsafe_code)] // Synchronous qualified source copy; no retained guest pointer.
 pub mod depth_source_ffi;
 pub mod depth_sources;
+pub mod fragment_builtin_rows;
 pub mod geometry_attributes;
 pub mod geometry_streams;
 pub mod material_finish;

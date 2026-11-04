@@ -51,7 +51,8 @@ libraries of `mag-render-programs`):
   frontend packet records.
 
 `material_constants` also decodes a material's fragment builtin requests
-(kinds 3, 4, 31 and 32 of `fragment-builtins.md`) and prepares their rows.
+(kinds 3, 4, 31 and 32 of `fragment-builtins.md`); `mag-render-adapter-scene`
+prepares their rows.
 Nothing in this crate runs unless a host calls it. The C exports are `mag_render_adapter_enabled`,
 `mag_render_adapter_enable`, `mag_original_work_sha256_file` and the `ffi`
 entry points above.
