@@ -39,7 +39,16 @@ documentation or captures.
 | [texture-unit-controls.md](texture-unit-controls.md) | Texture unit decoding and native sampler translation | Complete |
 | [material-setup.md](material-setup.md) | Setup command banks and register knowledge | Complete |
 | [main-group-transitions.md](main-group-transitions.md) | Fixed-function state across mesh groups | Complete |
-| [scene-plan.md](scene-plan.md) | Main scene planning | Complete for the planner; depends on unpublished specs |
+| [scene-plan.md](scene-plan.md) | Main scene planning | Complete |
+
+### Planner dependencies
+
+| Specification | Behaviour | Status |
+| --- | --- | --- |
+| [material-values.md](material-values.md) | Material value composition: constants, current attributes, per-item rows | Complete; fragment built-in rows not yet specified |
+| [program-compilation.md](program-compilation.md) | Program compilation contract, fragment inline constants, uniform layouts, cache identities | Complete |
+| [vertex-inputs.md](vertex-inputs.md) | Vertex-input selection, effective array mask and interleaving | Complete |
+| [raster-state.md](raster-state.md) | Raster-state translation into the packet ABI | Complete |
 
 Each document's "Open questions" section lists what is still undecided. A *Partial* status means
 some behaviour depends on evidence or a ruling that is not yet available; the document says which.
