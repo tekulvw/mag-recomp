@@ -20,6 +20,10 @@
 //! | [`normals`] | `geometry-normals.md` |
 //! | [`skinning`] | `skinning-deformation.md` |
 //! | [`noninstanced`] | `noninstanced-deformation.md` (group 4; group 3 is held) |
+//! | [`material_values`] | `material-values.md` |
+//! | [`program_compilation`] | `program-compilation.md` (frontend side of the translator contract) |
+//! | [`vertex_inputs`] | `vertex-inputs.md` |
+//! | [`raster`] | `raster-state.md` |
 //! | [`waveform`] | helpers defined in `group-zero-deformation.md` |
 //!
 //! Floating-point outputs use ordinary native arithmetic. They are checked against the
@@ -33,14 +37,18 @@ pub mod fog_values;
 pub mod group_twelve;
 pub mod guest;
 pub mod lighting;
+pub mod material_values;
 pub mod noninstanced;
 pub mod normals;
 pub mod producer;
 pub mod producers;
+pub mod program_compilation;
+pub mod raster;
 pub mod setup;
 pub mod skinning;
 pub mod surfaces;
 pub mod texture;
+pub mod vertex_inputs;
 pub mod waveform;
 
 #[cfg(test)]
