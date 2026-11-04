@@ -48,10 +48,6 @@ static SOURCES: OnceLock<Mutex<VecDeque<Arc<OwnedDepthSources>>>> = OnceLock::ne
 fn sources() -> &'static Mutex<VecDeque<Arc<OwnedDepthSources>>> {
     SOURCES.get_or_init(|| Mutex::new(VecDeque::new()))
 }
-#[expect(
-    dead_code,
-    reason = "called by the cohort source FFI layer, which is migrated later"
-)]
 pub(crate) fn vm_changed(vm: u64) {
     let next = REVOCATION.try_update(Ordering::AcqRel, Ordering::Acquire, |n| n.checked_add(1));
     VM.store(if next.is_ok() { vm } else { 0 }, Ordering::Release);

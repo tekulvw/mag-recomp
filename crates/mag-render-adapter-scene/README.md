@@ -53,6 +53,13 @@ Current contents:
   `mag_render_behavior::setup` through the capture's charged located reader;
 - `vertex_inputs`, `cohort_geometry::qualification`: canonical vertex inputs
   from the owned streams, and the Main geometry qualification of an item;
+- `cohort_ffi`, `cohort_resource_ffi`, `client_scene_ffi`: the C entry
+  points that receive the retained visibility cohort, copy its Main sources
+  (resources, geometry and materials) under the caller's read window, and
+  hand a position-only client scene to the frontend;
+- `producer_sources`: the C entry point that observes one source window's
+  producer inputs and fog camera, acquired by `mag_render_behavior::producers`
+  and `mag_render_behavior::fog_values` through the bridge's counted copy;
 - `depth_source_ffi`: the C entry point that copies one depth pre-pass's
   sources (`mag_render_adapter_depth_sources`). It returns its refused result
   and records nothing while the master switch is off;
@@ -67,8 +74,13 @@ draw's programs, with its fragment, vertex and plan-reuse caches.
 The core modules these build on are re-exported under their own names, so the
 whole adapter is addressable from this crate. Nothing here runs unless a host
 calls it; per-frame host entry points check the core crate's default-off
-master switch. The C exports are `mag_render_adapter_depth_sources` and the
-one-time view registrations `mag_render_adapter_set_located_view` and
+master switch: every C entry point below refuses, reads nothing and records
+nothing while it is off. The per-frame C exports are
+`mag_render_adapter_cohort_{vm,decline,begin,item,finish}`,
+`mag_render_adapter_cohort_assets{,_v3,_v4,_v5}`,
+`mag_render_adapter_main_original`, `mag_render_adapter_submit_scene`,
+`mag_render_adapter_producer_sources` and `mag_render_adapter_depth_sources`;
+the one-time view registrations are `mag_render_adapter_set_located_view` and
 `mag_render_adapter_set_guest_view`.
 
 ```sh
