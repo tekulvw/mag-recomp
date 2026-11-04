@@ -535,7 +535,8 @@ static void timing_setup(frontend_vk *c,const MagRenderHostOwner *host){
     if(families){families((VkPhysicalDevice)host->physical_device,&count,NULL);
         VkQueueFamilyProperties *props=count?calloc(count,sizeof(*props)):NULL;
         if(props){families((VkPhysicalDevice)host->physical_device,&count,props);
-            if(host->queue_family<count)bits=props[host->queue_family].timestampValidBits;free(props);}}
+            if(host->queue_family<count)bits=props[host->queue_family].timestampValidBits;
+            free(props);}}
 #define TIMING_LOAD(name) c->name=(PFN_##name)host->get_device_proc(host->device,#name);if(!c->name&&!reason)reason="missing " #name;
     TIMING_LOAD(vkCreateQueryPool) TIMING_LOAD(vkDestroyQueryPool) TIMING_LOAD(vkCmdResetQueryPool)
     TIMING_LOAD(vkCmdWriteTimestamp) TIMING_LOAD(vkGetQueryPoolResults)
