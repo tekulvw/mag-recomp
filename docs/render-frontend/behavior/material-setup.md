@@ -54,7 +54,7 @@ that record:
 
 | Offset | Type | Meaning |
 | --- | --- | --- |
-| `+0x48` | `u16` | enabled-group mask |
+| `+0x48` | `u32` | group-enable word. The enabled-group mask is its *low* 16 bits, the `u16` at `+0x4a`, with bit `g` for mesh group `g`. The high half, `u16 +0x48`, is not part of the mask, and its meaning is not established. |
 | `+0x4c` | `u8` | lists enabled (nonzero = enabled) |
 | `+0x4d` | `u8` | depth control |
 | `+0x50`, `+0x54`, `+0x58` | `u32` | initial setup-bank references (IO offsets; 0 = none) |
@@ -320,6 +320,9 @@ Memory images list (IO offset: word).
    With `0x304 = 3` instead of 0: bit 0 is kept, alpha test is enabled, and the decode fails with
    `State(Value { method: 0x308, value: 0x999 })`. With `0x1834 = 0`: fails with
    `State(Value { method: 0x1834, value: 0 })`, because front face has no controlling enable.
+10. Group-enable word. Setup record bytes `+0x48..+0x4b` = `00 07 00 FE`: the enabled-group
+    mask is `0x00FE`, groups 1–7. Reading the high half instead would give `0x0007` (groups 0–2),
+    which is wrong.
 
 ## Open questions
 
