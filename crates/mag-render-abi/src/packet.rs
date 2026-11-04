@@ -242,6 +242,10 @@ pub struct Item {
 pub struct Desc {
     pub abi_version: u32,
     pub struct_size: u32,
+    /// Bit 0: the producer declares unresolved obligations. Validation then
+    /// accepts draw-required items with obligations and no draw; admission
+    /// omits them (reported in the receipt) but still refuses unresolved
+    /// draws. Other bits are invalid.
     pub flags: u32,
     pub reserved: u32,
     pub source: Source,
