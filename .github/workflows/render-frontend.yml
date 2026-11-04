@@ -271,13 +271,16 @@ jobs:
         run: cargo test --manifest-path crates/mag-render-native/Cargo.toml ${{ matrix.feature_args }} --locked --offline
       - name: Native backend Clippy
         run: cargo clippy --manifest-path crates/mag-render-native/Cargo.toml ${{ matrix.feature_args }} --all-targets --locked --offline -- -D warnings
-      - name: Adapter link crate (native frontend and game adapter in one archive)
-        shell: bash
-        run: |
-          cargo fetch --manifest-path crates/mag-render-adapter-link/Cargo.toml --locked
-          cargo fmt --manifest-path crates/mag-render-adapter-link/Cargo.toml --check
-          cargo clippy --manifest-path crates/mag-render-adapter-link/Cargo.toml ${{ matrix.feature_args }} --all-targets --locked --offline -- -D warnings
-          cargo test --manifest-path crates/mag-render-adapter-link/Cargo.toml ${{ matrix.feature_args }} --locked --offline
+      # One command per step, in the job's default shell: on Windows that keeps the
+      # MSVC environment's link.exe ahead of Git Bash's /usr/bin/link.
+      - name: Adapter link crate dependencies
+        run: cargo fetch --manifest-path crates/mag-render-adapter-link/Cargo.toml --locked
+      - name: Adapter link crate format
+        run: cargo fmt --manifest-path crates/mag-render-adapter-link/Cargo.toml --check
+      - name: Adapter link crate Clippy (native frontend and game adapter in one archive)
+        run: cargo clippy --manifest-path crates/mag-render-adapter-link/Cargo.toml ${{ matrix.feature_args }} --all-targets --locked --offline -- -D warnings
+      - name: Adapter link crate tests
+        run: cargo test --manifest-path crates/mag-render-adapter-link/Cargo.toml ${{ matrix.feature_args }} --locked --offline
       # The compat C/ObjC fixtures are built only by the GPU checkers, never by
       # cargo; syntax-check them against the candidate SDK so a broken fixture
       # cannot pass CI. No shaders, GPU or link.
