@@ -35,10 +35,13 @@ arithmetic within the stated tolerances, not the `material_float` SPU number mod
 | `setup::copy_main_setup_banks`, `setup::MainSetupRecord::decode` | the snapshot (IO-mapped main memory) and the 160-byte pass setup record |
 | `setup::decode_inherited_snapshot` | the runtime register-snapshot interface's (method, value) list |
 | `scene_plan::check_association`, `scene_plan::traverse` | `OwnedVisibilityCohort` header and items (`glue::cohort`), material entries, pass control word |
-| `material_values::read_technique`, `ItemInputs` | material address, technique chunk and selector from the material source; `TransformRecord` from `CohortItem::transform`; `mbi` from `CohortItem::mbi`; mesh constant row from `mesh_sources` |
-| `program_compilation::TechniqueSource` | `material_programs::TechniquePrograms` (vertex instructions, load slot, masks, transform word, fragment bytes, semantic and transfer sizes, shader control, texture-coordinate controls, relocation directory) |
-| `vertex_inputs::VertexDraw` | `geometry_bindings` output and auxiliary bindings, decoded attribute banks from `partition_inputs`, raw indices, and the preparation results below |
-| `normals`, `skinning`, `noninstanced` | decoded banks and partition/stream fields from `partition_inputs` and `mesh_sources` |
+| `material_sources::PassSources`, `material_sources::item_sources` | the snapshot, the Main pass object address, and `CohortItem::mbi` and transform byte `+0x6F`; `MeshSource::copy` reads the same mesh record |
+| `material_values::read_technique`, `ItemInputs` | material address, technique chunk and selector from `item_sources`; `TransformRecord` from `CohortItem::transform`; `mbi` from `CohortItem::mbi`; mesh constant row from the item's mesh record |
+| `fragment_builtins::builtin_rows` | the snapshot, the pass address, and the material bytes, chunk and selector from `item_sources`; the result is `ItemInputs::builtin_rows` |
+| `program_compilation::TechniqueSource` | `material_programs::TechniquePrograms` decoded from the chunk `item_sources` copied (vertex instructions, load slot, masks, transform word, shader control, texture-coordinate controls, relocation directory), and the microcode `item_sources` read from the asset bank |
+| `geometry_streams::partition_chain`, `read_partition_streams`, `decode_partition` | the snapshot, the first partition of the item's `GeometrySource`, and the palette base it names; replaces `partition_inputs` (which lacks the large-stream rule) and `decode_gpu_attribute` (an RSX fetch decoder, not a partition codec) for partition streams |
+| `vertex_inputs::VertexDraw` | `geometry_bindings::builtin_output_bindings` or `decode_output_bindings` over slot 0 (by configuration byte 4), auxiliary bindings, the primary and secondary lists and indices from `decode_partition`, and the preparation results below |
+| `normals`, `skinning`, `noninstanced`, `group_zero` | banks from `PartitionGeometry::lookup`; partition fields from `PartitionRecord`; group-zero instance rows and colour pool by `group_zero::read_instance_rows` and `read_colour_pool` (an `rsx_location::RsxAddressMap` from the caller's GCM mapping) |
 | `group_twelve::run_group_twelve` | the snapshot and the Main pass object address |
 | `transitions` | `TransitionSources` from the setup record and pass object (`+0x114`, `+0x220`, `+0x19C`) |
 
