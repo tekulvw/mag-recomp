@@ -187,8 +187,8 @@ static void test_vulkan_import_cpu(frontend_vk *c) {
   invalid = hosts[0];
   invalid.image = (void *)(uintptr_t)1;
   assert(image_import(c, &invalid, &unused) == MAG_NATIVE_STALE);
-  assert(operations.image_import_certified == image_import_certified &&
-         operations.submit_scene_v5 == submit_scene_v5);
+  assert(operations.image_import_certified == reported_image_import_certified &&
+         operations.submit_scene_v5 == reported_submit_scene_v5);
   watch_import = 0;
   puts("PASS VulkanV5 CPU dispatch: exact imports/GENERAL handback/two "
        "pending/fence pin retirement; no device or driver");
