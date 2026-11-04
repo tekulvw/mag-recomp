@@ -94,12 +94,32 @@ class RenderAdapterBuild(unittest.TestCase):
         self.record(schema_version=2)
         self.assertIn('unsupported schema', self.configure('-DMAG_RENDER_ADAPTER=ON', expected=1).stderr)
 
+    def located_sdk(self):
+        (self.sdk / 'libs/video/cellGcmSys.h').write_text('int cellGcmNativeReadLocatedRange(unsigned, unsigned);\n')
+
+    def test_cohort_needs_the_sdk_located_range_and_its_stages(self):
+        self.record(stages=['configuration', 'update-loop', 'cohort'])
+        options = ('-DMAG_RENDER_ADAPTER=ON', '-DMAG_RENDER_ADAPTER_COHORT=ON')
+        self.assertIn('needs cellGcmNativeReadLocatedRange', self.configure(*options, expected=1).stderr)
+        self.located_sdk()
+        self.configure(*options)
+        report = self.report()
+        bridges = ROOT / 'src/render_adapter'
+        self.assertEqual(report['sources'].split(';')[1:], [str(bridges / name) for name in (
+            'mag_render_frontend_bridge.cpp', 'mag_render_update_loop.cpp', 'mag_render_cohort_bridge.cpp',
+            'mag_render_texture_bridge.cpp')])
+        self.assertTrue(report['lifted'].endswith('ppu_recomp_001.cpp:MAG_RENDER_ADAPTER_CONFIGURATION=1;'
+                                                  'MAG_RENDER_ADAPTER_UPDATE_LOOP=1;MAG_RENDER_ADAPTER_COHORT=1'))
+        self.record(stages=['configuration', 'cohort'])
+        self.assertIn('without the update-loop render hook stage', self.configure(*options, expected=1).stderr)
+
     def test_ui_handoff_needs_the_sdk_handoff_header_first(self):
-        self.record(stages=['configuration', 'cohort', 'ui-handoff'])
+        self.record(stages=['configuration', 'update-loop', 'cohort', 'ui-handoff'])
+        self.located_sdk()
         options = ('-DMAG_RENDER_ADAPTER=ON', '-DMAG_RENDER_ADAPTER_COHORT=ON', '-DMAG_RENDER_ADAPTER_UI_HANDOFF=ON')
         self.assertIn('needs libs/video/rsx_native_handoff.h', self.configure(*options, expected=1).stderr)
         (self.sdk / 'libs/video/rsx_native_handoff.h').write_text('#pragma once\n')
-        self.assertIn('MAG_RENDER_ADAPTER_COHORT: its hook bridge is not in this repository yet',
+        self.assertIn('its hook bridge is not in this repository',
                       self.configure(*options, expected=1).stderr)
 
     def test_option_dependencies_are_checked(self):
