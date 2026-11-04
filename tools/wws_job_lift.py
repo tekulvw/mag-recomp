@@ -4,10 +4,11 @@
 The job manager streams each module from its main-memory image into the job
 code buffer at local store 0x4000, header included. This tool finds the module
 images, bounds each module's code by control-flow reachability from its header
-entry -- following direct branches and the indirect-branch targets a static
-pass proves (computed jumps, explicit return addresses, constant-address
-pointer loads and bounded jump tables), plus optional measured interpreter
-entries -- lifts that interval with the SDK lifter, and emits a registration
+entry -- following direct branches, plus optional measured interpreter entries
+and, with --static-indirect (opt-in until accepted in game), the
+indirect-branch targets a static pass proves (computed jumps, explicit return
+addresses, constant-address pointer loads and bounded jump tables) -- lifts
+that interval with the SDK lifter, and emits a registration
 file that registers each module as a verified streamed region
 (spu_overlay_register_verified_region) by default unless MAG_COMPILED_JOBS is
 explicitly set to a value other than 1. Original bytes and generated code stay
@@ -88,9 +89,10 @@ def _direct_flow(pc, w):
     return None, None, op11 not in INDIRECT_END
 
 
-def reachable_end(raw, entries, lo, hi, indirect=True):
+def reachable_end(raw, entries, lo, hi, indirect=False):
     """Highest reachable instruction + 4. Direct branches are always followed;
-    with `indirect`, so are the indirect-branch targets discover_code proves."""
+    with `indirect` (opt-in), so are the indirect-branch targets discover_code
+    proves."""
     if indirect:
         return discover_code(raw, entries, lo, hi)[0]
     seen, work = set(), [e for e in entries if lo <= e < hi]
@@ -610,12 +612,16 @@ def data_code_pointers(raw, lo, end):
     return sorted(found)
 
 
-def module_plans(raw, roots, lo, hi, direct_only=False, data_pointers=False):
-    """Bounds to try in order: with data code pointers (opt-in), the
-    statically extended one, then the direct-branch bound, each only when it
-    differs from the next."""
-    direct = ('direct', reachable_end(raw, roots, lo, hi, indirect=False), [])
-    if direct_only:
+def module_plans(raw, roots, lo, hi, static=False, data_pointers=False):
+    """Bounds to try in order. By default only the direct-branch bound. With
+    `static`, first the statically extended bound, and with `data_pointers` as
+    well, before that the one extended by data code pointers; each is offered
+    only when it differs from the next, and the direct bound stays last as the
+    fallback."""
+    if data_pointers and not static:
+        raise ValueError('data code pointers require static indirect discovery')
+    direct = ('direct', reachable_end(raw, roots, lo, hi), [])
+    if not static:
         return [direct]
     end, static = discover_code(raw, roots, lo, hi)
     plans = [direct] if end == direct[1] and not static else [('static', end, static), direct]
@@ -678,20 +684,24 @@ def main():
     ap.add_argument('--output', type=pathlib.Path, required=True)
     ap.add_argument('--attribution', type=pathlib.Path, action='append', default=[],
                     help='SPU_INTERP_ATTRIBUTION report(s) whose entries become extra lift entries')
-    ap.add_argument('--direct-only', action='store_true',
-                    help='bound each module by direct branches alone (the bound before static '
-                         'indirect-target discovery); by default a module whose statically '
-                         'extended lift fails is retried this way')
+    ap.add_argument('--static-indirect', action='store_true',
+                    help='opt-in: extend each module by the indirect-branch targets a static pass '
+                         'proves (computed jumps, explicit return addresses, constant-address '
+                         'pointer loads, bounded jump tables); a module whose extended lift fails '
+                         'is retried with the direct-branch bound. Without it the bound follows '
+                         'direct branches and measured entries only')
     ap.add_argument('--data-code-pointers', action='store_true',
-                    help='opt-in heuristic: also take words in a module\'s data that hold the '
-                         'address of a function boundary inside its code as entries (validated, '
-                         'with fallback to the default bound)')
+                    help='further opt-in heuristic, requires --static-indirect: also take words in '
+                         'a module\'s data that hold the address of a function boundary inside its '
+                         'code as entries (validated, with fallback to the --static-indirect bound)')
     ap.add_argument('--merge-chunks', action='store_true',
                     help='lift each contiguous run between call targets as one host function, so '
                          'branches inside it are gotos instead of drain-loop transfers')
     ap.add_argument('--require-complete', action='store_true',
                     help='fail after recording results if any discovered job remains interpreted')
     a = ap.parse_args()
+    if a.data_code_pointers and not a.static_indirect:
+        ap.error('--data-code-pointers requires --static-indirect')
     preparer_digest = digest(pathlib.Path(__file__))
     profile_digest = digest(a.engine_profile) if a.engine_profile else None
     if a.engine_profile:
@@ -732,7 +742,7 @@ def main():
                       image_id=m['image_id'], raw_sha256=digest_bytes(m['raw']))
         roots = [m['entry'], *measured]
         try:
-            plans = module_plans(m['raw'], roots, lo, hi, a.direct_only, a.data_code_pointers)
+            plans = module_plans(m['raw'], roots, lo, hi, a.static_indirect, a.data_code_pointers)
         except ValueError as e:
             plans = []
             record.update(status='interpreted', reason=str(e))
@@ -741,14 +751,17 @@ def main():
                 count, cmd, extra = lift_module(m, code_end, measured, static, lifter, work, output,
                                                 a.merge_chunks)
             except ValueError as e:
-                record.setdefault('rejected', []).append(dict(discovery=basis, code_end=hex(code_end),
-                                                              reason=str(e)))
+                if a.static_indirect:
+                    record.setdefault('rejected', []).append(
+                        dict(discovery=basis, code_end=hex(code_end), reason=str(e)))
                 record.update(status='interpreted', reason=str(e))
                 continue
             record.pop('reason', None)
-            record.update(status='lifted', discovery=basis, code_end=hex(code_end), functions=count,
-                          extra_entries=[hex(e) for e in extra],
-                          static_entries=[hex(e) for e in static], command=cmd[1:])
+            # Without --static-indirect the record is exactly the direct-bound one.
+            discovery = dict(discovery=basis) if a.static_indirect else {}
+            static_record = dict(static_entries=[hex(e) for e in static]) if a.static_indirect else {}
+            record.update(status='lifted', **discovery, code_end=hex(code_end), functions=count,
+                          extra_entries=[hex(e) for e in extra], **static_record, command=cmd[1:])
             lifted.append(m)
             break
         records.append(record)

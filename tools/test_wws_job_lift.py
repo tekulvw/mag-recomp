@@ -244,8 +244,8 @@ int main(void) { printf("%d %d\\n",compiled,regions); return 0; }
         end, targets = self.discover(code)
         self.assertEqual((end, targets), (0x4808, [0x4800]))
         raw = image(code, 0x1000, 0x4030)
-        self.assertEqual(w.reachable_end(raw, [0x4030], 0x4030, 0x5000, indirect=False), 0x4038)
-        self.assertEqual(w.reachable_end(raw, [0x4030], 0x4030, 0x5000), 0x4808)
+        self.assertEqual(w.reachable_end(raw, [0x4030], 0x4030, 0x5000), 0x4038)   # default: direct
+        self.assertEqual(w.reachable_end(raw, [0x4030], 0x4030, 0x5000, indirect=True), 0x4808)
 
     def test_ilhu_iohl_and_ai_build_targets(self):
         code = {0x4030: ri16(0x082, 0, 3), 0x4034: ri16(0x0C1, 0x4900, 3), 0x4038: ri10(0x1C, 3, 3, 8),
@@ -348,16 +348,26 @@ int main(void) { printf("%d %d\\n",compiled,regions); return 0; }
                 code = {0x4030: ila(2, target), 0x4034: bi(2), 0x4800: NOP, 0x4804: BI_LR}
                 self.assertEqual(self.discover(code), (0x4038, []))
 
+    def test_static_discovery_is_opt_in(self):
+        # By default the plan is exactly the direct-branch bound (with measured
+        # entries), whatever static discovery could add.
+        code = {0x4030: ila(2, 0x4800), 0x4034: bi(2), 0x4800: BI_LR, 0x4C00: NOP, 0x4C04: BI_LR}
+        raw = image(code, 0x1000, 0x4030)
+        self.assertEqual(w.module_plans(raw, [0x4030], 0x4030, 0x5000), [('direct', 0x4038, [])])
+        self.assertEqual(w.module_plans(raw, [0x4030, 0x4C00], 0x4030, 0x5000),
+                         [('direct', 0x4C08, [])])
+        with self.assertRaisesRegex(ValueError, 'require static'):
+            w.module_plans(raw, [0x4030], 0x4030, 0x5000, data_pointers=True)
+
     def test_static_and_measured_entries_combine(self):
         code = {0x4030: ila(2, 0x4800), 0x4034: bi(2), 0x4800: BI_LR, 0x4C00: NOP, 0x4C04: BI_LR}
         raw = image(code, 0x1000, 0x4030)
-        plans = w.module_plans(raw, [0x4030, 0x4C00], 0x4030, 0x5000)
+        plans = w.module_plans(raw, [0x4030, 0x4C00], 0x4030, 0x5000, static=True)
         self.assertEqual(plans, [('static', 0x4C08, [0x4800]), ('direct', 0x4C08, [])])
-        self.assertEqual(w.module_plans(raw, [0x4030], 0x4030, 0x5000, direct_only=True),
-                         [('direct', 0x4038, [])])
         # No static gain: only the direct bound is offered.
         plain = image({0x4030: NOP, 0x4034: BI_LR}, 0x1000, 0x4030)
-        self.assertEqual(w.module_plans(plain, [0x4030], 0x4030, 0x5000), [('direct', 0x4038, [])])
+        self.assertEqual(w.module_plans(plain, [0x4030], 0x4030, 0x5000, static=True),
+                         [('direct', 0x4038, [])])
 
     def test_data_code_pointers_are_opt_in(self):
         # 0x4400 starts a function (after `bi $0` and lnop padding) inside the
@@ -370,13 +380,14 @@ int main(void) { printf("%d %d\\n",compiled,regions); return 0; }
                 0x4F00: 0x4400, 0x4F04: 0x4404, 0x4F08: 0x4A00}
         raw = image(code, 0x1000, 0x4030)
         self.assertEqual(w.data_code_pointers(raw, 0x4030, 0x4604), [0x4400])
-        self.assertEqual(w.module_plans(raw, [0x4030], 0x4030, 0x5000), [('direct', 0x4604, [])])
-        self.assertEqual(w.module_plans(raw, [0x4030], 0x4030, 0x5000, data_pointers=True),
+        self.assertEqual(w.module_plans(raw, [0x4030], 0x4030, 0x5000, static=True),
+                         [('direct', 0x4604, [])])
+        self.assertEqual(w.module_plans(raw, [0x4030], 0x4030, 0x5000, static=True, data_pointers=True),
                          [('static+data', 0x4A04, [0x4400]), ('direct', 0x4604, [])])
         # A pointed-to function whose code is not valid is refused.
         code[0x4408] = UNDEFINED
         raw = image(code, 0x1000, 0x4030)
-        self.assertEqual(w.module_plans(raw, [0x4030], 0x4030, 0x5000, data_pointers=True),
+        self.assertEqual(w.module_plans(raw, [0x4030], 0x4030, 0x5000, static=True, data_pointers=True),
                          [('direct', 0x4604, [])])
 
     def test_is_defined_rejects_unencoded_words(self):
