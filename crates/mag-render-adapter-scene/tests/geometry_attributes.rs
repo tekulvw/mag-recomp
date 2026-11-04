@@ -44,7 +44,7 @@ fn all_source_semantics_are_owned_with_first_declaration_order_and_explicit_fail
     assert_eq!(result.owned_bytes(), 48);
 }
 #[test]
-fn original_normal_integer_and_color_field_endpoints_are_not_ieee_half_or_gpu_unorm() {
+fn normal_integer_and_color_field_endpoints_are_not_ieee_half_or_gpu_unorm() {
     for (codec, source, expected) in [
         (
             1,

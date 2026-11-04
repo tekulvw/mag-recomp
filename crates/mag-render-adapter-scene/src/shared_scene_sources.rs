@@ -311,13 +311,6 @@ fn intern_unlocked(
 /// The live content byte-identical to `bytes`, if the catalog holds one,
 /// found in `intern_with`'s lookup order. Never inserts: a caller that gets
 /// `None` interns through the ordinary path.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "called by the source FFI layer, which is migrated later"
-    )
-)]
 pub(crate) fn find_content(bytes: &[u8]) -> Option<Arc<SourceContent>> {
     let catalog = CATALOG.get()?;
     let probe = crate::source_acquisition::content_probe_enabled();

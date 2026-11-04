@@ -16,6 +16,8 @@ default = []
 mag-render-adapter-core = { path = "../mag-render-adapter-core" }
 # Clean-room behaviour that the migrated readers call instead of private code.
 mag-render-behavior = { path = "../mag-render-behavior" }
+# The one shared deformation entry point for Main and the depth pre-pass.
+mag-render-behavior-glue = { path = "../mag-render-behavior-glue" }
 sha2 = "=0.10.9"
 
 [lints.rust]
