@@ -128,7 +128,9 @@ otherwise the result is `MaterialBounds`. This rule applies to items of every me
 
 The chunk is a tree of records linked by self-relative offsets. Each link is a `u32`, measured from
 the start of the record that holds it, and must be nonzero, a multiple of 4, and point to a record
-that fits inside the chunk.
+that fits inside the chunk. Links are unsigned and do not wrap: a link whose target would pass
+`2^32` or the chunk's end is a bounds error. Every record therefore lies after the record that
+links to it, so `A < B < VD < V` and `B < FD < FP` as chunk offsets.
 
 | Record | Reached from | Size used |
 | --- | --- | --- |
@@ -139,11 +141,24 @@ that fits inside the chunk.
 | fragment descriptor `FD` | `B+16` | 20 |
 | fragment program object `FP` | `FD+16` | 24-byte header |
 
+The vertex program object at `V` has three regions after its 24-byte header. Let `n = u16 V+0`
+(instruction count), `o = u16 V+18` (instruction offset) and `k = u16 V+22` (static constant
+count):
+
+| Region | Start | Length |
+| --- | --- | --- |
+| constant registers | `V + 24` | `4·k` |
+| constant values | `V + align16(24 + 4·k)` | `16·k` |
+| instructions | `V + o` (when `n ≠ 0`, `o` must be nonzero and a multiple of 4) | `16·n` |
+
+These are the same object layout as in [material-producers.md](material-producers.md). Each region
+must lie inside the chunk.
+
 No two of these regions may overlap. The regions are: the first 4 bytes, `A`, `B`, `VD`, `FD`, both
 object headers, and the vertex constant registers, values and instructions. Empty regions are
-ignored. This is one check over all ten regions together: every pair is compared, including a
-vertex constant or instruction region against `A`, `B`, `VD`, `FD`, the first 4 bytes or the
-fragment header. An implementation may split the work, for example checking the records and headers
+ignored. This is one check over all ten regions together: every pair is compared. Because links
+point forward, the vertex regions cannot reach back over the first 4 bytes, `A`, `B` or `VD`. They
+can still overlap `FD` or the fragment header `FP` when those are placed after the vertex object. An implementation may split the work, for example checking the records and headers
 while walking the chunk and the vertex object's own regions in the program decode. In that case it
 must also check the vertex object's registers, values and instructions against the walked records,
 because neither half alone covers those pairs. Decoding the two objects is the published
@@ -235,10 +250,15 @@ No arithmetic on floating-point values. Every field is used or copied exactly.
      `MBI+0x1B` bit 0 clear → skinned partitions, palette `0x00ABCDE0`. The same with transform
      `+0x6F = 1` → instanced direct draw.
 9. **Override.** `PASS+0x190 = 2`: every item fails with `UnqualifiedOverride(2)`.
-10. **Cross-overlap.** A chunk whose vertex instruction region overlaps record `B`, while every
-    header and record is otherwise disjoint and the vertex object's own regions are mutually
-    disjoint: the item fails (program error, overlap). Checking only the records and headers, or
-    only the vertex object's internal regions, would miss this case.
+10. **Cross-overlap.** Records at `A = 0x04`, `B = 0x14`, `VD = 0x28`, vertex object `V = 0x40`
+    with `k = 0`, `n = 2` and `o = 0x20` (instructions `0x60`–`0x7F`), and `FD = 0x70` after the
+    vertex object, with `FP = 0x90`. Every header and record is disjoint, and the vertex object's
+    own regions are disjoint, but the instructions overlap `FD`: the item fails (program error,
+    overlap). With `FD = 0x80` and `FP = 0xA0` instead: accepted. For the fragment header, take
+    `A = 0x04`, `B = 0x14`, `FD = 0x28`, `VD = 0x3C`, `V = 0x50` with `k = 0`, `n = 2`, `o = 0x20`
+    (instructions `0x70`–`0x8F`) and `FP = 0x80`. The instructions overlap the fragment header:
+    same failure. Checking only the records and headers, or only the vertex object's internal
+    regions, would miss both failing cases. All links in these layouts point forward.
 
 ## Open questions
 
