@@ -7,57 +7,59 @@
 //! - the cascade views: plane corners, axial centres, the bounding-sphere fit and the refresh
 //!   rule;
 //! - the routing of a caster onto Main's geometry preparation;
-//! - the pass state the run writes (depth-only, less-or-equal with writes, no blend, alpha test or
-//!   colour), the native draw state, the vertex arrays and the per-draw constant rows;
-//! - the shared 2048×1024 shadow surface and its two halves;
+//! - the pass state the run writes and the native pass state (depth-only, less-or-equal with
+//!   writes, polygon offset 2.0/60.0, back-face culling with counter-clockwise front faces), the
+//!   vertex arrays and the per-draw constant rows;
+//! - the shared 2048×1024 linear surface, cascade 0's region, viewport and scissor, cascade 1's
+//!   inferred half behind [`LayoutAssumptions`], and the once-per-frame clear;
+//! - the unit-1 sampling record checks;
+//! - [`describe_cascade_pass`] and [`describe_frame`]: a pure description of each native
+//!   depth-only cascade pass (region, viewport, state, clear and caster list) that the frontend
+//!   can turn into a plan pass;
 //! - the native-replacement contract: the obligations, the ring-generation release rule, the
 //!   side-slot continuation, the writer publication and the completion ordering, behind a
 //!   decision that keeps the original job.
 //!
 //! Every question the specification still lists as open stays an explicit [`ShadowQuestion`]
-//! refusal: the depth bias, the light view, the cascade-half assignment with viewport, scissor
-//! and stencil clear, row 42, the per-item child work, groups outside the mask, group-7 skinning,
-//! the unit-1 import identity and the shadow-resolve draws. The exact command words of a segment
-//! belong to the shared native ring writer and are not re-encoded here. Nothing here is wired into
-//! the frontend; [`ShadowSwitch`] is off by default and, while any blocking question is open,
-//! [`ownership`] always keeps the original job.
+//! refusal: the light view, the confirmation of cascade 1's half, row 42, the per-item child work,
+//! groups outside the mask, group-7 skinning and the shadow-resolve draws. The exact command words
+//! of a segment belong to the shared native ring writer and are not re-encoded here. Nothing here
+//! is wired into the frontend; [`ShadowSwitch`] is off by default and, while any blocking question
+//! is open, [`ownership`] always keeps the original job.
 
 use crate::material_sources::GeometrySource;
-use crate::setup::{Comparison, PipelineState};
+use crate::setup::{Comparison, CullFace, FrontFace, PipelineState};
+use crate::texture::{DecodedUnit, Filter, TextureUnitRecord, decode};
 use crate::vertex_inputs::VertexBinding;
 
-/// The questions `shadow-pass.md` still lists as open, by number. Former questions 4, 6 and 8
-/// are settled.
+/// The questions `shadow-pass.md` still lists as open, by number. Former questions 1, 4, 6, 8 and
+/// 11 are settled, and question 3 is settled apart from cascade 1's half.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ShadowQuestion {
-    /// 1: whether a depth bias is in effect at run start, and its factor and units.
-    DepthBias = 1,
     /// 2: how a cascade sphere becomes the light view that rows 3–6 carry.
     LightView = 2,
-    /// 3: which surface half belongs to which cascade, each run's viewport and scissor, and the
-    /// stencil clear value.
-    CascadeHalves = 3,
+    /// 3: that cascade 1 uses x 1024–2047 with a viewport like cascade 0's (inferred, not
+    /// confirmed).
+    CascadeOneHalf = 3,
     /// 5: what vertex constant row 42 holds.
     RowFortyTwo = 5,
-    /// 7: the per-item child work: technique selection, programs and per-material state.
+    /// 7: the per-item child work: technique selection, programs and per-material state,
+    /// including which materials disable culling.
     ChildWork = 7,
     /// 9: whether any setting enables groups outside `0xFE`.
     GroupsOutsideMask = 9,
     /// 10: the group-7 skinning admission conditions.
     GroupSevenSkinning = 10,
-    /// 11: whether `PARAMS+0x1520` names exactly the depth target the runs render into.
-    UnitOneImport = 11,
     /// 12: how the shadow-resolve draws split by cascade.
     ShadowResolveDraws = 12,
 }
 
 /// The questions that block native ownership of a run's output.
-pub const OWNERSHIP_BLOCKERS: [ShadowQuestion; 5] = [
+pub const OWNERSHIP_BLOCKERS: [ShadowQuestion; 4] = [
     ShadowQuestion::LightView,
-    ShadowQuestion::CascadeHalves,
+    ShadowQuestion::CascadeOneHalf,
     ShadowQuestion::RowFortyTwo,
     ShadowQuestion::ChildWork,
-    ShadowQuestion::UnitOneImport,
 ];
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -71,6 +73,8 @@ pub enum ShadowError {
     ItemRefused(&'static str),
     /// Encoded by the shared native ring writer, not by this module.
     RingWriter,
+    /// The unit-1 sampling record does not describe the native shadow surface.
+    SamplingRecord(&'static str),
 }
 
 // --- Runs and caster selection -----------------------------------------------------------------
@@ -366,49 +370,96 @@ pub const MAP_DESCRIPTOR: u32 = 0x1520;
 pub const CASCADE_TRANSFORMS: [u32; 2] = [0xd0, 0xb50];
 
 /// The shared depth surface both cascade runs render into.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ShadowSurface {
     pub width: u32,
     pub height: u32,
-    /// Z24S8.
+    /// Z24S8 depth.
     pub depth_stencil: bool,
-    pub tiled: bool,
-    /// Depth clear value, once per frame in the clear group at the start of the frame.
-    pub depth_clear: f32,
+    /// Linear layout, `pitch` bytes per row.
+    pub pitch: u32,
 }
 
 pub const SHADOW_SURFACE: ShadowSurface = ShadowSurface {
     width: 2048,
     height: 1024,
     depth_stencil: true,
-    tiled: true,
-    depth_clear: 1.0,
+    pitch: 8192,
 };
 
-/// The two 1024×1024 halves `(x, y, width, height)`: x 0–1023 and x 1024–2047. Which cascade
-/// uses which is open question 3, see [`cascade_region`].
+/// The two 1024×1024 halves `(x, y, width, height)`: x 0–1023 and x 1024–2047.
 pub const SURFACE_HALVES: [[u32; 4]; 2] = [[0, 0, 1024, 1024], [1024, 0, 1024, 1024]];
 
-/// The viewport depth transform: z scale 0.5 and z offset 0.5 (clip −1…1 to window 0…1).
-pub const DEPTH_TRANSFORM: (f32, f32) = (0.5, 0.5);
-
-/// The half cascade `k` renders into: open question 3.
-pub fn cascade_region(_cascade: usize) -> Result<[u32; 4], ShadowError> {
-    Err(ShadowError::Unresolved(ShadowQuestion::CascadeHalves))
+/// One cascade's viewport, scissor and depth transform.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CascadeViewport {
+    /// `(x, y, width, height)`; the scissor is the same rectangle.
+    pub rectangle: [u32; 4],
+    pub scissor: [u32; 4],
+    /// `(x, y, z)` scale and offset of the viewport transform.
+    pub scale: [f32; 3],
+    pub offset: [f32; 3],
+    pub depth_range: (f32, f32),
 }
 
-/// A run's viewport and scissor: open question 3.
-pub fn run_viewport(_cascade: usize) -> Result<[u32; 4], ShadowError> {
-    Err(ShadowError::Unresolved(ShadowQuestion::CascadeHalves))
+/// Cascade 0: x 0–1023, y 0–1023, viewport and scissor 1024×1024 at the origin, scale
+/// `(512, −512, 0.5)`, offset `(512, 512, 0.5)`, depth range 0–1.
+pub const CASCADE_ZERO_VIEWPORT: CascadeViewport = CascadeViewport {
+    rectangle: SURFACE_HALVES[0],
+    scissor: SURFACE_HALVES[0],
+    scale: [512.0, -512.0, 0.5],
+    offset: [512.0, 512.0, 0.5],
+    depth_range: (0.0, 1.0),
+};
+
+/// Assumptions the specification states as inferred, not confirmed. Each is off by default, so an
+/// unconfirmed fact is refused unless a caller opts in.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct LayoutAssumptions {
+    /// Cascade 1 uses x 1024–2047 with cascade 0's viewport moved to an x origin of 1024 (open
+    /// question 3: both halves are written and the first run uses the left half).
+    pub cascade_one_right_half: bool,
 }
 
-/// The stencil clear value: open question 3.
-pub fn stencil_clear() -> Result<u32, ShadowError> {
-    Err(ShadowError::Unresolved(ShadowQuestion::CascadeHalves))
+/// The viewport, scissor and region of cascade `k`.
+pub fn cascade_viewport(
+    cascade: usize,
+    assumptions: &LayoutAssumptions,
+) -> Result<CascadeViewport, ShadowError> {
+    match cascade {
+        0 => Ok(CASCADE_ZERO_VIEWPORT),
+        1 if assumptions.cascade_one_right_half => {
+            let x = SURFACE_HALVES[1][0] as f32;
+            Ok(CascadeViewport {
+                rectangle: SURFACE_HALVES[1],
+                scissor: SURFACE_HALVES[1],
+                offset: [x + CASCADE_ZERO_VIEWPORT.offset[0], 512.0, 0.5],
+                ..CASCADE_ZERO_VIEWPORT
+            })
+        }
+        1 => Err(ShadowError::Unresolved(ShadowQuestion::CascadeOneHalf)),
+        _ => Err(ShadowError::CascadeDeclined("no such cascade")),
+    }
 }
 
-/// The colour target bound during the pass aliases the depth surface's memory and is nominally
-/// A8R8G8B8, but colour mask 0 means it is never written.
+/// The surface's clear: once per frame, before the first cascade.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FrameClear {
+    pub depth: f32,
+    pub stencil: u32,
+}
+
+pub const FRAME_CLEAR: FrameClear = FrameClear {
+    depth: 1.0,
+    stencil: 0,
+};
+
+/// The colour value the frame's clear group also uses. The native pass has no colour output and
+/// clears depth and stencil only.
+pub const CAPTURED_COLOUR_CLEAR: u32 = 0xff00_0000;
+
+/// The colour target bound during the pass aliases the depth surface's memory and is A8R8G8B8,
+/// but colour mask 0 means it is never written.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ColourTarget {
     pub aliases_depth: bool,
@@ -420,10 +471,43 @@ pub const COLOUR_TARGET: ColourTarget = ColourTarget {
     written: false,
 };
 
-/// Whether a native pass may replace the image Main's lighting unit 1 imports: not until open
-/// question 11 shows that `PARAMS+0x1520` names exactly the surface the runs render into.
-pub fn replace_unit_one_image() -> Result<(), ShadowError> {
-    Err(ShadowError::Unresolved(ShadowQuestion::UnitOneImport))
+/// Checks that the unit-1 sampling record (the twelve words at `PARAMS+0x1520`, read at run time)
+/// describes the native shadow surface: masked format `0x90` with the linear-layout bit,
+/// 2048×1024, one mip, s and t clamp-to-border (`4`), r clamp-to-edge (`3`), depth comparison
+/// greater-or-equal (`6`), linear minification and magnification and remap `0xAAE4`. A match means
+/// the native pass writes the image unit 1 imports.
+pub fn check_sampling_record(full: &[u32; 12]) -> Result<(), ShadowError> {
+    let mut record = TextureUnitRecord::default();
+    record.apply_full(full);
+    let controls = match decode(&record) {
+        Ok(DecodedUnit::Enabled(controls)) => controls,
+        Ok(DecodedUnit::Disabled(_)) => return Err(ShadowError::SamplingRecord("unit disabled")),
+        Err(_) => return Err(ShadowError::SamplingRecord("undecodable")),
+    };
+    let fail = |what| Err(ShadowError::SamplingRecord(what));
+    if controls.base != 0x90 || controls.format & 0x20 == 0 {
+        return fail("format");
+    }
+    let size = (controls.words[6] >> 16, controls.words[6] & 0xffff);
+    if size != (SHADOW_SURFACE.width, SHADOW_SURFACE.height) {
+        return fail("size");
+    }
+    if controls.mip_count != 1 {
+        return fail("mip count");
+    }
+    if controls.wrap.map(|axis| axis.code) != [4, 4, 3] {
+        return fail("wrap");
+    }
+    if controls.compare_function != 6 {
+        return fail("comparison");
+    }
+    if (controls.min, controls.mag) != (Filter::Linear, Filter::Linear) {
+        return fail("filters");
+    }
+    if controls.words[4] != 0xaae4 {
+        return fail("remap");
+    }
+    Ok(())
 }
 
 /// Which cascade each shadow-resolve draw resolves: open question 12.
@@ -522,19 +606,33 @@ pub fn after_run_state(state: &PipelineState) -> PipelineState {
     }
 }
 
-/// The state a native pass draws with: the run's writes, with the stencil test off as in the
-/// pass. Any depth bias stays the inherited state's (open question 1), so an unknown inherited
-/// bias leaves the draw state incomplete rather than guessed.
-pub fn native_pass_state(inherited: &PipelineState) -> PipelineState {
+/// The explicit polygon offset of the pass: factor 2.0, units 60.0, applied by the native pass
+/// rather than relied on from whatever state is current.
+pub const DEPTH_BIAS: (f32, f32) = (2.0, 60.0);
+
+/// The state a native pass draws a caster with: the run's writes, plus the raster state the
+/// captures give for both cascades. Polygon offset fill is on with [`DEPTH_BIAS`] (point and line
+/// offset off), stencil and two-sided stencil off, depth bounds off, and back faces culled with
+/// counter-clockwise front faces unless the caster's material disables culling. Which materials
+/// do that is per-item child work (open question 7), so the caller supplies it.
+pub fn native_pass_state(inherited: &PipelineState, culling_disabled: bool) -> PipelineState {
     PipelineState {
+        polygon_offset_fill: Some(true),
+        offset_factor: Some(DEPTH_BIAS.0.to_bits()),
+        offset_units: Some(DEPTH_BIAS.1.to_bits()),
         stencil_enable: Some(false),
+        two_sided_stencil: Some(false),
+        depth_bounds_enable: Some(false),
+        cull_enable: Some(!culling_disabled),
+        cull_face: Some(CullFace::Back),
+        front_face: Some(FrontFace::CounterClockwise),
         ..after_run_state(inherited)
     }
 }
 
-/// Whether a depth bias is set at run start, and its factor and units: open question 1.
-pub fn depth_bias() -> Result<(u32, u32), ShadowError> {
-    Err(ShadowError::Unresolved(ShadowQuestion::DepthBias))
+/// Which casters' materials disable culling: open question 7.
+pub fn caster_culling_disabled(_material_flags: u32) -> Result<bool, ShadowError> {
+    Err(ShadowError::Unresolved(ShadowQuestion::ChildWork))
 }
 
 /// Vertex arrays 1–15 are disabled once per run with format `0x2` (float, size 0), and the
@@ -628,6 +726,74 @@ pub fn caster_preparation(
 /// run's own pass object.
 pub fn technique_outcome(_mesh_group: u16) -> Result<bool, ShadowError> {
     Err(ShadowError::Unresolved(ShadowQuestion::ChildWork))
+}
+
+// --- Pass description --------------------------------------------------------------------------
+
+/// One native depth-only cascade pass, as a plan pass: where it renders, with what state, and
+/// which casters.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CascadePass {
+    pub run: CascadeRun,
+    /// The cohort camera slot whose caster list the pass draws.
+    pub camera_slot: usize,
+    pub semaphore_offset: u32,
+    pub viewport: CascadeViewport,
+    /// The surface clear, present for the first cascade of the frame only.
+    pub clear: Option<FrameClear>,
+    /// The state of a caster whose material keeps culling; [`CascadePass::caster_state`] gives
+    /// the state of one whose material disables it.
+    pub state: PipelineState,
+    /// Cohort indices of the casters, in cohort order.
+    pub casters: Vec<usize>,
+    pub enabled_arrays: u16,
+}
+
+impl CascadePass {
+    /// A caster's state, given whether its material disables culling.
+    pub fn caster_state(&self, culling_disabled: bool) -> PipelineState {
+        PipelineState {
+            cull_enable: Some(!culling_disabled),
+            ..self.state
+        }
+    }
+}
+
+/// Describes cascade `k`'s pass from its run's mask and its cohort's census groups (in cohort
+/// order), with `inherited` the state at run start.
+pub fn describe_cascade_pass(
+    cascade: usize,
+    mask: u16,
+    groups: &[u32],
+    inherited: &PipelineState,
+    assumptions: &LayoutAssumptions,
+) -> Result<CascadePass, ShadowError> {
+    let run = *RUNS
+        .get(cascade)
+        .ok_or(ShadowError::CascadeDeclined("no such cascade"))?;
+    Ok(CascadePass {
+        run,
+        camera_slot: run_camera(&run),
+        semaphore_offset: SEMAPHORE_OFFSETS[cascade],
+        viewport: cascade_viewport(cascade, assumptions)?,
+        clear: (cascade == 0).then_some(FRAME_CLEAR),
+        state: native_pass_state(inherited, false),
+        casters: caster_items(mask, groups)?,
+        enabled_arrays: ENABLED_ARRAYS,
+    })
+}
+
+/// Describes both cascade passes of a frame, cascade 0 first. Either refusal refuses the frame.
+pub fn describe_frame(
+    masks: [u16; 2],
+    groups: [&[u32]; 2],
+    inherited: &PipelineState,
+    assumptions: &LayoutAssumptions,
+) -> Result<[CascadePass; 2], ShadowError> {
+    Ok([
+        describe_cascade_pass(0, masks[0], groups[0], inherited, assumptions)?,
+        describe_cascade_pass(1, masks[1], groups[1], inherited, assumptions)?,
+    ])
 }
 
 // --- Native-replacement contract ---------------------------------------------------------------
@@ -1056,19 +1222,32 @@ mod tests {
         assert_eq!(after.cull_enable, Some(false));
         assert_eq!(after.offset_factor, Some(7));
         // The native pass draws with the stencil test off and the inherited bias.
-        let native = native_pass_state(&inherited);
+        // The native pass applies the captured raster state explicitly.
+        let native = native_pass_state(&inherited, false);
         assert_eq!(native.stencil_enable, Some(false));
+        assert_eq!(native.two_sided_stencil, Some(false));
+        assert_eq!(native.depth_bounds_enable, Some(false));
+        assert_eq!(native.polygon_offset_fill, Some(true));
         assert_eq!(
-            (native.offset_factor, native.polygon_offset_fill),
-            (Some(7), Some(true))
+            (native.offset_factor, native.offset_units),
+            (Some(2f32.to_bits()), Some(60f32.to_bits()))
         );
         assert_eq!(
-            native_pass_state(&PipelineState::default()).offset_factor,
-            None
+            (native.cull_enable, native.cull_face, native.front_face),
+            (
+                Some(true),
+                Some(CullFace::Back),
+                Some(FrontFace::CounterClockwise)
+            )
         );
+        // An unknown inherited bias no longer matters: the bias is explicit.
+        let unknown = native_pass_state(&PipelineState::default(), false);
+        assert_eq!(unknown.offset_factor, Some(2f32.to_bits()));
+        // A material that disables culling.
+        assert_eq!(native_pass_state(&inherited, true).cull_enable, Some(false));
         assert_eq!(
-            depth_bias(),
-            Err(ShadowError::Unresolved(ShadowQuestion::DepthBias))
+            caster_culling_disabled(0x1),
+            Err(ShadowError::Unresolved(ShadowQuestion::ChildWork))
         );
     }
 
@@ -1115,9 +1294,16 @@ mod tests {
     }
 
     #[test]
-    fn shared_surface_and_halves() {
-        assert_eq!((SHADOW_SURFACE.width, SHADOW_SURFACE.height), (2048, 1024));
-        assert_eq!(SHADOW_SURFACE.depth_clear, 1.0);
+    fn shared_surface_viewports_and_clear() {
+        assert_eq!(
+            SHADOW_SURFACE,
+            ShadowSurface {
+                width: 2048,
+                height: 1024,
+                depth_stencil: true,
+                pitch: 8192
+            }
+        );
         // The halves tile the surface without overlap.
         assert_eq!(
             SURFACE_HALVES[0][0] + SURFACE_HALVES[0][2],
@@ -1128,25 +1314,127 @@ mod tests {
             SHADOW_SURFACE.width
         );
         assert!(SURFACE_HALVES.iter().all(|h| h[3] == SHADOW_SURFACE.height));
-        assert_eq!(DEPTH_TRANSFORM, (0.5, 0.5));
         const { assert!(!COLOUR_TARGET.written) };
-        for result in [cascade_region(0), run_viewport(1)] {
-            assert_eq!(
-                result,
-                Err(ShadowError::Unresolved(ShadowQuestion::CascadeHalves))
-            );
-        }
+
+        // Cascade 0 is settled.
+        let off = LayoutAssumptions::default();
+        let zero = cascade_viewport(0, &off).unwrap();
+        assert_eq!(zero.rectangle, [0, 0, 1024, 1024]);
+        assert_eq!(zero.scissor, zero.rectangle);
         assert_eq!(
-            stencil_clear(),
-            Err(ShadowError::Unresolved(ShadowQuestion::CascadeHalves))
+            (zero.scale, zero.offset),
+            ([512.0, -512.0, 0.5], [512.0, 512.0, 0.5])
         );
+        assert_eq!(zero.depth_range, (0.0, 1.0));
+        // Cascade 1 only under the named assumption.
         assert_eq!(
-            replace_unit_one_image(),
-            Err(ShadowError::Unresolved(ShadowQuestion::UnitOneImport))
+            cascade_viewport(1, &off),
+            Err(ShadowError::Unresolved(ShadowQuestion::CascadeOneHalf))
         );
+        let on = LayoutAssumptions {
+            cascade_one_right_half: true,
+        };
+        let one = cascade_viewport(1, &on).unwrap();
+        assert_eq!(one.rectangle, [1024, 0, 1024, 1024]);
+        assert_eq!(one.scissor, one.rectangle);
+        assert_eq!(
+            (one.scale, one.offset),
+            ([512.0, -512.0, 0.5], [1536.0, 512.0, 0.5])
+        );
+        assert!(cascade_viewport(2, &on).is_err());
+
+        assert_eq!((FRAME_CLEAR.depth, FRAME_CLEAR.stencil), (1.0, 0));
         assert_eq!(
             resolve_draw_cascades(),
             Err(ShadowError::Unresolved(ShadowQuestion::ShadowResolveDraws))
+        );
+    }
+
+    /// The captured unit-1 record: enabled, masked format 0x90 with the linear bit (0xB0),
+    /// 2D, one mip, wraps (4, 4, 3) with comparison 6, linear filters, remap 0xAAE4, 2048×1024.
+    fn sampling_record() -> [u32; 12] {
+        let mut w = [0u32; 12];
+        w[1] = (1 << 16) | (0xb0 << 8) | (2 << 4);
+        w[2] = 4 | (4 << 8) | (3 << 16) | (6 << 28);
+        w[3] = 0x8000_0000;
+        w[4] = 0xaae4;
+        w[5] = (2 << 24) | (2 << 16);
+        w[6] = (2048 << 16) | 1024;
+        w[7] = 0xffff_ffff;
+        w
+    }
+
+    #[test]
+    fn unit_one_sampling_record_checks() {
+        assert_eq!(check_sampling_record(&sampling_record()), Ok(()));
+        let mismatch = |edit: fn(&mut [u32; 12]), what: &'static str| {
+            let mut w = sampling_record();
+            edit(&mut w);
+            assert_eq!(
+                check_sampling_record(&w),
+                Err(ShadowError::SamplingRecord(what))
+            );
+        };
+        mismatch(|w| w[3] = 0, "unit disabled");
+        mismatch(|w| w[1] = (1 << 16) | (0x90 << 8) | (2 << 4), "format");
+        mismatch(|w| w[1] = (1 << 16) | (0xb5 << 8) | (2 << 4), "format");
+        mismatch(|w| w[6] = (1024 << 16) | 1024, "size");
+        mismatch(|w| w[1] = (2 << 16) | (0xb0 << 8) | (2 << 4), "mip count");
+        mismatch(|w| w[2] = 3 | (4 << 8) | (3 << 16) | (6 << 28), "wrap");
+        mismatch(
+            |w| w[2] = 4 | (4 << 8) | (3 << 16) | (4 << 28),
+            "comparison",
+        );
+        mismatch(|w| w[5] = (1 << 24) | (2 << 16), "filters");
+        mismatch(|w| w[4] = 0xaae5, "remap");
+        mismatch(|w| w[5] = 7 << 16, "undecodable");
+    }
+
+    #[test]
+    fn cascade_pass_descriptions() {
+        let groups = [0u32, 1, 1, 3, 7, 8];
+        let inherited = PipelineState::default();
+        let on = LayoutAssumptions {
+            cascade_one_right_half: true,
+        };
+        let [first, second] =
+            describe_frame([0xfe, 0xfe], [&groups, &groups[1..]], &inherited, &on).unwrap();
+        assert_eq!((first.run, first.camera_slot), (RUNS[0], 1));
+        assert_eq!((second.run, second.camera_slot), (RUNS[1], 2));
+        assert_eq!(
+            (first.semaphore_offset, second.semaphore_offset),
+            (0x490, 0x4a0)
+        );
+        // The clear precedes the first cascade only.
+        assert_eq!(first.clear, Some(FRAME_CLEAR));
+        assert_eq!(second.clear, None);
+        assert_eq!(first.casters, vec![1, 2, 3, 4]);
+        assert_eq!(second.casters, vec![0, 1, 2, 3]);
+        assert_eq!(first.viewport.rectangle, SURFACE_HALVES[0]);
+        assert_eq!(second.viewport.rectangle, SURFACE_HALVES[1]);
+        assert_eq!(first.enabled_arrays, ENABLED_ARRAYS);
+        assert_eq!(first.state, native_pass_state(&inherited, false));
+        assert_eq!(first.caster_state(true).cull_enable, Some(false));
+        // An empty run still describes its pass.
+        assert!(
+            describe_cascade_pass(0, 0, &groups, &inherited, &on)
+                .unwrap()
+                .casters
+                .is_empty()
+        );
+        // Without the assumption the frame is refused at cascade 1, not fabricated.
+        assert_eq!(
+            describe_frame(
+                [0xfe, 0xfe],
+                [&groups, &groups],
+                &inherited,
+                &LayoutAssumptions::default()
+            ),
+            Err(ShadowError::Unresolved(ShadowQuestion::CascadeOneHalf))
+        );
+        assert_eq!(
+            describe_cascade_pass(0, 0x1fe, &groups, &inherited, &on),
+            Err(ShadowError::Unresolved(ShadowQuestion::GroupsOutsideMask))
         );
     }
 
