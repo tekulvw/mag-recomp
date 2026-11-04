@@ -1,0 +1,16 @@
+[package]
+name = "mag-render-behavior"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99"
+license = "MIT"
+description = "Clean-room Main render behaviour implemented from the public behaviour specifications"
+
+[lib]
+name = "mag_render_behavior"
+
+[dependencies]
+mag-render-abi = { path = "../mag-render-abi" }
+
+[lints.rust]
+unsafe_code = "forbid"

@@ -64,6 +64,11 @@ jobs:
           cargo fmt --manifest-path crates/mag-render-programs/Cargo.toml --check
           cargo clippy --manifest-path crates/mag-render-programs/Cargo.toml --locked --offline --all-targets -- -D warnings
           cargo test --manifest-path crates/mag-render-programs/Cargo.toml --locked --offline
+      - name: Check clean-room behaviour crate
+        run: |
+          cargo fmt --manifest-path crates/mag-render-behavior/Cargo.toml --check
+          cargo clippy --manifest-path crates/mag-render-behavior/Cargo.toml --locked --offline --all-targets -- -D warnings
+          cargo test --manifest-path crates/mag-render-behavior/Cargo.toml --locked --offline
       - name: Fetch locked shader translator dependencies
         run: cargo fetch --manifest-path crates/mag-render-shaders/Cargo.toml --locked
       - name: Shader translator format
