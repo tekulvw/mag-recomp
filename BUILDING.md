@@ -128,6 +128,15 @@ interpreter fallback. This restores compiled streamed-job coverage, not the
 separate opt-in native/Rust or Group0 GPU replacements. Verified-geometry,
 connected-geometry and audio experiment activation is unchanged.
 
+By default each job's lifted code is bounded by direct branches from its header entry,
+plus any `--attribution` interpreter entries. `--static-indirect` is opt-in until it passes
+in-game acceptance. It also follows the indirect-branch targets a static pass proves:
+computed jumps, explicit return addresses, constant-address pointer loads and bounded jump
+tables. A job whose extended lift fails is retried with the direct bound. `--data-code-pointers`
+requires `--static-indirect` and adds a validated heuristic for function pointers held only in
+job data. Without either flag the output is unchanged, so builds that pin job sources by hash
+keep working.
+
 `spu_programs_lift.py` lifts every SPU program embedded in the engine and checks the result against
 `profiles/retail-v1.0-spu-coverage.json`; the engine build re-runs that check and refuses to configure
 without it.

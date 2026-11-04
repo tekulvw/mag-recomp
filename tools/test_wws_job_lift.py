@@ -21,8 +21,80 @@ def brsl(pc, target):
     return ri16(0x066, (target - pc) >> 2)
 
 
-def brz(pc, target):
-    return ri16(0x040, (target - pc) >> 2)
+def brz(pc, target, rt=0):
+    return ri16(0x040, (target - pc) >> 2, rt)
+
+
+def binz(ra, rt=0):
+    return (0x129 << 21) | (ra << 7) | rt
+
+
+# Encoders for the instructions the static discovery tests use (SPU ISA formats).
+def ila(rt, imm):
+    return (0x21 << 25) | ((imm & 0x3FFFF) << 7) | rt
+
+
+def il(rt, imm):
+    return ri16(0x081, imm, rt)
+
+
+def rr(op11, rt, ra, rb=0):
+    return (op11 << 21) | (rb << 14) | (ra << 7) | rt
+
+
+def ri10(op8, rt, ra, imm):
+    return (op8 << 24) | ((imm & 0x3FF) << 14) | (ra << 7) | rt
+
+
+def bi(ra):
+    return rr(0x1A8, 0, ra)
+
+
+def bisl(rt, ra):
+    return rr(0x1A9, rt, ra)
+
+
+def a_(rt, ra, rb):
+    return rr(0x0C0, rt, ra, rb)
+
+
+def sf(rt, ra, rb):
+    return rr(0x040, rt, ra, rb)
+
+
+def lqd(rt, ra, offset):
+    return ri10(0x34, rt, ra, offset >> 4)
+
+
+def lqx(rt, ra, rb):
+    return rr(0x1C4, rt, ra, rb)
+
+
+def rotqby(rt, ra, rb):
+    return rr(0x1DC, rt, ra, rb)
+
+
+def shli(rt, ra, n):
+    return rr(0x07B, rt, ra, n)
+
+
+def clgti(rt, ra, n):
+    return ri10(0x5C, rt, ra, n)
+
+
+def brnz(pc, rt, target):
+    return ri16(0x042, (target - pc) >> 2, rt)
+
+
+def image(code, size, entry):
+    """Module image with `code` ({local-store address: word}) and zeros elsewhere."""
+    raw = bytearray(module([], size, entry))
+    for addr, word in code.items():
+        struct.pack_into('>I', raw, addr - w.LOAD_BASE, word)
+    return bytes(raw)
+
+
+UNDEFINED = 0x9ABCDEF0        # top nibble 9: no SPU instruction encodes this
 
 
 def module(words, size, entry):
@@ -160,6 +232,169 @@ int main(void) { printf("%d %d\\n",compiled,regions); return 0; }
         # The SDK interpreter attribution report seeds with 1469598103934665603.
         self.assertEqual(w.fnv64(b''), 1469598103934665603)
         self.assertEqual(w.fnv64(b'a'), ((1469598103934665603 ^ 0x61) * 1099511628211) & (2**64 - 1))
+
+    # ---- static indirect-target discovery ---------------------------------
+    def discover(self, code, size=0x1000, entry=0x4030, **kw):
+        raw = image(code, size, entry)
+        return w.discover_code(raw, [entry], w.LOAD_BASE + w.HEADER, w.LOAD_BASE + size, **kw)
+
+    def test_computed_jump_to_an_ila_constant_is_followed(self):
+        code = {0x4030: ila(2, 0x4800), 0x4034: bi(2),
+                0x4800: NOP, 0x4804: BI_LR}
+        end, targets = self.discover(code)
+        self.assertEqual((end, targets), (0x4808, [0x4800]))
+        raw = image(code, 0x1000, 0x4030)
+        self.assertEqual(w.reachable_end(raw, [0x4030], 0x4030, 0x5000), 0x4038)   # default: direct
+        self.assertEqual(w.reachable_end(raw, [0x4030], 0x4030, 0x5000, indirect=True), 0x4808)
+
+    def test_ilhu_iohl_and_ai_build_targets(self):
+        code = {0x4030: ri16(0x082, 0, 3), 0x4034: ri16(0x0C1, 0x4900, 3), 0x4038: ri10(0x1C, 3, 3, 8),
+                0x403C: bi(3), 0x4908: BI_LR}
+        self.assertEqual(self.discover(code), (0x490C, [0x4908]))
+
+    def test_explicit_return_address_in_link_register(self):
+        # Position-independent base (brsl to the next word), then a call made as
+        # a jump with $r0 = return point + base: the callee returns there.
+        code = {0x4030: ila(2, 0x4038), 0x4034: brsl(0x4034, 0x4038) | 126,
+                0x4038: sf(126, 2, 126),
+                0x403C: brsl(0x403C, 0x4600),            # ABI: r126 survives
+                0x4040: ila(0, 0x4A00), 0x4044: a_(0, 0, 126), 0x4048: br(0x4048, 0x4600),
+                0x4600: BI_LR,
+                0x4A00: NOP, 0x4A04: BI_LR}
+        end, targets = self.discover(code)
+        self.assertEqual((end, targets), (0x4A08, [0x4A00]))
+
+    def test_volatile_registers_do_not_survive_a_call(self):
+        code = {0x4030: ila(5, 0x4A00), 0x4034: ila(85, 0x4B00), 0x4038: brsl(0x4038, 0x4600),
+                0x403C: binz(85), 0x4040: bi(5),
+                0x4600: il(5, 0), 0x4604: BI_LR,
+                0x4A00: BI_LR, 0x4B00: BI_LR}
+        self.assertEqual(self.discover(code), (0x4B04, [0x4B00]))
+
+    def test_constant_address_pointer_load_feeds_indirect_call(self):
+        # Constructor-table shape: lqd/rotqby of a word at a known address.
+        code = {0x4030: ila(80, 0x4F04), 0x4034: lqd(7, 80, 0), 0x4038: rotqby(3, 7, 80),
+                0x403C: bisl(0, 3), 0x4040: BI_LR,
+                0x4C00: NOP, 0x4C04: BI_LR,
+                0x4F04: 0x4C00}
+        self.assertEqual(self.discover(code), (0x4C08, [0x4C00]))
+
+    def jump_table(self, entries, bound, relative=False):
+        """0x4030 jumps to a bounded jump table at 0x4040 whose table is at 0x4E00."""
+        base = 0x4E00
+        code = {0x4030: br(0x4030, 0x4040),
+                0x4040: ila(10, base), 0x4044: shli(8, 6, 2), 0x4048: clgti(5, 6, bound),
+                0x404C: a_(3, 8, 10), 0x4050: lqx(7, 10, 8), 0x4054: rotqby(2, 7, 3),
+                0x4058: a_(2, 2, 10) if relative else NOP,
+                0x405C: brnz(0x405C, 5, 0x4100), 0x4060: bi(2),
+                0x4100: BI_LR}
+        for i, target in enumerate(entries):
+            code[base + 4 * i] = (target - base) & 0xFFFFFFFF if relative else target
+            code.setdefault(target, BI_LR)
+        return code
+
+    def test_bounded_jump_table_takes_every_entry(self):
+        cases = [0x4400, 0x4500, 0x4600]
+        for relative in (False, True):
+            with self.subTest(relative=relative):
+                self.assertEqual(self.discover(self.jump_table(cases, 2, relative)), (0x4604, cases))
+
+    def test_jump_table_bound_limits_entries(self):
+        # A further valid address past the bound is not an entry.
+        code = self.jump_table([0x4400, 0x4500], 1)
+        code.update({0x4E08: 0x4700, 0x4700: BI_LR})
+        self.assertEqual(self.discover(code), (0x4504, [0x4400, 0x4500]))
+
+    def test_jump_table_with_an_invalid_entry_is_rejected_whole(self):
+        code = self.jump_table([0x4400, 0x4500], 1)
+        code[0x4500] = UNDEFINED
+        self.assertEqual(self.discover(code), (0x4104, []))
+
+    def test_jump_table_without_bound_check_is_not_taken(self):
+        code = self.jump_table([0x4400, 0x4500], 1)
+        code[0x405C] = NOP
+        self.assertEqual(self.discover(code), (0x4064, []))
+
+    def test_jump_table_entered_mid_sequence_is_not_taken(self):
+        # A second path joins at the lqx, skipping the shift and the bound check.
+        code = self.jump_table([0x4400, 0x4500], 1)
+        code.update({0x4030: brz(0x4030, 0x4800, 9), 0x4034: br(0x4034, 0x4040),
+                     0x4800: ila(10, 0x4E00), 0x4804: br(0x4804, 0x4050)})
+        end, targets = self.discover(code)
+        self.assertEqual((end, targets), (0x4808, []))
+
+    def test_target_into_data_is_rejected(self):
+        for bad in ({0x4800: UNDEFINED}, {0x4800: NOP}, {0x4800: NOP, 0x4804: brsl(0x4804, 0x4900), 0x4808: BI_LR,
+                                                      0x4900: UNDEFINED}):
+            with self.subTest(bad=bad):
+                code = {0x4030: ila(2, 0x4800), 0x4034: bi(2), **bad}
+                # zeros after the NOP, an undefined word, or an invalid callee
+                self.assertEqual(self.discover(code), (0x4038, []))
+
+    def test_target_over_loaded_data_is_rejected(self):
+        # The code loads the quadword at 0x4800 as data; a jump there is refused.
+        code = {0x4030: ila(4, 0x4800), 0x4034: lqd(5, 4, 0), 0x4038: ila(2, 0x4804), 0x403C: bi(2),
+                0x4800: 0x12345678, 0x4804: NOP, 0x4808: BI_LR}
+        self.assertEqual(self.discover(code), (0x4040, []))
+
+    def test_constants_not_used_as_branch_targets_are_ignored(self):
+        code = {0x4030: ila(3, 0x4800), 0x4034: ila(0, 0x4900), 0x4038: lqd(0, 1, 0x10), 0x403C: br(0x403C, 0x4600),
+                0x4600: BI_LR, 0x4800: NOP, 0x4804: BI_LR, 0x4900: NOP, 0x4904: BI_LR}
+        self.assertEqual(self.discover(code), (0x4604, []))
+
+    def test_target_out_of_module_or_misaligned_is_ignored(self):
+        for target in (0x30000, 0x4802, 0x4010):
+            with self.subTest(target=target):
+                code = {0x4030: ila(2, target), 0x4034: bi(2), 0x4800: NOP, 0x4804: BI_LR}
+                self.assertEqual(self.discover(code), (0x4038, []))
+
+    def test_static_discovery_is_opt_in(self):
+        # By default the plan is exactly the direct-branch bound (with measured
+        # entries), whatever static discovery could add.
+        code = {0x4030: ila(2, 0x4800), 0x4034: bi(2), 0x4800: BI_LR, 0x4C00: NOP, 0x4C04: BI_LR}
+        raw = image(code, 0x1000, 0x4030)
+        self.assertEqual(w.module_plans(raw, [0x4030], 0x4030, 0x5000), [('direct', 0x4038, [])])
+        self.assertEqual(w.module_plans(raw, [0x4030, 0x4C00], 0x4030, 0x5000),
+                         [('direct', 0x4C08, [])])
+        with self.assertRaisesRegex(ValueError, 'require static'):
+            w.module_plans(raw, [0x4030], 0x4030, 0x5000, data_pointers=True)
+
+    def test_static_and_measured_entries_combine(self):
+        code = {0x4030: ila(2, 0x4800), 0x4034: bi(2), 0x4800: BI_LR, 0x4C00: NOP, 0x4C04: BI_LR}
+        raw = image(code, 0x1000, 0x4030)
+        plans = w.module_plans(raw, [0x4030, 0x4C00], 0x4030, 0x5000, static=True)
+        self.assertEqual(plans, [('static', 0x4C08, [0x4800]), ('direct', 0x4C08, [])])
+        # No static gain: only the direct bound is offered.
+        plain = image({0x4030: NOP, 0x4034: BI_LR}, 0x1000, 0x4030)
+        self.assertEqual(w.module_plans(plain, [0x4030], 0x4030, 0x5000, static=True),
+                         [('direct', 0x4038, [])])
+
+    def test_data_code_pointers_are_opt_in(self):
+        # 0x4400 starts a function (after `bi $0` and lnop padding) inside the
+        # lifted interval that only a data word names; its callee lies past the
+        # bound. A word naming 0x4404 (mid-function) or 0x4A00 (past the bound)
+        # is not a candidate.
+        code = {0x4030: brsl(0x4030, 0x4600), 0x4034: BI_LR, 0x4600: BI_LR,
+                0x43F8: BI_LR, 0x43FC: 0x00200000,
+                0x4400: il(3, 1), 0x4404: brsl(0x4404, 0x4A00), 0x4408: BI_LR, 0x4A00: BI_LR,
+                0x4F00: 0x4400, 0x4F04: 0x4404, 0x4F08: 0x4A00}
+        raw = image(code, 0x1000, 0x4030)
+        self.assertEqual(w.data_code_pointers(raw, 0x4030, 0x4604), [0x4400])
+        self.assertEqual(w.module_plans(raw, [0x4030], 0x4030, 0x5000, static=True),
+                         [('direct', 0x4604, [])])
+        self.assertEqual(w.module_plans(raw, [0x4030], 0x4030, 0x5000, static=True, data_pointers=True),
+                         [('static+data', 0x4A04, [0x4400]), ('direct', 0x4604, [])])
+        # A pointed-to function whose code is not valid is refused.
+        code[0x4408] = UNDEFINED
+        raw = image(code, 0x1000, 0x4030)
+        self.assertEqual(w.module_plans(raw, [0x4030], 0x4030, 0x5000, static=True, data_pointers=True),
+                         [('direct', 0x4604, [])])
+
+    def test_is_defined_rejects_unencoded_words(self):
+        for word in (NOP, BI_LR, ila(1, 2), lqx(1, 2, 3), 0x80000000, 0):
+            self.assertTrue(w.is_defined(word), hex(word))
+        for word in (UNDEFINED, 0xA0000000, 0x3D800000, 0x40000000):
+            self.assertFalse(w.is_defined(word), hex(word))
 
 
 if __name__ == '__main__':
