@@ -12,11 +12,24 @@
 //! | [`setup`] | `material-setup.md` |
 //! | [`producers`] | `material-producers.md` |
 //! | [`surfaces`] | `main-producer-inputs.md` |
+//! | [`lighting`] | `main-lighting.md` |
+//! | [`group_twelve`] | `main-group-twelve.md` |
+//! | [`fog_values`] | `main-fog-values.md` (the specified parts) |
+//! | [`fog`] | `main-fog.md` |
+//! | [`producer`] | shared full-screen producer pieces |
 //!
 //! Floating-point outputs use ordinary native arithmetic. They are checked against the
 //! tolerances each specification states, never against a particular evaluation order.
 
+// Matrix and lane arithmetic reads more clearly with explicit indices.
+#![allow(clippy::needless_range_loop)]
+
+pub mod fog;
+pub mod fog_values;
+pub mod group_twelve;
 pub mod guest;
+pub mod lighting;
+pub mod producer;
 pub mod producers;
 pub mod setup;
 pub mod surfaces;
