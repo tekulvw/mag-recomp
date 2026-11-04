@@ -1,0 +1,22 @@
+[package]
+name = "mag-render-adapter-scene"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99"
+license = "MIT"
+description = "MAG render adapter scene preparation: source capture, caches and geometry decoding over the adapter core"
+
+[lib]
+name = "mag_render_adapter_scene"
+
+[features]
+default = []
+
+[dependencies]
+mag-render-adapter-core = { path = "../mag-render-adapter-core" }
+# Clean-room behaviour that the migrated readers call instead of private code.
+mag-render-behavior = { path = "../mag-render-behavior" }
+sha2 = "=0.10.9"
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"

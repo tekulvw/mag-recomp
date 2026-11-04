@@ -14,6 +14,6 @@ Native replacements for the retail SPU render jobs (MaterialFlush Main, DepthNor
 
 ## Status
 
-Every SPU job still runs as the recompiled original program by default. The game render adapter's publishable parts are moving into `crates/mag-render-adapter-core` (see [the frontend guide](render-frontend.md#game-adapter)); they are opt-in, off by default, and limited to code that depends only on interface facts and on behavior specified in our own words. Adapter code that was organised around original functions, call order or local-store layout is re-specified and reimplemented under this method before it is published. New native code must be developed under this method from the start.
+Every SPU job still runs as the recompiled original program by default. The game render adapter's publishable parts are moving into `crates/mag-render-adapter-core` and `crates/mag-render-adapter-scene` (see [the frontend guide](render-frontend.md#game-adapter)); they are opt-in, off by default, and limited to code that depends only on interface facts and on behavior specified in our own words. Adapter code that was organised around original functions, call order or local-store layout is re-specified and reimplemented under this method before it is published. New native code must be developed under this method from the start.
 
 Black-box capture and analysis tools: `tools/jobio.py` (recording reader), `tools/jobio_provenance.py` (output-to-input relations), `tools/jobio_rules.py` (item-level rule mining with held-out scoring).

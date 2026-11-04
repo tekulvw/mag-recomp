@@ -19,7 +19,9 @@ this public repository.
 ## Game adapter
 
 The adapter reads the game's render sources from guest memory and turns them into owned scenes for
-the frontend. Its publishable parts move into `crates/mag-render-adapter-core` step by step; the
+the frontend. Its publishable parts move into `crates/mag-render-adapter-core` (guest reads and
+RSX state) and `crates/mag-render-adapter-scene` (source capture, caches and geometry decoding,
+calling `crates/mag-render-behavior` where a clean-room rule exists) step by step; the
 rest stays in a separate checkout until it meets the rules below. A part is publishable when it
 depends only on public interface facts (RSX method layout, the guest data-structure layouts needed
 to read and write guest memory, hardware number formats) and on behaviour written in our own words
@@ -29,7 +31,7 @@ use is not publishable, whatever its comments say; it is re-specified and reimpl
 Identities that verify inputs, including generated-function hashes keyed by address, are allowed
 (see `AGENTS.md`).
 
-The crate has no game content and needs no game files to build or test. Nothing in it runs unless
+The crates have no game content and need no game files to build or test. Nothing in them runs unless
 a host calls it, and its per-frame entry points also check a master switch that is off by default:
 set `MAG_RENDER_ADAPTER=1`, or call `mag_render_adapter_enable()` before the first frame, to turn
 it on. A build that does not link the crate, or links it without turning the switch on, renders
@@ -39,6 +41,9 @@ exactly as before.
 cargo fmt --manifest-path crates/mag-render-adapter-core/Cargo.toml --check
 cargo clippy --manifest-path crates/mag-render-adapter-core/Cargo.toml --all-targets --locked -- -D warnings
 cargo test --manifest-path crates/mag-render-adapter-core/Cargo.toml --locked
+cargo fmt --manifest-path crates/mag-render-adapter-scene/Cargo.toml --check
+cargo clippy --manifest-path crates/mag-render-adapter-scene/Cargo.toml --all-targets --locked -- -D warnings
+cargo test --manifest-path crates/mag-render-adapter-scene/Cargo.toml --locked
 ```
 
 ## Build the optional library
