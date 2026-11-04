@@ -115,7 +115,8 @@ Some producer draws use the explicit viewport instead. Let `W = u32 RENDERER+0x3
 Given a source viewport, the target's physical size `(PW, PH)` and the record's sample grid
 `(gx, gy)`:
 
-- Decline unless the clip range is exactly `[0, 1]` and every scale and offset lane is finite.
+- Decline unless the clip range is exactly `[0, 1]` and every scale and offset lane is finite. The
+  minimum may be `+0.0` or `−0.0` (they compare equal); the maximum must be `1.0`.
 - Native viewport: `x = (ox − sx)·gx`, `y = (oy + sy)·gy`, `width = 2·sx·gx`,
   `height = −2·sy·gy`, depth range `[0, 1]`.
 - Native scissor: each scissor value multiplied by the matching grid factor.
@@ -137,18 +138,30 @@ Given a compact descriptor `d` and a set of candidate records:
 2. Require dimension 2, no cube flag, mip count 1 and `CONTROL3` depth at most 1; otherwise "no
    association".
 3. Location 1 means local and 2 means main; anything else is an error.
-4. A candidate matches when its colour format equals the mapped format, its physical size equals
-   the descriptor's `IMAGE_RECT`, and its colour (location, offset, pitch) equals the
-   descriptor's (location, `OFFSET`, `CONTROL3` pitch).
-5. No match means "no association". Matches that disagree on (location, offset, pitch, format,
-   size) are an *ambiguous source* error. Otherwise the result is the first matching record.
+4. Consider, in order, every candidate whose colour format equals the mapped format. Its
+   anti-aliasing mode must be supported; an unsupported mode on such a candidate is an error (the
+   whole association declines), not a non-match, because its physical size cannot be known.
+   Candidates with a different colour format are skipped without looking at their mode.
+5. A candidate matches when its physical size equals the descriptor's `IMAGE_RECT` and its colour
+   (location, offset, pitch) equals the descriptor's (location, `OFFSET`, `CONTROL3` pitch). Its
+   colour DMA context must be local or main memory, otherwise error.
+6. No match means "no association". The image a match describes is identified by (location,
+   offset, pitch, colour format, physical size, sample grid). Matches agree on the first five by
+   construction, so two matches can differ only in their sample grid, for example a 1280×720
+   record with a 2×1 grid and a 2560×720 record with a 1×1 grid at the same storage. Matches with
+   different sample grids are an *ambiguous source* error. Otherwise the result is the first
+   matching record.
 
 ### Depth classification of the lighting source
 
 The lighting producer's unit-0 descriptor can name a depth buffer. Classify a descriptor `d` read
 from address `A`:
 
-- **Packed alias**: masked format `0x85` and `A` is `RENDERER+0x3120` or `RENDERER+0x3140`.
+- **Packed alias**: masked format `0x85` and `A` is `RENDERER+0x3120` or `RENDERER+0x3140`. This is
+  intended: the game builds these two descriptors from depth-surface fields, so an A8R8G8B8 format
+  there is always a reinterpretation of Z24S8 depth, never a colour surface. Other formats at
+  these addresses are classified by the remaining rules, so a non-depth format there still takes
+  the colour path.
 - **Native depth**: masked format `0x90`.
 - **Unsupported**: masked format `0x91`–`0x93`.
 - **Not depth**: anything else.
@@ -172,6 +185,27 @@ Lighting uses two descriptors:
 - unit 0: the compact descriptor at `RENDERER+0x3120` when bank zero is enabled, otherwise at
   `RENDERER+0x3140`;
 - unit 1: the full descriptor at `PARAMS+0x1520`. Its compact form is words 0–6 and word 8.
+
+### Producer texture bindings
+
+Producers never resolve images themselves. They bind a unit to the image whose provenance is exactly
+the unit's (source address, unmodified compact descriptor), taken from a list of producer texture
+bindings that is built before the producers run. That list is built as follows, for every producer
+texture request: lighting units 0 and 1 and group-twelve units 11, 12 and 13
+([main-group-twelve.md](main-group-twelve.md)).
+
+1. Classify the request with "Depth classification of the lighting source" above. The packed-alias
+   case can only arise for the two lighting addresses; group-twelve requests can be native depth.
+2. A depth request (packed alias or native depth) is bound to a colour image derived from the
+   depth plane it names, with that case's encoding. Requests with the same depth plane, encoding
+   and `IMAGE_RECT` share one derived image. The conversion of depth texels into colour texels is
+   the existing depth-to-colour encoding and is not specified here.
+3. Any other request is bound to the guest image the descriptor describes, imported normally.
+4. An unsupported classification is an error for the whole list.
+
+A bound image therefore never has a depth packet format. A producer that finds a binding whose image
+has a depth packet format (D32 = 2, D24S8 = 15 or D32S8 = 16) declines, because a depth image cannot be
+read through an ordinary colour view.
 
 ### Required surfaces before Main
 
@@ -204,6 +238,10 @@ exist before Main writes anything):
      offset and pitch;
    - otherwise the colour association above, over the set, marks that record's colour plane.
 
+   A packed-alias descriptor (masked `0x85`) takes the colour branch here. It normally matches no
+   colour plane and so marks nothing; the depth plane it reads is checked when its derived image is
+   built (see "Producer texture bindings").
+
 Entries are merged by record address: uses are combined. Two entries with the same address but
 different record contents are an error.
 
@@ -232,7 +270,7 @@ not on computed values.
 ## Synthetic test vectors
 
 1. **Role forcing.** Bank zero disabled. `select(1, 1)` → record at table offset
-   `0xA8·2 + 0x54 = 0x1A4`. `select(1, 3)` with AA byte nonzero → offset `0xA8·3 + 0x54 = 0x228`;
+   `0xA8·2 + 0x54 = 0x1A4`. `select(1, 3)` with AA byte nonzero → offset `0xA8·3 + 0x54 = 0x24C`;
    with AA byte zero → `0x1A4`.
 2. **Surface viewport.** Record 1280×720, AA 0. `VP_HX = 0.5`, `VP_HY = −0.5`, jitter `(0.25, −0.25)`,
    `CLIP_MIN = 0`, `CLIP_MAX = 1`. Scale `(640, −360, 0.5, 0)`, offset `(640.25, 359.75, 0.5, 0)`.
@@ -258,6 +296,14 @@ not on computed values.
 10. **Merge.** Prior colour input on record X, then X as a colour and depth attachment: one entry,
     uses = colour+depth, prior = colour, attachment = colour+depth. The same address with a
     different record byte: error.
+11. **Ambiguous storage.** Two candidate records, both colour format 8 at colour offset `0x7C0000`,
+    pitch 10240, DMA `0xFEED0000`: one 1280×720 with AA mode 3 (physical 2560×720, grid 2×1), the
+    other 2560×720 with AA mode 0 (grid 1×1). The descriptor from vector 7 matches both: *ambiguous
+    source*. If the second record's colour format is 11 instead, it is skipped and the first record
+    is the result.
+12. **Unsupported AA on a candidate.** A candidate with colour format 8 and AA mode 2 is an error,
+    even if another candidate would match. With colour format 11 it is skipped.
+13. **Negative-zero clip minimum.** `CLIP_MIN = −0.0`, `CLIP_MAX = 1`: the mapping proceeds.
 
 ## Open questions
 

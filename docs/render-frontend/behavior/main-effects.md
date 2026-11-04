@@ -199,7 +199,11 @@ Each event is validated, then routed:
    equal to group-15 reference `slot`. References come from `material-setup.md`. Any mismatch is
    an error.
 2. **Guard.** Initial events for slots 0 and 1, and all group-13 and group-15 events, require a
-   known generation flag (error otherwise). When the flag is disabled they are no-ops.
+   known generation flag (error otherwise). When the flag is disabled they are no-ops. The guard
+   deliberately does not cover the group-12 event or the finish. Group-12 setup belongs to the
+   material lists, not to the producer banks the flag describes, so it runs whatever the flag
+   says. The finish always runs; it consults the flag only to decide whether to restore the role-2
+   surface (`main-finish.md`). Initial slot 2 is a no-op either way.
 3. **Routing.** See the table in "Scope". Initial slot 2 is a no-op regardless of the guard: its
    bank exists but contains no work. Any other event (including auxiliary group-15 item events)
    is an error: the plan declines rather than skip unimplemented producer work.
@@ -466,10 +470,15 @@ Common fixture: `R = 0x30000`, `T = 0x20000`, `L = -0.75`, `H = 0.5`, `F = 2.5`,
    during the draw: same words with `FILTER = 0x01014ABC`. After the draw: `CONTROL0 = 0`, other
    words unchanged. With `S` bound at 320x180 and a fragment program sampling unit 0 the draw
    succeeds; with `IMAGE_RECT = 0x01400168` (320x360) it fails the sampled-size check.
-9. **Stencil-mask pipeline.** Starting from a state with depth bounds on, polygon-offset fill on
-   and front face counter-clockwise: after the producer, depth bounds, offset fill and front face
-   are unchanged; stencil enabled, two-sided, both faces ALWAYS/`0x81`/read `0`/write `0`/
+9. **Stencil-mask pipeline (state writes only).** This vector checks only which fields the
+   producer writes, not whether its draw is admitted. Starting from a state with depth bounds on,
+   polygon-offset fill on and front face counter-clockwise: after the producer, depth bounds, offset
+   fill and front face are unchanged; stencil enabled, two-sided, both faces ALWAYS/`0x81`/read `0`/write `0`/
    REPLACE x3; depth test and depth write off; colour mask all off.
+   A draw from this exact state is refused: with polygon-offset fill on and no bias clamp supplied,
+   the bias field can never be fully known ([raster-state.md](raster-state.md)), so the raster
+   state is incomplete. An admitted stencil-mask draw needs offset fill known *disabled*, a known
+   front face and known depth bounds.
 10. **Stencil-mask attachments.** `D` binding depth not initialised, stencil not initialised:
     pass depth load *don't care*, stencil load *don't care*, colour none, one draw with 6
     indices.

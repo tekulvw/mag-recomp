@@ -172,8 +172,14 @@ Value evaluation:
 2. Apply `fragment_writes` in order. Each write replaces every inline row its logical slot maps to.
    Later writes win.
 3. *Sanitise* every seed and every written row: a lane whose binary32 value is NaN, or whose
-   magnitude exceeds `3.0e38`, becomes `+0`. Other lanes, including signed zeros and subnormals,
-   keep their bits. `sanitized_fragment_words` counts the replaced lanes.
+   magnitude exceeds the threshold `L`, becomes `+0`. `L` is the binary32 value nearest to
+   `3.0e38` (bits `0x7F61B1E6`, about `3.00000000550e38`, slightly above `3.0e38`). A lane whose
+   magnitude equals `L` is kept. Other lanes, including signed zeros and subnormals, keep their
+   bits.
+4. `sanitized_fragment_words` counts replacements in the inputs, not in the final rows. It is the
+   number of lanes replaced across all seed rows, counted even if a later write overwrites that
+   row, plus the lanes replaced in each write, counted once per write. A write that maps to
+   several inline rows still counts once, and a write that is later overwritten still counts.
 
 The number of inline rows must equal the translator's `constant_slots`, otherwise *uniform layout*.
 
@@ -250,8 +256,8 @@ uniform layout; missing current attribute (input); allocation; vertex inputs (fr
 
 ## Tolerance
 
-No floating-point arithmetic is performed. Sanitisation compares magnitudes against `3.0e38`
-exactly and replaces whole lanes. Every packed word is a bit-exact copy of an input word or `+0`.
+No floating-point arithmetic is performed. Sanitisation compares magnitudes against `L` exactly
+and replaces whole lanes. Every packed word is a bit-exact copy of an input word or `+0`.
 
 **Consequences of non-bit-exact output.**
 
@@ -260,7 +266,7 @@ exactly and replaces whole lanes. Every packed word is a bit-exact copy of an in
   cache key, so a tolerance difference never changes which compiled program is used.
 - The known-current mask *does* enter the prepared-technique key. Whether a value is known must
   therefore not depend on arithmetic precision.
-- A value near `3.0e38` that is computed natively may fall on either side of the sanitisation
+- A value near `L` that is computed natively may fall on either side of the sanitisation
   threshold. Producers must not rely on values that close to the threshold.
 
 ## Synthetic test vectors

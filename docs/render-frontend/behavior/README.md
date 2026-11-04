@@ -43,6 +43,9 @@ documentation or captures.
 
 ### Planner dependencies
 
+These four specifications are the next implementation batch. Implement them before
+[scene-plan.md](scene-plan.md), which depends on all four.
+
 | Specification | Behaviour | Status |
 | --- | --- | --- |
 | [material-values.md](material-values.md) | Material value composition: constants, current attributes, per-item rows | Complete; fragment built-in rows not yet specified |

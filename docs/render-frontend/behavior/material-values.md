@@ -144,7 +144,12 @@ Groups 14 and 15 are refused (unqualified). Let `F` be the technique flags. Step
    `u32 PASS+0x140 = 0`, the values are `(0, 0, 0, 0.001)` and `(1, 0, 0, 0)`. Otherwise read the
    128 bytes at `base + 128·⌊(idx−1)/4⌋` as eight rows of four words, and take column
    `(idx−1) mod 4` of each row. That gives eight words; vertex row 44 is the first four and row 45
-   the last four. If bit 27 is set but the column is "unused", the item fails (`MissingParameters`).
+   the last four. The column is *unused* when the item's sources were read under technique flags
+   with bit 27 clear, so no column (and no null default) was recorded for it. If the technique
+   used for composition has bit 27 set but the column is unused, the item fails
+   (`MissingParameters`). This guards against a technique selection that changed between reading
+   and composing. A column block that cannot be read when bit 27 is set is not "unused": the item's
+   source read fails, and the item fails with that read error.
 2. **Mesh constant** (bit 26): staging row 13 := the mesh constant row.
 3. **Atlas** (bit 29): requires material flag `0x10` and bit 0 of `u32 mbi+24` (otherwise
    `MissingAtlas`). Let `A` = (the `u32` at `mbi` byte 9) with its low four bits cleared, and let
@@ -180,7 +185,10 @@ Groups 14 and 15 are refused (unqualified). Let `F` be the technique flags. Step
 
 - Category `c = min(mbi[4] & 7, 2)`.
 - The class is *alternate* when the material class is 1 or 2.
-- Distance `d` = the word at `PASS + 0x118 + 4c` (`PASS + 0x11C + 4c` when alternate).
+- Distance `d` = the word at `PASS + 0x118 + 4c` (`PASS + 0x11C + 4c` when alternate). For the
+  alternate class with category 2 this is `PASS + 0x124`, the same word as the category-0
+  denominator. That overlap is the layout as observed and is intended; the word is read twice and
+  used in both roles.
 - Denominator `q` = the word at `PASS + 0x124 + 4c`.
 - *Forced* (alternate and material flag `0x8000`): `d = (30, 100, 200)[c]` and `q = 15`.
 - Inverse `r` = `100.0` if not forced and `q` is negative, zero or subnormal; otherwise `1/q`.
@@ -217,11 +225,19 @@ on error may update in place instead.
 - Groups 14 and 15 in a draw: error. Update-only items outside group 0: error.
 - A parameter value type outside the table, an out-of-range destination, or a current-attribute
   slot of 16 or more: error.
-- Arithmetic inputs (quaternion, scale, `W`, `P`, `a`, `k`, `q`): a subnormal input is treated as
-  zero. A value whose exponent field is all ones is outside the supported domain and fails the
-  item. Any result whose exact magnitude exceeds the binary32 maximum fails the item.
-- Copied words (translation, `e0`, `e1`, mesh constant, parameter column, distance, lane 3, static
-  rows, parameter values) are copied bit for bit, with no domain check.
+- The domain rule applies to a value only where this item actually computes with it:
+  - quaternion and scale, when `F` bit 6 or 7 is set;
+  - translation and `W`, when `F` bit 6 is set (rows 7–9);
+  - `P` lanes 2 and 3 of each row, plus `a` and `k`, for group 11 only;
+  - `q`, when the binding row is not forced.
+
+  For such a value, a subnormal input is treated as zero, and a value whose exponent field is all
+  ones is outside the supported domain and fails the item. Any computed result whose exact
+  magnitude exceeds the binary32 maximum also fails the item.
+- Otherwise words are copied bit for bit, with no domain check. In particular, `P` is copied
+  unchanged into rows 3–6 for every group except 11 (and in group 11, lanes 0 and 1 are still
+  copied), and the translation is copied into column 3 of rows 0–2. The same holds for `e0`, `e1`,
+  the mesh constant, the parameter column, the distance, lane 3, static rows and parameter values.
 
 ## Tolerance
 
@@ -266,7 +282,8 @@ sub-micrometre placement error at game scale.
    without bit 7, rows 0–2 are not written, but rows 7–9 are the same.
 5. **Group 11.** `P = I`, `a = 2`, `k = 0.5`: row 5 = `(0, 0, 0.5, 0)`, row 6 = `(0, 0, −1, 1)`,
    rows 3 and 4 unchanged.
-6. **Atlas.** `mbi+24..27 = 0C 5F 83 00`, `Wa = 256`, `Ha = 128`: numerators `(64, 96, 992, 48)`,
+6. **Atlas.** `mbi+24..27 = 0C 5F 83 01` (bit 0 set, as the atlas rule requires), `Wa = 256`,
+   `Ha = 128`: numerators `(64, 96, 992, 48)`,
    row 18 = `(0.25, 0.75, 3.875, 0.375)`.
 7. **Parameter column.** `u32 mbi+24 = 0x00030000` gives `idx = 6`, so read the 128 bytes at
    `base + 128`, column 1. `idx = 0`, or base 0: rows 44 and 45 = `(0, 0, 0, 0.001)` and

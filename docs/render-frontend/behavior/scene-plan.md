@@ -413,11 +413,13 @@ Traversal (transform `T(x)` = 112 bytes, first word `x`, rest zero; mesh key 16)
    `Unsupported("special Main caller")`.
 
 Event order. Lists enabled; initial references `[0xa00, 0, 0xb00]`; group-13 reference `0xc00`;
-group-15 references `[0, 0xd00]`; items with groups 0 (control 3), 12, 15 (none repeated):
+group-15 references `[0, 0xd00]`; items with groups 0 (control 3), 12, 13 (none repeated):
 
 6. Events: `Initial{0, 0xa00}`, `Initial{2, 0xb00}`, `Group12Textures` (then vertex rows 46/47 =
-   water rows), `Group13{0xc00}`, `Group15{1, 0xd00}`, `Finish{15}`. Passes: one opened before item
-   0, one before item 1 (after `Group12Textures`), one before item 2.
+   water rows), `Group13{0xc00}`, then `Finish{13}`, whose remaining transitions to group 15 raise
+   `Group15{1, 0xd00}`. Passes: one opened before item 0, one before item 1 (after
+   `Group12Textures`), one before item 2 (after `Group13`). An item in group 15 would instead be
+   refused as a special route (section 3).
 7. Same sources with an empty cohort: `Initial{0, 0xa00}`, `Initial{2, 0xb00}`, `Finish{-1}`.
 8. Lists disabled with two items: two `ListsDisabled` records in one pass, then `Finish{-1}`; no
    initial events.

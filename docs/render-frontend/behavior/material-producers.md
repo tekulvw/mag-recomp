@@ -90,7 +90,7 @@ Offsets are from `RENDERER`. All multi-byte fields are big-endian.
 | `+0x260` | `0xA28` | projection block (fields listed below) |
 | `+0x2BAC` | 84 | the downsample depth surface record |
 | `+0x2C10` | `8 × 84` | surface record table (four roles × two indices) |
-| `+0x2F58` | `0x220` | target-state block; contains the fields below |
+| `+0x2F58` | `0x220` | target-state block (`+0x2F58` to `+0x3177`); it contains the fields from `+0x2FB0` to `+0x3168` below |
 | `+0x2FB0` | 4 | `u32` current surface index (used when no explicit index is given) |
 | `+0x2FC0` | `8 × 32` | compact texture descriptors, one per surface record |
 | `+0x3120` | 32 | compact descriptor of the lighting source image when bank zero is enabled |
@@ -98,11 +98,11 @@ Offsets are from `RENDERER`. All multi-byte fields are big-endian.
 | `+0x3160` | 4 | `u32` surface-branch control (nonzero = enabled) |
 | `+0x3164` | 4 | `u32` explicit producer viewport width in pixels |
 | `+0x3168` | 4 | `u32` explicit producer viewport height in pixels |
-| `+0x3174` | 12 | selection controls; the `u32` at `+0x3174` is the "forced role" control |
-| `+0x3290` | 4 | `u32` fog controls; bit `0x400` is used |
-| `+0x329C` | 1 | sRGB control byte (nonzero = sRGB) |
-| `+0x329D` | 1 | stencil-branch byte (nonzero = enabled) |
-| `+0x329F` | 1 | anti-aliasing enable byte |
+| `+0x3174` | 12 | selection controls, read separately; the `u32` at `+0x3174` is the "forced role" control |
+| `+0x3290` | 4 | `u32` fog controls, read separately; bit `0x400` is used |
+| `+0x329C` | 1 | sRGB control byte (nonzero = sRGB), read separately |
+| `+0x329D` | 3 | stencil-branch byte (nonzero = enabled); read together with `+0x329E` (unused) and `+0x329F` |
+| `+0x329F` | 1 | anti-aliasing enable byte (part of the `+0x329D` read) |
 
 Projection block fields (offsets from `RENDERER+0x260`):
 
@@ -196,8 +196,10 @@ must prove that a texture descriptor or surface came from a particular source.
 ## Behaviour
 
 1. Validate `TOC`.
-2. Read `RENDERER`; fail if null. Read the renderer fields, the projection block, the surface
-   record table and the target-state block.
+2. Read `RENDERER`; fail if null. Read the projection block, the depth-distance record, the
+   surface record table, the target-state block, and the separately read fields after it
+   (`+0x3160`, `+0x3174`, `+0x3290`, `+0x329C`, `+0x329D` to `+0x329F`). `+0x3160` lies inside the
+   target-state block but is also read on its own; both reads come from the same window.
 3. Read `JITTER`, `PARAMS` and `COMMON_VC` (fail if null or, for `COMMON_VC`, not 16-aligned) and
    their objects.
 4. Evaluate *bank zero enabled* and *role forcing* from the renderer bytes just read, and acquire

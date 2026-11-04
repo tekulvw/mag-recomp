@@ -46,6 +46,12 @@ compact descriptor and leaves the three optional fields unchanged.
 - `Enabled(controls)`, with the fields below;
 - a decode error (`Wrap(code)`, `MinFilter(code)`, `MagFilter(code)`, `Remap(op)`).
 
+The checks are made in this order and the first failure is reported: unknown compact descriptor
+(`MissingState`); unit disabled (`Disabled`, which is not an error and makes no further check); the
+wrap codes of the observed axes in the order s, t, r; the minification code; the magnification code;
+then the remap operations of the output channels in the order A, R, G, B. For example, a unit with
+an invalid s wrap code and an invalid magnification code reports `Wrap`.
+
 `controls` fields:
 
 | Field | Value |
@@ -116,7 +122,9 @@ identity swizzle; it really selects zero for every channel.
 
 - `gamma_mask` starts as `(w[2] >> 20) & 0xf` (bit 0 R, 1 G, 2 B, 3 A in RGBA order) and is forced
   to zero unless `base` is in `0x81..=0x88`, `0x8b`, `0x8d..=0x8f`, `0x97`, `0x9d` or `0x9e`.
-- A channel is *physical* when its remap source is a lane rather than zero or one. A physical
+- A channel is *physical* when its resolved source is a colour component: red, green, blue or
+  alpha. It is not physical when its operation selects constant zero or constant one, or when it
+  selects an input lane that is itself the constant one (lane 0 of formats `0x81` and `0x94`). A physical
   channel is *signed* when bit `28 + sel` of `w[5]` is set (`sel` being that channel's lane
   selector). The gamma bit of every physical signed channel is cleared.
 - `expand_mask` bit for channel `c` is set when `base` is in `0x81..=0x88`, `0x8b`, `0x8d..=0x95`,
@@ -143,8 +151,9 @@ identity swizzle; it really selects zero for every channel.
 
 Refusals:
 
-- A wrap of clamp (5) or any mirror-once mode (6, 7, 8) on any axis is refused as unsupported
-  addressing.
+- A wrap of clamp (5) or any mirror-once mode (6, 7, 8) on an *observed* axis is refused as
+  unsupported addressing. An unobserved axis is never refused, whatever its raw code (including
+  5–8 and invalid codes), and is encoded as clamp to edge (0).
 - If any axis observes the border and the border colour is unknown, the result is a `MissingBorder`
   error. No black border is invented. When no axis observes the border, an unknown border is
   harmless.
@@ -217,7 +226,10 @@ Common words unless stated: `w[0] = 0x00010000`, `w[4] = 0x0000aae4` (identity r
 3. Same as 1 with `w[2] = 0x00000304` (s border) and border unknown: `MissingBorder`. With border
    `0x80ff4000`: `border = [1.0, 0.2509804, 0.0, 0.5019608]` (bits `3f800000 3e808081 00000000
    3f008081` for ordinary division).
-4. Same as 1 with `w[2] = 0x00000305` (s clamp): unsupported addressing.
+4. Same as 1 with `w[2] = 0x00000305` (s clamp): unsupported addressing. Same as 1 with
+   `w[2] = 0x00060301` (r mirror once to edge on a 2-D unit, so r is unobserved): accepted, and the
+   native r wrap is 0. Same as 1 with `w[2] = 0x00000309` (invalid s code 9) and `w[5] = 0x07061f80`
+   (invalid magnification 7): `Wrap(9)`, because wrap codes are checked first.
 5. Same as 1 with `w[2] = 0x00000309`: `Wrap(9)` error. With `w[1] = 0x00018511` (1-D) and
    `w[2] = 0x00000901`: t is unobserved, so no error.
 6. Bias sign: `w[5] = 0x02061000` gives `lod_bias_q8 -4096`, `lod_bias -16.0`; `w[5] =
