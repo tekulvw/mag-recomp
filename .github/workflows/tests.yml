@@ -6,7 +6,28 @@ on:
 permissions:
   contents: read
 jobs:
+  # `python` is a required check, so this workflow always runs; the Rust input
+  # matrix skips itself when only docs or Markdown changed.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.diff.outputs.code }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: diff
+        env:
+          BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if files=$(git diff --name-only "$BASE" HEAD 2>/dev/null) && [ -n "$files" ] && ! printf '%s\n' "$files" | grep -qvE '^docs/|\.md$'; then
+            echo code=false >> "$GITHUB_OUTPUT"
+          else
+            echo code=true >> "$GITHUB_OUTPUT"
+          fi
   rust:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     name: Rust input (${{ matrix.os }})
     strategy:
       fail-fast: false
