@@ -700,6 +700,10 @@ impl Worker {
         let actor_outstanding = Arc::clone(&outstanding);
         let join = thread::Builder::new()
             .name("mag-render-client".into())
+            // Platform pipelines compile on this thread.
+            .stack_size(crate::thread_stack::with_overhead(
+                crate::thread_stack::PIPELINE_COMPILER_STACK_BYTES,
+            ))
             .spawn(move || {
                 let mut driver = match factory() {
                     Ok(d) => d,

@@ -3,11 +3,12 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 
 ROOT=Path(__file__).resolve().parents[1]
-KEYS=('SPU_DISPATCH_CACHE','SPU_MFC_LOOKUP_CACHE','SPU_FLOAT_RZ','PS3_VERBOSE')
+KEYS=('SPU_DISPATCH_CACHE','SPU_MFC_LOOKUP_CACHE','SPU_FLOAT_RZ','PS3_VERBOSE','RUST_MIN_STACK')
 
 @unittest.skipUnless(shutil.which('clang++'),'clang++ required')
 class RuntimeDefaultsTests(unittest.TestCase):
@@ -28,5 +29,44 @@ std::printf("%s=%s\\n",k,std::getenv(k)); }
             self.assertEqual(result.stdout.splitlines(),['SPU_DISPATCH_CACHE=1','SPU_MFC_LOOKUP_CACHE=1','SPU_FLOAT_RZ=1','PS3_VERBOSE=0'])
             result=subprocess.run([str(tmp/'test')],env={**base,'SPU_DISPATCH_CACHE':'shadow','SPU_MFC_LOOKUP_CACHE':'0','SPU_FLOAT_RZ':'0','PS3_VERBOSE':'1'},check=True,capture_output=True,text=True)
             self.assertEqual(result.stdout.splitlines(),['SPU_DISPATCH_CACHE=shadow','SPU_MFC_LOOKUP_CACHE=0','SPU_FLOAT_RZ=0','PS3_VERBOSE=1'])
+
+    @unittest.skipUnless(sys.platform.startswith('linux'),'glibc static TLS is carved from thread stacks only on Linux')
+    def test_rust_threads_keep_their_stack_beside_static_tls(self):
+        # A large static TLS block, as the runtime has: a Rust-style 2 MiB
+        # thread stack would keep almost none of it usable.
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp=Path(tmp)
+            source=tmp/'test.cpp'
+            source.write_text('''#include "mag_runtime_defaults.h"
+#include <pthread.h>
+// External linkage and volatile access keep the block from being optimized away.
+__attribute__((used)) thread_local unsigned char big_tls[3u << 20];
+static void* run(void* out) {
+    volatile unsigned char frame[6u << 20];
+    volatile unsigned char* tls = big_tls;
+    frame[0] = 1; frame[sizeof frame - 1] = 2; tls[0] = 3; tls[sizeof big_tls - 1] = 4;
+    *(int*)out = frame[0] + frame[sizeof frame - 1] + tls[0] + tls[sizeof big_tls - 1];
+    return nullptr;
+}
+int main() {
+    if (mag_apply_runtime_defaults()) return 2;
+    const char* value = std::getenv("RUST_MIN_STACK");
+    std::printf("RUST_MIN_STACK=%s\\n", value ? value : "");
+    if (!value) return 0;
+    pthread_attr_t attr; pthread_attr_init(&attr);
+    if (pthread_attr_setstacksize(&attr, std::strtoull(value, nullptr, 10))) return 3;
+    pthread_t t; int sum = 0;
+    if (pthread_create(&t, &attr, run, &sum)) return 4;
+    pthread_join(t, nullptr);
+    return sum == 10 ? 0 : 5;
+}
+''')
+            subprocess.run(['clang++','-std=c++17','-Wall','-Wextra','-Werror','-I'+str(ROOT/'src'),str(source),'-o',str(tmp/'test'),'-pthread','-ldl'],check=True,capture_output=True,text=True)
+            base={k:v for k,v in os.environ.items() if k not in KEYS}
+            result=subprocess.run([str(tmp/'test')],env=base,capture_output=True,text=True)
+            self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+            self.assertGreaterEqual(int(result.stdout.split('=',1)[1]),(8<<20)+(3<<20))
+            result=subprocess.run([str(tmp/'test')],env={**base,'RUST_MIN_STACK':'123'},capture_output=True,text=True)
+            self.assertEqual(result.stdout.strip(),'RUST_MIN_STACK=123')
 
 if __name__=='__main__': unittest.main()
