@@ -43,6 +43,17 @@ Current contents:
   selected-material programs and fragment builtin requests;
 - `material_finish`, `material_group_twelve`: the Main pass's owned finish
   inputs and auxiliary records, and its group-twelve compact texture inputs;
+- `ring_writer`, `main_terminal_writer`, `main_terminal_job`,
+  `empty_pass_terminal`: the command-ring transport of a natively rendered
+  pass. `ring_writer` holds what every writer shares: the progress markers of
+  a writer slot, the two-bit ring generation that advances on each wrap, where
+  a segment continues (slot 0 runs on in the ring, side slots return through
+  their continuation), and the ordered fence, put, descriptor, epoch and
+  next-writer publication. `main_terminal_writer` and `main_terminal_job` are
+  Main's slot-0 transport and its CPU reference effects. `empty_pass_terminal`
+  is the empty-pass writer for any side slot (1 to 15), parameterised by the
+  pass's state block and reports; the Depth profile (slot 3) is defined.
+  Nothing here runs unless a host calls it;
 - `client_scene`: a position-only client scene prepared from the captured
   geometry, with every omission kept explicit;
 - `fragment_builtin_rows`: fragment constant rows for a material's decoded
