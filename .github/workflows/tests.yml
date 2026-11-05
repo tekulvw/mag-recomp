@@ -59,6 +59,9 @@ jobs:
       SPU_BATCH_TEST_SDK: ${{ github.workspace }}/local/ps3recomp-lifter-5244db9
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/self-hosted-linux
+        with:
+          rust: 'true'
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
