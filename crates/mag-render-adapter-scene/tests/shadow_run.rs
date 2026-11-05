@@ -49,8 +49,11 @@ fn caster<'a>(f: &'a Fixture, i: usize, census: u32, mesh_group: u16) -> CasterS
         }),
         transform: Some(&f.transforms[i]),
         partitions: Some(&f.partitions[i]),
+        mbi: &NO_MBI,
+        material: None,
     }
 }
+static NO_MBI: [u8; 32] = [0; 32];
 const MASK: u16 = 0xfe;
 
 #[test]
@@ -67,6 +70,7 @@ fn enabled_casters_draw_in_cohort_order_with_main_transform_rule_and_pass_state(
         0,
         MASK,
         &sources,
+        &[],
         &PipelineState::default(),
         &LayoutAssumptions::default(),
         &ShadowRunPolicy::default(),
@@ -99,6 +103,7 @@ fn cascade_one_needs_the_right_half_assumption() {
         1,
         MASK,
         &sources,
+        &[],
         &PipelineState::default(),
         &LayoutAssumptions::default(),
         &ShadowRunPolicy::default(),
@@ -116,6 +121,7 @@ fn cascade_one_needs_the_right_half_assumption() {
         1,
         MASK,
         &sources,
+        &[],
         &PipelineState::default(),
         &assumptions,
         &ShadowRunPolicy::default(),
@@ -139,6 +145,7 @@ fn repeats_and_terminated_items_draw_nothing() {
         0,
         MASK,
         &sources,
+        &[],
         &PipelineState::default(),
         &LayoutAssumptions::default(),
         &ShadowRunPolicy::default(),
@@ -159,6 +166,7 @@ fn deformation_refuses_unless_undeformed_drawing_is_allowed() {
             0,
             MASK,
             &sources,
+            &[],
             &PipelineState::default(),
             &LayoutAssumptions::default(),
             &strict
@@ -173,6 +181,7 @@ fn deformation_refuses_unless_undeformed_drawing_is_allowed() {
         0,
         MASK,
         &sources,
+        &[],
         &PipelineState::default(),
         &LayoutAssumptions::default(),
         &lenient,
@@ -204,6 +213,7 @@ fn unprepared_casters_refuse_or_are_omitted_and_listed() {
             0,
             MASK,
             &sources,
+            &[],
             &PipelineState::default(),
             &LayoutAssumptions::default(),
             &ShadowRunPolicy::default()
@@ -218,6 +228,7 @@ fn unprepared_casters_refuse_or_are_omitted_and_listed() {
         0,
         MASK,
         &sources,
+        &[],
         &PipelineState::default(),
         &LayoutAssumptions::default(),
         &omit,
@@ -251,6 +262,7 @@ fn a_failed_stream_and_the_cull_policy() {
             0,
             MASK,
             &sources,
+            &[],
             &PipelineState::default(),
             &LayoutAssumptions::default(),
             &ShadowRunPolicy::default()
@@ -267,6 +279,7 @@ fn a_failed_stream_and_the_cull_policy() {
         0,
         MASK,
         &sources,
+        &[],
         &PipelineState::default(),
         &LayoutAssumptions::default(),
         &off,
@@ -283,6 +296,7 @@ fn an_empty_mask_is_an_empty_plan_and_mesh_group_reads_the_record() {
         0,
         0,
         &sources,
+        &[],
         &PipelineState::default(),
         &LayoutAssumptions::default(),
         &ShadowRunPolicy::default(),
@@ -391,4 +405,153 @@ fn a_captured_run_plans_through_the_depth_source_capture() {
     assert_eq!(plan.repeats, 1);
     assert_eq!(plan.omitted, vec![(0, ShadowRunRefusal::Partitions)]);
     assert_eq!(plan.pass.casters.len(), 2);
+}
+
+fn floats(values: &[f32]) -> Vec<u8> {
+    values.iter().flat_map(|v| v.to_be_bytes()).collect()
+}
+fn deformable(n: usize) -> DepthImmutablePartition {
+    // Normals (semantic 2) and weights (semantic 9), four floats each in a
+    // 32-byte vertex.
+    let format = {
+        let mut f = vec![2u8, 32, 0, 0, 0, 0, 0, 0];
+        f.extend([0, 2, 3, 2, 16, 0, 0, 0]);
+        f.extend([16, 2, 3, 9, 16, 0, 0, 0]);
+        f
+    };
+    let mut source = Vec::new();
+    for i in 0..n {
+        source.extend(floats(&[0., 1., 0., 0., 0.25 * i as f32, 0.5, 0., 0.]));
+    }
+    let attributes = mag_render_adapter_scene::geometry_attributes::decode_primary_attributes(
+        &format,
+        &source,
+        0x1000,
+        n,
+        1 << 20,
+    )
+    .unwrap();
+    DepthImmutablePartition {
+        source_address: 0x1000,
+        positions: Ok(Arc::new(
+            (0..n)
+                .map(|i| [(i as f32).to_bits(), 0, 1f32.to_bits(), 1f32.to_bits()])
+                .collect(),
+        )),
+        indices: Ok(Arc::new((0..n as u16).collect())),
+        attributes: Some(Ok(attributes)),
+        record: Box::new([0; 544]),
+        secondary_attributes: None,
+        skinning: None,
+    }
+}
+fn wind_pass(mode: u32, workers: u32) -> Vec<u8> {
+    let mut pass = vec![0u8; 688];
+    pass[0x230..0x234].copy_from_slice(&mode.to_be_bytes());
+    pass[0x22c..0x230].copy_from_slice(&workers.to_be_bytes());
+    for (i, v) in [0.5f32, 0.25, 1.0, 0.125, 2.0].into_iter().enumerate() {
+        pass[0x260 + 4 * i..0x264 + 4 * i].copy_from_slice(&v.to_be_bytes());
+    }
+    pass
+}
+
+#[test]
+fn groups_three_and_four_deform_through_the_shared_entry_point() {
+    let partitions = vec![deformable(4)];
+    let transform = transform(0x100);
+    let material: Vec<u8> = (0..24)
+        .flat_map(|i| (0.1f32 * i as f32).to_be_bytes())
+        .collect();
+    let pass = wind_pass(8, 2);
+    let source = CasterSource {
+        census_group: 3,
+        route: DepthItemRoute::Prepare,
+        mesh_group: Some(3),
+        geometry: Some(GeometrySource::StaticPartitions {
+            first: 0x2000,
+            count: 1,
+        }),
+        transform: Some(&transform),
+        partitions: Some(&partitions),
+        mbi: &NO_MBI,
+        material: Some(&material),
+    };
+    let plan = plan_shadow_casters(
+        0,
+        MASK,
+        &[source],
+        &pass,
+        &PipelineState::default(),
+        &LayoutAssumptions::default(),
+        &ShadowRunPolicy::default(),
+    )
+    .unwrap();
+    assert_eq!(
+        (plan.draws.len(), plan.deformed, plan.undeformed),
+        (1, 1, 0)
+    );
+    let d = &plan.draws[0];
+    assert!(d.deformed && !d.undeformed);
+    // Exactly the shared entry point's positions for the same inputs.
+    let word = |b: &[u8], at: usize| u32::from_be_bytes(b[at..at + 4].try_into().unwrap());
+    let bank = |semantic| -> Vec<[u32; 4]> {
+        let attributes = partitions[0].attributes.as_ref().unwrap().as_ref().unwrap();
+        attributes
+            .first_semantic(semantic)
+            .unwrap()
+            .unwrap()
+            .words
+            .to_vec()
+    };
+    let positions = partitions[0].positions.as_ref().unwrap();
+    let (normals, weights) = (bank(2), bank(9));
+    let expected = mag_render_adapter_scene::deformation::prepare_noninstanced_geometry(
+        mag_render_adapter_scene::deformation::NoninstancedGeometryInput {
+            group: 3,
+            positions,
+            normals: &normals,
+            weights: &weights,
+            tangents: None,
+            material_rows: core::array::from_fn(|r| {
+                core::array::from_fn(|c| word(&material, r * 16 + c * 4))
+            }),
+            wind: core::array::from_fn(|i| word(&pass, 0x260 + 4 * i)),
+            object_origin: core::array::from_fn(|i| word(&transform, 16 + 4 * i)),
+        },
+        DEFORMATION_BUDGET,
+    )
+    .unwrap();
+    assert_eq!(*d.partitions[0].positions, expected.positions);
+    // A pass mode outside Main's admitted modes refuses the caster.
+    let other = wind_pass(4, 2);
+    assert_eq!(
+        plan_shadow_casters(
+            0,
+            MASK,
+            &[source],
+            &other,
+            &PipelineState::default(),
+            &LayoutAssumptions::default(),
+            &ShadowRunPolicy::default()
+        ),
+        Err(ShadowRunRefusal::Deformation)
+    );
+    // So does a group-4 caster without a tangent bank.
+    let four = CasterSource {
+        census_group: 4,
+        mesh_group: Some(4),
+        ..source
+    };
+    assert_eq!(
+        plan_shadow_casters(
+            0,
+            MASK,
+            &[four],
+            &pass,
+            &PipelineState::default(),
+            &LayoutAssumptions::default(),
+            &ShadowRunPolicy::default()
+        ),
+        Err(ShadowRunRefusal::Deformation)
+    );
 }

@@ -25,9 +25,12 @@
 //! - **Per-item child work and per-material culling (open question 7).** Child technique work is
 //!   not needed for depth only. Culling follows [`CullPolicy`], chosen by the caller (back faces
 //!   culled by default, as most captured casters are).
-//! - **Groups 3 and 4 deformation.** Wind and ripple deformation needs inputs this capture does
-//!   not retain. [`ShadowRunPolicy::allow_undeformed`] lets such casters draw undeformed (counted);
-//!   otherwise they refuse.
+//! - **Groups 3 and 4 deformation.** As Main does, through the shared
+//!   [`crate::deformation::prepare_noninstanced_geometry`] entry point: the partition's normal,
+//!   weight and (group 4) tangent banks, the material's first three rows, the run's pass wind words
+//!   and the transform record's object origin, under Main's mode and worker checks. A caster whose
+//!   inputs do not qualify refuses, unless [`ShadowRunPolicy::allow_undeformed`] lets it draw
+//!   undeformed (counted).
 //!
 //! An unprepared caster refuses the whole run unless [`ShadowRunPolicy::omit_unprepared`] is set,
 //! in which case it is left out and listed. Nothing here runs unless a host calls it.
@@ -55,7 +58,8 @@ pub enum CullPolicy {
 pub struct ShadowRunPolicy {
     /// Leave unprepared casters out (listed in [`ShadowRunPlan::omitted`]) instead of refusing.
     pub omit_unprepared: bool,
-    /// Draw group 3 and 4 casters without their deformation (counted) instead of refusing.
+    /// Draw group 3 and 4 casters whose deformation inputs do not qualify without their
+    /// deformation (counted) instead of refusing.
     pub allow_undeformed: bool,
     pub cull: CullPolicy,
 }
@@ -73,7 +77,7 @@ pub enum ShadowRunRefusal {
     DirectDraw,
     /// The immutable partitions were not retained or a stream failed.
     Partitions,
-    /// A group 3 or 4 caster needs deformation.
+    /// A group 3 or 4 caster's deformation inputs do not qualify, or it refused.
     Deformation,
 }
 
@@ -89,6 +93,10 @@ pub struct CasterSource<'a> {
     pub transform: Option<&'a [u8; 112]>,
     /// `None` when the capture did not retain them or a stream failed.
     pub partitions: Option<&'a [DepthImmutablePartition]>,
+    /// The item's draw-batch record (its optional-stream bytes 24 and 27).
+    pub mbi: &'a [u8; 32],
+    /// The item's material record, when captured.
+    pub material: Option<&'a [u8]>,
 }
 
 /// One partition of a caster: its positions (four words per vertex) and 16-bit indices.
@@ -110,6 +118,8 @@ pub struct ShadowDraw {
     pub object_to_clip: [[u32; 4]; 4],
     /// Drawn without the deformation its group would apply.
     pub undeformed: bool,
+    /// Deformed through the shared group 3/4 entry point.
+    pub deformed: bool,
     pub partitions: Vec<ShadowPartition>,
 }
 
@@ -124,6 +134,8 @@ pub struct ShadowRunPlan {
     pub repeats: usize,
     /// Draws drawn undeformed under [`ShadowRunPolicy::allow_undeformed`].
     pub undeformed: usize,
+    /// Draws deformed through the shared group 3/4 entry point.
+    pub deformed: usize,
 }
 
 fn behaviour_geometry(source: CapturedGeometry) -> Result<GeometrySource, ShadowRunRefusal> {
@@ -154,48 +166,139 @@ pub fn object_to_clip(transform: &[u8; 112]) -> [[u32; 4]; 4] {
 /// A prepared caster: whether it draws undeformed, its partitions and its transform.
 struct Prepared {
     undeformed: bool,
+    deformed: bool,
     partitions: Vec<ShadowPartition>,
     object_to_clip: [[u32; 4]; 4],
 }
+fn word(bytes: &[u8], at: usize) -> Option<u32> {
+    bytes
+        .get(at..at + 4)
+        .map(|b| u32::from_be_bytes(b.try_into().unwrap()))
+}
+fn bank(partition: &DepthImmutablePartition, semantic: u8) -> Option<&[[u32; 4]]> {
+    match partition
+        .attributes
+        .as_ref()?
+        .as_ref()
+        .ok()?
+        .first_semantic(semantic)?
+    {
+        Ok(bank) => Some(bank.words.as_slice()),
+        Err(_) => None,
+    }
+}
+/// The group 3/4 deformation of one partition, as Main prepares it.
+fn deform(
+    group: u16,
+    partition: &DepthImmutablePartition,
+    positions: &[[u32; 4]],
+    source: &CasterSource<'_>,
+    transform: &[u8; 112],
+    pass: &[u8],
+    budget: usize,
+) -> Option<Vec<[u32; 4]>> {
+    let material = source.material.filter(|m| m.len() >= 96)?;
+    // Optional streams (MBI bytes 24 and 27) are not part of this preparation.
+    let optional = if source.mbi[27] & 1 == 0 {
+        source.mbi[24] >> 2
+    } else {
+        0
+    };
+    if optional != 0 {
+        return None;
+    }
+    let flag = word(material, 0x58)? & 1 != 0;
+    let mode = (word(pass, 0x230)? | if flag { 32 } else { 0 }) & !2;
+    if !matches!(mode, 8 | 10 | 0x28) {
+        return None;
+    }
+    let workers = word(pass, 0x22c)?.min(if flag { 1 } else { 2 });
+    if workers != if mode == 0x28 { 1 } else { 2 } {
+        return None;
+    }
+    let tangents = if group == 4 {
+        Some(bank(partition, 3)?)
+    } else {
+        None
+    };
+    let input = crate::deformation::NoninstancedGeometryInput {
+        group: group as u8,
+        positions,
+        normals: bank(partition, 2)?,
+        weights: bank(partition, 9)?,
+        tangents,
+        material_rows: core::array::from_fn(|r| {
+            core::array::from_fn(|c| word(material, r * 16 + c * 4).unwrap_or(0))
+        }),
+        wind: core::array::from_fn(|i| word(pass, 0x260 + i * 4).unwrap_or(0)),
+        object_origin: core::array::from_fn(|i| word(transform, 16 + i * 4).unwrap_or(0)),
+    };
+    pass.get(0x260..0x274)?;
+    crate::deformation::prepare_noninstanced_geometry(input, budget)
+        .ok()
+        .map(|g| g.positions)
+}
 fn prepare(
     source: &CasterSource<'_>,
+    pass: &[u8],
     policy: &ShadowRunPolicy,
 ) -> Result<Prepared, ShadowRunRefusal> {
     let mesh_group = source.mesh_group.ok_or(ShadowRunRefusal::MissingGeometry)?;
     let geometry = behaviour_geometry(source.geometry.ok_or(ShadowRunRefusal::MissingGeometry)?)?;
     let preparation =
         shadow::caster_preparation(mesh_group, geometry).map_err(ShadowRunRefusal::Behaviour)?;
-    if preparation.deform && !policy.allow_undeformed {
-        return Err(ShadowRunRefusal::Deformation);
-    }
     let transform = source.transform.ok_or(ShadowRunRefusal::MissingTransform)?;
-    let partitions = source
-        .partitions
-        .ok_or(ShadowRunRefusal::Partitions)?
-        .iter()
-        .map(|p| match (&p.positions, &p.indices) {
-            (Ok(positions), Ok(indices)) => Ok(ShadowPartition {
-                positions: Arc::clone(positions),
-                indices: Arc::clone(indices),
-            }),
-            _ => Err(ShadowRunRefusal::Partitions),
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+    let mut undeformed = false;
+    let mut partitions = Vec::new();
+    for p in source.partitions.ok_or(ShadowRunRefusal::Partitions)? {
+        let (Ok(positions), Ok(indices)) = (&p.positions, &p.indices) else {
+            return Err(ShadowRunRefusal::Partitions);
+        };
+        let positions = if preparation.deform {
+            match deform(
+                mesh_group,
+                p,
+                positions,
+                source,
+                transform,
+                pass,
+                DEFORMATION_BUDGET,
+            ) {
+                Some(deformed) => Arc::new(deformed),
+                None if policy.allow_undeformed => {
+                    undeformed = true;
+                    Arc::clone(positions)
+                }
+                None => return Err(ShadowRunRefusal::Deformation),
+            }
+        } else {
+            Arc::clone(positions)
+        };
+        partitions.push(ShadowPartition {
+            positions,
+            indices: Arc::clone(indices),
+        });
+    }
     Ok(Prepared {
-        undeformed: preparation.deform,
+        undeformed,
+        deformed: preparation.deform && !undeformed,
         partitions,
         object_to_clip: object_to_clip(transform),
     })
 }
+/// Byte budget of one caster's deformation outputs.
+pub const DEFORMATION_BUDGET: usize = 64 << 20;
 
 /// Plans cascade `cascade`'s pass from its casters' sources, in cohort order.
 ///
 /// Items routed as terminating, or after the termination, are not cohort members of the pass.
 /// A repeated item is a cohort member but draws nothing, as the job skips it.
+#[allow(clippy::too_many_arguments)]
 pub fn plan_shadow_casters(
     cascade: usize,
     group_mask: u16,
     sources: &[CasterSource<'_>],
+    pass_record: &[u8],
     inherited: &PipelineState,
     assumptions: &LayoutAssumptions,
     policy: &ShadowRunPolicy,
@@ -218,6 +321,7 @@ pub fn plan_shadow_casters(
         omitted: Vec::new(),
         repeats: 0,
         undeformed: 0,
+        deformed: 0,
     };
     for &member in &plan.pass.casters {
         let item = members[member];
@@ -226,18 +330,21 @@ pub fn plan_shadow_casters(
             plan.repeats += 1;
             continue;
         }
-        match prepare(source, policy) {
+        match prepare(source, pass_record, policy) {
             Ok(Prepared {
                 undeformed,
+                deformed,
                 partitions,
                 object_to_clip,
             }) => {
                 plan.undeformed += usize::from(undeformed);
+                plan.deformed += usize::from(deformed);
                 plan.draws.push(ShadowDraw {
                     item,
                     state: plan.pass.caster_state(culling_disabled),
                     object_to_clip,
                     undeformed,
+                    deformed,
                     partitions,
                 });
             }
@@ -284,12 +391,15 @@ pub fn plan_shadow_run(input: &ShadowRunInput<'_>) -> Result<ShadowRunPlan, Shad
                 Some(Ok(parts)) => Some(parts.as_slice()),
                 _ => None,
             },
+            mbi: &item.mbi,
+            material: item.material.as_ref().map(|m| m.bytes()),
         })
         .collect();
     plan_shadow_casters(
         input.cascade,
         input.group_mask,
         &sources,
+        input.sources.pass.bytes(),
         input.inherited,
         &input.assumptions,
         &input.policy,
