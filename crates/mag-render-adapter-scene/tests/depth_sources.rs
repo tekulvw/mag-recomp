@@ -616,3 +616,34 @@ fn partition(sources: &OwnedDepthSources) -> &DepthImmutablePartition {
         .as_ref()
         .unwrap()[0]
 }
+
+#[test]
+fn a_shadow_camera_slot_reads_its_own_family_lists() {
+    let (mut input, mut memory) = fixture();
+    // Cascade 0 of the Shadow job: cohort camera slot 1, whose four lists sit
+    // one 16-byte family row into the bucket's list table.
+    input.identity.camera = 1;
+    memory.get_mut(&input.pass).unwrap()[0x19b] = 1;
+    // The item carries a transform for camera slot 1 (camera bit 1 << 2).
+    memory.get_mut(&0x25000).unwrap()[20..24].copy_from_slice(&4u32.to_be_bytes());
+    let bucket = memory.get_mut(&input.bucket).unwrap();
+    bucket[0x58..0x5c].fill(0);
+    bucket[0x38..0x3c].copy_from_slice(&0x27000u32.to_be_bytes());
+    let copy = |memory: &BTreeMap<u32, Vec<u8>>| {
+        copy_depth_sources(input, DepthBudget::default(), &mut |a, n| {
+            memory
+                .get(&a)
+                .filter(|v| v.len() == n)
+                .cloned()
+                .ok_or(Error::OutsideSnapshot)
+        })
+    };
+    let source = copy(&memory).unwrap();
+    assert_eq!(source.items.len(), 2);
+    assert_eq!(source.items[0].route, DepthItemRoute::Prepare);
+    // The family-3 row is not read for camera slot 1.
+    let bucket = memory.get_mut(&input.bucket).unwrap();
+    bucket[0x38..0x3c].fill(0);
+    bucket[0x58..0x5c].copy_from_slice(&0x27000u32.to_be_bytes());
+    assert!(copy(&memory).is_err());
+}
