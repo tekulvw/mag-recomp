@@ -98,7 +98,10 @@ extern "C" int mag_render_dxc_compile_stage(const char *library_path,uint32_t st
         if(FAILED(create(CLSID_DxcCompiler,__uuidof(IDxcCompiler3),reinterpret_cast<void **>(compiler.put()))) || !compiler.p){
             message(diagnostic,capacity,"DXC Compiler3 unavailable");return MAG_RENDER_DXC_UNAVAILABLE;}
         std::wstring wide_entry;for(uint32_t i=0;i<entry_length;++i)wide_entry.push_back(static_cast<wchar_t>(entry[i]));
-        const wchar_t *args[]={L"-E",wide_entry.c_str(),L"-T",target,L"-HV",L"2021",L"-Ges",L"-WX"};
+        // Warnings stay errors, except Naga's redundant parentheses around
+        // equality conditions (if ((a == b))), which are its normal output.
+        const wchar_t *args[]={L"-E",wide_entry.c_str(),L"-T",target,L"-HV",L"2021",L"-Ges",L"-WX",
+            L"-Wno-parentheses-equality"};
         DxcBuffer buffer={source,static_cast<size_t>(length),DXC_CP_UTF8};
         Com<IDxcResult> result;
         if(FAILED(compiler.p->Compile(&buffer,args,static_cast<uint32_t>(sizeof(args)/sizeof(*args)),nullptr,
