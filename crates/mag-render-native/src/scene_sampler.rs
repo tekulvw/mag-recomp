@@ -135,11 +135,21 @@ impl Cache {
         }
         self.entries.clear();
     }
+    /// Resolve every explicit sampler and write the submission's texture
+    /// bindings into `textures`, all draws back to back, with each draw's
+    /// (start, count) in `ranges`, and the sampler table into `table`. The
+    /// vectors are the caller's reused scratch; they are cleared first.
     pub(super) fn resolve(
         &mut self,
         api: SdkApi,
         commands: &scene::SceneCommands,
-    ) -> Result<(Vec<Vec<TextureBinding>>, Vec<Handle>), i32> {
+        textures: &mut Vec<TextureBinding>,
+        ranges: &mut Vec<(usize, usize)>,
+        table: &mut Vec<Handle>,
+    ) -> Result<(), i32> {
+        textures.clear();
+        ranges.clear();
+        table.clear();
         checked_layout()?;
         self.epoch = self.epoch.checked_add(1).ok_or(-5)?;
         distinct_states(
@@ -193,36 +203,26 @@ impl Cache {
             }
             self.entries.insert(*key, (handle, self.epoch));
         }
-        let table: Vec<_> = self
-            .distinct
-            .iter()
-            .map(|(key, _)| self.entries[key].0)
-            .collect();
+        table.extend(self.distinct.iter().map(|(key, _)| self.entries[key].0));
         let distinct = &self.distinct;
-        let textures = commands
-            .passes()
-            .iter()
-            .flat_map(|p| &p.draws)
-            .map(|d| {
-                d.textures
-                    .iter()
-                    .map(|t| TextureBinding {
-                        stage: t.stage as u32,
-                        texture_slot: t.texture_slot,
-                        sampler_slot: t.sampler_slot,
-                        image: t.image.image().index() as u32,
-                        sampler: match &t.sampler {
-                            scene::Sampler::NearestClamp => 0,
-                            scene::Sampler::LinearClamp => 1,
-                            scene::Sampler::CompareLessEqual => 2,
-                            scene::Sampler::Explicit(s) => table_index(distinct, s),
-                        },
-                        reserved: 0,
-                    })
-                    .collect()
-            })
-            .collect();
-        Ok((textures, table))
+        for d in commands.passes().iter().flat_map(|p| &p.draws) {
+            let start = textures.len();
+            textures.extend(d.textures.iter().map(|t| TextureBinding {
+                stage: t.stage as u32,
+                texture_slot: t.texture_slot,
+                sampler_slot: t.sampler_slot,
+                image: t.image.image().index() as u32,
+                sampler: match &t.sampler {
+                    scene::Sampler::NearestClamp => 0,
+                    scene::Sampler::LinearClamp => 1,
+                    scene::Sampler::CompareLessEqual => 2,
+                    scene::Sampler::Explicit(s) => table_index(distinct, s),
+                },
+                reserved: 0,
+            }));
+            ranges.push((start, textures.len() - start));
+        }
+        Ok(())
     }
 }
 #[cfg(test)]
