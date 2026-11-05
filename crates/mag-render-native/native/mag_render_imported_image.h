@@ -33,7 +33,12 @@ int mag_native_submit_scene_v5(mag_native_device *,const mag_native_scene_v5 *,c
  * there. The next submit_scene_v5 then encodes into that reserved position
  * without the lease, using those validated imports; a failed or abandoned
  * reservation still releases its queue position (never blocks the queue).
- * Backends without reservations return UNSUPPORTED. */
+ * Backends without reservations return UNSUPPORTED.
+ * Position only: imports NULL and count 0 fix the position and ticket without
+ * knowing the imports yet. The encoding then validates the scene's own
+ * imports under a short owner lease of its own before it encodes without one;
+ * if they cannot be validated the reservation is released and the encoding
+ * fails. Backends that cannot do that return UNSUPPORTED for count 0. */
 int mag_native_reserve_scene_v5(mag_native_device *,const mag_native_scene_import *,uint32_t,mag_native_ticket *);
 int mag_native_abandon_scene_reservation(mag_native_device *);
 /* Diagnostic for the opt-in chunked reserved encoding: out[0] chunked

@@ -213,7 +213,8 @@ int mag_native_submit_scene_v5(mag_native_device *device,const mag_native_scene_
 
 int mag_native_reserve_scene_v5(mag_native_device *device,const mag_native_scene_import *imports,uint32_t count,mag_native_ticket *out){
  if(out)memset(out,0,sizeof(*out));
- if(!device||!out||!imports||!count||count>MAG_NATIVE_SCENE_MAX_IMAGES)return MAG_NATIVE_INVALID;
+ /* count 0 (imports NULL) reserves the position only; see the header. */
+ if(!device||!out||(count&&!imports)||(!count&&imports)||count>MAG_NATIVE_SCENE_MAX_IMAGES)return MAG_NATIVE_INVALID;
  return device->ops->reserve_scene?device->ops->reserve_scene(device->context,imports,count,out):MAG_NATIVE_UNSUPPORTED;
 }
 int mag_native_abandon_scene_reservation(mag_native_device *device){

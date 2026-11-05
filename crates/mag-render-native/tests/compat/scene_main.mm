@@ -174,6 +174,49 @@ static void check_reserved_submission(const MagRenderHostOwner *owner,const MagR
     fprintf(stderr,"[reserved submission] reserve=%llu abandoned busy/close then encoded=%llu completed\n",
         (unsigned long long)first.submission_id,(unsigned long long)encoded.submission_id);
 }
+/* A position-only reservation (no imports yet) holds its queue position and
+ * ticket; the encoding validates the scene's own import under a short lease
+ * and completes with that ticket. An import that is no longer valid at
+ * encoding releases the reservation and fails the encoding. */
+static void check_position_reservation(const MagRenderHostOwner *owner,const MagRenderHostImage *target){
+    mag_native_device *device=NULL;assert(mag_native_create(owner,&device)==0);
+    mag_native_image_certificate certificate={*target,NULL};mag_native_image ref={};
+    assert(mag_native_image_import_certified(device,&certificate,&ref)==0);
+    mag_native_scene_import import={0,0,ref};
+    mag_native_ticket reserved={},busy={};
+    assert(mag_native_reserve_scene_v5(device,&import,0,&reserved)==MAG_NATIVE_INVALID);
+    assert(mag_native_reserve_scene_v5(device,NULL,0,&reserved)==0&&reserved.submission_id);
+    assert(mag_native_reserve_scene_v5(device,NULL,0,&busy)==MAG_NATIVE_BUSY);
+    mag_native_scene_image image={MAG_NATIVE_SCENE_RGBA8,target->width,target->height,0,{}};
+    mag_native_scene_pass pass={};
+    pass.color.image=0;pass.color.load=MAG_NATIVE_SCENE_CLEAR;pass.color.store=1;
+    pass.color.clear[1]=0.5f;pass.color.clear[3]=1;pass.depth.image=MAG_NATIVE_SCENE_NONE;
+    mag_native_scene scene={};scene.struct_size=sizeof(scene);scene.abi_version=1;
+    scene.images=&image;scene.image_count=1;scene.passes=&pass;scene.pass_count=1;scene.output_image=MAG_NATIVE_SCENE_NONE;
+    mag_native_stencil_attachment stencil={MAG_NATIVE_SCENE_NONE,0,0,0,0,0};
+    mag_native_scene_v5 v5={};v5.struct_size=sizeof(v5);v5.abi_version=5;
+    v5.base.struct_size=sizeof(v5.base);v5.base.abi_version=4;v5.base.stencils=&stencil;v5.base.stencil_count=1;
+    v5.base.base.struct_size=sizeof(v5.base.base);v5.base.base.abi_version=3;
+    v5.base.base.base.struct_size=sizeof(v5.base.base.base);v5.base.base.base.abi_version=2;v5.base.base.base.scene=&scene;
+    v5.imports=&import;v5.import_count=1;
+    mag_native_ticket encoded={};
+    assert(mag_native_submit_scene_v5(device,&v5,NULL,NULL,&encoded)==0);
+    assert(encoded.submission_id==reserved.submission_id);
+    int completed=0;
+    for(int i=0;i<2000&&!completed;++i){mag_native_event event={};uint32_t count=0;assert(mag_native_poll(device,&event,1,&count)==0);
+        if(count){assert(event.ticket.submission_id==reserved.submission_id&&event.succeeded);completed=1;}
+        else usleep(1000);}
+    assert(completed);
+    /* A stale import at encoding: the reservation is released, not encoded. */
+    mag_native_ticket second={};
+    assert(mag_native_reserve_scene_v5(device,NULL,0,&second)==0&&second.submission_id>reserved.submission_id);
+    mag_native_scene_import stale=import;stale.ref.id+=1000;v5.imports=&stale;
+    assert(mag_native_submit_scene_v5(device,&v5,NULL,NULL,&encoded)!=0);
+    assert(mag_native_abandon_scene_reservation(device)==MAG_NATIVE_STALE);
+    assert(mag_native_image_release(device,ref)==0);
+    assert(mag_native_close(device)==0);
+    fprintf(stderr,"[position reservation] reserved=%llu encoded, stale import released\n",(unsigned long long)reserved.submission_id);
+}
 /* Reserved encoding of the six-pass probe scene must equal its direct
  * encoding byte for byte: once unchunked, then with the opt-in chunked commit
  * (three slots, so shadow maps written in the first chunk are sampled in
@@ -275,6 +318,7 @@ int mag_render_scene_target_main(const char *directory, bool diagnostic,bool imp
         }
         // Before the probe's deliberate queue gate: this check needs completion.
         if(imported)check_reserved_submission(&owner,&target);
+        if(imported)check_position_reservation(&owner,&target);
         if (mag_render_test_owner_gate()) {
             mag_render_test_owner_close(1);
             return 3;
