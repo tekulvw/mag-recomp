@@ -563,8 +563,20 @@ static int resource_index(const Plan &plan, const std::shared_ptr<Buffer> &b) {
 static bool range(uint64_t size, uint64_t offset, uint64_t length) {
   return length && offset <= size && length <= size - offset;
 }
+// In a batch every buffer a command names must be one of the batch's declared
+// resources; anything else is an invalid batch, whether or not the handle is
+// still live on this device.
+static bool in_batch(const mag_native_batch *batch, mag_native_buffer ref) {
+  if (!batch)
+    return true;
+  for (uint32_t i = 0; i < batch->resource_count; ++i)
+    if (same(batch->resources[i].buffer, ref))
+      return true;
+  return false;
+}
 static int prepare_frame(Context *c, const mag_native_frame *frame,
-                         Command &command) {
+                         Command &command,
+                         const mag_native_batch *batch = nullptr) {
   if (!frame || frame->struct_size != sizeof(*frame) ||
       frame->abi_version != 1 || !frame->bindings)
     return MAG_NATIVE_INVALID;
@@ -593,6 +605,8 @@ static int prepare_frame(Context *c, const mag_native_frame *frame,
     if (layout == command.pipeline->count)
       return MAG_NATIVE_INVALID;
     const auto &definition = command.pipeline->bindings[layout];
+    if (!in_batch(batch, supplied.buffer))
+      return MAG_NATIVE_INVALID;
     auto b = buffer(c, supplied.buffer);
     if (!b)
       return MAG_NATIVE_STALE;
@@ -621,7 +635,8 @@ static int prepare_frame(Context *c, const mag_native_frame *frame,
   return MAG_NATIVE_OK;
 }
 static int prepare_draw(Context *c, const mag_native_indexed_draw *draw,
-                        Command &command) {
+                        Command &command,
+                        const mag_native_batch *batch = nullptr) {
   if (!draw || draw->reserved || draw->reserved1 || !draw->width ||
       !draw->height || draw->width > 4096 || draw->height > 4096 ||
       !draw->index_count || draw->index_count % 3 ||
@@ -635,6 +650,9 @@ static int prepare_draw(Context *c, const mag_native_indexed_draw *draw,
   if (!command.pipeline)
     return MAG_NATIVE_STALE;
   if (!command.pipeline->graphics)
+    return MAG_NATIVE_INVALID;
+  if (!in_batch(batch, draw->vertices) || !in_batch(batch, draw->indices) ||
+      (!zero(draw->color_readback) && !in_batch(batch, draw->color_readback)))
     return MAG_NATIVE_INVALID;
   command.vertices = buffer(c, draw->vertices);
   command.indices = buffer(c, draw->indices);
@@ -702,7 +720,7 @@ static int prepare_batch(Context *c, const mag_native_batch *batch,
     if (supplied.kind == MAG_NATIVE_DISPATCH) {
       if (!supplied.dispatch || supplied.draw)
         return MAG_NATIVE_INVALID;
-      int status = prepare_frame(c, supplied.dispatch, node);
+      int status = prepare_frame(c, supplied.dispatch, node, batch);
       if (status)
         return status;
       std::vector<uint8_t> writes = std::vector<uint8_t>(MaxResources);
@@ -728,7 +746,7 @@ static int prepare_batch(Context *c, const mag_native_batch *batch,
     } else if (supplied.kind == MAG_NATIVE_INDEXED_DRAW) {
       if (supplied.dispatch || !supplied.draw)
         return MAG_NATIVE_INVALID;
-      int status = prepare_draw(c, supplied.draw, node);
+      int status = prepare_draw(c, supplied.draw, node, batch);
       if (status)
         return status;
       if (!mag_d3d12_attachment_budget(&bytes, supplied.draw->width,
