@@ -305,6 +305,13 @@ int mag_render_client_worker_submit_scene_subgraph_imported_v3(uint64_t,const Ma
 int mag_render_client_worker_reserve_position(uint64_t,MagRenderClientReceipt*);
 int mag_render_client_worker_submit_scene_subgraph_imported_v3_at(uint64_t,const MagRenderScenePacketV3Desc*,const MagRenderPacketImageRequirement*,uint32_t,const MagRenderPacketImageBinding*,uint32_t,uint64_t,MagRenderClientReceipt*);
 int mag_render_client_worker_abandon_position(uint64_t,uint64_t);
+/* reserve_position with the positioned commit's imports (requirements and
+ * bindings as for submit_scene_subgraph_imported_v3) bound and validated now,
+ * under the owner lease: for hosts whose image identities hold only at the
+ * boundary. The positioned commit must import exactly these requirements, or
+ * it is refused (-5) and the position released. A positioned commit waits for
+ * the worker's caller lock instead of returning BUSY. */
+int mag_render_client_worker_reserve_position_imported(uint64_t,const MagRenderPacketImageRequirement*,uint32_t,const MagRenderPacketImageBinding*,uint32_t,MagRenderClientReceipt*);
 /* Handed-over packets. With MAG_RENDER_PACKET_HANDOFF=1 (default off) the
  * worker borrows the packet's large byte ranges -- role-0 buffer bytes and
  * the texels of unkeyed images whose subresources already lie at their packed

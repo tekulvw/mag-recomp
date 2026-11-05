@@ -3475,6 +3475,23 @@ pub(crate) fn commit_subgraph_reserved(
 /// returns the receipt its positioned commit will carry. One at a time (-4);
 /// backends without position reservations return their status (UNSUPPORTED).
 pub(crate) fn reserve_position(id: u64) -> (i32, Receipt) {
+    reserve_position_with(id, None)
+}
+/// `reserve_position` with the commit's imports bound and validated now,
+/// under the owner lease (a full reservation): for callers whose image
+/// identities are only valid at the boundary. The positioned commit must then
+/// import exactly these requirements.
+pub(crate) fn reserve_position_imported(
+    id: u64,
+    bindings: &[raw::ImageBinding],
+    requirements: &[raw::ImageRequirement],
+) -> (i32, Receipt) {
+    reserve_position_with(id, Some((bindings, requirements)))
+}
+fn reserve_position_with(
+    id: u64,
+    imports: Option<(&[raw::ImageBinding], &[raw::ImageRequirement])>,
+) -> (i32, Receipt) {
     let mut out = Receipt {
         abi_version: 1,
         struct_size: size_of::<Receipt>() as u32,
@@ -3486,7 +3503,29 @@ pub(crate) fn reserve_position(id: u64) -> (i32, Receipt) {
             if s.acknowledged_failure || s.position.is_some() {
                 return Err(-4);
             }
-            let (generation, native) = s.backend.device().0.borrow_mut().reserve_position()?;
+            let (generation, native) = match imports {
+                None => s.backend.device().0.borrow_mut().reserve_position()?,
+                Some((bindings, requirements)) => {
+                    if requirements.is_empty() {
+                        return Err(-1);
+                    }
+                    unsafe {
+                        s.backend
+                            .device()
+                            .0
+                            .borrow_mut()
+                            .bind_imports(bindings, requirements)
+                    }?;
+                    match s.backend.device().0.borrow_mut().reserve_submission() {
+                        Ok(v) => v,
+                        Err(e) => {
+                            let _ = s.backend.device().0.borrow_mut().release_imports();
+                            return Err(e);
+                        }
+                    }
+                }
+            };
+            s.position_imports = imports.map(|(_, r)| r.to_vec());
             out.ticket = s.backend.next_submission_id();
             out.native_generation = generation;
             out.native_ticket = native;
@@ -3506,6 +3545,9 @@ pub(crate) fn abandon_position(id: u64, ticket: u64) -> i32 {
                 return Err(-3);
             }
             s.position = None;
+            if s.position_imports.take().is_some() {
+                let _ = s.backend.device().0.borrow_mut().release_imports();
+            }
             s.backend.device().0.borrow_mut().abandon_reservation()
         })
     })
@@ -3515,6 +3557,9 @@ pub(crate) fn abandon_any_position(id: u64) {
     let _ = ffi(|| {
         with_session(id, |s| {
             if s.position.take().is_some() {
+                if s.position_imports.take().is_some() {
+                    let _ = s.backend.device().0.borrow_mut().release_imports();
+                }
                 let _ = s.backend.device().0.borrow_mut().abandon_reservation();
             }
             Ok(())
@@ -3542,16 +3587,31 @@ pub(crate) fn commit_subgraph_at(
                 return Err(-3);
             };
             s.position = None;
-            let bound = s.admissions.get(admission, source).and_then(|p| {
-                let requirements = p.imports.clone();
-                unsafe {
-                    s.backend
-                        .device()
-                        .0
-                        .borrow_mut()
-                        .bind_imports(bindings, &requirements)
-                }
-            });
+            let bound = match s.position_imports.take() {
+                // Bound and validated at reservation: the commit must import
+                // exactly those.
+                Some(requirements) => match s.admissions.get(admission, source) {
+                    Ok(p) if p.imports == requirements => Ok(()),
+                    Ok(_) => {
+                        let _ = s.backend.device().0.borrow_mut().release_imports();
+                        Err(-5)
+                    }
+                    Err(e) => {
+                        let _ = s.backend.device().0.borrow_mut().release_imports();
+                        Err(e)
+                    }
+                },
+                None => s.admissions.get(admission, source).and_then(|p| {
+                    let requirements = p.imports.clone();
+                    unsafe {
+                        s.backend
+                            .device()
+                            .0
+                            .borrow_mut()
+                            .bind_imports(bindings, &requirements)
+                    }
+                }),
+            };
             if let Err(e) = bound {
                 let _ = s.backend.device().0.borrow_mut().abandon_reservation();
                 return Err(e);
