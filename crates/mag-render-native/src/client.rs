@@ -270,6 +270,10 @@ struct Session {
     /// A reserved submission already acknowledged to the caller failed while
     /// encoding: its failed terminal receipt was queued; nothing more is admitted.
     acknowledged_failure: bool,
+    /// The receipt of an outstanding position-only reservation
+    /// (`scene_packet::reserve_position`), which the next positioned commit
+    /// carries.
+    position: Option<Receipt>,
     /// Worker sessions only: terminal receipts published for the host, which
     /// drains them without an actor round trip (so a busy actor never hides
     /// receipts that are already terminal). `ready` is then only staging.
@@ -699,6 +703,7 @@ fn create_session(
                 pending: BTreeMap::new(),
                 ready: VecDeque::new(),
                 acknowledged_failure: false,
+                position: None,
                 outbox: None,
             },
         )
