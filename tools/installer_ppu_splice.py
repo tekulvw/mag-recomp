@@ -26,6 +26,13 @@ def digest(path):
         return hashlib.file_digest(stream, 'sha256').hexdigest()
 
 
+def tag_commit(sdk, tag):
+    """The commit an immutable fork tag names in a checkout, or None."""
+    result = subprocess.run(['git', '-C', str(sdk), 'rev-parse', '--verify', '--quiet', 'refs/tags/' + tag + '^{commit}'],
+                            capture_output=True, text=True)
+    return result.stdout.strip() if result.returncode == 0 else None
+
+
 def require_hash(path, expected):
     if digest(path) != expected:
         raise ValueError('Splice input identity mismatch: ' + str(path))
@@ -70,6 +77,10 @@ def prepare(base, output, work, elf, inventory, nonlocal_profile, before_sdk, af
                           ('sdk_revision', profile['before']['revision'])):
         if provenance.get(key) != expected:
             raise ValueError('Splice base provenance differs from reviewed generation inputs: ' + key)
+    after_tag = profile['after']['tag']
+    if not after_tag.startswith('mag-recomp/') or tag_commit(after_sdk, after_tag) != profile['after']['revision']:
+        raise ValueError('Splice after lifter tag ' + after_tag + ' does not name the pinned after revision; '
+                         'fetch the pinned lifter checkout again')
     decoder = pinned_blob(before_sdk, profile['before']['revision'], 'tools/ppu_disasm.py', profile['decoder_sha256'])
     parser = pinned_blob(before_sdk, profile['before']['revision'], 'tools/elf_parser.py', profile['parser_sha256'])
     lifters = {name: pinned_blob(sdk, profile[name]['revision'], 'tools/ppu_lifter.py', profile[name]['lifter_sha256'])
