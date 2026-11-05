@@ -1,0 +1,21 @@
+# Configure-only fixture for cmake/MagRenderAdapter.cmake: checks a prepared lift's hook record
+# and reports what the adapter would add, without compiling anything.
+cmake_minimum_required(VERSION 3.20)
+project(mag_render_adapter_fixture CXX)
+set(MAG_RENDER_FRONTEND_NATIVE ON)
+include("${MAG_REPO}/cmake/MagRenderAdapter.cmake")
+file(GLOB RECOMP_SOURCES "${RECOMP_DIR}/*.cpp")
+file(WRITE "${CMAKE_BINARY_DIR}/fixture.cpp" "int fixture() { return 0; }\n")
+add_library(fixture OBJECT EXCLUDE_FROM_ALL "${CMAKE_BINARY_DIR}/fixture.cpp")
+if(MAG_RENDER_ADAPTER)
+    mag_render_adapter_apply(fixture "${MAG_REPO}")
+endif()
+get_target_property(_sources fixture SOURCES)
+set(_lifted "")
+foreach(_source IN LISTS RECOMP_SOURCES)
+    get_source_file_property(_definitions "${_source}" COMPILE_DEFINITIONS)
+    get_filename_component(_name "${_source}" NAME)
+    list(APPEND _lifted "${_name}:${_definitions}")
+endforeach()
+file(WRITE "${CMAKE_BINARY_DIR}/adapter.txt"
+    "receipt=${MAG_RENDER_ADAPTER_RECEIPT_EXTRA}\nsources=${_sources}\nlifted=${_lifted}\n")

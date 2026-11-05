@@ -30,13 +30,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, ubuntu-latest, windows-latest]
+        os: [macos-latest, mag-recomp, windows-latest]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     env:
       MAG_RENDER_REQUIRE_TOOLS: '1'
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/self-hosted-linux
+        with:
+          rust: 'true'
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
@@ -219,7 +222,7 @@ jobs:
           - os: macos-latest
             backend: Metal compile and contract tests
             feature_args: --features metal
-          - os: ubuntu-latest
+          - os: mag-recomp
             backend: Vulkan compile and contract tests
             feature_args: --features vulkan
           - os: windows-latest
@@ -229,6 +232,9 @@ jobs:
       CMAKE_GENERATOR: Ninja
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/self-hosted-linux
+        with:
+          rust: 'true'
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
@@ -271,6 +277,16 @@ jobs:
         run: cargo test --manifest-path crates/mag-render-native/Cargo.toml ${{ matrix.feature_args }} --locked --offline
       - name: Native backend Clippy
         run: cargo clippy --manifest-path crates/mag-render-native/Cargo.toml ${{ matrix.feature_args }} --all-targets --locked --offline -- -D warnings
+      # One command per step, in the job's default shell: on Windows that keeps the
+      # MSVC environment's link.exe ahead of Git Bash's /usr/bin/link.
+      - name: Adapter link crate dependencies
+        run: cargo fetch --manifest-path crates/mag-render-adapter-link/Cargo.toml --locked
+      - name: Adapter link crate format
+        run: cargo fmt --manifest-path crates/mag-render-adapter-link/Cargo.toml --check
+      - name: Adapter link crate Clippy (native frontend and game adapter in one archive)
+        run: cargo clippy --manifest-path crates/mag-render-adapter-link/Cargo.toml ${{ matrix.feature_args }} --all-targets --locked --offline -- -D warnings
+      - name: Adapter link crate tests
+        run: cargo test --manifest-path crates/mag-render-adapter-link/Cargo.toml ${{ matrix.feature_args }} --locked --offline
       # The compat C/ObjC fixtures are built only by the GPU checkers, never by
       # cargo; syntax-check them against the candidate SDK so a broken fixture
       # cannot pass CI. No shaders, GPU or link.
@@ -296,12 +312,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, ubuntu-latest, windows-latest]
+        os: [macos-latest, mag-recomp, windows-latest]
     env:
       CMAKE_GENERATOR: Ninja
       CMAKE_PREFIX_PATH: ${{ github.workspace }}/build/program-compiler-install
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/self-hosted-linux
+        with:
+          rust: 'true'
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
@@ -367,6 +386,12 @@ jobs:
         run: cargo test --manifest-path crates/mag-render-adapter-core/Cargo.toml --features owned-scene --locked --offline
       - name: Adapter core owned-scene Clippy
         run: cargo clippy --manifest-path crates/mag-render-adapter-core/Cargo.toml --features owned-scene --all-targets --locked --offline -- -D warnings
+      - name: Fetch locked adapter scene dependencies
+        run: cargo fetch --manifest-path crates/mag-render-adapter-scene/Cargo.toml --locked
+      - name: Adapter scene owned-programs tests
+        run: cargo test --manifest-path crates/mag-render-adapter-scene/Cargo.toml --features owned-programs --locked --offline
+      - name: Adapter scene owned-programs Clippy
+        run: cargo clippy --manifest-path crates/mag-render-adapter-scene/Cargo.toml --features owned-programs --all-targets --locked --offline -- -D warnings
 
   vulkan-sdk-cpu:
     name: Vulkan SDK provider and bridge (CPU only)
@@ -378,10 +403,11 @@ jobs:
        github.event.pull_request.head.repo.full_name == github.repository) ||
       (github.event_name == 'workflow_dispatch' &&
        github.ref == 'refs/heads/codex/render-frontend-integration')
-    runs-on: ubuntu-latest
+    runs-on: mag-recomp
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/self-hosted-linux
       - uses: actions/checkout@v4
         with:
           repository: tekulvw/ps3recomp

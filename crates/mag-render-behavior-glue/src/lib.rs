@@ -4,12 +4,14 @@
 //! | Module | Role |
 //! | --- | --- |
 //! | [`abi`] | the pointer-bearing packet records from an owned arena |
+//! | [`builtins`] | kind-31/32 animated fragment built-in rows from decoded role values |
 //! | [`memory`] | `GuestSnapshot` as a behaviour `GuestMemory` |
 //! | [`cohort`] | owned cohort records as planner inputs |
 //! | [`packet`] | plan steps and producer passes as packet entries |
 //! | [`resources`] | `ProducerResources` over exact image provenance |
 //! | [`programs`] | `ProgramTranslator` over `mag-render-programs` |
 //! | [`deformation`] | one deformation per item, shared by Main and the depth pre-pass |
+//! | [`gpu_group_zero`] | the opt-in GPU group-zero deformation through the packet's compute prefix |
 //!
 //! Depth-equal requirement: group 1 tests depth *equal* against depth written earlier in the
 //! frame. The depth pre-pass and Main must therefore consume identical deformed positions for
@@ -18,8 +20,10 @@
 //! coefficients.
 
 pub mod abi;
+pub mod builtins;
 pub mod cohort;
 pub mod deformation;
+pub mod gpu_group_zero;
 pub mod memory;
 pub mod packet;
 pub mod programs;

@@ -110,7 +110,12 @@ triangle list of these three vertices. The constants are copied bit for bit.
 - Unit 0: the compact lighting source descriptor (`RENDERER+0x3120` if bank zero is enabled,
   otherwise `+0x3140`).
 - Unit 1: the full descriptor at `PARAMS+0x1520` (twelve words), after which unit 1's border colour
-  is forced to `0xFFFFFFFF`.
+  is forced to `0xFFFFFFFF`. This is the shadow map that [shadow-pass.md](shadow-pass.md) renders.
+  In the captured frames the record describes the 2048×1024 linear 24-bit depth surface shared by
+  both cascades, with depth comparison greater-or-equal, s and t clamp-to-border, r clamp-to-edge
+  and linear filters. A border colour of `0xFFFFFFFF` (depth 1.0) makes lookups outside the map
+  unshadowed. The record is read at run time; these values only let an implementation check that
+  its native image matches.
 - Any image previously associated with units 0 and 1 is forgotten. Each unit the lighting fragment
   program samples must be bound to an image whose provenance matches that unit's (source address,
   descriptor) exactly. That image must be a single-sample, single-layer 2D image with the

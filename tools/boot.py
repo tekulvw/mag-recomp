@@ -22,7 +22,9 @@ def clone_disc(source: Path, destination: Path) -> None:
     if source.is_symlink() or any(p.is_symlink() for p in source.rglob('*')):
         raise ValueError('Disc source must not contain symlinks')
     destination.mkdir(parents=True, exist_ok=False)
-    subprocess.run(['/bin/cp', '-cR', str(source), str(destination/'PS3_GAME')], check=True)
+    # macOS clones with APFS copy-on-write (-c); GNU cp reflinks where the filesystem supports it.
+    clone = ['-cR'] if sys.platform == 'darwin' else ['-R', '--reflink=auto']
+    subprocess.run(['/bin/cp', *clone, str(source), str(destination/'PS3_GAME')], check=True)
 
 
 def capture_process(command: list, cwd: Path, env: dict, log_path: Path,

@@ -789,6 +789,8 @@ fn decode_pipeline(registers: &KnownRegisters) -> Result<PipelineState, Pipeline
 /// The fields of a Main pass's 160-byte setup record used by the setup banks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MainSetupRecord {
+    /// The low 16 bits (`u16 +0x4a`) of the `u32` group-enable word at `+0x48`; bit `g` is mesh
+    /// group `g`. The high half is not part of the mask.
     pub enabled_group_mask: u16,
     pub lists_enabled: bool,
     pub depth_control: u8,
@@ -816,7 +818,7 @@ impl MainSetupRecord {
             });
         }
         Ok(Self {
-            enabled_group_mask: be_u16(bytes, 0x48),
+            enabled_group_mask: be_u16(bytes, 0x4a),
             lists_enabled: bytes[0x4c] != 0,
             depth_control: bytes[0x4d],
             initial: [
@@ -1537,9 +1539,18 @@ mod tests {
     }
 
     #[test]
+    fn v10_group_enable_word() {
+        let mut bytes = vec![0u8; 160];
+        bytes[0x48..0x4c].copy_from_slice(&[0x00, 0x07, 0x00, 0xfe]);
+        let record = MainSetupRecord::decode(&bytes).unwrap();
+        // The low half: groups 1–7, not the high half's 0x0007.
+        assert_eq!(record.enabled_group_mask, 0x00fe);
+    }
+
+    #[test]
     fn main_setup_record_and_bank_slots() {
         let mut bytes = vec![0u8; 160];
-        bytes[0x48..0x4a].copy_from_slice(&0x1234u16.to_be_bytes());
+        bytes[0x4a..0x4c].copy_from_slice(&0x1234u16.to_be_bytes());
         bytes[0x4c] = 1;
         bytes[0x4d] = 7;
         bytes[0x54..0x58].copy_from_slice(&0x1000u32.to_be_bytes());

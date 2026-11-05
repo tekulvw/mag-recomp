@@ -1524,6 +1524,9 @@ fn one_main_frame_from_guest_memory() {
                             8,
                         ));
                     }
+                    Some(Ok(Deformed::GroupZeroGpu(_))) => {
+                        unreachable!("this frame prepares group 0 on the CPU")
+                    }
                     Some(Err(error)) => panic!("deformation refused: {error:?}"),
                     None => {}
                 }

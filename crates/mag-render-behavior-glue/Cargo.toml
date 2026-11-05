@@ -15,6 +15,10 @@ mag-render-adapter-core = { path = "../mag-render-adapter-core" }
 mag-render-behavior = { path = "../mag-render-behavior" }
 mag-render-programs = { path = "../mag-render-programs" }
 
+[build-dependencies]
+# Translates the authored group-zero compute kernel with the pinned Naga at build time.
+mag-render-shaders = { path = "../mag-render-shaders" }
+
 [dev-dependencies]
 # The real packet validator, for round-trip tests of the ABI builder.
 mag-render-native = { path = "../mag-render-native" }

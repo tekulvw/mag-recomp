@@ -112,6 +112,35 @@ fn noninstanced_site_returns_the_shared_banks_and_keeps_its_refusals() {
         prepare_noninstanced_geometry(input, usize::MAX),
         Err(NoninstancedGeometryError::Deform(_))
     ));
+    // So is a non-finite result from finite inputs: a wind amplitude whose
+    // displacement does not fit binary32.
+    let positions = bank(16, 11, 1.0);
+    let normals = vec![bits([1.0, 1.0, 0.0, 0.0]); 16];
+    let weights = vec![bits([1.0, 0.0, 0.0, 0.0]); 16];
+    let overflow = NoninstancedGeometryInput {
+        group: 3,
+        positions: &positions,
+        normals: &normals,
+        weights: &weights,
+        tangents: None,
+        material_rows: [
+            bits([3.0e38, 1.0, 0.0, 0.0]),
+            bits([1.0, 0.0, 0.0, 0.0]),
+            [0; 4],
+        ],
+        wind: [1.0f32, 0.0, 3.0, 1.0, 0.25].map(f32::to_bits),
+        object_origin: [0; 3],
+    };
+    assert_eq!(
+        validate_noninstanced_geometry(&overflow, usize::MAX),
+        Ok(())
+    );
+    assert!(matches!(
+        prepare_noninstanced_geometry(overflow, usize::MAX),
+        Err(NoninstancedGeometryError::Deform(
+            noninstanced::DeformError::NonFinite(noninstanced::DeformWord::Output { .. })
+        ))
+    ));
 }
 
 fn palette(matrices: usize) -> Vec<u8> {
@@ -288,6 +317,57 @@ fn group_zero_site_expands_instances_like_the_shared_entry_point() {
         Err(GroupZeroGeometryError::Budget)
     ));
     assert!(prepare_group_zero_geometry(input(), need).is_ok());
+    // The opt-in GPU path takes the same inputs: its indices are the CPU expansion's, and the
+    // kernel reference's positions stay within the specification's tolerance of the CPU rows.
+    let work = prepare_group_zero_gpu_work(&input(), usize::MAX).unwrap();
+    assert_eq!(work.indices, expected.indices);
+    assert_eq!(work.vertex_count, 15);
+    let rows = mag_render_behavior_glue::gpu_group_zero::reference(&work);
+    let validated =
+        mag_render_behavior_glue::gpu_group_zero::validated(&group_zero::GroupZeroInputs {
+            wind,
+            material: material_rows,
+            object: object_pose,
+            fade,
+            environment,
+            instances: &instances,
+            colour_frequency: frequency,
+            batch_max: batch as u32,
+            colour_pool: &pool,
+            positions: &positions,
+            normals: &normals,
+            weights: &weights,
+            indices: &indices,
+        })
+        .unwrap();
+    for (index, position) in expected.positions.iter().enumerate() {
+        let (instance, vertex) = (index / 5, index % 5);
+        for lane in 0..3 {
+            let error = (rows[2 * index][lane] - f32::from_bits(position[lane])).abs() as f64;
+            assert!(
+                error
+                    <= group_zero::position_tolerance(
+                        &validated,
+                        &validated.placements[instance],
+                        positions[vertex],
+                        normals[vertex],
+                        weights[vertex],
+                        lane,
+                    )
+            );
+        }
+        assert_eq!(
+            rows[2 * index + 1].map(f32::to_bits),
+            expected.colours[index]
+        );
+    }
+    assert_eq!(
+        prepare_group_zero_gpu_work(&input(), 64).err(),
+        Some(mag_render_behavior_glue::gpu_group_zero::GpuRefusal::Budget)
+    );
+    if std::env::var_os("MAG_RENDER_GPU_GROUP_ZERO").is_none() {
+        assert!(!group_zero_gpu_enabled());
+    }
     assert_eq!(
         required_color_population(5, 3, batch, 1),
         Err(GroupZeroGeometryError::ColorFrequency(1))
