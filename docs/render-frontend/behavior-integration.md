@@ -146,6 +146,28 @@ Groups 0 and 3 use this implementation's own wind tuning values. The recompiled 
 uses the game's values, so for wind items only this shared path can feed a depth pass that Main
 tests for equality. Tests cover groups 0, 3, 4 and 11.
 
+### Opt-in GPU group-zero deformation
+
+With `MAG_RENDER_GPU_GROUP_ZERO=1`, group 0 can be deformed by the packet's compute prefix instead
+of on the CPU (`glue::gpu_group_zero`, kernel `shaders/render_frontend/group_zero.wgsl`). The CPU
+still runs every check of `group_zero::validate_group_zero` and computes the per-instance
+placements. The kernel evaluates every (instance, vertex) in binary32 and writes the position and
+the slot-12 colour row into a produced buffer. The draw reads that buffer through the
+vertex-inputs GPU layout plan. The expanded indices stay a CPU product, because the packet
+validator refuses produced index buffers.
+
+The choice is made once per item in the shared store (`deformation::group_zero_preferring_gpu`),
+so the passes of one item never mix the CPU and GPU evaluations. The GPU path declines, and the
+CPU path runs, on:
+
+- any refusal the CPU path makes;
+- a non-finite or possibly overflowing input;
+- a pass layout other than slot 0, or slots 0 and 12;
+- a grid beyond the dispatch limits.
+
+`tools/check_group_zero_gpu.py` runs the kernel on Metal against the CPU deformation within the
+tolerance of [group-zero-deformation.md](behavior/group-zero-deformation.md).
+
 ## Not covered yet
 
 - Native shader lowering and the stored-depth Metal variant (`mag-render-programs` with
