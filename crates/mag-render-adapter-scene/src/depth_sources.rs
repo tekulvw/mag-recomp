@@ -282,8 +282,15 @@ pub fn copy_depth_sources_with(
         if population == 0 {
             continue;
         }
+        // Depth reads the family-3 lists; a Shadow run (cohort camera slot 1
+        // or 2) reads its own family's lists, laid out the same way.
+        let family = if matches!(id.camera, 1 | 2) {
+            id.camera as usize
+        } else {
+            3
+        };
         let indices = reader.copy(
-            word(bucket_bytes, 0x28 + 3 * 16 + 4 * shard),
+            word(bucket_bytes, 0x28 + family * 16 + 4 * shard),
             population * 2,
         )?;
         items

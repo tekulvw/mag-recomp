@@ -7,11 +7,13 @@
 //! values; the recompiled original depth job uses the game's, so for wind items only this shared
 //! path can feed a depth pass that Main tests for equality.
 
+use crate::gpu_group_zero::{self, GpuGroupZeroWork, GpuRefusal};
 use mag_render_behavior::group_zero::{
     GroupZeroError, GroupZeroInputs, GroupZeroOutput, deform_group_zero,
 };
 use mag_render_behavior::noninstanced::{DeformError, DeformationInputs, DeformedBanks, deform};
 use mag_render_behavior::skinning::{SkinnedBanks, SkinningError, SkinningInputs, skin};
+use mag_render_behavior::vertex_inputs::{AuxiliarySet, VertexBinding};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -30,6 +32,9 @@ pub enum Prepared {
     Ripple(DeformedBanks),
     /// Group 0 (instanced wind).
     GroupZero(GroupZeroOutput),
+    /// Group 0 deformed by the packet's compute prefix: every pass binds the one produced
+    /// buffer this work's dispatch writes.
+    GroupZeroGpu(GpuGroupZeroWork),
     Skinned(SkinnedBanks),
 }
 
@@ -99,6 +104,39 @@ pub fn group_zero(
     deform_group_zero(inputs, max_vertices)
         .map(Prepared::GroupZero)
         .map_err(PreparationError::GroupZero)
+}
+
+/// The draw layouts an item's passes will read: its output bindings, its group-zero auxiliary
+/// attributes and the required slot mask of every pass.
+pub struct GroupZeroLayouts<'a> {
+    pub outputs: &'a [VertexBinding],
+    pub auxiliary: &'a AuxiliarySet<'a>,
+    pub required: &'a [u16],
+}
+
+/// The shared group-0 deformation with the GPU path preferred when `gpu` is set: the GPU work is
+/// chosen only if [`gpu_group_zero::prepare`] accepts the item and every pass's layout can read
+/// the produced rows. Otherwise, and when `gpu` is not set, the CPU deformation runs. The choice
+/// is made here, once, so the passes of one item never mix the two.
+pub fn group_zero_preferring_gpu(
+    inputs: &GroupZeroInputs<'_>,
+    max_vertices: u64,
+    gpu: bool,
+    layouts: &GroupZeroLayouts<'_>,
+) -> (Result<Prepared, PreparationError>, Option<GpuRefusal>) {
+    if !gpu {
+        return (group_zero(inputs, max_vertices), None);
+    }
+    let work = gpu_group_zero::prepare(inputs, max_vertices).and_then(|work| {
+        for &required in layouts.required {
+            work.layout_plan(layouts.outputs, layouts.auxiliary, required)?;
+        }
+        Ok(work)
+    });
+    match work {
+        Ok(work) => (Ok(Prepared::GroupZeroGpu(work)), None),
+        Err(refusal) => (group_zero(inputs, max_vertices), Some(refusal)),
+    }
 }
 
 /// The shared group-11 skinning.
