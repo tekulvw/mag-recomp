@@ -22,7 +22,7 @@ permissions:
 # The exact candidate SDK the frontend's SDK-facing checks use (the Windows CPU
 # interop step and the compat fixture syntax check). One place to change it.
 env:
-  MAG_RENDER_CANDIDATE_SDK: 32230656cb33838dbe93a537d11b04bbc3dcaceb
+  MAG_RENDER_CANDIDATE_SDK: f0547a673a5b61384b4ddce3a647cd6bfc9a6141
 
 jobs:
   native:
