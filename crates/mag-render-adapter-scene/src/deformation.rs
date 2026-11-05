@@ -12,6 +12,7 @@
 //! state, and groups 0 and 3 use the behaviour crate's own wind tuning values.
 use mag_render_behavior::{group_zero, noninstanced, skinning};
 use mag_render_behavior_glue::deformation::{self as shared, PreparationError, Prepared};
+use mag_render_behavior_glue::gpu_group_zero;
 
 /// Deformed (or, for the static path, unchanged) banks of one partition.
 #[derive(Debug)]
@@ -233,6 +234,48 @@ pub enum GroupZeroGeometryError {
     Budget,
     /// A refusal of the behaviour deformation.
     Deform(group_zero::GroupZeroError),
+}
+
+/// The opt-in GPU group-zero path (`MAG_RENDER_GPU_GROUP_ZERO=1`): the same inputs as
+/// [`prepare_group_zero_geometry`], prepared as compute work whose produced vertex rows the draw
+/// reads (`mag_render_behavior_glue::gpu_group_zero`). Off by default. On a refusal the caller
+/// keeps the CPU path for every pass of the item.
+pub fn prepare_group_zero_gpu_work(
+    i: &GroupZeroGeometryInput<'_>,
+    byte_budget: usize,
+) -> Result<gpu_group_zero::GpuGroupZeroWork, gpu_group_zero::GpuRefusal> {
+    let count = i.positions.len().saturating_mul(i.instances.len());
+    let inputs = group_zero::GroupZeroInputs {
+        wind: i.wind,
+        material: i.material_rows,
+        object: i.object_pose,
+        fade: i.fade,
+        environment: i.source_view_rows,
+        instances: i.instances,
+        colour_frequency: i.color_frequency,
+        batch_max: u32::try_from(i.batch_maximum).unwrap_or(u32::MAX),
+        colour_pool: i.colour_pool,
+        positions: i.positions,
+        normals: i.normals,
+        weights: i.weights,
+        indices: i.indices,
+    };
+    let work = gpu_group_zero::prepare(&inputs, count as u64)?;
+    let bytes = work.output_bytes() as usize
+        + work.parameters.len()
+        + work.instances.len()
+        + work.vertices.len()
+        + work.pool.len()
+        + 4 * work.indices.len();
+    if bytes > byte_budget {
+        return Err(gpu_group_zero::GpuRefusal::Budget);
+    }
+    Ok(work)
+}
+
+/// Whether the GPU group-zero path is enabled in this process.
+pub fn group_zero_gpu_enabled() -> bool {
+    gpu_group_zero::enabled_by_environment()
 }
 
 /// Colour pool entries the expansion of `instances` instances reads.

@@ -36,14 +36,18 @@ class InstallerPPUSpliceTests(unittest.TestCase):
         nonlocal_profile.write_text(json.dumps({'elf_sha256':tool.digest(elf), 'sdk_revision':'a'*40,
                                                'configuration':config.name, 'configuration_sha256':tool.digest(config)}))
         def lifter(body):
-            return ('import pathlib,sys\np=pathlib.Path(sys.argv[sys.argv.index("--output")+1]); p.mkdir()\n'
+            # Like the real lifter, fail unless the shared decoder and ELF parser sit beside it.
+            return ('import pathlib,sys\nh=pathlib.Path(__file__).parent\n'
+                    'assert (h/"ppu_disasm.py").read_bytes()==b"decoder fixture" and (h/"elf_parser.py").read_bytes()==b"parser fixture"\n'
+                    'p=pathlib.Path(sys.argv[sys.argv.index("--output")+1]); p.mkdir()\n'
                     '(p/"ppu_recomp_000.cpp").write_text('+repr(body+other)+')\n').encode()
         old, new = lifter(before), lifter(after)
         profile = {'format':1, 'elf_sha256':tool.digest(elf), 'function':'func_00001000', 'body_sha256':sha(after.encode()),
-                   'decoder_sha256':sha(b'decoder fixture'), 'before':{'revision':'a'*40, 'lifter_sha256':sha(old)},
+                   'decoder_sha256':sha(b'decoder fixture'), 'parser_sha256':sha(b'parser fixture'), 'before':{'revision':'a'*40, 'lifter_sha256':sha(old)},
                    'after':{'revision':'b'*40, 'lifter_sha256':sha(new)}, 'reason':'synthetic dispatcher correction'}
         def pinned(sdk, revision, path, expected):
-            data = b'decoder fixture' if path.endswith('ppu_disasm.py') else old if revision == 'a'*40 else new
+            data = (b'decoder fixture' if path.endswith('ppu_disasm.py') else b'parser fixture' if path.endswith('elf_parser.py')
+                    else old if revision == 'a'*40 else new)
             if sha(data) != expected: raise ValueError('SDK Git object hash mismatch')
             return data
         args = dict(base=base, output=root/'output', work=root/'work', elf=elf, inventory=inventory,
@@ -60,7 +64,8 @@ class InstallerPPUSpliceTests(unittest.TestCase):
             record = json.loads((output/'provenance.json').read_text())
             self.assertEqual(record['function_splices'][-1]['changed'], ['func_00001000'])
             self.assertEqual(record['installer_dispatcher_splice']['profile'], args['profile'])
-            self.assertEqual(len(read.call_args_list), 3)
+            self.assertEqual(sorted(call.args[2] for call in read.call_args_list),
+                             ['tools/elf_parser.py', 'tools/ppu_disasm.py', 'tools/ppu_lifter.py', 'tools/ppu_lifter.py'])
             self.assertEqual(sorted(p.name for p in args['work'].iterdir()), ['after.log','before.log','splice.log'])
 
     def test_rejects_wrong_game_and_inventory_before_tool_materialization(self):

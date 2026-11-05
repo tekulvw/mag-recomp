@@ -865,18 +865,18 @@ pub fn release_value(next_word_offset: u32, generation: u8) -> u32 {
     (next_word_offset & 0x3fff_ffff) | (((generation & 3) as u32) << 30)
 }
 
-/// The ring generation: a 2-bit counter kept in the writer's epoch word, advanced modulo 4 each
-/// time the ring wraps back to its start.
+/// The ring generation: a 2-bit counter kept in bits 30–31 of the writer's epoch word (the same
+/// position as in a release value), advanced modulo 4 each time the ring wraps back to its start.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Ring {
     pub generation: u8,
 }
 
 impl Ring {
-    /// The generation read from the epoch word.
+    /// The generation read from bits 30–31 of the epoch word.
     pub fn from_epoch(epoch: u32) -> Self {
         Self {
-            generation: (epoch & 3) as u8,
+            generation: ((epoch >> 30) & 3) as u8,
         }
     }
 
@@ -890,9 +890,10 @@ impl Ring {
         self.generation = (self.generation + 1) & 3;
     }
 
-    /// The epoch word after the run. A run that did not wrap leaves it unchanged.
+    /// The epoch word after the run, with the generation in bits 30–31. A run that did not wrap
+    /// leaves it unchanged.
     pub fn epoch(&self) -> u32 {
-        self.generation as u32
+        (self.generation as u32) << 30
     }
 }
 
@@ -1441,34 +1442,53 @@ mod tests {
     #[test]
     fn v7_ring_generation() {
         // Generation 0b10, no wrap: every release carries 0b10 and the epoch is unchanged.
-        let ring = Ring::from_epoch(0b10);
+        let ring = Ring::from_epoch(0x8000_0000);
         assert!(
             [0x40u32, 0x2000, 0x3fff_fff0]
                 .iter()
                 .all(|&o| ring.release(o) >> 30 == 0b10)
         );
-        assert_eq!(ring.epoch(), 0b10);
+        assert_eq!(ring.epoch(), 0x8000_0000);
         // Generation 0b11 and one wrap: 0b11 before, 0b00 after, epoch 0b00.
-        let mut ring = Ring::from_epoch(0b11);
+        let mut ring = Ring::from_epoch(0xc000_0000);
         let before = ring.release(0x7f00);
         ring.wrap();
         let after = ring.release(0x40);
         assert_eq!((before >> 30, after >> 30), (0b11, 0b00));
-        assert_eq!(ring.epoch(), 0b00);
+        assert_eq!(ring.epoch(), 0);
         assert_eq!(release_value(0x001230, 0b11), 0xc000_1230);
         // The offset keeps only its low 30 bits.
         assert_eq!(release_value(0xffff_ffff, 0), 0x3fff_ffff);
     }
 
     #[test]
+    fn epoch_word_keeps_the_generation_in_bits_30_and_31() {
+        // 0x80000000 → 0xC0000000 → 0x00000000 across two wraps.
+        let mut ring = Ring::from_epoch(0x8000_0000);
+        assert_eq!(ring.generation, 0b10);
+        let mut epochs = vec![ring.epoch()];
+        for _ in 0..2 {
+            ring.wrap();
+            epochs.push(ring.epoch());
+        }
+        assert_eq!(epochs, vec![0x8000_0000, 0xc000_0000, 0]);
+        // The epoch word and a release under it agree on the generation bits.
+        let ring = Ring::from_epoch(0xc000_0000);
+        assert_eq!(ring.release(0x1230) & 0xc000_0000, ring.epoch());
+        assert_eq!(Ring::from_epoch(ring.epoch()), ring);
+        // The low bits of the epoch word are not the generation.
+        assert_eq!(Ring::from_epoch(3).generation, 0);
+    }
+
+    #[test]
     fn continuation_and_publication() {
         // Side slots always return through the continuation, wrapped or not.
         assert_eq!(continuation_target(0x1000_0000, 0x3400), 0x1000_3400);
-        let ring = Ring::from_epoch(1);
+        let ring = Ring::from_epoch(0x4000_0000);
         let publication = writer_publication(0x2340, &ring, 0x100, 0x8000);
         assert_eq!(publication.put, 0x2340);
         assert_eq!(publication.slot_word, 0x2342);
-        assert_eq!(publication.epoch, 1);
+        assert_eq!(publication.epoch, 0x4000_0000);
         assert_eq!(publication.next_state, [0x100, 0x8000, 0x2340, 0xffff_ffff]);
         assert_eq!(TERMINAL_SEGMENT_BYTES, 128);
         assert_eq!(

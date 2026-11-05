@@ -23,6 +23,9 @@ fn partition(n: usize) -> DepthImmutablePartition {
         positions: Ok(Arc::new(vec![[0x3f80_0000, 0, 0, 0x3f80_0000]; n])),
         indices: Ok(Arc::new((0..n as u16).collect())),
         attributes: None,
+        record: Box::new([0; 544]),
+        secondary_attributes: None,
+        skinning: None,
     }
 }
 struct Fixture {

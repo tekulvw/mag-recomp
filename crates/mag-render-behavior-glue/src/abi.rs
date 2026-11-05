@@ -9,9 +9,9 @@
 
 use crate::packet::{OwnedAttachment, OwnedItem, OwnedPass, PacketAssembler};
 use mag_render_abi::packet::{
-    Binding, Buffer, BufferUse, Desc, DescV2, DescV3, Draw, Image, ImageView, Item, Pass, Pipeline,
-    Program, RasterState, Sampler, SamplerSlot, StencilAttachment, Subresource, TextureSlot,
-    TextureUse, Viewport,
+    Binding, Buffer, BufferUse, Desc, DescV2, DescV3, Dispatch, Draw, Image, ImageView, Item, Pass,
+    Pipeline, Program, RasterState, Sampler, SamplerSlot, StencilAttachment, Subresource,
+    TextureSlot, TextureUse, Viewport,
 };
 use mag_render_abi::{
     Attachment, BindingLayout, ShaderStage, Source, TextureLayout, VertexAttribute,
@@ -213,6 +213,16 @@ pub fn packet_viewport(v: &NativeViewport) -> Viewport {
     }
 }
 
+/// An owned compute dispatch of the packet's compute prefix: a stage-2 program, its buffer
+/// bindings `(slot, buffer, offset, length)` and the workgroup counts. Dispatches run in order,
+/// before every pass; a produced buffer is written by exactly one dispatch.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OwnedDispatch {
+    pub program: u32,
+    pub bindings: Vec<(u32, u32, u64, u64)>,
+    pub groups: [u32; 3],
+}
+
 /// The owned arena of one scene packet.
 #[derive(Clone)]
 pub struct SceneBuilder {
@@ -226,6 +236,7 @@ pub struct SceneBuilder {
     /// Views with their dimension.
     pub views: Vec<(ImageView, u32)>,
     pub samplers: Vec<Sampler>,
+    pub dispatches: Vec<OwnedDispatch>,
     pub passes: Vec<OwnedPassRecord>,
     pub items: Vec<Item>,
     pub output_image: u32,
@@ -279,6 +290,7 @@ impl SceneBuilder {
             images: Vec::new(),
             views: Vec::new(),
             samplers: Vec::new(),
+            dispatches: Vec::new(),
             passes: Vec::new(),
             items: Vec::new(),
             output_image: 0,
@@ -293,6 +305,11 @@ impl SceneBuilder {
     pub fn add_pipeline(&mut self, pipeline: OwnedPipeline) -> u32 {
         self.pipelines.push(pipeline);
         index(self.pipelines.len() - 1)
+    }
+
+    pub fn add_dispatch(&mut self, dispatch: OwnedDispatch) -> u32 {
+        self.dispatches.push(dispatch);
+        index(self.dispatches.len() - 1)
     }
 
     pub fn add_buffer(&mut self, buffer: OwnedBuffer) -> u32 {
@@ -397,6 +414,8 @@ pub struct PacketView<'a> {
     _draw_textures: Vec<Vec<Vec<TextureUse>>>,
     _draws: Vec<Vec<Draw>>,
     _passes: Vec<Pass>,
+    _dispatch_bindings: Vec<Vec<Binding>>,
+    _dispatches: Vec<Dispatch>,
     _viewports: Vec<Viewport>,
     _stencils: Vec<StencilAttachment>,
     desc: DescV3,
@@ -651,6 +670,32 @@ impl<'a> PacketView<'a> {
             .collect();
         let viewports: Vec<Viewport> = b.passes.iter().map(|p| p.viewport).collect();
         let stencils: Vec<StencilAttachment> = b.passes.iter().map(|p| p.stencil).collect();
+        let dispatch_bindings: Vec<Vec<Binding>> = b
+            .dispatches
+            .iter()
+            .map(|d| {
+                d.bindings
+                    .iter()
+                    .map(|&(slot, buffer, offset, length)| Binding {
+                        stage: 2,
+                        slot,
+                        view: use_of((buffer, offset, length)),
+                    })
+                    .collect()
+            })
+            .collect();
+        let dispatches: Vec<Dispatch> = b
+            .dispatches
+            .iter()
+            .zip(&dispatch_bindings)
+            .map(|(d, bindings)| Dispatch {
+                program: d.program,
+                binding_count: bindings.len() as u32,
+                bindings: bindings.as_ptr(),
+                groups: d.groups,
+                reserved: 0,
+            })
+            .collect();
         let base = Desc {
             abi_version: 1,
             struct_size: size_of::<Desc>() as u32,
@@ -670,8 +715,12 @@ impl<'a> PacketView<'a> {
             view_count: views.len() as u32,
             sampler_count: b.samplers.len() as u32,
             samplers: b.samplers.as_ptr(),
-            dispatches: std::ptr::null(),
-            dispatch_count: 0,
+            dispatches: if dispatches.is_empty() {
+                std::ptr::null()
+            } else {
+                dispatches.as_ptr()
+            },
+            dispatch_count: dispatches.len() as u32,
             pass_count: passes.len() as u32,
             passes: passes.as_ptr(),
             items: b.items.as_ptr(),
@@ -714,6 +763,8 @@ impl<'a> PacketView<'a> {
             _draw_textures: draw_textures,
             _draws: draws,
             _passes: passes,
+            _dispatch_bindings: dispatch_bindings,
+            _dispatches: dispatches,
             _viewports: viewports,
             _stencils: stencils,
             desc,
