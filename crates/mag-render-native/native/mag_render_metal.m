@@ -3,6 +3,7 @@
  * MagRender-owned implementation; no SDK runtime/header dependency. */
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
+#include <unistd.h>
 #include "mag_render_native_internal.h"
 #include "mag_render_sampler_registry.h"
 #include "mag_render_scene_validate.h"
@@ -84,6 +85,8 @@ static void metal_witness(id<MTLCommandBuffer> command) {
     /* One reserved scene submission: enqueued command buffer, its ticket and
      * the imports validated under the lease when it was reserved. */
     id<MTLCommandBuffer> reserved;mag_native_ticket reserved_ticket;int reserved_encoding;
+    /* A position-only reservation: its imports are validated when encoded. */
+    int reserved_late;
     mag_native_scene_import reserved_imports[MAG_NATIVE_SCENE_MAX_IMAGES];
     mag_native_import_info reserved_info[MAG_NATIVE_SCENE_MAX_IMAGES];uint32_t reserved_count;
     /* Opt-in (MAG_RENDER_MAIN_CHUNKED_COMMIT=1): a reservation enqueues
