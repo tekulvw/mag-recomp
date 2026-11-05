@@ -67,6 +67,10 @@ impl MethodClass {
 
 /// Classify an NV4097 method offset (subchannel 0). `None` when the method is
 /// not one this replay knows.
+///
+/// The table follows the NV4097 method register list. Arrays cover all their
+/// elements (16 vertex attributes, 16 texture units, 4 vertex texture units).
+/// Context DMA bindings select memory objects and are replayed as state.
 pub fn classify(method: u32) -> Option<MethodClass> {
     use MethodClass as C;
     if method & 3 != 0 {
@@ -74,31 +78,120 @@ pub fn classify(method: u32) -> Option<MethodClass> {
     }
     Some(match method {
         0x0100 => C::NoOperation,
-        0x0050 | 0x0064 | 0x0068 | 0x006c | 0x1d6c | 0x1d70 | 0x1d74 | 0x1fd8 => C::Synchronization,
-        0x1d94 => C::Clear,
+        // Channel semaphores and references, notify, idle wait, performance
+        // trigger, report clear and get, semaphore releases, L2 invalidate.
+        0x0050
+        | 0x0060..=0x006c
+        | 0x0104
+        | 0x0110
+        | 0x0140
+        | 0x17c8
+        | 0x1800
+        | 0x1d6c
+        | 0x1d70
+        | 0x1d74
+        | 0x1fd8 => C::Synchronization,
+        // Surface clear and zcull surface clear.
+        0x1d94 | 0x1438 => C::Clear,
         0x1808 => C::Primitive,
-        0x180c..=0x1818 => C::Draw,
-        0x0200..=0x02fc | 0x08c0 | 0x08c4 | 0x0a00..=0x0a5c => C::Attachment,
-        0x0b80..=0x0bfc | 0x08e4 | 0x1d60 | 0x1d64 | 0x1e9c | 0x1ea0 | 0x1ef8 | 0x1ff0..=0x1ff8 => {
-            C::Program
-        }
+        // Array elements, draw arrays, inline array, draw index array.
+        0x180c..=0x1818 | 0x1824 => C::Draw,
+        // Texture A/B and vertex A/B context DMAs.
+        0x0184 | 0x0188 => C::TextureBinding,
+        0x019c | 0x01a0 => C::VertexInput,
+        // The other context DMAs: notifies, colour A-D, state, zeta,
+        // semaphore, report, clip ID and cull data.
+        0x0180..=0x01b8 => C::Attachment,
+        // Surface, window clip, scissor, viewport, surface compression.
+        0x0200..=0x02fc | 0x08c0 | 0x08c4 | 0x0a00..=0x0a5c | 0x1d80 => C::Attachment,
+        // Transform program, shader program and control, constant read
+        // limits, execution mode, program load and start, timeout, output
+        // attribute routing, input and output masks, branch bits.
+        0x0b80..=0x0bfc
+        | 0x08e4
+        | 0x1d60
+        | 0x1d64
+        | 0x1e94
+        | 0x1e9c
+        | 0x1ea0
+        | 0x1ef8
+        | 0x1fc4..=0x1fd4
+        | 0x1ff0..=0x1ff8 => C::Program,
         0x1efc | 0x1f00..=0x1f7c => C::VertexConstants,
-        0x1680..=0x17bc | 0x181c | 0x1820 | 0x1e00..=0x1e40 | 0x1fc0 => C::VertexInput,
-        0x1a00..=0x1bfc | 0x1840..=0x187c | 0x0b00..=0x0b3c | 0x1d00..=0x1d3c => C::TextureBinding,
+        // Immediate vertex data (scaled4s, 3f, 2f, 2s, 4ub, 4s, 4f, 1f),
+        // array offsets, base offset and index, formats, index array, restart
+        // index, frequency divider.
+        0x0a80..=0x0afc
+        | 0x1500..=0x15bc
+        | 0x1680..=0x17bc
+        | 0x181c
+        | 0x1820
+        | 0x1880..=0x19fc
+        | 0x1c00..=0x1cfc
+        | 0x1dac
+        | 0x1db0
+        | 0x1e00..=0x1e7c
+        | 0x1fc0 => C::VertexInput,
+        // Anisotropic spread, vertex textures, texture control 2 and 3,
+        // texture units, colour keys, no-paranoid fetches.
+        0x03c0..=0x03fc
+        | 0x0900..=0x097c
+        | 0x0b00..=0x0b3c
+        | 0x1840..=0x187c
+        | 0x1a00..=0x1bfc
+        | 0x1d00..=0x1d3c
+        | 0x1fe8 => C::TextureBinding,
+        // Fixed-function raster state.
         0x0300..=0x03a0
+        | 0x03b0
+        | 0x03b8
+        | 0x03bc
+        | 0x08cc..=0x08d4
         | 0x0a60..=0x0a7c
-        | 0x1830
-        | 0x1834
-        | 0x1838
-        | 0x183c
+        | 0x0b40..=0x0b7c
+        | 0x1428
+        | 0x142c
+        | 0x1450
+        | 0x1454
+        | 0x145c
+        | 0x1478
+        | 0x147c
+        | 0x1480..=0x14fc
+        | 0x17cc
+        | 0x1804
+        | 0x1828..=0x183c
         | 0x1d78
         | 0x1d7c
-        | 0x1d88
-        | 0x1d8c
-        | 0x1d90
+        | 0x1d84..=0x1d90
+        | 0x1d98
+        | 0x1d9c
+        | 0x1da4
+        | 0x1db4
+        | 0x1db8
+        | 0x1e98
+        | 0x1ea4..=0x1eac
+        | 0x1ee0..=0x1ee8
+        | 0x1fe0
         | 0x1fec => C::Raster,
         _ => return None,
     })
+}
+
+/// Every distinct subchannel-0 method among `writes` that [`classify`] does
+/// not know, with how many writes use it, in method order. A diagnostic for a
+/// refused replay: one pass names all of them, not just the first.
+pub fn unclassified_methods(writes: &[MethodWrite]) -> Vec<(u32, usize)> {
+    let mut found: Vec<(u32, usize)> = Vec::new();
+    for w in writes.iter().filter(|w| w.subchannel == 0) {
+        if classify(w.method).is_some() {
+            continue;
+        }
+        match found.binary_search_by_key(&w.method, |&(m, _)| m) {
+            Ok(at) => found[at].1 += 1,
+            Err(at) => found.insert(at, (w.method, 1)),
+        }
+    }
+    found
 }
 
 /// One recorded method write.

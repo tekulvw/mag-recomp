@@ -3,6 +3,7 @@ import pathlib,shutil,subprocess,tempfile,time,json,sys,unittest
 ROOT=pathlib.Path(__file__).resolve().parents[1]
 prefix=r'''#include "macos_runloop.h"
 #include "mag_extension.h"
+#include "frame_present_policy.h"
 #include <dispatch/dispatch.h>
 #include <atomic>
 #include <thread>

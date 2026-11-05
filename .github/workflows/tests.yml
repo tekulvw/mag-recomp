@@ -9,7 +9,7 @@ jobs:
   # `python` is a required check, so this workflow always runs; the Rust input
   # matrix skips itself when only docs or Markdown changed.
   changes:
-    runs-on: ubuntu-latest
+    runs-on: mag-recomp
     outputs:
       code: ${{ steps.diff.outputs.code }}
     steps:
@@ -32,13 +32,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, ubuntu-latest, windows-latest]
+        os: [macos-latest, mag-recomp, windows-latest]
     runs-on: ${{ matrix.os }}
     defaults:
       run:
         working-directory: crates/mag-input
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/self-hosted-linux
+        with:
+          rust: 'true'
       - name: Pinned Rust toolchain
         run: rustup toolchain install 1.99.0 --profile minimal --component rustfmt --component clippy
       - name: Format

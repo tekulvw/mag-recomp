@@ -32,6 +32,23 @@ fn single_validation() -> bool {
     static VALUE: OnceLock<bool> = OnceLock::new();
     *VALUE.get_or_init(|| env_flag("MAG_RENDER_WORKER_SINGLE_VALIDATION"))
 }
+/// Default-off (MAG_RENDER_PACKET_HANDOFF=1): the `_owned` prepare/submit
+/// entries borrow a handed-over packet's large byte ranges (role-0 buffer
+/// bytes, unkeyed contiguous image texels) instead of copying them on the
+/// caller's thread; the snapshots the actor uploads from reference them too.
+/// Off, those entries copy exactly as the plain ones and release at return.
+fn packet_handoff() -> bool {
+    static VALUE: OnceLock<bool> = OnceLock::new();
+    *VALUE.get_or_init(|| env_flag("MAG_RENDER_PACKET_HANDOFF"))
+}
+/// Default-off (MAG_RENDER_VALIDATE_ON_WORKER=1): the caller's thread copies an
+/// imported packet without validating it (twice) and the actor validates it,
+/// once, at admission. The caller still waits for that admission, so a refused
+/// packet is refused before any effect, exactly as before.
+fn validate_on_worker() -> bool {
+    static VALUE: OnceLock<bool> = OnceLock::new();
+    *VALUE.get_or_init(|| env_flag("MAG_RENDER_VALIDATE_ON_WORKER"))
+}
 /// Default-on (MAG_RENDER_MAIN_ASYNC_COMMIT=0 disables): an imported subgraph commit
 /// acknowledges once its native queue position and ticket are reserved and its
 /// imports validated under the owner lease; allocation, encoding and the GPU
@@ -1462,6 +1479,52 @@ pub unsafe extern "C" fn mag_render_client_worker_prepare_scene_imported_v3(
     count: u32,
     out: *mut mag_render_abi::packet::Admission,
 ) -> i32 {
+    unsafe { prepare_imported_v3(id, input, requirements, count, out, None) }
+}
+/// Adopt a handed-over packet's owner record. Null, or without `release`:
+/// nothing to release (-1). Otherwise it is released exactly once, in every
+/// outcome, including a mismatched record (-1, released at once).
+/// # Safety
+/// `owner` is null or a readable PacketOwner obeying its contract.
+unsafe fn adopt_owner(
+    owner: *const client::scene_packet::PacketOwner,
+) -> Result<std::sync::Arc<client::scene_packet::Handoff>, i32> {
+    let owner = unsafe { owner.as_ref() }.ok_or(-1)?;
+    let release = owner.release.ok_or(-1)?;
+    unsafe { client::scene_packet::Handoff::adopt(owner) }
+        .inspect_err(|_| unsafe { release(owner.userdata) })
+}
+/// prepare_scene_imported_v3 for a handed-over packet: with
+/// MAG_RENDER_PACKET_HANDOFF=1 its large byte ranges are borrowed, not copied,
+/// until `owner->release(owner->userdata)`, called exactly once from any
+/// thread (possibly before return; see adopt_owner). Off, it copies exactly as
+/// prepare_scene_imported_v3 and releases before returning.
+/// # Safety
+/// As prepare_scene_imported_v3; borrowed ranges stay readable and unchanged
+/// until release.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mag_render_client_worker_prepare_scene_imported_v3_owned(
+    id: u64,
+    input: *const client::scene_packet::raw::DescV3,
+    requirements: *const mag_render_abi::packet::ImageRequirement,
+    count: u32,
+    owner: *const client::scene_packet::PacketOwner,
+    out: *mut mag_render_abi::packet::Admission,
+) -> i32 {
+    let handoff = match unsafe { adopt_owner(owner) } {
+        Ok(h) => h,
+        Err(status) => return status,
+    };
+    unsafe { prepare_imported_v3(id, input, requirements, count, out, Some(&handoff)) }
+}
+unsafe fn prepare_imported_v3(
+    id: u64,
+    input: *const client::scene_packet::raw::DescV3,
+    requirements: *const mag_render_abi::packet::ImageRequirement,
+    count: u32,
+    out: *mut mag_render_abi::packet::Admission,
+    handoff: Option<&std::sync::Arc<client::scene_packet::Handoff>>,
+) -> i32 {
     if out.is_null() {
         return -1;
     }
@@ -1485,7 +1548,7 @@ pub unsafe extern "C" fn mag_render_client_worker_prepare_scene_imported_v3(
             let timed = fifo_timing();
             let mut timing = CallerTiming::default();
             let copy_start = Instant::now();
-            let admit = unsafe { copy_admit_input(&worker, id, input, requirements) }?;
+            let admit = unsafe { copy_admit_input(&worker, id, input, requirements, handoff) }?;
             timing.copy_ns = elapsed_ns(copy_start);
             let single = admit.prevalidated.is_some();
             if timed {
@@ -1526,10 +1589,19 @@ unsafe fn copy_admit_input(
     id: u64,
     input: &client::scene_packet::raw::DescV3,
     requirements: &[mag_render_abi::packet::ImageRequirement],
+    handoff: Option<&std::sync::Arc<client::scene_packet::Handoff>>,
 ) -> Result<AdmitInput, i32> {
     let limits = (worker.max_draws as usize, worker.max_bytes);
+    let here = !validate_on_worker();
     let packet = unsafe {
-        client::scene_packet::ScenePacket::copy_imported_v3(input, requirements, limits.0, limits.1)
+        client::scene_packet::ScenePacket::copy_imported_v3_with(
+            input,
+            requirements,
+            limits.0,
+            limits.1,
+            handoff.filter(|_| packet_handoff()),
+            here,
+        )
     }
     .inspect_err(|&status| {
         if status < 0 {
@@ -1545,8 +1617,9 @@ unsafe fn copy_admit_input(
     Ok(AdmitInput {
         worker: id,
         packet: Box::new(packet),
-        // copy_imported_v3 validated this exact packet against these limits.
-        prevalidated: single_validation().then_some(limits),
+        // The copy validated this exact packet against these limits, unless
+        // validation was left to the actor (which then always validates).
+        prevalidated: (here && single_validation()).then_some(limits),
     })
 }
 /// Default-off alternative to prepare_imported_v3 followed by commit_subgraph:
@@ -1567,6 +1640,64 @@ pub unsafe extern "C" fn mag_render_client_worker_submit_scene_subgraph_imported
     bindings: *const mag_render_abi::packet::ImageBinding,
     binding_count: u32,
     out: *mut client::Receipt,
+) -> i32 {
+    unsafe {
+        submit_subgraph_imported_v3(
+            id,
+            input,
+            requirements,
+            count,
+            bindings,
+            binding_count,
+            out,
+            None,
+        )
+    }
+}
+/// submit_scene_subgraph_imported_v3 for a handed-over packet, with the
+/// release contract of prepare_scene_imported_v3_owned.
+/// # Safety
+/// As submit_scene_subgraph_imported_v3; borrowed ranges stay readable and
+/// unchanged until release.
+#[unsafe(no_mangle)]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn mag_render_client_worker_submit_scene_subgraph_imported_v3_owned(
+    id: u64,
+    input: *const client::scene_packet::raw::DescV3,
+    requirements: *const mag_render_abi::packet::ImageRequirement,
+    count: u32,
+    bindings: *const mag_render_abi::packet::ImageBinding,
+    binding_count: u32,
+    owner: *const client::scene_packet::PacketOwner,
+    out: *mut client::Receipt,
+) -> i32 {
+    let handoff = match unsafe { adopt_owner(owner) } {
+        Ok(h) => h,
+        Err(status) => return status,
+    };
+    unsafe {
+        submit_subgraph_imported_v3(
+            id,
+            input,
+            requirements,
+            count,
+            bindings,
+            binding_count,
+            out,
+            Some(&handoff),
+        )
+    }
+}
+#[allow(clippy::too_many_arguments)]
+unsafe fn submit_subgraph_imported_v3(
+    id: u64,
+    input: *const client::scene_packet::raw::DescV3,
+    requirements: *const mag_render_abi::packet::ImageRequirement,
+    count: u32,
+    bindings: *const mag_render_abi::packet::ImageBinding,
+    binding_count: u32,
+    out: *mut client::Receipt,
+    handoff: Option<&std::sync::Arc<client::scene_packet::Handoff>>,
 ) -> i32 {
     if out.is_null() {
         return -1;
@@ -1598,7 +1729,7 @@ pub unsafe extern "C" fn mag_render_client_worker_submit_scene_subgraph_imported
             let timed = fifo_timing();
             let mut timing = CallerTiming::default();
             let copy_start = Instant::now();
-            let admit = unsafe { copy_admit_input(&worker, id, input, requirements) }?;
+            let admit = unsafe { copy_admit_input(&worker, id, input, requirements, handoff) }?;
             timing.copy_ns = elapsed_ns(copy_start);
             let single = admit.prevalidated.is_some();
             let pin_start = Instant::now();
@@ -1871,6 +2002,82 @@ pub unsafe extern "C" fn mag_render_client_worker_commit_scene_subgraph(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn owned_entries_release_a_handed_over_packet_exactly_once_in_every_outcome() {
+        use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
+        static RELEASES: AtomicUsize = AtomicUsize::new(0);
+        unsafe extern "C" fn release(userdata: *mut c_void) {
+            unsafe { &*userdata.cast::<AtomicUsize>() }.fetch_add(1, SeqCst);
+        }
+        let owner = client::scene_packet::PacketOwner {
+            abi_version: 1,
+            struct_size: size_of::<client::scene_packet::PacketOwner>() as u32,
+            userdata: (&RELEASES as *const AtomicUsize).cast_mut().cast(),
+            release: Some(release),
+        };
+        let mut admission = mag_render_abi::packet::Admission::default();
+        let mut receipt = client::Receipt::default();
+        // No such worker: refused, and the packet is released before return.
+        assert!(
+            unsafe {
+                mag_render_client_worker_prepare_scene_imported_v3_owned(
+                    u64::MAX,
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    0,
+                    &owner,
+                    &mut admission,
+                )
+            } < 0
+        );
+        assert_eq!(RELEASES.load(SeqCst), 1);
+        assert!(
+            unsafe {
+                mag_render_client_worker_submit_scene_subgraph_imported_v3_owned(
+                    u64::MAX,
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    0,
+                    std::ptr::null(),
+                    0,
+                    &owner,
+                    &mut receipt,
+                )
+            } != 0
+        );
+        assert_eq!(RELEASES.load(SeqCst), 2);
+        // A mismatched record is still released (once); a null one has nothing to release.
+        let mut stale = owner;
+        stale.struct_size -= 1;
+        assert_eq!(
+            unsafe {
+                mag_render_client_worker_prepare_scene_imported_v3_owned(
+                    u64::MAX,
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    0,
+                    &stale,
+                    &mut admission,
+                )
+            },
+            -1
+        );
+        assert_eq!(RELEASES.load(SeqCst), 3);
+        assert_eq!(
+            unsafe {
+                mag_render_client_worker_prepare_scene_imported_v3_owned(
+                    u64::MAX,
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    0,
+                    std::ptr::null(),
+                    &mut admission,
+                )
+            },
+            -1
+        );
+        assert_eq!(RELEASES.load(SeqCst), 3);
+    }
     use std::{
         ffi::c_void, marker::PhantomData, rc::Rc, sync::atomic::AtomicI32, thread::ThreadId,
     };

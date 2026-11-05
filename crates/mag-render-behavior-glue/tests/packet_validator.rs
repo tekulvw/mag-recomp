@@ -588,3 +588,124 @@ fn producer_stencil_pass_round_trips_through_the_validator() {
     bad.passes[0].stencil = NO_STENCIL;
     assert!(validate(&bad).is_err());
 }
+
+/// The opt-in GPU group-zero path: the kernel as the packet's compute prefix, its produced rows
+/// as the draw's vertex buffer, through the native validator.
+#[test]
+fn gpu_group_zero_dispatch_round_trips_through_the_validator() {
+    use mag_render_behavior::group_zero::GroupZeroInputs;
+    use mag_render_behavior_glue::gpu_group_zero::{self, kernel_program};
+
+    let mut builder = SceneBuilder::new(SOURCE);
+    let target = builder.add_image(OwnedImage::attachment(1, 64, 64));
+    builder.output_image = target;
+    let (pipeline, vertex_uniform, fragment_uniform) =
+        add_compiled(&mut builder, constant_fragment(), false);
+    // The produced rows are position then colour: a 32-byte stride, position at offset 0.
+    builder.pipelines[pipeline as usize].record.stride = gpu_group_zero::STRIDE;
+    let program = builder.add_program(kernel_program(LANGUAGE_MSL).unwrap());
+
+    let half = |value: f32| -> u16 {
+        let bits = value.to_bits();
+        (((bits >> 16) & 0x8000) | ((((bits >> 23) & 0xff) - 112) << 10) | ((bits >> 13) & 0x3ff))
+            as u16
+    };
+    let bits = |v: [f32; 4]| v.map(f32::to_bits);
+    let instances = [
+        [half(1.0), half(0.5), 0, half(1.0), 0, 0, 0, half(1.0)],
+        [half(-1.0), 0, 0, half(0.5), 0, 0, 0, half(1.0)],
+    ];
+    let pool = [[255u8, 128, 0, 255]; 8];
+    let inputs = GroupZeroInputs {
+        wind: [1.0f32, 0.0, 0.5, 0.25, 3.0].map(f32::to_bits),
+        material: [bits([1.0, 1.0, 0.0, 0.0]), bits([1.0, 0.0, 0.0, 0.0])],
+        object: [0.0f32, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0].map(f32::to_bits),
+        fade: [0, 0],
+        environment: [
+            bits([1.0, 0.0, 0.0, 0.0]),
+            bits([0.0, 1.0, 0.0, 0.0]),
+            bits([0.0, 0.0, 1.0, 0.0]),
+            bits([0.0, 0.0, 0.0, 1.0]),
+        ],
+        instances: &instances,
+        colour_frequency: 2,
+        batch_max: 255,
+        colour_pool: &pool,
+        positions: &POSITIONS,
+        normals: &[bits([0.0, 0.0, 1.0, 0.0]); 3],
+        weights: &[bits([0.0, 0.0, 0.0, 0.5]); 3],
+        indices: &[0, 1, 2],
+    };
+    let work = gpu_group_zero::prepare(&inputs, 1 << 20).unwrap();
+    let position = VertexBinding {
+        declaration: 0,
+        semantic: 1,
+        slot: 0,
+        format: 2,
+        components: 4,
+    };
+    let plan = work
+        .layout_plan(&[position], &AuxiliarySet::default(), 1)
+        .unwrap();
+    assert_eq!((plan.stride, plan.fields.as_slice()), (32, &[0][..]));
+
+    let setup = SetupReferences {
+        lists_enabled: true,
+        initial: [0; 3],
+        group_thirteen: 0,
+        group_fifteen: [0; 2],
+    };
+    let (steps, _) = traverse(&[item(2, 0x3f80_0000)], &setup, 3).unwrap();
+    let mut assembler = PacketAssembler::<OwnedDraw>::new();
+    for step in steps {
+        let Some(CallerWork::Prepare { item, .. }) = assembler
+            .apply(step, &main_binding(target), Some(1))
+            .unwrap()
+        else {
+            continue;
+        };
+        let produced = work.append(&mut builder, program);
+        let vb = builder.add_buffer(OwnedBuffer::Bytes(vertex_uniform.clone()));
+        let fb = builder.add_buffer(OwnedBuffer::Bytes(fragment_uniform.clone()));
+        assembler
+            .add_draw(OwnedDraw {
+                source_item: item as u64,
+                source_partition: 0,
+                obligations: 0,
+                pipeline,
+                index_count: produced.index_count,
+                vertices: produced.vertices,
+                indices: produced.indices,
+                buffers: vec![
+                    (0, 0, vb, 0, vertex_uniform.len() as u64),
+                    (1, 1, fb, 0, fragment_uniform.len() as u64),
+                ],
+                textures: Vec::new(),
+            })
+            .unwrap();
+    }
+    let passes = assembler.passes.len();
+    builder
+        .add_assembled(assembler, &vec![viewport(64, 64); passes])
+        .unwrap();
+    assert_eq!(builder.dispatches.len(), 1);
+    assert_eq!(validate(&builder), Ok(()));
+
+    // The validator checks the compute prefix: the produced buffer must be written exactly once,
+    // with its whole length, by a dispatch that matches the program's bindings.
+    let mut unwritten = builder.clone();
+    unwritten.dispatches.clear();
+    assert!(validate(&unwritten).is_err());
+    let mut partial = builder.clone();
+    partial.dispatches[0].bindings[4].3 -= 32;
+    assert!(validate(&partial).is_err());
+    let mut missing = builder.clone();
+    missing.dispatches[0].bindings.pop();
+    assert!(validate(&missing).is_err());
+    // Every shader language's program record validates the same way.
+    for language in [LANGUAGE_HLSL, LANGUAGE_SPIRV] {
+        let mut other = builder.clone();
+        other.programs[program as usize] = kernel_program(language).unwrap();
+        assert_eq!(validate(&other), Ok(()), "language {language}");
+    }
+}
