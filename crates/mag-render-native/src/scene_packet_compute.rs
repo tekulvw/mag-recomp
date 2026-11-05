@@ -418,7 +418,7 @@ pub(crate) mod tests {
         bad.produced.insert(0, 74);
         bad.dispatches[0].bindings[1].view.length = 74;
         assert_eq!(bad.validate(32, 1 << 20), Err(-1));
-        packet.buffers.push(Vec::new());
+        packet.buffers.push(Vec::new().into());
         packet.produced.insert(4, 72);
         let mut next = packet.dispatches[0].clone();
         next.bindings[0].view.buffer = 0;

@@ -1,7 +1,13 @@
 #include "../../../src/mag_render_scene_packet.h"
+#include <cstddef>
 #include <stddef.h>
 #include "mag_render_imported_image.h"
 static_assert(MAG_NATIVE_PROGRAM_STORED_DEPTH_AUX == MAG_RENDER_PROGRAM_STORED_DEPTH_AUX,"aux flag must match both public boundaries");
+// The handed-over packet owner record matches the Rust PacketOwner (repr(C)).
+static_assert(sizeof(MagRenderPacketOwner) == 8 + 2 * sizeof(void *) &&
+                  offsetof(MagRenderPacketOwner, userdata) == 8 &&
+                  offsetof(MagRenderPacketOwner, release) == 8 + sizeof(void *),
+              "packet owner layout");
 extern "C" int mag_native_packet_layout(uint32_t *out, uint32_t words) {
     const uint32_t expected[] = {
         sizeof(MagRenderPacketTextureSlot),

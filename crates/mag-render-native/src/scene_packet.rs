@@ -14,6 +14,7 @@ use crate::{
     },
     host_frame::HostFrame,
 };
+use mag_render::resources::SharedBytes;
 use mag_render::scene;
 use mag_render::sdk_compute::BindingLayout;
 pub use mag_render_abi::Attachment;
@@ -202,6 +203,8 @@ pub struct ImagePayload {
 pub enum ImageBytes {
     Owned(Vec<u8>),
     Resident(ResourceLease),
+    /// Borrowed from a handed-over packet (see PacketOwner).
+    Borrowed(SharedBytes),
 }
 impl core::ops::Deref for ImageBytes {
     type Target = [u8];
@@ -209,12 +212,117 @@ impl core::ops::Deref for ImageBytes {
         match self {
             Self::Owned(v) => v,
             Self::Resident(l) => l.bytes(),
+            Self::Borrowed(b) => b,
         }
     }
 }
 impl From<Vec<u8>> for ImageBytes {
     fn from(v: Vec<u8>) -> Self {
         Self::Owned(v)
+    }
+}
+/// The caller's promise for a handed-over packet: every borrowed byte range
+/// stays readable and unchanged until `release(userdata)`, which this side
+/// calls exactly once, from any thread, when nothing reads them any more.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct PacketOwner {
+    pub abi_version: u32,
+    pub struct_size: u32,
+    pub userdata: *mut core::ffi::c_void,
+    pub release: Option<unsafe extern "C" fn(*mut core::ffi::c_void)>,
+}
+/// One handed-over packet's owner; releases it when the last borrow drops.
+pub struct Handoff(PacketOwner);
+// The caller's contract makes its ranges readable from any thread and its
+// release callable from any thread.
+unsafe impl Send for Handoff {}
+unsafe impl Sync for Handoff {}
+impl Handoff {
+    /// # Safety
+    /// `owner` obeys the PacketOwner contract; it is released on drop.
+    pub unsafe fn adopt(owner: &PacketOwner) -> Result<std::sync::Arc<Self>, i32> {
+        if owner.abi_version != 1 || owner.struct_size as usize != size_of::<PacketOwner>() {
+            return Err(-1);
+        }
+        owner.release.ok_or(-1)?;
+        Ok(std::sync::Arc::new(Self(*owner)))
+    }
+}
+impl Drop for Handoff {
+    fn drop(&mut self) {
+        if let Some(release) = self.0.release {
+            unsafe { release(self.0.userdata) }
+        }
+    }
+}
+/// A borrowed range of a handed-over packet (immutable until release).
+struct Borrowed {
+    _owner: std::sync::Arc<Handoff>,
+    ptr: *const u8,
+    len: usize,
+}
+unsafe impl Send for Borrowed {}
+unsafe impl Sync for Borrowed {}
+impl AsRef<[u8]> for Borrowed {
+    fn as_ref(&self) -> &[u8] {
+        unsafe { std::slice::from_raw_parts(self.ptr, self.len) }
+    }
+}
+/// # Safety
+/// `ptr..ptr+len` is readable and unchanged for the owner's life.
+unsafe fn borrow(
+    owner: &std::sync::Arc<Handoff>,
+    ptr: *const u8,
+    len: usize,
+) -> Result<SharedBytes, i32> {
+    if len == 0 || ptr.is_null() {
+        return Err(-1);
+    }
+    Ok(SharedBytes::new(std::sync::Arc::new(Borrowed {
+        _owner: std::sync::Arc::clone(owner),
+        ptr,
+        len,
+    })))
+}
+/// The bytes of one packet buffer: copied, or borrowed from a handed-over
+/// packet (immutable). Reads are identical either way.
+#[derive(Clone)]
+pub enum PacketBytes {
+    Owned(Vec<u8>),
+    Borrowed(SharedBytes),
+}
+impl core::ops::Deref for PacketBytes {
+    type Target = [u8];
+    fn deref(&self) -> &[u8] {
+        match self {
+            Self::Owned(v) => v,
+            Self::Borrowed(b) => b,
+        }
+    }
+}
+impl core::ops::DerefMut for PacketBytes {
+    /// Owned bytes only (tests edit fixtures); borrowed bytes are immutable.
+    fn deref_mut(&mut self) -> &mut [u8] {
+        match self {
+            Self::Owned(v) => v,
+            Self::Borrowed(_) => panic!("borrowed packet bytes are immutable"),
+        }
+    }
+}
+impl From<Vec<u8>> for PacketBytes {
+    fn from(v: Vec<u8>) -> Self {
+        Self::Owned(v)
+    }
+}
+impl PartialEq<Vec<u8>> for PacketBytes {
+    fn eq(&self, other: &Vec<u8>) -> bool {
+        **self == other[..]
+    }
+}
+impl std::fmt::Debug for PacketBytes {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "PacketBytes({} bytes)", self.len())
     }
 }
 /// Packed upload bytes and layout of images whose caller supplied a nonzero
@@ -365,7 +473,7 @@ pub struct ScenePacket {
     pub flags: u32,
     pub programs: Vec<Program>,
     pub pipelines: Vec<Pipeline>,
-    pub buffers: Vec<Vec<u8>>,
+    pub buffers: Vec<PacketBytes>,
     pub produced: BTreeMap<u32, u64>,
     pub dispatches: Vec<compute::Dispatch>,
     pub images: Vec<ImagePayload>,
@@ -446,14 +554,14 @@ impl ScenePacket {
     /// Every declared synchronous range is valid and aligned. All bytes are copied;
     /// the host image and frame are pinned separately by worker admission.
     pub unsafe fn copy(d: &raw::Desc, max_draws: usize, max_bytes: u64) -> Result<Self, i32> {
-        unsafe { Self::copy_impl(d, max_draws, max_bytes, None, None, None) }.map_err(|status| {
-            packet_failure(d.source, "copy/v1", None, "copy-or-validation", status)
-        })
+        unsafe { Self::copy_impl(d, max_draws, max_bytes, None, None, None, None, true) }.map_err(
+            |status| packet_failure(d.source, "copy/v1", None, "copy-or-validation", status),
+        )
     }
     /// # Safety
     /// Same synchronous range contract as copy; V2 tables are complete and valid.
     pub unsafe fn copy_v2(d: &raw::DescV2, max_draws: usize, max_bytes: u64) -> Result<Self, i32> {
-        unsafe { Self::copy_v2_impl(d, max_draws, max_bytes, None) }.map_err(|status| {
+        unsafe { Self::copy_v2_impl(d, max_draws, max_bytes, None, None, true) }.map_err(|status| {
             packet_failure(d.base.source, "copy/v2", None, "copy-or-validation", status)
         })
     }
@@ -461,6 +569,18 @@ impl ScenePacket {
     /// All V3/V2 ranges remain readable through the synchronous copy. Source
     /// full-write flags require concrete producer coverage qualification.
     pub unsafe fn copy_v3(d: &raw::DescV3, max_draws: usize, max_bytes: u64) -> Result<Self, i32> {
+        unsafe { Self::copy_v3_with(d, max_draws, max_bytes, None, true) }
+    }
+    /// copy_v3, optionally borrowing the large byte ranges of a handed-over
+    /// packet instead of copying them, and optionally leaving the owned-packet
+    /// validation to the caller (the worker actor validates every admission).
+    unsafe fn copy_v3_with(
+        d: &raw::DescV3,
+        max_draws: usize,
+        max_bytes: u64,
+        handoff: Option<&std::sync::Arc<Handoff>>,
+        validate_here: bool,
+    ) -> Result<Self, i32> {
         checked_v3_layout()?;
         if d.abi_version != 3
             || d.struct_size as usize != size_of::<raw::DescV3>()
@@ -471,25 +591,40 @@ impl ScenePacket {
             return Err(-1);
         }
         let stencils = unsafe { slice(d.stencils, d.stencil_count as usize) }?.to_vec();
-        unsafe { Self::copy_v2_impl(&d.base, max_draws, max_bytes, Some(stencils)) }.map_err(
-            |status| {
-                packet_failure(
-                    d.base.base.source,
-                    "copy/v3",
-                    None,
-                    "copy-or-validation",
-                    status,
-                )
-            },
-        )
+        unsafe {
+            Self::copy_v2_impl(
+                &d.base,
+                max_draws,
+                max_bytes,
+                Some(stencils),
+                handoff,
+                validate_here,
+            )
+        }
+        .map_err(|status| {
+            packet_failure(
+                d.base.base.source,
+                "copy/v3",
+                None,
+                "copy-or-validation",
+                status,
+            )
+        })
     }
+    /// Copy an imported packet: requirement records are exact source-bound
+    /// external inputs. With a handover, role-0 buffer bytes and unkeyed
+    /// contiguous image texels are borrowed (everything else is copied).
+    /// Without `validate_here` the packet must be validated before any use
+    /// (the actor's admission does).
     /// # Safety
-    /// Same copy contract; requirement records are exact source-bound external inputs.
-    pub unsafe fn copy_imported_v3(
+    /// Same copy contract; borrowed ranges obey the Handoff's PacketOwner.
+    pub unsafe fn copy_imported_v3_with(
         d: &raw::DescV3,
         requirements: &[raw::ImageRequirement],
         max_draws: usize,
         max_bytes: u64,
+        handoff: Option<&std::sync::Arc<Handoff>>,
+        validate_here: bool,
     ) -> Result<Self, i32> {
         if requirements.len() > 1024 {
             return Err(-5);
@@ -497,16 +632,26 @@ impl ScenePacket {
         let metadata = (requirements.len() as u64)
             .checked_mul(size_of::<raw::ImageBinding>() as u64)
             .ok_or(-5)?;
-        let mut packet =
-            unsafe { Self::copy_v3(d, max_draws, max_bytes.checked_sub(metadata).ok_or(-5)?) }?;
+        // As before: the import-free packet, then the packet with its imports.
+        let mut packet = unsafe {
+            Self::copy_v3_with(
+                d,
+                max_draws,
+                max_bytes.checked_sub(metadata).ok_or(-5)?,
+                handoff,
+                validate_here,
+            )
+        }?;
         packet
             .imports
             .try_reserve_exact(requirements.len())
             .map_err(|_| -5)?;
         packet.imports.extend_from_slice(requirements);
-        packet.validate(max_draws, max_bytes).map_err(|status| {
-            packet_failure(packet.source, "copy/validate", None, "owned-packet", status)
-        })?;
+        if validate_here {
+            packet.validate(max_draws, max_bytes).map_err(|status| {
+                packet_failure(packet.source, "copy/validate", None, "owned-packet", status)
+            })?;
+        }
         Ok(packet)
     }
     unsafe fn copy_v2_impl(
@@ -514,6 +659,8 @@ impl ScenePacket {
         max_draws: usize,
         max_bytes: u64,
         stencils: Option<Vec<raw::StencilAttachment>>,
+        handoff: Option<&std::sync::Arc<Handoff>>,
+        validate_here: bool,
     ) -> Result<Self, i32> {
         checked_v2_layout()?;
         if d.abi_version != 2
@@ -572,9 +719,12 @@ impl ScenePacket {
                 Some(dimensions),
                 Some(viewports),
                 stencils,
+                handoff,
+                validate_here,
             )
         }
     }
+    #[allow(clippy::too_many_arguments)]
     unsafe fn copy_impl(
         d: &raw::Desc,
         max_draws: usize,
@@ -582,6 +732,8 @@ impl ScenePacket {
         dimensions: Option<Vec<Dimension>>,
         viewports: Option<Vec<Viewport>>,
         stencils: Option<Vec<raw::StencilAttachment>>,
+        handoff: Option<&std::sync::Arc<Handoff>>,
+        validate_here: bool,
     ) -> Result<Self, i32> {
         checked_layout()?;
         let cap = limits()?;
@@ -709,19 +861,28 @@ impl ScenePacket {
                 return Err(-1);
             }
             match b.role {
-                0 => buffers.push(unsafe {
-                    budget.copy(
-                        b.bytes.cast::<u8>(),
-                        usize::try_from(b.length).map_err(|_| -5)?,
-                    )
-                }?),
+                0 => {
+                    let length = usize::try_from(b.length).map_err(|_| -5)?;
+                    buffers.push(match handoff {
+                        // Charged exactly as the copy would be.
+                        Some(owner) => {
+                            budget.take(b.length)?;
+                            PacketBytes::Borrowed(unsafe {
+                                borrow(owner, b.bytes.cast::<u8>(), length)
+                            }?)
+                        }
+                        None => PacketBytes::Owned(unsafe {
+                            budget.copy(b.bytes.cast::<u8>(), length)
+                        }?),
+                    })
+                }
                 1 => {
                     if !b.bytes.is_null() {
                         return Err(-1);
                     }
                     budget.take(b.length)?;
                     produced.insert(index as u32, b.length);
-                    buffers.push(Vec::new());
+                    buffers.push(PacketBytes::Owned(Vec::new()));
                 }
                 _ => {
                     return Err(packet_failure(
@@ -853,8 +1014,24 @@ impl ScenePacket {
                     packed.resize(padded as usize, 0);
                     Ok(packed)
                 };
+                // A handed-over unkeyed image whose subresources already lie at
+                // their packed offsets in one range, ending 16-aligned, is
+                // borrowed as that range rather than packed into a copy.
+                let contiguous = || {
+                    let base = source[0].bytes.cast::<u8>() as usize;
+                    padded == offset
+                        && source.iter().zip(&layout.subresources).all(|(s, placed)| {
+                            s.bytes.cast::<u8>() as usize
+                                == base.wrapping_add(placed.offset as usize)
+                        })
+                };
                 if let Some(lease) = resident {
                     Some(ImageBytes::Resident(lease))
+                } else if let Some(owner) = handoff.filter(|_| key == 0 && contiguous()) {
+                    let length = usize::try_from(padded).map_err(|_| -5)?;
+                    Some(ImageBytes::Borrowed(unsafe {
+                        borrow(owner, source[0].bytes.cast::<u8>(), length)
+                    }?))
                 } else {
                     let packed = pack()?;
                     let table = (key != 0).then(keyed_images::table).flatten();
@@ -940,9 +1117,11 @@ impl ScenePacket {
             items,
             output: d.output_image,
         };
-        packet.validate(max_draws, max_bytes).map_err(|status| {
-            packet_failure(packet.source, "copy/validate", None, "owned-packet", status)
-        })?;
+        if validate_here {
+            packet.validate(max_draws, max_bytes).map_err(|status| {
+                packet_failure(packet.source, "copy/validate", None, "owned-packet", status)
+            })?;
+        }
         Ok(packet)
     }
 }
@@ -2136,7 +2315,12 @@ impl ScenePacket {
             max_bytes: max_bytes as usize,
         })
         .map_err(|error| packet_failure(self.source, "scene/resource-store", None, error, -5))?;
-        let mut lease = |b: &[u8], kind: &str, index: usize| -> Result<ResourceLease, i32> {
+        // Borrowed (handed-over) bytes become a snapshot without a copy.
+        let mut lease = |b: &[u8],
+                         shared: Option<&SharedBytes>,
+                         kind: &str,
+                         index: usize|
+         -> Result<ResourceLease, i32> {
             // Only texture image uploads are kept: those are the uploads the
             // device keeps resident, and they are stable across frames. The
             // concatenated per-frame vertex/index/uniform arenas change every
@@ -2147,17 +2331,21 @@ impl ScenePacket {
             {
                 return Ok(lease);
             }
-            let v = store
-                .apply(ResourceDelta::Create { bytes: b.to_vec() })
-                .map_err(|error| {
-                    packet_failure(
-                        self.source,
-                        "scene/resource-create",
-                        Some(index),
-                        (kind, b.len(), error),
-                        -5,
-                    )
-                })?;
+            let delta = match shared {
+                Some(bytes) => ResourceDelta::CreateShared {
+                    bytes: bytes.clone(),
+                },
+                None => ResourceDelta::Create { bytes: b.to_vec() },
+            };
+            let v = store.apply(delta).map_err(|error| {
+                packet_failure(
+                    self.source,
+                    "scene/resource-create",
+                    Some(index),
+                    (kind, b.len(), error),
+                    -5,
+                )
+            })?;
             let l = store.lease(v).map_err(|error| {
                 packet_failure(
                     self.source,
@@ -2203,7 +2391,17 @@ impl ScenePacket {
                 allocations.insert(index as u32, batch.allocate(length).map_err(|_| -5)?);
             } else {
                 sources[index] = Some(ReadSource::Upload(
-                    batch.upload(lease(b, "buffer", index)?).map_err(|_| -5)?,
+                    batch
+                        .upload(lease(
+                            b,
+                            match b {
+                                PacketBytes::Borrowed(shared) => Some(shared),
+                                PacketBytes::Owned(_) => None,
+                            },
+                            "buffer",
+                            index,
+                        )?)
+                        .map_err(|_| -5)?,
                 ));
             }
         }
@@ -2290,7 +2488,10 @@ impl ScenePacket {
                             layout.clone(),
                             match bytes {
                                 ImageBytes::Resident(resident) => resident.clone(),
-                                ImageBytes::Owned(owned) => lease(owned, "image", index)?,
+                                ImageBytes::Owned(owned) => lease(owned, None, "image", index)?,
+                                ImageBytes::Borrowed(shared) => {
+                                    lease(shared, Some(shared), "image", index)?
+                                }
                             },
                         )
                         .map_err(|error| {
@@ -2319,7 +2520,10 @@ impl ScenePacket {
                             image.desc,
                             match bytes {
                                 ImageBytes::Resident(resident) => resident.clone(),
-                                ImageBytes::Owned(owned) => lease(owned, "image", index)?,
+                                ImageBytes::Owned(owned) => lease(owned, None, "image", index)?,
+                                ImageBytes::Borrowed(shared) => {
+                                    lease(shared, Some(shared), "image", index)?
+                                }
                             },
                         )
                         .map_err(|error| {
@@ -3775,13 +3979,14 @@ pub(crate) mod packet_tests {
             produced: BTreeMap::new(),
             dispatches: Vec::new(),
             buffers: vec![
-                vec![0; 72],
+                vec![0; 72].into(),
                 [0u32, 1, 2]
                     .into_iter()
                     .flat_map(u32::to_ne_bytes)
-                    .collect(),
-                vec![1; 16],
-                vec![2; 16],
+                    .collect::<Vec<u8>>()
+                    .into(),
+                vec![1u8; 16].into(),
+                vec![2u8; 16].into(),
             ],
             images: vec![
                 ImagePayload {
@@ -4294,6 +4499,227 @@ pub(crate) mod packet_tests {
     thread_local! {
         /// Per-image content keys the next test copy passes as raw::Image::reserved.
         static TEST_IMAGE_KEYS: std::cell::RefCell<Vec<u32>> = const { std::cell::RefCell::new(Vec::new()) };
+        /// A handover (and whether to validate here) for copy_view's V3 copy.
+        static TEST_HANDOFF: std::cell::RefCell<Option<(std::sync::Arc<Handoff>, bool)>> =
+            const { std::cell::RefCell::new(None) };
+        /// The V3 copy's limits (default the fixtures' 32 draws, 1 MiB).
+        static TEST_LIMITS: std::cell::RefCell<(usize, u64)> = const { std::cell::RefCell::new((32, 1 << 20)) };
+    }
+    fn copy_view_limits(packet: &ScenePacket, limits: (usize, u64)) -> ScenePacket {
+        TEST_LIMITS.with(|l| *l.borrow_mut() = limits);
+        let copy = copy_view(packet);
+        TEST_LIMITS.with(|l| *l.borrow_mut() = (32, 1 << 20));
+        copy
+    }
+    fn copy_view_handed_over_limits(
+        packet: &ScenePacket,
+        owner: std::sync::Arc<Handoff>,
+        limits: (usize, u64),
+    ) -> ScenePacket {
+        TEST_LIMITS.with(|l| *l.borrow_mut() = limits);
+        let copy = copy_view_handed_over(packet, owner, false);
+        TEST_LIMITS.with(|l| *l.borrow_mut() = (32, 1 << 20));
+        copy
+    }
+    fn copy_view_handed_over(
+        packet: &ScenePacket,
+        owner: std::sync::Arc<Handoff>,
+        validate_here: bool,
+    ) -> ScenePacket {
+        TEST_HANDOFF.with(|h| *h.borrow_mut() = Some((owner, validate_here)));
+        let copy = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| copy_view(packet)));
+        TEST_HANDOFF.with(|h| h.borrow_mut().take());
+        copy.unwrap()
+    }
+    unsafe extern "C" fn count_release(userdata: *mut core::ffi::c_void) {
+        unsafe { &*userdata.cast::<std::sync::atomic::AtomicUsize>() }
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+    fn counting_owner(releases: &'static std::sync::atomic::AtomicUsize) -> PacketOwner {
+        PacketOwner {
+            abi_version: 1,
+            struct_size: size_of::<PacketOwner>() as u32,
+            userdata: (releases as *const std::sync::atomic::AtomicUsize)
+                .cast_mut()
+                .cast(),
+            release: Some(count_release),
+        }
+    }
+    /// The fixture as a V3 packet (one viewport, an absent stencil).
+    fn v3_fixture() -> ScenePacket {
+        let mut packet = fixture();
+        packet.viewports = Some(vec![Viewport {
+            x: 0.,
+            y: 0.,
+            width: 2.,
+            height: 2.,
+            min_depth: 0.,
+            max_depth: 1.,
+            scissor_x: 0,
+            scissor_y: 0,
+            scissor_width: 2,
+            scissor_height: 2,
+            known_fields: 7,
+            reserved: 0,
+        }]);
+        packet.stencils = Some(vec![raw::StencilAttachment {
+            image: u32::MAX,
+            load: 0,
+            store: 0,
+            clear_value: 0,
+            flags: 0,
+            reserved: 0,
+        }]);
+        // A 2x2 texture: 16 bytes, already the packed 16-aligned layout.
+        packet.images[1].desc.width = 2;
+        packet.images[1].desc.height = 2;
+        packet.images[1].bytes = Some((0..16u8).collect::<Vec<u8>>().into());
+        packet
+    }
+    #[test]
+    fn handed_over_packet_is_borrowed_until_its_last_upload_snapshot_drops() {
+        use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
+        static RELEASES: AtomicUsize = AtomicUsize::new(0);
+        let packet = v3_fixture();
+        let owned = copy_view(&packet);
+        let handoff = unsafe { Handoff::adopt(&counting_owner(&RELEASES)) }.unwrap();
+        let borrowed = copy_view_handed_over(&packet, handoff, true);
+        // The caller's own bytes, not a copy, with identical contents.
+        for (index, b) in borrowed.buffers.iter().enumerate() {
+            assert_eq!(&b[..], &owned.buffers[index][..]);
+            if borrowed.produced.contains_key(&(index as u32)) {
+                continue;
+            }
+            assert!(matches!(b, PacketBytes::Borrowed(_)), "buffer {index}");
+            assert_eq!(b.as_ptr(), packet.buffers[index].as_ptr(), "buffer {index}");
+        }
+        let mut borrowed_images = 0;
+        for (index, image) in borrowed.images.iter().enumerate() {
+            let (Some(b), Some(o)) = (&image.bytes, &owned.images[index].bytes) else {
+                continue;
+            };
+            assert_eq!(&b[..], &o[..]);
+            // Borrowed exactly when the caller's range already is the packed,
+            // 16-aligned layout; otherwise packed into a copy as before.
+            let aligned = packet.images[index].bytes.as_ref().map(|p| p.len()) == Some(o.len());
+            assert_eq!(
+                matches!(b, ImageBytes::Borrowed(_)),
+                aligned,
+                "image {index}: {} -> {}",
+                packet.images[index].bytes.as_ref().map_or(0, |p| p.len()),
+                o.len()
+            );
+            borrowed_images += usize::from(aligned);
+        }
+        assert!(
+            borrowed_images > 0,
+            "the fixture borrows at least one image"
+        );
+        assert_eq!(RELEASES.load(SeqCst), 0);
+        // The prepared scene's upload snapshots reference the same bytes.
+        let prepared = borrowed
+            .prepare(&Catalog(&borrowed), &[1], 32, 1 << 20)
+            .unwrap();
+        let reference = owned.prepare(&Catalog(&owned), &[1], 32, 1 << 20).unwrap();
+        drop(borrowed);
+        assert_eq!(RELEASES.load(SeqCst), 0, "upload snapshots still borrow");
+        let (commands, leases) = prepared.into_submission();
+        let (_, expected) = reference.into_submission();
+        assert_eq!(leases.len(), expected.len());
+        for (l, e) in leases.iter().zip(&expected) {
+            assert_eq!(l.bytes(), e.bytes());
+        }
+        assert!(
+            leases
+                .iter()
+                .any(|l| l.bytes().as_ptr() == packet.buffers[0].as_ptr())
+        );
+        drop(commands);
+        drop(leases);
+        assert_eq!(
+            RELEASES.load(SeqCst),
+            1,
+            "released exactly once, after the last borrow"
+        );
+    }
+    #[test]
+    fn copy_left_to_the_worker_keeps_every_validation_refusal() {
+        use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
+        static RELEASES: AtomicUsize = AtomicUsize::new(0);
+        let mut packet = v3_fixture();
+        packet.stencils.as_mut().unwrap()[0].clear_value = 256; // invalid
+        assert!(packet.validate(32, 1 << 20).is_err());
+        let handoff = unsafe { Handoff::adopt(&counting_owner(&RELEASES)) }.unwrap();
+        // Not validated on the copying thread, so the copy succeeds ...
+        let copied = copy_view_handed_over(&packet, handoff, false);
+        // ... and the full validation (the actor's admission) still refuses it.
+        assert_eq!(copied.validate(32, 1 << 20), packet.validate(32, 1 << 20));
+        drop(copied);
+        assert_eq!(RELEASES.load(SeqCst), 1);
+    }
+    /// Measurement only: `cargo test --release -- --ignored handover_cost`.
+    #[test]
+    #[ignore]
+    fn handover_cost() {
+        use std::time::Instant;
+        let mut packet = v3_fixture();
+        packet.buffers[0] = vec![0u8; 32 << 20].into();
+        let limits = (32usize, 1u64 << 30);
+        let time = |f: &mut dyn FnMut()| {
+            let start = Instant::now();
+            for _ in 0..20 {
+                f()
+            }
+            start.elapsed().as_secs_f64() * 1e3 / 20.0
+        };
+        let copy_ms = time(&mut || {
+            let p = copy_view_limits(&packet, limits);
+            p.validate(limits.0, limits.1).unwrap();
+            std::hint::black_box(
+                p.prepare(&Catalog(&packet), &[1], limits.0, limits.1)
+                    .unwrap(),
+            );
+        });
+        static RELEASES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let handoff_ms = time(&mut || {
+            let owner = unsafe { Handoff::adopt(&counting_owner(&RELEASES)) }.unwrap();
+            let p = copy_view_handed_over_limits(&packet, owner, limits);
+            p.validate(limits.0, limits.1).unwrap();
+            std::hint::black_box(
+                p.prepare(&Catalog(&packet), &[1], limits.0, limits.1)
+                    .unwrap(),
+            );
+        });
+        eprintln!(
+            "32 MiB buffer: copy+validate x2 (owned) {copy_ms:.2} ms, handover+validate once {handoff_ms:.2} ms"
+        );
+    }
+    #[test]
+    fn packet_owner_layout_matches_the_c_header() {
+        assert_eq!(size_of::<PacketOwner>(), 8 + 2 * size_of::<usize>());
+        assert_eq!(std::mem::offset_of!(PacketOwner, userdata), 8);
+        assert_eq!(
+            std::mem::offset_of!(PacketOwner, release),
+            8 + size_of::<usize>()
+        );
+    }
+    #[test]
+    fn owner_records_are_checked_and_released_exactly_once() {
+        use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
+        static RELEASES: AtomicUsize = AtomicUsize::new(0);
+        let mut owner = counting_owner(&RELEASES);
+        owner.abi_version = 2;
+        assert!(unsafe { Handoff::adopt(&owner) }.is_err());
+        owner.abi_version = 1;
+        owner.release = None;
+        assert!(unsafe { Handoff::adopt(&owner) }.is_err());
+        assert_eq!(RELEASES.load(SeqCst), 0);
+        let handoff = unsafe { Handoff::adopt(&counting_owner(&RELEASES)) }.unwrap();
+        let second = std::sync::Arc::clone(&handoff);
+        drop(handoff);
+        assert_eq!(RELEASES.load(SeqCst), 0);
+        std::thread::spawn(move || drop(second)).join().unwrap();
+        assert_eq!(RELEASES.load(SeqCst), 1);
     }
     fn copy_view_keyed(packet: &ScenePacket, keys: &[u32]) -> ScenePacket {
         TEST_IMAGE_KEYS.with(|k| *k.borrow_mut() = keys.to_vec());
@@ -4529,7 +4955,14 @@ pub(crate) mod packet_tests {
                     stencil_count: stencils.len() as u32,
                     reserved: 0,
                 };
-                unsafe { ScenePacket::copy_v3(&v3, 32, 1 << 20) }.unwrap()
+                let (draws, bytes) = TEST_LIMITS.with(|l| *l.borrow());
+                match TEST_HANDOFF.with(|h| h.borrow().clone()) {
+                    Some((owner, validate)) => unsafe {
+                        ScenePacket::copy_v3_with(&v3, draws, bytes, Some(&owner), validate)
+                    },
+                    None => unsafe { ScenePacket::copy_v3(&v3, draws, bytes) },
+                }
+                .unwrap()
             } else {
                 unsafe { ScenePacket::copy_v2(&desc, 32, 1 << 20) }.unwrap()
             }

@@ -155,3 +155,93 @@ fn classes_of_representative_methods() {
     }
     assert!(!C::Draw.is_state() && !C::Clear.is_state() && !C::NoOperation.is_state());
 }
+
+#[test]
+fn context_dma_bindings_are_state_except_notify_and_synchronisation() {
+    for (method, class) in [
+        (0x0194, MethodClass::Attachment), // colour A
+        (0x018c, MethodClass::Attachment), // colour B
+        (0x01b4, MethodClass::Attachment), // colour C
+        (0x01b8, MethodClass::Attachment), // colour D
+        (0x0198, MethodClass::Attachment), // zeta
+        (0x0184, MethodClass::TextureBinding),
+        (0x0188, MethodClass::TextureBinding),
+        (0x019c, MethodClass::VertexInput),
+        (0x01a0, MethodClass::VertexInput),
+    ] {
+        assert_eq!(classify(method), Some(class), "{method:#06x}");
+    }
+    // The other context DMAs are bindings too.
+    for method in [0x0180, 0x0190, 0x01a4, 0x01a8, 0x01ac, 0x01b0] {
+        assert_eq!(
+            classify(method),
+            Some(MethodClass::Attachment),
+            "{method:#06x}"
+        );
+    }
+    // A surface setup replays its context DMAs with the surface words.
+    let writes = [
+        w(0x0194, 0xfeed_0000),
+        w(0x0198, 0xfeed_0001),
+        w(0x0200, 0x0101),
+    ];
+    let p = encode_state_preamble(&writes, ClassSet::all_state(), 64).unwrap();
+    assert_eq!(
+        p.words,
+        [
+            (2 << 18) | 0x0194,
+            0xfeed_0000,
+            0xfeed_0001,
+            0x0004_0200,
+            0x0101,
+            RETURN
+        ]
+    );
+}
+
+#[test]
+fn the_method_table_classes_and_its_array_ends() {
+    for (method, class) in [
+        (0x0b40, MethodClass::Raster),      // texture coordinate control 0
+        (0x0b7c, MethodClass::Raster),      // its last element
+        (0x08d4, MethodClass::Raster),      // fog parameter 1
+        (0x1480, MethodClass::Raster),      // polygon stipple pattern
+        (0x1ea4, MethodClass::Raster),      // zcull control 0
+        (0x0a80, MethodClass::VertexInput), // scaled immediate data, attribute 0
+        (0x1cfc, MethodClass::VertexInput), // 4f immediate data, attribute 15
+        (0x1e7c, MethodClass::VertexInput), // 1f immediate data, attribute 15
+        (0x1db0, MethodClass::VertexInput), // restart index
+        (0x097c, MethodClass::TextureBinding),
+        (0x03c0, MethodClass::TextureBinding),
+        (0x1e94, MethodClass::Program),
+        (0x1fd4, MethodClass::Program),
+        (0x1d80, MethodClass::Attachment),
+        (0x1824, MethodClass::Draw),
+        (0x1438, MethodClass::Clear),
+        (0x0110, MethodClass::Synchronization),
+        (0x1800, MethodClass::Synchronization),
+    ] {
+        assert_eq!(classify(method), Some(class), "{method:#06x}");
+    }
+    // Outside the table.
+    for method in [0x0004, 0x03a4, 0x0400, 0x2000] {
+        assert_eq!(classify(method), None, "{method:#06x}");
+    }
+}
+
+#[test]
+fn every_unclassified_method_is_listed_once_with_its_count() {
+    let writes = [
+        w(0x0004, 0),
+        w(0x0a74, 1),
+        w(0x03a4, 0),
+        w(0x0004, 1),
+        MethodWrite {
+            subchannel: 3,
+            method: 0x0004,
+            value: 0,
+        },
+    ];
+    assert_eq!(unclassified_methods(&writes), [(0x0004, 2), (0x03a4, 1)]);
+    assert!(unclassified_methods(&[w(0x0a74, 1)]).is_empty());
+}

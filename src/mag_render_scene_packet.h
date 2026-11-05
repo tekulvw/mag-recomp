@@ -294,6 +294,28 @@ int mag_render_client_worker_commit_scene_subgraph(uint64_t,const MagRenderScene
  * cancelled before return); zero accepted; positive indeterminate. No GPU
  * completion, presentation or original CPU publication is implied. */
 int mag_render_client_worker_submit_scene_subgraph_imported_v3(uint64_t,const MagRenderScenePacketV3Desc*,const MagRenderPacketImageRequirement*,uint32_t,const MagRenderPacketImageBinding*,uint32_t,MagRenderClientReceipt*);
+/* Handed-over packets. With MAG_RENDER_PACKET_HANDOFF=1 (default off) the
+ * worker borrows the packet's large byte ranges -- role-0 buffer bytes and
+ * the texels of unkeyed images whose subresources already lie at their packed
+ * 16-aligned offsets in one range -- instead of copying them on the calling
+ * thread, and uploads from them. Everything else is copied as before. The
+ * caller keeps every range readable and unchanged until release(userdata),
+ * which the worker calls exactly once, from any thread, possibly before
+ * return: in every outcome, including refusal, a disabled handover (then
+ * after an ordinary copy) and a mismatched record (-1). A null owner or one
+ * without release is -1 with nothing to release. Status meaning is that of
+ * the plain entries. */
+typedef struct MagRenderPacketOwner {
+    uint32_t abi_version, struct_size; /* 1, sizeof(MagRenderPacketOwner) */
+    void *userdata;
+    void (*release)(void *userdata);
+} MagRenderPacketOwner;
+int mag_render_client_worker_prepare_scene_imported_v3_owned(uint64_t,const MagRenderScenePacketV3Desc*,const MagRenderPacketImageRequirement*,uint32_t,const MagRenderPacketOwner*,MagRenderSceneAdmission*);
+int mag_render_client_worker_submit_scene_subgraph_imported_v3_owned(uint64_t,const MagRenderScenePacketV3Desc*,const MagRenderPacketImageRequirement*,uint32_t,const MagRenderPacketImageBinding*,uint32_t,const MagRenderPacketOwner*,MagRenderClientReceipt*);
+/* MAG_RENDER_VALIDATE_ON_WORKER=1 (default off): the calling thread copies an
+ * imported packet without validating it; the worker validates it once, at
+ * admission, which the caller still waits for. A refused packet is refused
+ * before any effect, as before. */
 /* Uses the SAME persistent worker/session/SceneDevice and genuine ticket path.
  * Negative is definitely uncommitted; caller owns early frame cancellation.
  * Positive indeterminate must not be replayed. Physical present remains separate.
