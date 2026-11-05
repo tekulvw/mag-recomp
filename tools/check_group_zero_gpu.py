@@ -7,10 +7,14 @@ tolerance of group-zero-deformation.md. This script compiles a small Metal runne
 the kernel for every fixture and reports the largest position error, absolute and as a
 fraction of the tolerance. Colour rows must match bit for bit and w must be exactly 1.
 
-Only Metal on macOS is implemented here; Vulkan and D3D12 execution remain pending. Exit codes:
-0 every fixture within tolerance, 1 a mismatch, 2 unsupported host or tool failure.
+Metal runs on macOS; Vulkan runs anywhere a C compiler, the Vulkan headers and loader, and a device
+with a compute queue are present, dispatching the kernel's SPIR-V (with the Khronos validation layer
+when installed; any validation error fails the run). D3D12 execution remains pending. Exit codes:
+0 every fixture within tolerance, 1 a mismatch or validation error, 2 unsupported host (no backend
+available: skipped) or tool failure.
 """
 import argparse
+import os
 import json
 import math
 import platform
@@ -78,6 +82,162 @@ int main(int argc, char **argv) {
 }
 """
 
+VULKAN_RUNNER = r"""
+/* Vulkan runner: FIXTURE_DIR ENTRY GX GY GZ VERTEX_COUNT. Bindings follow group_zero.wgsl: 0 uniform
+ * parameters, 1-3 storage read (instances, vertices, pool), 4 storage read_write output. Enables
+ * VK_LAYER_KHRONOS_validation when present. Exit 0 ok, 3 validation errors, 4 no Vulkan, 2 other. */
+#include <vulkan/vulkan.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+static int g_validation_errors;
+static VKAPI_ATTR VkBool32 VKAPI_CALL on_message(VkDebugUtilsMessageSeverityFlagBitsEXT severity,
+    VkDebugUtilsMessageTypeFlagsEXT type, const VkDebugUtilsMessengerCallbackDataEXT* data, void* user)
+{
+    (void)type; (void)user;
+    if (severity >= VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) {
+        fprintf(stderr, "[validation %s] %s\n",
+                severity >= VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT ? "error" : "warning", data->pMessage);
+        if (severity >= VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) g_validation_errors++;
+    }
+    return VK_FALSE;
+}
+static void* load(const char* dir, const char* name, size_t* size)
+{
+    char path[4096]; snprintf(path, sizeof path, "%s/%s", dir, name);
+    FILE* f = fopen(path, "rb"); if (!f) { fprintf(stderr, "missing %s\n", path); exit(2); }
+    fseek(f, 0, SEEK_END); *size = (size_t)ftell(f); fseek(f, 0, SEEK_SET);
+    void* p = malloc(*size ? *size : 1); if (*size && fread(p, 1, *size, f) != *size) exit(2); fclose(f); return p;
+}
+#define CHECK(x) do { VkResult r_ = (x); if (r_ != VK_SUCCESS) { fprintf(stderr, "%s failed: %d\n", #x, r_); return 2; } } while (0)
+
+int main(int argc, char** argv)
+{
+    if (argc != 7) return 2;
+    const char* dir = argv[1]; const char* entry = argv[2];
+    uint32_t gx = (uint32_t)atoi(argv[3]), gy = (uint32_t)atoi(argv[4]), gz = (uint32_t)atoi(argv[5]);
+    size_t count = (size_t)atoll(argv[6]);
+
+    uint32_t nlayers = 0; vkEnumerateInstanceLayerProperties(&nlayers, NULL);
+    VkLayerProperties* layers = calloc(nlayers + 1, sizeof *layers); vkEnumerateInstanceLayerProperties(&nlayers, layers);
+    int have_validation = 0;
+    for (uint32_t i = 0; i < nlayers; ++i) if (!strcmp(layers[i].layerName, "VK_LAYER_KHRONOS_validation")) have_validation = 1;
+    const char* layer = "VK_LAYER_KHRONOS_validation"; const char* ext = VK_EXT_DEBUG_UTILS_EXTENSION_NAME;
+    VkApplicationInfo app = {VK_STRUCTURE_TYPE_APPLICATION_INFO, NULL, "group-zero-check", 1, NULL, 0, VK_API_VERSION_1_1};
+    VkInstanceCreateInfo ici = {VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO, NULL, 0, &app,
+        have_validation ? 1u : 0u, have_validation ? &layer : NULL, have_validation ? 1u : 0u, have_validation ? &ext : NULL};
+    VkInstance instance;
+    if (vkCreateInstance(&ici, NULL, &instance) != VK_SUCCESS) { fprintf(stderr, "no Vulkan instance\n"); return 4; }
+    VkDebugUtilsMessengerEXT messenger = VK_NULL_HANDLE;
+    if (have_validation) {
+        PFN_vkCreateDebugUtilsMessengerEXT create = (PFN_vkCreateDebugUtilsMessengerEXT)vkGetInstanceProcAddr(instance, "vkCreateDebugUtilsMessengerEXT");
+        VkDebugUtilsMessengerCreateInfoEXT mci = {VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT, NULL, 0,
+            VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT,
+            VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT, on_message, NULL};
+        if (create) CHECK(create(instance, &mci, NULL, &messenger));
+    }
+    uint32_t ndev = 0; vkEnumeratePhysicalDevices(instance, &ndev, NULL);
+    if (!ndev) { fprintf(stderr, "no Vulkan device\n"); return 4; }
+    VkPhysicalDevice* devs = calloc(ndev, sizeof *devs); vkEnumeratePhysicalDevices(instance, &ndev, devs);
+    VkPhysicalDevice phys = devs[0];
+    for (uint32_t i = 0; i < ndev; ++i) { VkPhysicalDeviceProperties p; vkGetPhysicalDeviceProperties(devs[i], &p);
+        if (p.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU) { phys = devs[i]; break; } }
+    VkPhysicalDeviceProperties props; vkGetPhysicalDeviceProperties(phys, &props);
+    uint32_t nq = 0; vkGetPhysicalDeviceQueueFamilyProperties(phys, &nq, NULL);
+    VkQueueFamilyProperties* qf = calloc(nq, sizeof *qf); vkGetPhysicalDeviceQueueFamilyProperties(phys, &nq, qf);
+    uint32_t family = UINT32_MAX;
+    for (uint32_t i = 0; i < nq; ++i) if (qf[i].queueFlags & VK_QUEUE_COMPUTE_BIT) { family = i; break; }
+    if (family == UINT32_MAX) { fprintf(stderr, "no Vulkan compute queue\n"); return 4; }
+    float prio = 1.0f;
+    VkDeviceQueueCreateInfo qci = {VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO, NULL, 0, family, 1, &prio};
+    VkDeviceCreateInfo dci = {VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO, NULL, 0, 1, &qci, 0, NULL, 0, NULL, NULL};
+    VkDevice device; CHECK(vkCreateDevice(phys, &dci, NULL, &device));
+    VkQueue queue; vkGetDeviceQueue(device, family, 0, &queue);
+    VkPhysicalDeviceMemoryProperties mem; vkGetPhysicalDeviceMemoryProperties(phys, &mem);
+
+    const char* names[4] = {"parameters.bin", "instances.bin", "vertices.bin", "pool.bin"};
+    VkBuffer buffers[5]; VkDeviceMemory memories[5]; VkDeviceSize sizes[5]; void* mapped[5];
+    for (int i = 0; i < 5; ++i) {
+        size_t n = 0; void* data = i < 4 ? load(dir, names[i], &n) : NULL;
+        if (i == 4) n = count * 32;
+        sizes[i] = n ? n : 16;
+        VkBufferCreateInfo bci = {VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, NULL, 0, sizes[i],
+            i == 0 ? VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT : VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VK_SHARING_MODE_EXCLUSIVE, 0, NULL};
+        CHECK(vkCreateBuffer(device, &bci, NULL, &buffers[i]));
+        VkMemoryRequirements req; vkGetBufferMemoryRequirements(device, buffers[i], &req);
+        uint32_t type = UINT32_MAX;
+        for (uint32_t t = 0; t < mem.memoryTypeCount; ++t)
+            if ((req.memoryTypeBits & (1u << t)) && (mem.memoryTypes[t].propertyFlags &
+                (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) ==
+                (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) { type = t; break; }
+        if (type == UINT32_MAX) { fprintf(stderr, "no host-visible coherent memory\n"); return 2; }
+        VkMemoryAllocateInfo mai = {VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, NULL, req.size, type};
+        CHECK(vkAllocateMemory(device, &mai, NULL, &memories[i]));
+        CHECK(vkBindBufferMemory(device, buffers[i], memories[i], 0));
+        CHECK(vkMapMemory(device, memories[i], 0, VK_WHOLE_SIZE, 0, &mapped[i]));
+        memset(mapped[i], 0, sizes[i]);
+        if (data) { memcpy(mapped[i], data, n); free(data); }
+    }
+    size_t spv_size = 0; uint32_t* spv = load(dir, "shader.spv", &spv_size);
+    VkShaderModuleCreateInfo smci = {VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO, NULL, 0, spv_size, spv};
+    VkShaderModule module; CHECK(vkCreateShaderModule(device, &smci, NULL, &module));
+    VkDescriptorSetLayoutBinding b[5];
+    for (int i = 0; i < 5; ++i) b[i] = (VkDescriptorSetLayoutBinding){(uint32_t)i,
+        i == 0 ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, NULL};
+    VkDescriptorSetLayoutCreateInfo dslci = {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO, NULL, 0, 5, b};
+    VkDescriptorSetLayout dsl; CHECK(vkCreateDescriptorSetLayout(device, &dslci, NULL, &dsl));
+    VkPipelineLayoutCreateInfo plci = {VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO, NULL, 0, 1, &dsl, 0, NULL};
+    VkPipelineLayout layout; CHECK(vkCreatePipelineLayout(device, &plci, NULL, &layout));
+    VkComputePipelineCreateInfo cpci = {VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO, NULL, 0,
+        {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, NULL, 0, VK_SHADER_STAGE_COMPUTE_BIT, module, entry, NULL}, layout, VK_NULL_HANDLE, 0};
+    VkPipeline pipeline; CHECK(vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &cpci, NULL, &pipeline));
+    VkDescriptorPoolSize ps[2] = {{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1}, {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 4}};
+    VkDescriptorPoolCreateInfo dpci = {VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO, NULL, 0, 1, 2, ps};
+    VkDescriptorPool pool; CHECK(vkCreateDescriptorPool(device, &dpci, NULL, &pool));
+    VkDescriptorSetAllocateInfo dsai = {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO, NULL, pool, 1, &dsl};
+    VkDescriptorSet set; CHECK(vkAllocateDescriptorSets(device, &dsai, &set));
+    VkDescriptorBufferInfo infos[5]; VkWriteDescriptorSet writes[5];
+    for (int i = 0; i < 5; ++i) {
+        infos[i] = (VkDescriptorBufferInfo){buffers[i], 0, VK_WHOLE_SIZE};
+        writes[i] = (VkWriteDescriptorSet){VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, NULL, set, (uint32_t)i, 0, 1,
+            b[i].descriptorType, NULL, &infos[i], NULL};
+    }
+    vkUpdateDescriptorSets(device, 5, writes, 0, NULL);
+    VkCommandPoolCreateInfo cpi = {VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO, NULL, 0, family};
+    VkCommandPool cmdpool; CHECK(vkCreateCommandPool(device, &cpi, NULL, &cmdpool));
+    VkCommandBufferAllocateInfo cbai = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO, NULL, cmdpool, VK_COMMAND_BUFFER_LEVEL_PRIMARY, 1};
+    VkCommandBuffer cmd; CHECK(vkAllocateCommandBuffers(device, &cbai, &cmd));
+    VkCommandBufferBeginInfo cbbi = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO, NULL, VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT, NULL};
+    CHECK(vkBeginCommandBuffer(cmd, &cbbi));
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, layout, 0, 1, &set, 0, NULL);
+    vkCmdDispatch(cmd, gx, gy, gz);
+    VkMemoryBarrier mb = {VK_STRUCTURE_TYPE_MEMORY_BARRIER, NULL, VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_HOST_READ_BIT};
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 1, &mb, 0, NULL, 0, NULL);
+    CHECK(vkEndCommandBuffer(cmd));
+    VkSubmitInfo si = {VK_STRUCTURE_TYPE_SUBMIT_INFO, NULL, 0, NULL, NULL, 1, &cmd, 0, NULL};
+    CHECK(vkQueueSubmit(queue, 1, &si, VK_NULL_HANDLE));
+    CHECK(vkQueueWaitIdle(queue));
+    char path[4096]; snprintf(path, sizeof path, "%s/gpu.bin", dir);
+    FILE* f = fopen(path, "wb"); fwrite(mapped[4], 1, count * 32, f); fclose(f);
+    vkDestroyCommandPool(device, cmdpool, NULL);
+    vkDestroyDescriptorPool(device, pool, NULL);
+    vkDestroyPipeline(device, pipeline, NULL);
+    vkDestroyPipelineLayout(device, layout, NULL);
+    vkDestroyDescriptorSetLayout(device, dsl, NULL);
+    vkDestroyShaderModule(device, module, NULL);
+    for (int i = 0; i < 5; ++i) { vkUnmapMemory(device, memories[i]); vkDestroyBuffer(device, buffers[i], NULL); vkFreeMemory(device, memories[i], NULL); }
+    vkDestroyDevice(device, NULL);
+    if (messenger) { PFN_vkDestroyDebugUtilsMessengerEXT destroy = (PFN_vkDestroyDebugUtilsMessengerEXT)vkGetInstanceProcAddr(instance, "vkDestroyDebugUtilsMessengerEXT"); if (destroy) destroy(instance, messenger, NULL); }
+    vkDestroyInstance(instance, NULL);
+    printf("%s | driver %u.%u.%u | validation %s | validation_errors %d\n", props.deviceName,
+           VK_VERSION_MAJOR(props.driverVersion), VK_VERSION_MINOR(props.driverVersion), VK_VERSION_PATCH(props.driverVersion),
+           have_validation ? "on" : "unavailable", g_validation_errors);
+    return g_validation_errors ? 3 : 0;
+}
+"""
+
 
 def compare(directory):
     expected = (directory / "expected.bin").read_bytes()
@@ -109,32 +269,77 @@ def compare(directory):
             "failures": failures}
 
 
+def build_runner(backend, output_dir):
+    """Compile the runner for `backend`; None (with a reason) when this host cannot."""
+    if backend == "metal":
+        clang = shutil.which("clang")
+        if platform.system() != "Darwin" or not clang:
+            return None, "Metal execution needs macOS and clang"
+        source, runner = output_dir / "runner.m", output_dir / "runner-metal"
+        source.write_text(RUNNER)
+        command = [clang, "-fobjc-arc", "-O2", str(source), "-o", str(runner),
+                   "-framework", "Foundation", "-framework", "Metal"]
+    else:
+        cc = os.environ.get("CC") or shutil.which("cc") or shutil.which("clang")
+        if not cc:
+            return None, "a C compiler is required for Vulkan execution"
+        source, runner = output_dir / "runner-vulkan.c", output_dir / "runner-vulkan"
+        source.write_text(VULKAN_RUNNER)
+        command = [cc, "-O2", "-std=c11", str(source), "-o", str(runner), "-lvulkan"]
+    built = subprocess.run(command, capture_output=True, text=True)
+    if built.returncode:
+        return None, f"cannot build the {backend} runner: {built.stderr.strip()[-400:]}"
+    return runner, None
+
+
+def run_fixture(backend, runner, directory):
+    """Dispatch one fixture; returns (device text, validation-error flag) or raises Skip."""
+    if backend == "metal":
+        run = subprocess.run([str(runner), str(directory)], check=True, capture_output=True, text=True)
+        return run.stdout.strip(), False
+    meta = json.loads((directory / "meta.json").read_text())
+    run = subprocess.run([str(runner), str(directory), meta["spirv_entry"], *map(str, meta["groups"]),
+                          str(meta["vertex_count"])], capture_output=True, text=True)
+    sys.stderr.write(run.stderr)
+    if run.returncode == 4:
+        raise Skip(run.stderr.strip() or "no Vulkan device")
+    if run.returncode not in (0, 3):
+        raise RuntimeError(f"{directory.name}: Vulkan runner exit {run.returncode}")
+    return run.stdout.strip(), run.returncode == 3
+
+
+class Skip(Exception):
+    pass
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--output-dir", type=Path, default=ROOT / "build/group-zero-gpu")
     parser.add_argument("--report", type=Path)
+    parser.add_argument("--backend", choices=("auto", "metal", "vulkan"), default="auto",
+                        help="auto: Metal on macOS, Vulkan elsewhere")
     args = parser.parse_args()
-    if platform.system() != "Darwin":
-        print("Metal execution needs macOS; Vulkan and D3D12 execution are pending", file=sys.stderr)
-        return 2
-    clang = shutil.which("clang")
-    if not clang:
-        print("clang is required", file=sys.stderr)
-        return 2
+    backend = args.backend
+    if backend == "auto":
+        backend = "metal" if platform.system() == "Darwin" else "vulkan"
     args.output_dir.mkdir(parents=True, exist_ok=True)
+    runner, reason = build_runner(backend, args.output_dir)
+    if not runner:
+        print(f"SKIP: {reason}", file=sys.stderr)
+        return 2
     subprocess.run(["cargo", "run", "--quiet", "--offline", "--manifest-path",
                     str(ROOT / "crates/mag-render-behavior-glue/Cargo.toml"),
                     "--example", "group_zero_fixture", "--", str(args.output_dir)], check=True)
-    runner_source = args.output_dir / "runner.m"
-    runner = args.output_dir / "runner"
-    runner_source.write_text(RUNNER)
-    subprocess.run([clang, "-fobjc-arc", "-O2", str(runner_source), "-o", str(runner),
-                    "-framework", "Foundation", "-framework", "Metal"], check=True)
-    report = {"backend": "metal", "fixtures": {}}
-    for directory in sorted(p for p in args.output_dir.iterdir() if (p / "meta.json").exists()):
-        run = subprocess.run([str(runner), str(directory)], check=True, capture_output=True, text=True)
-        report["device"] = run.stdout.strip()
-        report["fixtures"][directory.name] = compare(directory)
+    report = {"backend": backend, "fixtures": {}}
+    validation_errors = False
+    try:
+        for directory in sorted(p for p in args.output_dir.iterdir() if (p / "meta.json").exists()):
+            report["device"], invalid = run_fixture(backend, runner, directory)
+            validation_errors |= invalid
+            report["fixtures"][directory.name] = compare(directory) | {"validation_errors": invalid}
+    except Skip as skip:
+        print(f"SKIP: {skip}", file=sys.stderr)
+        return 2
     report["max_abs_error"] = max(f["max_abs_error"] for f in report["fixtures"].values())
     report["max_error_over_tolerance"] = max(
         f["max_error_over_tolerance"] for f in report["fixtures"].values())
@@ -142,7 +347,8 @@ def main():
     print(text)
     if args.report:
         args.report.write_text(text + "\n")
-    return 0 if all(f["failures"] == 0 for f in report["fixtures"].values()) else 1
+    ok = all(f["failures"] == 0 for f in report["fixtures"].values()) and not validation_errors
+    return 0 if ok else 1
 
 
 if __name__ == "__main__":
