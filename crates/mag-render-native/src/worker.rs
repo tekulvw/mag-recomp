@@ -575,6 +575,14 @@ trait Driver {
     fn reserve_position(&mut self) -> Reply {
         (-2, client::Receipt::default())
     }
+    /// Position reservation with the commit's imports bound and validated now.
+    fn reserve_position_imported(
+        &mut self,
+        _bindings: ImportPins,
+        _requirements: Vec<mag_render_abi::packet::ImageRequirement>,
+    ) -> Reply {
+        (-2, client::Receipt::default())
+    }
     /// Commit into the position reservation `ticket`.
     fn commit_subgraph_at(
         &mut self,
@@ -645,6 +653,13 @@ impl Driver for ClientDriver {
     }
     fn reserve_position(&mut self) -> Reply {
         client::scene_packet::reserve_position(self.session)
+    }
+    fn reserve_position_imported(
+        &mut self,
+        bindings: ImportPins,
+        requirements: Vec<mag_render_abi::packet::ImageRequirement>,
+    ) -> Reply {
+        client::scene_packet::reserve_position_imported(self.session, &bindings.0, &requirements)
     }
     fn commit_subgraph_at(
         &mut self,
@@ -720,6 +735,12 @@ enum Command {
     /// Position-only reservation; replies with the receipt the positioned
     /// commit will carry.
     ReservePosition(SyncSender<Reply>),
+    /// The same, with the commit's imports bound and validated now.
+    ReservePositionImported(
+        ImportPins,
+        Vec<mag_render_abi::packet::ImageRequirement>,
+        SyncSender<Reply>,
+    ),
     /// Admission followed by its commit into position `u64`. A refused
     /// commit cancels the uncommitted preparation (the position is released).
     AdmitSubgraphAt(
@@ -901,6 +922,10 @@ impl Worker {
                         }
                         Command::ReservePosition(reply) => {
                             let _ = reply.send(driver.reserve_position());
+                        }
+                        Command::ReservePositionImported(bindings, requirements, reply) => {
+                            let _ = reply
+                                .send(driver.reserve_position_imported(bindings, requirements));
                         }
                         Command::AdmitSubgraphAt(input, source, bindings, ticket, reply) => {
                             let admitted =
@@ -1774,6 +1799,46 @@ pub unsafe extern "C" fn mag_render_client_worker_reserve_position(
     unsafe { *out = receipt };
     status
 }
+/// reserve_position with the positioned commit's imports bound and validated
+/// now, under the owner lease (`requirements`/`bindings` as for
+/// submit_scene_subgraph_imported_v3). For hosts whose image identities hold
+/// only at the boundary. The positioned commit must import exactly these
+/// requirements; otherwise it is refused (-5) and the position released.
+/// # Safety
+/// Ranges are valid for the call; provider metadata obeys the retained
+/// callback contract; `out` is a writable receipt.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mag_render_client_worker_reserve_position_imported(
+    id: u64,
+    requirements: *const mag_render_abi::packet::ImageRequirement,
+    count: u32,
+    bindings: *const mag_render_abi::packet::ImageBinding,
+    binding_count: u32,
+    out: *mut client::Receipt,
+) -> i32 {
+    if out.is_null() || count == 0 || count != binding_count || count > 1024 {
+        return -1;
+    }
+    let mut receipt = client::Receipt::default();
+    let status = ffi(
+        || {
+            let worker = get(id)?;
+            let _serial = worker.serial.try_lock().map_err(|_| -4)?;
+            let requirements = unsafe { checked_slice(requirements, count as usize) }?.to_vec();
+            let pins = unsafe { ImportPins::copy(bindings, binding_count) }?;
+            let (status, r) = worker.call_serial(
+                |reply| Command::ReservePositionImported(pins, requirements, reply),
+                false,
+            )?;
+            receipt = r;
+            Ok(status)
+        },
+        -6,
+    );
+    receipt.status = status;
+    unsafe { *out = receipt };
+    status
+}
 /// submit_scene_subgraph_imported_v3 into the position reservation `ticket`
 /// (its receipt's ticket). The imports are validated when the commit is
 /// encoded. Negative is definitely uncommitted and releases the position;
@@ -1889,7 +1954,14 @@ unsafe fn submit_subgraph_imported_v3(
             client::scene_admission::checked_layout()?;
             client::scene_admission::checked_import_layout()?;
             let worker = get(id)?;
-            let _serial = worker.serial.try_lock().map_err(|_| -4)?;
+            // A positioned commit comes from its own (late) thread while the
+            // boundary thread may be inside another call: wait for it rather
+            // than refusing BUSY.
+            let _serial = if position.is_some() {
+                worker.serial.lock().map_err(|_| -6)?
+            } else {
+                worker.serial.try_lock().map_err(|_| -4)?
+            };
             let input = unsafe { checked_ref(input) }?;
             if !input.base.base.target.is_null() || !input.base.base.frame.is_null() {
                 return Err(-1);
@@ -2663,6 +2735,18 @@ mod tests {
                 },
             )
         }
+        fn reserve_position_imported(
+            &mut self,
+            bindings: ImportPins,
+            requirements: Vec<mag_render_abi::packet::ImageRequirement>,
+        ) -> Reply {
+            assert_eq!(bindings.0.len(), requirements.len());
+            let reply = self.reserve_position();
+            if reply.0 == 0 {
+                self.events.lock().unwrap().push("bound");
+            }
+            reply
+        }
         fn abandon_position(&mut self, ticket: u64) -> i32 {
             if self.position.is_some_and(|p| ticket == 0 || p == ticket) {
                 self.position = None;
@@ -2838,6 +2922,38 @@ mod tests {
                 "reserve", "admit", "cancel", "admit", "at", "terminal", "reserve", "abandon"
             ]
         );
+    }
+    /// The imported variant reserves with its bindings and requirements.
+    #[test]
+    fn imported_position_reservation_binds_at_reservation() {
+        let events = Arc::new(Mutex::new(vec![]));
+        let worker = prepared_worker_with(Arc::new(AtomicI32::new(0)), events.clone(), true);
+        with_input(|input, _, _| {
+            let mut host = unsafe { *input.target };
+            host.image = std::ptr::dangling_mut::<u8>().cast();
+            let binding = mag_render_abi::packet::ImageBinding {
+                image: 0,
+                reserved: 0,
+                source_key: 99,
+                host,
+                validate_planes: None,
+            };
+            let requirement = mag_render_abi::packet::ImageRequirement {
+                image: 0,
+                required_initialized_planes: 0,
+                source_key: 99,
+            };
+            let pins = unsafe { ImportPins::copy(&binding, 1) }.unwrap();
+            let (s, r) = worker
+                .call(
+                    |reply| Command::ReservePositionImported(pins, vec![requirement], reply),
+                    false,
+                )
+                .unwrap();
+            assert_eq!((s, r.ticket), (0, 7));
+        });
+        assert_eq!(worker.call(Command::Close, false).unwrap().0, 0);
+        assert_eq!(*events.lock().unwrap(), ["reserve", "bound", "abandon"]);
     }
     fn fixture_admit() -> AdmitInput {
         AdmitInput {

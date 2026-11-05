@@ -274,6 +274,9 @@ struct Session {
     /// (`scene_packet::reserve_position`), which the next positioned commit
     /// carries.
     position: Option<Receipt>,
+    /// The imports bound and validated with that position, when it was
+    /// reserved with them (the positioned commit must import exactly these).
+    position_imports: Option<Vec<mag_render_abi::packet::ImageRequirement>>,
     /// Worker sessions only: terminal receipts published for the host, which
     /// drains them without an actor round trip (so a busy actor never hides
     /// receipts that are already terminal). `ready` is then only staging.
@@ -704,6 +707,7 @@ fn create_session(
                 ready: VecDeque::new(),
                 acknowledged_failure: false,
                 position: None,
+                position_imports: None,
                 outbox: None,
             },
         )
