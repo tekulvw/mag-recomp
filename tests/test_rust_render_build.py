@@ -104,3 +104,32 @@ class RustRenderBuildTests(unittest.TestCase):
             after = extension_record(entries)
             self.assertNotEqual(before["rust-render-sources"], after["rust-render-sources"])
             self.assertNotEqual(before["rust-render-library"], after["rust-render-library"])
+
+    def test_windows_native_frontend_gets_this_builds_compilers_and_generator(self):
+        # build.rs configures the native sources with CMake. Without these variables it falls back
+        # to the Visual Studio generator and cl.exe, which cannot compile them (C11 atomics).
+        if os.name != "nt":
+            self.skipTest("Windows-only: the native D3D12 frontend build environment")
+        if not shutil.which("cargo") or not shutil.which("rustup"):
+            self.require_tool("the pinned Rust toolchain is required")
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            self.stage_fixture(directory, enabled=True)
+            for crate in ("mag-render-native", "mag-render-shaders"):
+                shutil.copytree(ROOT / "crates" / crate, directory / "crates" / crate,
+                                ignore=shutil.ignore_patterns("target"))
+            for name in ("mag_render_host_bridge.cpp", "mag_render_host_bridge.h",
+                         "mag_render_client.h", "mag_render_scene_packet.h"):
+                shutil.copy2(ROOT / "src" / name, directory / "src")
+            build = directory / "build"
+            # Configure only: the generated cargo command is what is checked.
+            self.run_command(["cmake", "-S", str(directory), "-B", str(build), "-G", "Ninja",
+                              "-DMAG_RENDER_FRONTEND_RUST=ON", "-DMAG_RENDER_FRONTEND_NATIVE=ON",
+                              "-DCMAKE_BUILD_TYPE=Release"])
+            cache = (build / "CMakeCache.txt").read_text()
+            compiler = re.search(r"^CMAKE_CXX_COMPILER:\w+=(.+)$", cache, re.M).group(1)
+            ninja = (build / "build.ninja").read_text()
+            command = next(line for line in ninja.splitlines() if "cargo" in line and " build " in line)
+            self.assertIn("CMAKE_GENERATOR=Ninja", command)
+            self.assertIn("CXX=" + compiler, command.replace("\\", "/").replace('"', ""))
+            self.assertIn("CC=", command)
