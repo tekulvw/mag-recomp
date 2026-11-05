@@ -66,6 +66,8 @@ PINS = {
     '00DFD2DC': {'sha256': 'b95d8f627b1929b7496c1244160aba99ed09c29c33133faf891ea86fce319e0c', 'file': 'ppu_recomp_005.cpp'},
     '00DFD51C': {'sha256': '6689f10fb845d64e3cd6227c37788ef772845a27b33a3ad50ab83ec88a76a5c9', 'file': 'ppu_recomp_005.cpp'},
 }
+# The update function also carries update-loop hooks; both stages pin it identically.
+SHARED = {'00013C54'}
 # Callees the scoped calls reach; verified, never changed.
 DEPENDENCIES = {
     '00CFE7B0': {'sha256': '463389e1d79077cae76ab60f3d01c61e9b686a939799f2ce516418e449f1182a', 'file': 'ppu_recomp_005.cpp'},

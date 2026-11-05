@@ -4,6 +4,9 @@
  * adapter's master switch is off. */
 #include "mag_render_frontend_bridge.h"
 #include "mag_render_adapter_switch.h"
+#if defined(MAG_RENDER_ADAPTER_COHORT) && MAG_RENDER_ADAPTER_COHORT
+#include "mag_render_cohort_bridge.h"
+#endif
 #include "ppu_recomp.h"
 #include <atomic>
 #include <exception>
@@ -31,7 +34,7 @@ constexpr uint64_t toc_manager = 0x2858, toc_state = 0x285c, toc_half = 0x2490;
 constexpr uint32_t half = 0x3f000000;
 
 std::mutex mutex;
-bool begun{};
+std::atomic<bool> begun{};
 uint64_t vm_serial{}, invocation_serial{};
 std::atomic<uint64_t> active_vm{};
 thread_local unsigned init_depth{};
@@ -66,19 +69,27 @@ bool source(ppu_context* c, uint32_t& manager, uint32_t& state) {
 void revoke_vm() {
     const auto old = active_vm.exchange(0);
     if (old) (void)mag_render_adapter_config_event(event(VmEnd, old));
+#if defined(MAG_RENDER_ADAPTER_COHORT) && MAG_RENDER_ADAPTER_COHORT
+    mag_render_cohort_vm(0);
+#endif
 }
 
 void begin_locked() {
-    begun = true;
+    begun.store(true, std::memory_order_release);
     revoke_vm();
     if (vm_serial == std::numeric_limits<uint64_t>::max()) return;
     const auto next = ++vm_serial;
-    if (mag_render_adapter_config_event(event(VmBegin, next)) == 0) active_vm = next;
+    if (mag_render_adapter_config_event(event(VmBegin, next)) == 0) {
+        active_vm = next;
+#if defined(MAG_RENDER_ADAPTER_COHORT) && MAG_RENDER_ADAPTER_COHORT
+        mag_render_cohort_vm(next);
+#endif
+    }
 }
 
 // A lifetime begins with the first hook that runs while the switch is on.
 void ensure_vm_locked() {
-    if (!begun) begin_locked();
+    if (!begun.load(std::memory_order_relaxed)) begin_locked();
 }
 }  // namespace
 
@@ -96,8 +107,18 @@ void mag_render_frontend_vm_end() noexcept {
     if (!mag_render_hooks_enabled()) return;
     try {
         std::lock_guard lock(mutex);
-        begun = true;
+        begun.store(true, std::memory_order_release);
         revoke_vm();
+    } catch (...) {
+        revoke_vm();
+    }
+}
+
+void mag_render_frontend_vm_ensure() noexcept {
+    if (begun.load(std::memory_order_acquire) || !mag_render_hooks_enabled()) return;
+    try {
+        std::lock_guard lock(mutex);
+        ensure_vm_locked();
     } catch (...) {
         revoke_vm();
     }

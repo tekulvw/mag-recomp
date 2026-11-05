@@ -21,11 +21,11 @@ if __package__ in (None, ''):
 from tools.movie_picture_hooks import RETAIL_ELF
 from tools.prepare_inputs import ROOT, sha256_file
 from tools.provenance import validate_lift
-from tools.render_hooks import common, configuration, cohort, shadow_view, ui_handoff
+from tools.render_hooks import common, configuration, cohort, shadow_view, ui_handoff, update_loop
 from tools.render_hooks.common import HookError
 
-STAGES = {stage.NAME: stage for stage in (configuration, shadow_view, cohort, ui_handoff)}
-REQUIRES = {'shadow-view': {'configuration'}, 'cohort': {'configuration'}, 'ui-handoff': {'cohort'}}
+STAGES = {stage.NAME: stage for stage in (configuration, shadow_view, update_loop, cohort, ui_handoff)}
+REQUIRES = {'shadow-view': {'configuration'}, 'cohort': {'configuration', 'update-loop'}, 'ui-handoff': {'cohort'}}
 RECORD = 'render_adapter_hooks'
 SCHEMA_VERSION = 1
 
@@ -53,14 +53,19 @@ def check_tables(stages):
     owners = {}
     for stage in stages:
         common.check_pins(stage)
-        for name in stage.PINS:
+        for name, pin in stage.PINS.items():
             if name in owners:
-                raise HookError(f'function {name} is instrumented by both {owners[name]} and {stage.NAME}')
-            owners[name] = stage.NAME
+                other = owners[name]
+                if name not in getattr(stage, 'SHARED', ()) or name not in getattr(other, 'SHARED', ()):
+                    raise HookError(f'function {name} is instrumented by both {other.NAME} and {stage.NAME}')
+                if pin != other.PINS[name]:
+                    raise HookError(f'shared function {name} has different pins in {other.NAME} and {stage.NAME}')
+                continue
+            owners[name] = stage
     for stage in stages:
         for name in stage.DEPENDENCIES:
             if name in owners:
-                raise HookError(f'{stage.NAME} dependency {name} is instrumented by {owners[name]}')
+                raise HookError(f'{stage.NAME} dependency {name} is instrumented by {owners[name].NAME}')
 
 
 def check_base(base):
@@ -92,8 +97,9 @@ def prepare(base, output, names):
             for filename in common.locate(partial, stage):
                 path = partial / filename
                 source = path.read_text()
-                result = common.instrument_source(source, stage)
-                if common.instrument_source(result, stage) != result:
+                others = [other for other in stages if other is not stage]
+                result = common.instrument_source(source, stage, others=others)
+                if common.instrument_source(result, stage, others=others) != result:
                     raise HookError(f'{stage.NAME}: hooks are not idempotent in {filename}')
                 if result != source:
                     path.write_text(result)
