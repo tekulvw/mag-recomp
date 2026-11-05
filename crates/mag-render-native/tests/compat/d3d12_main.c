@@ -731,6 +731,26 @@ int main(int argc, char **argv) {
         result = 2;
     }
     drain_info_queue();
+    /* Every native device has been closed: the frontend must hold no
+     * reference to the borrowed device or queue any more. */
+    ID3D12Fence_Release(g.gate);
+    ID3D12Fence_Release(g.idle);
+    const ULONG queue_left = ID3D12CommandQueue_Release(g.queue);
+    if (g.info) {
+        ID3D12InfoQueue1 *queue1 = NULL;
+        if (g.callback_cookie &&
+            SUCCEEDED(ID3D12InfoQueue_QueryInterface(g.info, &IID_ID3D12InfoQueue1, (void **)&queue1))) {
+            ID3D12InfoQueue1_UnregisterMessageCallback(queue1, g.callback_cookie);
+            ID3D12InfoQueue1_Release(queue1);
+        }
+        ID3D12InfoQueue_Release(g.info);
+    }
+    const ULONG device_left = ID3D12Device_Release(g.device);
+    if (queue_left || device_left) {
+        fprintf(stderr, "[d3d12] frontend still references the borrowed queue (%lu) or device (%lu)\n", queue_left,
+                device_left);
+        result = 1;
+    }
     fprintf(stderr, "[d3d12] adapter=%s %04x:%04x driver=%s validation=%s gpu_validation=%s errors=%ld warnings=%ld\n",
             g.name, g.vendor, g.device_id, driver, g.validation ? "on" : "off",
             getenv("MAG_D3D12_GPU_VALIDATION") ? getenv("MAG_D3D12_GPU_VALIDATION") : "0", g.validation_errors,
