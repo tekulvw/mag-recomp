@@ -150,6 +150,9 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python tools/test_render_frontend_d3d12_cpu.py --output-dir build/native-d3d12-cpu --compiler clang-cl --dxc-include $header.Directory.FullName
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # The real-GPU D3D12 fixture runs only on hardware; syntax-check it here (no GPU, no link).
+          python tools/check_render_frontend_d3d12_gpu.py --compile-only --shader-root build/shader-translation --build-dir build/d3d12-fixture-syntax
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Exact candidate SDK for Windows CPU interop only
         if: >-
           runner.os == 'Windows' &&
@@ -249,7 +252,7 @@ jobs:
         run: |
           'CC=clang-cl' | Out-File -FilePath $env:GITHUB_ENV -Append
           'CXX=clang-cl' | Out-File -FilePath $env:GITHUB_ENV -Append
-          Write-Output 'Portable ABI here; D3D12 feature/CPU compile is in the pinned-DXC Rust job. GPU acceptance remains pending.'
+          Write-Output 'Portable ABI here; D3D12 feature/CPU compile is in the pinned-DXC Rust job. Real-GPU D3D12 checks run outside CI (tools/check_render_frontend_d3d12_gpu.py).'
       - name: Native build tools
         run: python -m pip install cmake ninja
       - name: Vulkan headers and metadata
