@@ -1,0 +1,39 @@
+name: Self-hosted Linux runner tools
+description: >-
+  Install the build tools that GitHub-hosted Ubuntu images preinstall but the
+  minimal ARC runner image lacks. Every step is skipped on GitHub-hosted
+  runners, so a job can switch between the two without other changes.
+inputs:
+  packages:
+    description: Extra apt packages for this job, space separated
+    required: false
+    default: ''
+  rust:
+    description: Install rustup with a default stable toolchain (rustfmt, clippy)
+    required: false
+    default: 'false'
+runs:
+  using: composite
+  steps:
+    - name: Install base build tools
+      if: runner.environment == 'self-hosted' && runner.os == 'Linux'
+      shell: bash
+      env:
+        EXTRA_PACKAGES: ${{ inputs.packages }}
+      run: |
+        sudo apt-get update -q
+        # shellcheck disable=SC2086 # EXTRA_PACKAGES is a word list
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends \
+          build-essential clang lld cmake ninja-build pkg-config file xz-utils zstd zip \
+          python3-dev python3-pip python3-venv libssl-dev ca-certificates gh $EXTRA_PACKAGES
+    - name: Install rustup
+      if: runner.environment == 'self-hosted' && runner.os == 'Linux' && inputs.rust == 'true'
+      shell: bash
+      run: |
+        if ! command -v rustup >/dev/null; then
+          export CARGO_HOME="$RUNNER_TOOL_CACHE/cargo" RUSTUP_HOME="$RUNNER_TOOL_CACHE/rustup"
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs |
+            sh -s -- -y --no-modify-path --profile minimal --default-toolchain stable -c rustfmt -c clippy
+          printf 'CARGO_HOME=%s\nRUSTUP_HOME=%s\n' "$CARGO_HOME" "$RUSTUP_HOME" >> "$GITHUB_ENV"
+          echo "$CARGO_HOME/bin" >> "$GITHUB_PATH"
+        fi

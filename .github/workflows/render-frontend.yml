@@ -30,13 +30,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, ubuntu-latest, windows-latest]
+        os: [macos-latest, mag-recomp, windows-latest]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     env:
       MAG_RENDER_REQUIRE_TOOLS: '1'
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/self-hosted-linux
+        with:
+          rust: 'true'
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
@@ -219,7 +222,7 @@ jobs:
           - os: macos-latest
             backend: Metal compile and contract tests
             feature_args: --features metal
-          - os: ubuntu-latest
+          - os: mag-recomp
             backend: Vulkan compile and contract tests
             feature_args: --features vulkan
           - os: windows-latest
@@ -229,6 +232,9 @@ jobs:
       CMAKE_GENERATOR: Ninja
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/self-hosted-linux
+        with:
+          rust: 'true'
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
@@ -306,12 +312,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, ubuntu-latest, windows-latest]
+        os: [macos-latest, mag-recomp, windows-latest]
     env:
       CMAKE_GENERATOR: Ninja
       CMAKE_PREFIX_PATH: ${{ github.workspace }}/build/program-compiler-install
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/self-hosted-linux
+        with:
+          rust: 'true'
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
@@ -394,10 +403,11 @@ jobs:
        github.event.pull_request.head.repo.full_name == github.repository) ||
       (github.event_name == 'workflow_dispatch' &&
        github.ref == 'refs/heads/codex/render-frontend-integration')
-    runs-on: ubuntu-latest
+    runs-on: mag-recomp
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/self-hosted-linux
       - uses: actions/checkout@v4
         with:
           repository: tekulvw/ps3recomp
