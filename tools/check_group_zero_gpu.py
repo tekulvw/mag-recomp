@@ -2,14 +2,18 @@
 """Run the group-zero compute kernel on a real GPU and compare it with the CPU deformation.
 
 The behaviour-glue example `group_zero_fixture` writes synthetic fixtures: the kernel's MSL,
-its input buffers, the grid, the CPU rows of `deform_group_zero` and the per-lane position
-tolerance of group-zero-deformation.md. This script compiles a small Metal runner, dispatches
+SPIR-V and HLSL, its input buffers, the grid, the CPU rows of `deform_group_zero` and the per-lane
+position tolerance of group-zero-deformation.md. This script compiles a small runner for the
+selected backend, dispatches
 the kernel for every fixture and reports the largest position error, absolute and as a
 fraction of the tolerance. Colour rows must match bit for bit and w must be exactly 1.
 
 Metal runs on macOS; Vulkan runs anywhere a C compiler, the Vulkan headers and loader, and a device
 with a compute queue are present, dispatching the kernel's SPIR-V (with the Khronos validation layer
-when installed; any validation error fails the run). D3D12 execution remains pending. Exit codes:
+when installed; any validation error fails the run). D3D12 runs on Windows: the kernel's HLSL is
+compiled by the pinned DXC library (PS3RECOMP_DXC_LIBRARY, headers in MAG_RENDER_DXC_INCLUDE_DIR)
+and dispatched on the first hardware adapter, with the debug layer required when
+MAG_D3D12_VALIDATION=1 (Graphics Tools). Exit codes:
 0 every fixture within tolerance, 1 a mismatch or validation error, 2 unsupported host (no backend
 available: skipped) or tool failure.
 """
@@ -239,6 +243,177 @@ int main(int argc, char** argv)
 """
 
 
+D3D12_RUNNER = r"""
+/* D3D12 runner: FIXTURE_DIR ENTRY GX GY GZ VERTEX_COUNT DXC_LIBRARY. Registers follow the kernel's
+ * HLSL: b0 parameters, t1-t3 raw read buffers (instances, vertices, pool), u4 raw output, bound as root
+ * descriptors. The HLSL is compiled and validated by the pinned DXC library through mag_render_dxc.
+ * With MAG_D3D12_VALIDATION=1 the debug layer is required and any error message fails the run.
+ * Exit 0 ok, 3 validation errors, 4 no hardware D3D12 adapter, 2 other. */
+#define COBJMACROS
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#include <d3d12.h>
+#include <d3d12sdklayers.h>
+#include <dxgi1_6.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "mag_render_dxc.h"
+
+static void* load(const char* dir, const char* name, size_t* size)
+{
+    char path[4096]; snprintf(path, sizeof path, "%s/%s", dir, name);
+    FILE* f = fopen(path, "rb"); if (!f) { fprintf(stderr, "missing %s\n", path); exit(2); }
+    fseek(f, 0, SEEK_END); *size = (size_t)ftell(f); fseek(f, 0, SEEK_SET);
+    void* p = malloc(*size ? *size : 1); if (*size && fread(p, 1, *size, f) != *size) exit(2); fclose(f); return p;
+}
+#define CHECK(x) do { HRESULT r_ = (x); if (FAILED(r_)) { fprintf(stderr, "%s failed: 0x%08lx\n", #x, (unsigned long)r_); return 2; } } while (0)
+
+static ID3D12Resource* buffer(ID3D12Device* device, D3D12_HEAP_TYPE type, UINT64 size, D3D12_RESOURCE_FLAGS flags,
+                              D3D12_RESOURCE_STATES state)
+{
+    D3D12_HEAP_PROPERTIES heap = {type, D3D12_CPU_PAGE_PROPERTY_UNKNOWN, D3D12_MEMORY_POOL_UNKNOWN, 0, 0};
+    D3D12_RESOURCE_DESC desc = {D3D12_RESOURCE_DIMENSION_BUFFER, 0, size, 1, 1, 1, DXGI_FORMAT_UNKNOWN, {1, 0},
+                                D3D12_TEXTURE_LAYOUT_ROW_MAJOR, flags};
+    ID3D12Resource* resource = NULL;
+    if (FAILED(ID3D12Device_CreateCommittedResource(device, &heap, D3D12_HEAP_FLAG_NONE, &desc, state, NULL,
+                                                    &IID_ID3D12Resource, (void**)&resource))) exit(2);
+    return resource;
+}
+
+int main(int argc, char** argv)
+{
+    if (argc != 8) return 2;
+    const char* dir = argv[1]; const char* entry = argv[2];
+    UINT gx = (UINT)atoi(argv[3]), gy = (UINT)atoi(argv[4]), gz = (UINT)atoi(argv[5]);
+    size_t count = (size_t)_atoi64(argv[6]);
+    const char* validation = getenv("MAG_D3D12_VALIDATION");
+    int validate = validation && !strcmp(validation, "1");
+    if (validate) {
+        ID3D12Debug* debug = NULL;
+        if (FAILED(D3D12GetDebugInterface(&IID_ID3D12Debug, (void**)&debug))) {
+            fprintf(stderr, "D3D12 debug layer unavailable (install Graphics Tools)\n"); return 4; }
+        ID3D12Debug_EnableDebugLayer(debug); ID3D12Debug_Release(debug);
+    }
+    IDXGIFactory6* factory = NULL;
+    if (FAILED(CreateDXGIFactory2(0, &IID_IDXGIFactory6, (void**)&factory))) return 4;
+    IDXGIAdapter1* adapter = NULL; DXGI_ADAPTER_DESC1 ad;
+    for (UINT i = 0;; ++i) {
+        if (IDXGIFactory6_EnumAdapterByGpuPreference(factory, i, DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE,
+                &IID_IDXGIAdapter1, (void**)&adapter) == DXGI_ERROR_NOT_FOUND) { adapter = NULL; break; }
+        IDXGIAdapter1_GetDesc1(adapter, &ad);
+        if (!(ad.Flags & DXGI_ADAPTER_FLAG_SOFTWARE)) break;
+        IDXGIAdapter1_Release(adapter);
+    }
+    if (!adapter) { fprintf(stderr, "no hardware D3D12 adapter\n"); return 4; }
+    ID3D12Device* device = NULL;
+    if (FAILED(D3D12CreateDevice((IUnknown*)adapter, D3D_FEATURE_LEVEL_11_0, &IID_ID3D12Device, (void**)&device))) {
+        fprintf(stderr, "no D3D12 device\n"); return 4; }
+    LARGE_INTEGER umd = {0};
+    IDXGIAdapter1_CheckInterfaceSupport(adapter, &IID_IDXGIDevice, &umd);
+    ID3D12InfoQueue* info = NULL;
+    if (validate) CHECK(ID3D12Device_QueryInterface(device, &IID_ID3D12InfoQueue, (void**)&info));
+
+    size_t hlsl_size = 0; char* hlsl = load(dir, "shader.hlsl", &hlsl_size);
+    mag_render_dxc_blob dxil = {0}; char diagnostic[4096] = {0};
+    if (mag_render_dxc_compile(argv[7], hlsl, hlsl_size, entry, (uint32_t)strlen(entry), &dxil, diagnostic,
+                               sizeof diagnostic)) { fprintf(stderr, "DXC: %s\n", diagnostic); return 2; }
+
+    D3D12_ROOT_PARAMETER params[5];
+    memset(params, 0, sizeof params);
+    for (UINT i = 0; i < 5; ++i) {
+        params[i].ParameterType = i == 0 ? D3D12_ROOT_PARAMETER_TYPE_CBV
+                                : i == 4 ? D3D12_ROOT_PARAMETER_TYPE_UAV : D3D12_ROOT_PARAMETER_TYPE_SRV;
+        params[i].Descriptor.ShaderRegister = i;
+        params[i].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    }
+    D3D12_ROOT_SIGNATURE_DESC rsd = {5, params, 0, NULL, D3D12_ROOT_SIGNATURE_FLAG_NONE};
+    ID3DBlob* serialized = NULL; ID3DBlob* errors = NULL;
+    CHECK(D3D12SerializeRootSignature(&rsd, D3D_ROOT_SIGNATURE_VERSION_1, &serialized, &errors));
+    ID3D12RootSignature* root = NULL;
+    CHECK(ID3D12Device_CreateRootSignature(device, 0, ID3D10Blob_GetBufferPointer(serialized),
+          ID3D10Blob_GetBufferSize(serialized), &IID_ID3D12RootSignature, (void**)&root));
+    D3D12_COMPUTE_PIPELINE_STATE_DESC cpd;
+    memset(&cpd, 0, sizeof cpd);
+    cpd.pRootSignature = root; cpd.CS.pShaderBytecode = dxil.bytes; cpd.CS.BytecodeLength = (SIZE_T)dxil.length;
+    ID3D12PipelineState* pipeline = NULL;
+    CHECK(ID3D12Device_CreateComputePipelineState(device, &cpd, &IID_ID3D12PipelineState, (void**)&pipeline));
+
+    const char* names[4] = {"parameters.bin", "instances.bin", "vertices.bin", "pool.bin"};
+    ID3D12Resource* inputs[4];
+    for (int i = 0; i < 4; ++i) {
+        size_t n = 0; void* data = load(dir, names[i], &n);
+        UINT64 size = n ? ((n + 255) & ~(UINT64)255) : 256;
+        inputs[i] = buffer(device, D3D12_HEAP_TYPE_UPLOAD, size, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_GENERIC_READ);
+        void* mapped = NULL; D3D12_RANGE none = {0, 0};
+        CHECK(ID3D12Resource_Map(inputs[i], 0, &none, &mapped));
+        memset(mapped, 0, (size_t)size); memcpy(mapped, data, n);
+        ID3D12Resource_Unmap(inputs[i], 0, NULL); free(data);
+    }
+    const UINT64 out_size = (UINT64)count * 32;
+    ID3D12Resource* output = buffer(device, D3D12_HEAP_TYPE_DEFAULT, out_size, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+                                    D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    ID3D12Resource* readback = buffer(device, D3D12_HEAP_TYPE_READBACK, out_size, D3D12_RESOURCE_FLAG_NONE,
+                                      D3D12_RESOURCE_STATE_COPY_DEST);
+    D3D12_COMMAND_QUEUE_DESC qd = {D3D12_COMMAND_LIST_TYPE_DIRECT, 0, D3D12_COMMAND_QUEUE_FLAG_NONE, 0};
+    ID3D12CommandQueue* queue = NULL; ID3D12CommandAllocator* allocator = NULL; ID3D12GraphicsCommandList* list = NULL;
+    CHECK(ID3D12Device_CreateCommandQueue(device, &qd, &IID_ID3D12CommandQueue, (void**)&queue));
+    CHECK(ID3D12Device_CreateCommandAllocator(device, D3D12_COMMAND_LIST_TYPE_DIRECT, &IID_ID3D12CommandAllocator,
+                                              (void**)&allocator));
+    CHECK(ID3D12Device_CreateCommandList(device, 0, D3D12_COMMAND_LIST_TYPE_DIRECT, allocator, pipeline,
+                                         &IID_ID3D12GraphicsCommandList, (void**)&list));
+    ID3D12GraphicsCommandList_SetComputeRootSignature(list, root);
+    ID3D12GraphicsCommandList_SetComputeRootConstantBufferView(list, 0, ID3D12Resource_GetGPUVirtualAddress(inputs[0]));
+    for (UINT i = 1; i < 4; ++i)
+        ID3D12GraphicsCommandList_SetComputeRootShaderResourceView(list, i, ID3D12Resource_GetGPUVirtualAddress(inputs[i]));
+    ID3D12GraphicsCommandList_SetComputeRootUnorderedAccessView(list, 4, ID3D12Resource_GetGPUVirtualAddress(output));
+    ID3D12GraphicsCommandList_Dispatch(list, gx, gy, gz);
+    D3D12_RESOURCE_BARRIER barrier;
+    memset(&barrier, 0, sizeof barrier);
+    barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    barrier.Transition.pResource = output;
+    barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+    barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
+    ID3D12GraphicsCommandList_ResourceBarrier(list, 1, &barrier);
+    ID3D12GraphicsCommandList_CopyBufferRegion(list, readback, 0, output, 0, out_size);
+    CHECK(ID3D12GraphicsCommandList_Close(list));
+    ID3D12CommandQueue_ExecuteCommandLists(queue, 1, (ID3D12CommandList* const*)&list);
+    ID3D12Fence* fence = NULL;
+    CHECK(ID3D12Device_CreateFence(device, 0, D3D12_FENCE_FLAG_NONE, &IID_ID3D12Fence, (void**)&fence));
+    CHECK(ID3D12CommandQueue_Signal(queue, fence, 1));
+    HANDLE event = CreateEventW(NULL, FALSE, FALSE, NULL);
+    CHECK(ID3D12Fence_SetEventOnCompletion(fence, 1, event));
+    if (WaitForSingleObject(event, 10000) != WAIT_OBJECT_0) { fprintf(stderr, "dispatch timed out\n"); return 2; }
+    CHECK(ID3D12Device_GetDeviceRemovedReason(device));
+    void* mapped = NULL; D3D12_RANGE whole = {0, (SIZE_T)out_size};
+    CHECK(ID3D12Resource_Map(readback, 0, &whole, &mapped));
+    char path[4096]; snprintf(path, sizeof path, "%s/gpu.bin", dir);
+    FILE* f = fopen(path, "wb"); fwrite(mapped, 1, (size_t)out_size, f); fclose(f);
+    ID3D12Resource_Unmap(readback, 0, NULL);
+    int errors_seen = 0;
+    if (info) {
+        UINT64 stored = ID3D12InfoQueue_GetNumStoredMessages(info);
+        for (UINT64 i = 0; i < stored; ++i) {
+            SIZE_T size = 0; ID3D12InfoQueue_GetMessage(info, i, NULL, &size);
+            D3D12_MESSAGE* message = malloc(size);
+            if (message && SUCCEEDED(ID3D12InfoQueue_GetMessage(info, i, message, &size)) &&
+                message->Severity <= D3D12_MESSAGE_SEVERITY_WARNING) {
+                fprintf(stderr, "[validation %s] %s\n", message->Severity <= D3D12_MESSAGE_SEVERITY_ERROR ? "error" : "warning",
+                        message->pDescription);
+                errors_seen += message->Severity <= D3D12_MESSAGE_SEVERITY_ERROR;
+            }
+            free(message);
+        }
+    }
+    char name[256]; WideCharToMultiByte(CP_UTF8, 0, ad.Description, -1, name, sizeof name, NULL, NULL);
+    printf("%s | driver %u.%u.%u.%u | validation %s | validation_errors %d\n", name, HIWORD(umd.HighPart),
+           LOWORD(umd.HighPart), HIWORD(umd.LowPart), LOWORD(umd.LowPart), validate ? "on" : "off", errors_seen);
+    mag_render_dxc_free(&dxil);
+    return errors_seen ? 3 : 0;
+}
+"""
+
 def compare(directory):
     expected = (directory / "expected.bin").read_bytes()
     gpu = (directory / "gpu.bin").read_bytes()
@@ -279,6 +454,19 @@ def build_runner(backend, output_dir):
         source.write_text(RUNNER)
         command = [clang, "-fobjc-arc", "-O2", str(source), "-o", str(runner),
                    "-framework", "Foundation", "-framework", "Metal"]
+    elif backend == "d3d12":
+        compiler = shutil.which("clang-cl")
+        if platform.system() != "Windows" or not compiler:
+            return None, "D3D12 execution needs Windows and clang-cl (an x64 MSVC developer environment)"
+        native = ROOT / "crates/mag-render-native/native"
+        dxc_include = os.environ.get("MAG_RENDER_DXC_INCLUDE_DIR")
+        if not dxc_include or not (Path(dxc_include) / "dxcapi.h").is_file():
+            return None, "MAG_RENDER_DXC_INCLUDE_DIR must name the pinned DXC include directory"
+        source, runner = output_dir / "runner-d3d12.c", output_dir / "runner-d3d12.exe"
+        source.write_text(D3D12_RUNNER)
+        command = [compiler, "/nologo", "/O2", "/MD", "/W3", "/D_CRT_SECURE_NO_WARNINGS", f"/I{native}",
+                   f"/I{dxc_include}", f"/Fo{output_dir}{os.sep}", str(source), str(native / "mag_render_dxc.cpp"),
+                   "/EHsc", f"/Fe{runner}", "/link", "d3d12.lib", "dxgi.lib", "dxguid.lib"]
     else:
         cc = os.environ.get("CC") or shutil.which("cc") or shutil.which("clang")
         if not cc:
@@ -298,13 +486,19 @@ def run_fixture(backend, runner, directory):
         run = subprocess.run([str(runner), str(directory)], check=True, capture_output=True, text=True)
         return run.stdout.strip(), False
     meta = json.loads((directory / "meta.json").read_text())
-    run = subprocess.run([str(runner), str(directory), meta["spirv_entry"], *map(str, meta["groups"]),
-                          str(meta["vertex_count"])], capture_output=True, text=True)
+    if backend == "d3d12":
+        library = os.environ.get("PS3RECOMP_DXC_LIBRARY")
+        if not library or not Path(library).is_absolute() or not Path(library).is_file():
+            raise Skip("PS3RECOMP_DXC_LIBRARY must name the pinned absolute dxcompiler.dll")
+        arguments = [meta["hlsl_entry"], *map(str, meta["groups"]), str(meta["vertex_count"]), library]
+    else:
+        arguments = [meta["spirv_entry"], *map(str, meta["groups"]), str(meta["vertex_count"])]
+    run = subprocess.run([str(runner), str(directory), *arguments], capture_output=True, text=True)
     sys.stderr.write(run.stderr)
     if run.returncode == 4:
-        raise Skip(run.stderr.strip() or "no Vulkan device")
+        raise Skip(run.stderr.strip() or f"no {backend} device")
     if run.returncode not in (0, 3):
-        raise RuntimeError(f"{directory.name}: Vulkan runner exit {run.returncode}")
+        raise RuntimeError(f"{directory.name}: {backend} runner exit {run.returncode}")
     return run.stdout.strip(), run.returncode == 3
 
 
@@ -316,12 +510,12 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--output-dir", type=Path, default=ROOT / "build/group-zero-gpu")
     parser.add_argument("--report", type=Path)
-    parser.add_argument("--backend", choices=("auto", "metal", "vulkan"), default="auto",
-                        help="auto: Metal on macOS, Vulkan elsewhere")
+    parser.add_argument("--backend", choices=("auto", "metal", "vulkan", "d3d12"), default="auto",
+                        help="auto: Metal on macOS, D3D12 on Windows, Vulkan elsewhere")
     args = parser.parse_args()
     backend = args.backend
     if backend == "auto":
-        backend = "metal" if platform.system() == "Darwin" else "vulkan"
+        backend = {"Darwin": "metal", "Windows": "d3d12"}.get(platform.system(), "vulkan")
     args.output_dir.mkdir(parents=True, exist_ok=True)
     runner, reason = build_runner(backend, args.output_dir)
     if not runner:

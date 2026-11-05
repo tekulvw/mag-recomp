@@ -1,5 +1,5 @@
 //! Writes synthetic group-zero GPU fixtures for `tools/check_group_zero_gpu.py`: the kernel's
-//! MSL and SPIR-V, its input buffers, the grid, the CPU deformation's rows and the per-lane tolerance.
+//! MSL, SPIR-V and HLSL, its input buffers, the grid, the CPU deformation's rows and the per-lane tolerance.
 //! Usage: `cargo run --example group_zero_fixture -- OUTPUT_DIRECTORY`.
 
 use mag_render_behavior::group_zero::{GroupZeroInputs, deform_group_zero, position_tolerance};
@@ -108,6 +108,7 @@ fn write_case(root: &Path, name: &str, seed: u64, vertices: usize, instances: us
     write("shader.metal", kernel::MSL.as_bytes());
     let spirv: Vec<u8> = kernel::SPIRV.iter().flat_map(|w| w.to_le_bytes()).collect();
     write("shader.spv", &spirv);
+    write("shader.hlsl", kernel::HLSL.as_bytes());
     write("parameters.bin", &work.parameters);
     write("instances.bin", &work.instances);
     write("vertices.bin", &work.vertices);
@@ -134,9 +135,10 @@ fn write_case(root: &Path, name: &str, seed: u64, vertices: usize, instances: us
     write("expected.bin", &expected);
     write("tolerance.bin", &tolerance);
     let meta = format!(
-        "{{\"entry\": {:?}, \"spirv_entry\": {:?}, \"groups\": {:?}, \"threads\": {:?}, \"vertex_count\": {}}}",
+        "{{\"entry\": {:?}, \"spirv_entry\": {:?}, \"hlsl_entry\": {:?}, \"groups\": {:?}, \"threads\": {:?}, \"vertex_count\": {}}}",
         kernel::MSL_ENTRY,
         kernel::SPIRV_ENTRY,
+        kernel::HLSL_ENTRY,
         work.groups,
         kernel::THREADS,
         work.vertex_count

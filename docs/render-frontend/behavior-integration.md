@@ -165,8 +165,10 @@ CPU path runs, on:
 - a pass layout other than slot 0, or slots 0 and 12;
 - a grid beyond the dispatch limits.
 
-`tools/check_group_zero_gpu.py` runs the kernel on Metal (macOS) or Vulkan (elsewhere, its SPIR-V,
-with the Khronos validation layer when installed) against the CPU deformation within the tolerance of
+`tools/check_group_zero_gpu.py` runs the kernel on Metal (macOS), D3D12 (Windows, its HLSL compiled
+by the pinned DXC library; set `PS3RECOMP_DXC_LIBRARY` and `MAG_RENDER_DXC_INCLUDE_DIR`, and
+`MAG_D3D12_VALIDATION=1` to require the debug layer) or Vulkan (elsewhere, its SPIR-V, with the
+Khronos validation layer when installed) against the CPU deformation within the tolerance of
 [group-zero-deformation.md](behavior/group-zero-deformation.md). It skips with exit code 2 when the
 host has no usable backend.
 
