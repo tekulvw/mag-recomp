@@ -612,6 +612,23 @@ def _check_tk_runtime():
         raise InstallerError('Native release builds require Python with a working Tcl/Tk runtime; install a Tk-enabled build Python before packaging') from exc
 
 
+def _packager_environment(scratch):
+    """The isolated environment PyInstaller runs in.
+
+    It keeps only what the build interpreter itself needs. A relocated shared-library CPython
+    (setup-python's tool cache outside its build prefix) finds its own libpython only through
+    LD_LIBRARY_PATH; without it the loader can bind a different system libpython, whose search
+    path lacks the packager installed into the build interpreter.
+    """
+    environment = {'PATH': str(Path(sys.executable).parent) + os.pathsep + os.defpath,
+                   'HOME': str(scratch / 'home'), 'USERPROFILE': str(scratch / 'home'),
+                   'TEMP': str(scratch / 'tmp'), 'TMP': str(scratch / 'tmp'), 'TMPDIR': str(scratch / 'tmp'),
+                   'PYTHONNOUSERSITE': '1', 'PYINSTALLER_CONFIG_DIR': str(scratch / 'config')}
+    for name in ('SystemRoot', 'LD_LIBRARY_PATH'):
+        if os.environ.get(name): environment[name] = os.environ[name]
+    return environment
+
+
 def build(root, output, version, preview=False):
     """Explicit native build operation. Never downloads or installs dependencies."""
     root, output = Path(root).absolute(), Path(output).absolute()
@@ -631,11 +648,7 @@ def build(root, output, version, preview=False):
         scratch = Path(temporary)
         clean = stage(root, scratch / 'source')
         for name in ('home', 'tmp', 'spec', 'work', 'dist', 'smoke'): (scratch / name).mkdir()
-        environment = {'PATH': str(Path(sys.executable).parent) + os.pathsep + os.defpath,
-                       'HOME': str(scratch / 'home'), 'USERPROFILE': str(scratch / 'home'),
-                       'TEMP': str(scratch / 'tmp'), 'TMP': str(scratch / 'tmp'), 'TMPDIR': str(scratch / 'tmp'),
-                       'PYTHONNOUSERSITE': '1', 'PYINSTALLER_CONFIG_DIR': str(scratch / 'config')}
-        if 'SystemRoot' in os.environ: environment['SystemRoot'] = os.environ['SystemRoot']
+        environment = _packager_environment(scratch)
         command = [sys.executable, '-m', 'PyInstaller', '--onefile', '--console', '--noupx', '--clean', '--noconfirm',
                    '--hidden-import', 'tkinter', '--name', 'mag-installer', '--paths', str(clean), '--add-data', f'{clean}:resources',
                    '--specpath', str(scratch / 'spec'), '--workpath', str(scratch / 'work'),
