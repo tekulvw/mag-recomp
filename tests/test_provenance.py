@@ -37,6 +37,12 @@ class BuildImageTests(unittest.TestCase):
         self.assertEqual(result['elf_sha256'],self.images['EBOOT']['elf_sha256'])
         validate_receipt(self.binary,self.images['EBOOT']['elf_sha256'])
 
+    def test_movie_playback_is_recorded_only_when_built_with_decoder(self):
+        self.assertNotIn('movie_playback',record_build(self.binary,self.root,self.lifts['EBOOT']))
+        result=record_build(self.binary,self.root,self.lifts['mage_g'],image_name='mage_g',movie_playback=True)
+        self.assertIs(result['movie_playback'],True)
+        self.assertIs(validate_receipt(self.binary,self.images['mage_g']['elf_sha256'])['movie_playback'],True)
+
     def test_receipt_extra_file(self):
         extra=self.root/'native.a';extra.write_bytes(b'synthetic archive')
         result=record_build(self.binary,self.root,self.lifts['EBOOT'],extras={'native-core':extra})

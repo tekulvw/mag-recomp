@@ -3,7 +3,7 @@ import os
 import sys
 import tempfile
 from pathlib import Path
-from tools.boot import classify_boot, capture_process, clone_disc
+from tools.boot import classify_boot, capture_process, clone_disc, movie_environment
 
 
 class BootTests(unittest.TestCase):
@@ -87,6 +87,22 @@ class BootTests(unittest.TestCase):
                               ('[boot] ppu_run returned 0 (entry function unwound)',0,'entry_returned')]:
             with self.subTest(want=want):
                 self.assertEqual(classify_boot(log,code,False)['outcome'],want)
+
+class MovieEnvironmentTests(unittest.TestCase):
+    def test_decoder_build_turns_on_playback_switches(self):
+        self.assertEqual(movie_environment({'movie_playback':True}),
+                         {'PS3RECOMP_SAIL_TIMED_THX':'1','PS3RECOMP_SAIL_ATRAC_AUDIO':'1',
+                          'PS3RECOMP_GCM_CHECKED_REF':'1'})
+
+    def test_build_without_decoder_sets_nothing(self):
+        for receipt in ({}, {'movie_playback':False}, {'movie_playback':'true'}, {'movie_playback':1}):
+            with self.subTest(receipt=receipt):
+                self.assertEqual(movie_environment(receipt),{})
+
+    def test_result_is_a_copy(self):
+        movie_environment({'movie_playback':True})['PS3RECOMP_SAIL_TIMED_THX']='0'
+        self.assertEqual(movie_environment({'movie_playback':True})['PS3RECOMP_SAIL_TIMED_THX'],'1')
+
 
 class BootImageTests(unittest.TestCase):
     def test_nested_engine_uses_same_disc_root_and_correct_guest_path(self):
