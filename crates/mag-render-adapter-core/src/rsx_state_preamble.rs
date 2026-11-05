@@ -78,6 +78,11 @@ pub fn classify(method: u32) -> Option<MethodClass> {
         0x1d94 => C::Clear,
         0x1808 => C::Primitive,
         0x180c..=0x1818 => C::Draw,
+        // Surface context DMAs: colour A, B, C, D and zeta.
+        0x018c | 0x0194 | 0x0198 | 0x01b4 | 0x01b8 => C::Attachment,
+        // Texture and vertex context DMAs.
+        0x0184 | 0x0188 => C::TextureBinding,
+        0x019c | 0x01a0 => C::VertexInput,
         0x0200..=0x02fc | 0x08c0 | 0x08c4 | 0x0a00..=0x0a5c => C::Attachment,
         0x0b80..=0x0bfc | 0x08e4 | 0x1d60 | 0x1d64 | 0x1e9c | 0x1ea0 | 0x1ef8 | 0x1ff0..=0x1ff8 => {
             C::Program
