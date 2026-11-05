@@ -9,7 +9,7 @@ jobs:
   # `python` is a required check, so this workflow always runs; the Rust input
   # matrix skips itself when only docs or Markdown changed.
   changes:
-    runs-on: ubuntu-latest
+    runs-on: mag-recomp
     outputs:
       code: ${{ steps.diff.outputs.code }}
     steps:
@@ -32,13 +32,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, ubuntu-latest, windows-latest]
+        os: [macos-latest, mag-recomp, windows-latest]
     runs-on: ${{ matrix.os }}
     defaults:
       run:
         working-directory: crates/mag-input
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/self-hosted-linux
+        with:
+          rust: 'true'
       - name: Pinned Rust toolchain
         run: rustup toolchain install 1.99.0 --profile minimal --component rustfmt --component clippy
       - name: Format
@@ -48,7 +51,36 @@ jobs:
       - name: Tests
         run: cargo test --locked --offline
   python:
+    # Required check. Runs on the self-hosted Linux runners so pull requests are gated without
+    # hosted minutes; tests that need macOS skip themselves here and run in python-macos below.
+    runs-on: mag-recomp
+    env:
+      MAG_TEST_SDK: ${{ github.workspace }}/local/ps3recomp-runtime
+      SPU_BATCH_TEST_SDK: ${{ github.workspace }}/local/ps3recomp-lifter-5244db9
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/self-hosted-linux
+        with:
+          rust: 'true'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Pinned ps3recomp checkouts
+        run: python tools/fetch_ps3recomp.py --role runtime --role lifter-spu
+      - name: SDK tool dependencies
+        run: python -m pip install -r local/ps3recomp-runtime/requirements.txt
+      - name: Pinned Rust toolchain for native build fixtures
+        run: rustup toolchain install 1.99.0 --profile minimal --component rustfmt --component clippy
+      - name: Fetch locked frontend dependencies for offline build fixtures
+        run: cargo fetch --manifest-path crates/mag-render/Cargo.toml --locked
+      - name: Project tests
+        run: python -m unittest discover -s tests -t . -v
+      - name: Tool self-tests
+        run: python -m unittest discover -s tools -p 'test_*.py' -t . -v
+
+  python-macos:
     # Apple Silicon is the supported target; several tests build macOS fixtures with clang.
+    # Not a required check, so pull requests are not blocked when hosted macOS minutes run out.
     runs-on: macos-latest
     env:
       MAG_TEST_SDK: ${{ github.workspace }}/local/ps3recomp-runtime

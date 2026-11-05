@@ -30,8 +30,10 @@ class EdgeQueueProbeTests(unittest.TestCase):
     def test_real_subprocess_deadline_and_output_limit(self):
         mod=self.module()
         with self.assertRaises(TimeoutError):
-            mod.bounded_run([sys.executable,'-c','import time; time.sleep(10)'],
+            # POSIX children: bounded_run strips the environment, which a relocated Python
+            # interpreter (e.g. a CI tool cache needing LD_LIBRARY_PATH) may not survive.
+            mod.bounded_run(['/bin/sh','-c','sleep 10'],
                             time.monotonic()+.1,1024)
         with self.assertRaisesRegex(RuntimeError,'log bound'):
-            mod.bounded_run([sys.executable,'-c','print("x"*2048)'],
+            mod.bounded_run(['/bin/sh','-c','printf "%2048s" ""'],
                             time.monotonic()+2,1024)

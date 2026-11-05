@@ -87,9 +87,54 @@ pub struct DepthItem {
 #[derive(Debug)]
 pub struct DepthImmutablePartition {
     pub source_address: u32,
+    /// The partition record itself, as copied for the chain.
+    pub record: Box<[u8; 544]>,
     pub positions: Result<Arc<Vec<[u32; 4]>>, GeometryStreamError>,
     pub indices: Result<Arc<Vec<u16>>, GeometryStreamError>,
     pub attributes: Option<Result<OwnedPrimaryAttributes, GeometryStreamError>>,
+    /// The secondary attribute banks, when [`DepthCaptureOptions::secondary_attributes`] asks for
+    /// them and the record declares some.
+    pub secondary_attributes: Option<Result<OwnedPrimaryAttributes, DeformationSourceError>>,
+    /// The palette-skinning sources of a skinned-partition item, when
+    /// [`DepthCaptureOptions::skinning`] asks for them.
+    pub skinning: Option<Result<DepthSkinningSource, DeformationSourceError>>,
+}
+/// Which deformation sources a capture copies beyond the positions, indices and primary banks.
+///
+/// Both are off by default, so a default capture reads exactly what it always has. The extra
+/// reads come from the same budget and catalog; a failure is kept with its partition and never
+/// fails the capture.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DepthCaptureOptions {
+    /// The secondary attribute banks (record sizes at +0x0A, format stream 21, source stream 10).
+    pub secondary_attributes: bool,
+    /// For skinned-partition items: the skinning configuration (stream 19), the two palette
+    /// segments and the influence stream (5).
+    pub skinning: bool,
+}
+/// The palette-skinning sources of one partition, as copied.
+#[derive(Debug)]
+pub struct DepthSkinningSource {
+    /// The skinning configuration stream (19).
+    pub config: Arc<SourceContent>,
+    /// The item's palette address plus the record's two 16-bit offsets at +0x14.
+    pub palette_addresses: [u32; 2],
+    /// The two palette segments, sized by the slot 3 and 4 controls.
+    pub segments: [Arc<SourceContent>; 2],
+    /// The influence stream (5), as its control sizes it.
+    pub influences: Arc<SourceContent>,
+}
+/// Why a partition's optional deformation sources were not copied.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DeformationSourceError {
+    Source(DepthError),
+    Codec(GeometryStreamError),
+    /// More than the first secondary input chunk is declared.
+    SplitInputChunks([u16; 3]),
+    /// The configuration selects a built-in secondary layout.
+    Builtin(u8),
+    /// The item carries no palette address.
+    MissingPalette,
 }
 #[derive(Debug)]
 pub struct OwnedDepthSources {
@@ -177,6 +222,15 @@ pub fn copy_depth_sources(
     budget: DepthBudget,
     read: &mut impl FnMut(u32, usize) -> Result<Vec<u8>, Error>,
 ) -> Result<OwnedDepthSources, DepthError> {
+    copy_depth_sources_with(input, budget, DepthCaptureOptions::default(), read)
+}
+/// [`copy_depth_sources`], also copying the deformation sources `options` asks for.
+pub fn copy_depth_sources_with(
+    input: DepthInput,
+    budget: DepthBudget,
+    options: DepthCaptureOptions,
+    read: &mut impl FnMut(u32, usize) -> Result<Vec<u8>, Error>,
+) -> Result<OwnedDepthSources, DepthError> {
     let id = input.identity;
     if id.vm == 0
         || id.invocation == 0
@@ -228,8 +282,15 @@ pub fn copy_depth_sources(
         if population == 0 {
             continue;
         }
+        // Depth reads the family-3 lists; a Shadow run (cohort camera slot 1
+        // or 2) reads its own family's lists, laid out the same way.
+        let family = if matches!(id.camera, 1 | 2) {
+            id.camera as usize
+        } else {
+            3
+        };
         let indices = reader.copy(
-            word(bucket_bytes, 0x28 + 3 * 16 + 4 * shard),
+            word(bucket_bytes, 0x28 + family * 16 + 4 * shard),
             population * 2,
         )?;
         items
@@ -355,6 +416,7 @@ pub fn copy_depth_sources(
                         item.immutable_partitions = Some(capture_immutable_partitions(
                             &mut reader,
                             item.geometry.as_ref().expect("qualified dispatch"),
+                            options,
                         ));
                     }
                     item.material = Some(material);
@@ -402,6 +464,7 @@ pub fn copy_depth_sources(
 fn capture_immutable_partitions<F: FnMut(u32, usize) -> Result<Vec<u8>, Error>>(
     reader: &mut Reader<'_, F>,
     geometry: &GeometrySource,
+    options: DepthCaptureOptions,
 ) -> Result<Vec<DepthImmutablePartition>, DepthError> {
     let first = match geometry {
         GeometrySource::StaticPartitions { first, .. }
@@ -426,23 +489,12 @@ fn capture_immutable_partitions<F: FnMut(u32, usize) -> Result<Vec<u8>, Error>>(
         .map_err(|_| DepthError::Budget)?;
     for partition in chain.partitions() {
         let p = partition.bytes();
-        let mut stream = |slot: usize| -> Result<Arc<SourceContent>, DepthError> {
-            let control = word(p, 0x30 + 8 * slot);
-            if control >> 16 != 0 {
-                return Err(DepthError::StreamControl { slot, control });
-            }
-            if control == 0 {
-                return crate::shared_scene_sources::retain_content(&[])
-                    .map_err(|_| DepthError::Catalog);
-            }
-            reader.copy(word(p, 0x34 + 8 * slot), control as usize)
-        };
-        let config = stream(19)?;
-        let config = config.bytes().get(..16).ok_or(DepthError::Asset)?;
-        let source = stream(7)?;
-        let index = stream(1)?;
+        let config_stream = stream(reader, p, 19)?;
+        let config = config_stream.bytes().get(..16).ok_or(DepthError::Asset)?;
+        let source = stream(reader, p, 7)?;
+        let index = stream(reader, p, 1)?;
         let format = if config[2] == 255 {
-            Some(stream(20)?)
+            Some(stream(reader, p, 20)?)
         } else {
             None
         };
@@ -486,12 +538,131 @@ fn capture_immutable_partitions<F: FnMut(u32, usize) -> Result<Vec<u8>, Error>>(
             }
             decoded
         });
+        let secondary_attributes = if options.secondary_attributes {
+            secondary(reader, p, config, vertices)
+        } else {
+            None
+        };
+        let skinning = match (options.skinning, geometry) {
+            (
+                true,
+                GeometrySource::SkinnedPartitions {
+                    palette_address, ..
+                },
+            ) => Some(skinning(
+                reader,
+                p,
+                *palette_address,
+                Arc::clone(&config_stream),
+            )),
+            _ => None,
+        };
         result.push(DepthImmutablePartition {
             source_address: partition.source_address,
+            record: Box::new(*p),
             positions,
             indices,
             attributes,
+            secondary_attributes,
+            skinning,
         });
     }
     Ok(result)
+}
+
+/// One stream of a partition record, as its slot's control sizes it.
+fn stream<F: FnMut(u32, usize) -> Result<Vec<u8>, Error>>(
+    reader: &mut Reader<'_, F>,
+    p: &[u8; 544],
+    slot: usize,
+) -> Result<Arc<SourceContent>, DepthError> {
+    let control = word(p, 0x30 + 8 * slot);
+    if control >> 16 != 0 {
+        return Err(DepthError::StreamControl { slot, control });
+    }
+    if control == 0 {
+        return crate::shared_scene_sources::retain_content(&[]).map_err(|_| DepthError::Catalog);
+    }
+    reader.copy(word(p, 0x34 + 8 * slot), control as usize)
+}
+
+/// The secondary attribute banks a record declares: the first input chunk only, through a
+/// described (not built-in) layout.
+fn secondary<F: FnMut(u32, usize) -> Result<Vec<u8>, Error>>(
+    reader: &mut Reader<'_, F>,
+    p: &[u8; 544],
+    config: &[u8],
+    vertices: usize,
+) -> Option<Result<OwnedPrimaryAttributes, DeformationSourceError>> {
+    use DeformationSourceError as E;
+    let sizes: [u16; 3] =
+        core::array::from_fn(|i| u16::from_be_bytes([p[0x0a + 2 * i], p[0x0b + 2 * i]]));
+    if sizes == [0; 3] {
+        return None;
+    }
+    Some((|| {
+        if sizes[1..].iter().any(|&size| size != 0) {
+            return Err(E::SplitInputChunks(sizes));
+        }
+        if config[3] != 255 {
+            return Err(E::Builtin(config[3]));
+        }
+        let format = stream(reader, p, 21).map_err(E::Source)?;
+        let address = word(p, 0x34 + 8 * 10);
+        let source = reader
+            .copy(address, usize::from(sizes[0]))
+            .map_err(E::Source)?;
+        let decoded = geometry_attributes::decode_primary_attributes(
+            format.bytes(),
+            source.bytes(),
+            address,
+            vertices,
+            reader.remaining.bytes,
+        )
+        .map_err(E::Codec)?;
+        reader.remaining.bytes -= decoded.owned_bytes();
+        Ok(decoded)
+    })())
+}
+
+/// The palette-skinning sources of one skinned partition.
+fn skinning<F: FnMut(u32, usize) -> Result<Vec<u8>, Error>>(
+    reader: &mut Reader<'_, F>,
+    p: &[u8; 544],
+    palette_address: u32,
+    config: Arc<SourceContent>,
+) -> Result<DepthSkinningSource, DeformationSourceError> {
+    use DeformationSourceError as E;
+    if palette_address == 0 {
+        return Err(E::MissingPalette);
+    }
+    let palette_addresses: [u32; 2] = core::array::from_fn(|i| {
+        palette_address.wrapping_add(u32::from(u16::from_be_bytes([
+            p[0x14 + 2 * i],
+            p[0x15 + 2 * i],
+        ])))
+    });
+    let mut segment = |i: usize| -> Result<Arc<SourceContent>, DepthError> {
+        let slot = 3 + i;
+        let control = word(p, 0x30 + 8 * slot);
+        if control >> 16 != 0 {
+            return Err(DepthError::StreamControl { slot, control });
+        }
+        if control == 0 {
+            return crate::shared_scene_sources::retain_content(&[])
+                .map_err(|_| DepthError::Catalog);
+        }
+        reader.copy(palette_addresses[i], control as usize)
+    };
+    let segments = [
+        segment(0).map_err(E::Source)?,
+        segment(1).map_err(E::Source)?,
+    ];
+    let influences = stream(reader, p, 5).map_err(E::Source)?;
+    Ok(DepthSkinningSource {
+        config,
+        palette_addresses,
+        segments,
+        influences,
+    })
 }

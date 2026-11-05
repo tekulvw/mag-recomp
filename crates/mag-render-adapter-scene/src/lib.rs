@@ -39,9 +39,12 @@ pub mod depth_materials;
 #[allow(unsafe_code)] // Synchronous qualified source copy; no retained guest pointer.
 pub mod depth_source_ffi;
 pub mod depth_sources;
+pub mod empty_pass_terminal;
 pub mod fragment_builtin_rows;
 pub mod geometry_attributes;
 pub mod geometry_streams;
+pub mod main_terminal_job;
+pub mod main_terminal_writer;
 #[cfg(feature = "owned-programs")]
 pub mod material_compile;
 pub mod material_finish;
@@ -52,6 +55,8 @@ pub mod material_values;
 pub mod materials;
 #[allow(unsafe_code)] // Synchronous source copy; no retained guest pointer.
 pub mod producer_sources;
+pub mod ring_writer;
+pub mod shadow_run;
 pub mod shared_scene_sources;
 pub mod source_acquisition;
 pub mod vertex_inputs;
