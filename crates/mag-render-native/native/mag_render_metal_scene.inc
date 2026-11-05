@@ -319,7 +319,37 @@ static void metal_reservation_release(MagRenderMetal *c){
     if(c->reserved.status<MTLCommandBufferStatusCommitted)[c->reserved commit];
     for(id<MTLCommandBuffer> chunk in c->reserved_chunks)if(chunk.status<MTLCommandBufferStatusCommitted)[chunk commit];
     [c->reserved_chunks removeAllObjects];
-    c->reserved=nil;c->reserved_count=0;c->reserved_ticket=(mag_native_ticket){0};
+    c->reserved=nil;c->reserved_count=0;c->reserved_late=0;c->reserved_ticket=(mag_native_ticket){0};
+}
+/* A position-only reservation's imports, validated under a short owner lease
+ * of the encoding's own (the lease holder releases it between its own native
+ * work, so a bounded retry suffices) and then admitted exactly as a full
+ * reservation's are. */
+static int metal_validate_late_imports(void *opaque,const mag_native_scene_v5 *v5){
+    MagRenderMetal *c=context(opaque);
+    if(!v5||v5->import_count>MAG_NATIVE_SCENE_MAX_IMAGES||(v5->import_count&&!v5->imports))return MAG_NATIVE_INVALID;
+    int status=1;
+    for(int attempt=0;attempt<400;++attempt){
+        status=c->host.try_begin(c->host.userdata,c->host.lifetime);
+        if(status<=0)break;
+        usleep(50);
+    }
+    if(status)return status<0?status:MAG_NATIVE_BUSY;
+    @try{
+        mag_native_import_info info[MAG_NATIVE_SCENE_MAX_IMAGES];
+        for(uint32_t i=0;i<v5->import_count;++i){
+            for(uint32_t j=0;j<i;++j)if(v5->imports[j].image==v5->imports[i].image)return MAG_NATIVE_INVALID;
+            status=metal_scene_import_info(opaque,v5->imports[i].ref,v5->imports[i].required_initialized_planes,&info[i]);
+            if(status)return status;
+        }
+        c->reserved_count=v5->import_count;
+        if(v5->import_count){
+            memcpy(c->reserved_imports,v5->imports,v5->import_count*sizeof(*v5->imports));
+            memcpy(c->reserved_info,info,v5->import_count*sizeof(*info));
+        }
+        return MAG_NATIVE_OK;
+    }@catch(NSException *e){(void)e;return MAG_NATIVE_DEVICE_FAILED;}
+    @finally{c->host.end(c->host.userdata,c->host.lifetime);}
 }
 /* Make a submission visible to poll/close with its ticket and buffer uses.
  * The chunked path does this before its first early commit, so GPU work that
@@ -371,8 +401,8 @@ static int metal_reserve_scene(void *opaque,const mag_native_scene_import *impor
             if(!next){metal_reservation_release(c);return MAG_NATIVE_DEVICE_FAILED;}
             [next enqueue];[c->reserved_chunks addObject:next];
         }
-        c->reserved_count=count;
-        memcpy(c->reserved_imports,imports,count*sizeof(*imports));memcpy(c->reserved_info,info,count*sizeof(*info));
+        c->reserved_count=count;c->reserved_late=!count;
+        if(count){memcpy(c->reserved_imports,imports,count*sizeof(*imports));memcpy(c->reserved_info,info,count*sizeof(*info));}
         c->reserved_ticket=(mag_native_ticket){c->generation,++c->next_submission};
         *out=c->reserved_ticket;
         return MAG_NATIVE_OK;
@@ -777,6 +807,14 @@ static int metal_submit_scene_impl(void *opaque, const mag_native_scene *scene, 
         /* Encode the reservation: queue order, ticket and import validation
          * were fixed under the lease when it was reserved. */
         int result;
+        if (c->reserved_late) {
+            const int validated = metal_validate_late_imports(opaque, v5);
+            if (validated) {
+                metal_reservation_release(c);
+                return validated;
+            }
+            c->reserved_late = 0;
+        }
         c->reserved_encoding = 1;
         @try {
             result = v5 ? metal_scene_owned(opaque, scene, out, nil, sampler_table, sampler_count, v3, v4, v5) : MAG_NATIVE_INVALID;

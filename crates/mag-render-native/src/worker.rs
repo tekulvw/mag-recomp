@@ -571,6 +571,24 @@ trait Driver {
     ) {
         acknowledge(self.commit_subgraph(admission, source, bindings));
     }
+    /// Position-only reservation (see `client::scene_packet::reserve_position`).
+    fn reserve_position(&mut self) -> Reply {
+        (-2, client::Receipt::default())
+    }
+    /// Commit into the position reservation `ticket`.
+    fn commit_subgraph_at(
+        &mut self,
+        _admission: mag_render_abi::packet::Admission,
+        _source: client::Source,
+        _bindings: ImportPins,
+        _ticket: u64,
+    ) -> Reply {
+        (-2, client::Receipt::default())
+    }
+    /// Release the position reservation `ticket` (or any, with 0, before close).
+    fn abandon_position(&mut self, _ticket: u64) -> i32 {
+        -2
+    }
 
     fn scene(&mut self, _: OwnedScene) -> (i32, client::Receipt) {
         (-2, client::Receipt::default())
@@ -625,6 +643,31 @@ impl Driver for ClientDriver {
             acknowledge,
         );
     }
+    fn reserve_position(&mut self) -> Reply {
+        client::scene_packet::reserve_position(self.session)
+    }
+    fn commit_subgraph_at(
+        &mut self,
+        admission: mag_render_abi::packet::Admission,
+        source: client::Source,
+        bindings: ImportPins,
+        ticket: u64,
+    ) -> Reply {
+        client::scene_packet::commit_subgraph_at(
+            self.session,
+            admission,
+            source,
+            &bindings.0,
+            ticket,
+        )
+    }
+    fn abandon_position(&mut self, ticket: u64) -> i32 {
+        if ticket == 0 {
+            client::scene_packet::abandon_any_position(self.session);
+            return 0;
+        }
+        client::scene_packet::abandon_position(self.session, ticket)
+    }
 
     fn scene(&mut self, input: OwnedScene) -> (i32, client::Receipt) {
         client::scene_packet::submit(
@@ -674,6 +717,19 @@ enum Command {
         SyncSender<Reply>,
     ),
     Cancel(mag_render_abi::packet::Admission, SyncSender<Reply>),
+    /// Position-only reservation; replies with the receipt the positioned
+    /// commit will carry.
+    ReservePosition(SyncSender<Reply>),
+    /// Admission followed by its commit into position `u64`. A refused
+    /// commit cancels the uncommitted preparation (the position is released).
+    AdmitSubgraphAt(
+        AdmitInput,
+        client::Source,
+        ImportPins,
+        u64,
+        SyncSender<Reply>,
+    ),
+    AbandonPosition(u64, SyncSender<Reply>),
     Scene(Box<OwnedScene>, SyncSender<Reply>),
     Submit(Box<OwnedInput>, SyncSender<Reply>),
     Poll(SyncSender<Reply>),
@@ -843,7 +899,39 @@ impl Worker {
                             drop(finished);
                             let _ = reply.send(polled);
                         }
+                        Command::ReservePosition(reply) => {
+                            let _ = reply.send(driver.reserve_position());
+                        }
+                        Command::AdmitSubgraphAt(input, source, bindings, ticket, reply) => {
+                            let admitted =
+                                driver.admit(input.worker, *input.packet, input.prevalidated);
+                            let result = match admitted {
+                                Err(status) => {
+                                    let _ = driver.abandon_position(ticket);
+                                    (status, client::Receipt::default())
+                                }
+                                Ok(token) => {
+                                    let start = Instant::now();
+                                    let result =
+                                        driver.commit_subgraph_at(token, source, bindings, ticket);
+                                    if result.0 < 0 {
+                                        let _ = driver.cancel(token);
+                                    }
+                                    actor_timing
+                                        .commit_ns
+                                        .store(elapsed_ns(start), Ordering::Relaxed);
+                                    result
+                                }
+                            };
+                            let _ = reply.send(result);
+                        }
+                        Command::AbandonPosition(ticket, reply) => {
+                            let status = driver.abandon_position(ticket);
+                            let _ = reply.send((status, client::Receipt::default()));
+                        }
                         Command::Close(reply) => {
+                            // An unconsumed position never holds the queue.
+                            let _ = driver.abandon_position(0);
                             let status = driver.close();
                             let _ = reply.send((status, client::Receipt::default()));
                             if status == 0 {
@@ -1651,8 +1739,92 @@ pub unsafe extern "C" fn mag_render_client_worker_submit_scene_subgraph_imported
             binding_count,
             out,
             None,
+            None,
         )
     }
+}
+/// Position-only reservation (opt-in caller): fixes the next imported
+/// subgraph commit's native queue position and ticket now, before its packet
+/// exists, and writes the receipt that commit will carry. One at a time
+/// (BUSY); backends without position reservations return UNSUPPORTED. The
+/// position is consumed by submit_scene_subgraph_imported_v3_at, released by
+/// abandon_position, and released by close.
+/// # Safety
+/// `out` is a writable receipt.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mag_render_client_worker_reserve_position(
+    id: u64,
+    out: *mut client::Receipt,
+) -> i32 {
+    if out.is_null() {
+        return -1;
+    }
+    let mut receipt = client::Receipt::default();
+    let status = ffi(
+        || {
+            let worker = get(id)?;
+            let _serial = worker.serial.try_lock().map_err(|_| -4)?;
+            let (status, r) = worker.call_serial(Command::ReservePosition, false)?;
+            receipt = r;
+            Ok(status)
+        },
+        -6,
+    );
+    receipt.status = status;
+    unsafe { *out = receipt };
+    status
+}
+/// submit_scene_subgraph_imported_v3 into the position reservation `ticket`
+/// (its receipt's ticket). The imports are validated when the commit is
+/// encoded. Negative is definitely uncommitted and releases the position;
+/// zero is accepted, with the reservation's receipt (a later failure is a
+/// FAILED terminal receipt, declined when nothing reached the GPU).
+/// # Safety
+/// As submit_scene_subgraph_imported_v3.
+#[unsafe(no_mangle)]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn mag_render_client_worker_submit_scene_subgraph_imported_v3_at(
+    id: u64,
+    input: *const client::scene_packet::raw::DescV3,
+    requirements: *const mag_render_abi::packet::ImageRequirement,
+    count: u32,
+    bindings: *const mag_render_abi::packet::ImageBinding,
+    binding_count: u32,
+    ticket: u64,
+    out: *mut client::Receipt,
+) -> i32 {
+    if ticket == 0 {
+        return -1;
+    }
+    unsafe {
+        submit_subgraph_imported_v3(
+            id,
+            input,
+            requirements,
+            count,
+            bindings,
+            binding_count,
+            out,
+            None,
+            Some(ticket),
+        )
+    }
+}
+/// Releases the position reservation `ticket` without committing anything.
+#[unsafe(no_mangle)]
+pub extern "C" fn mag_render_client_worker_abandon_position(id: u64, ticket: u64) -> i32 {
+    if ticket == 0 {
+        return -1;
+    }
+    ffi(
+        || {
+            let worker = get(id)?;
+            let _serial = worker.serial.try_lock().map_err(|_| -4)?;
+            let (status, _) = worker.call_serial(|r| Command::AbandonPosition(ticket, r), false)?;
+            Ok(status)
+        },
+        -6,
+    )
 }
 /// submit_scene_subgraph_imported_v3 for a handed-over packet, with the
 /// release contract of prepare_scene_imported_v3_owned.
@@ -1685,6 +1857,7 @@ pub unsafe extern "C" fn mag_render_client_worker_submit_scene_subgraph_imported
             binding_count,
             out,
             Some(&handoff),
+            None,
         )
     }
 }
@@ -1698,6 +1871,7 @@ unsafe fn submit_subgraph_imported_v3(
     binding_count: u32,
     out: *mut client::Receipt,
     handoff: Option<&std::sync::Arc<client::scene_packet::Handoff>>,
+    position: Option<u64>,
 ) -> i32 {
     if out.is_null() {
         return -1;
@@ -1740,7 +1914,10 @@ unsafe fn submit_subgraph_imported_v3(
             }
             let wait_start = Instant::now();
             let result = worker.call_serial(
-                |reply| Command::AdmitSubgraph(admit, source, pins, reply),
+                |reply| match position {
+                    Some(ticket) => Command::AdmitSubgraphAt(admit, source, pins, ticket, reply),
+                    None => Command::AdmitSubgraph(admit, source, pins, reply),
+                },
                 true,
             );
             timing.wait_ns = elapsed_ns(wait_start);
@@ -2446,8 +2623,54 @@ mod tests {
         status: Arc<AtomicI32>,
         events: Arc<Mutex<Vec<&'static str>>>,
         thread: ThreadId,
+        position: Option<u64>,
     }
     impl Driver for PreparedDriver {
+        fn reserve_position(&mut self) -> Reply {
+            assert_eq!(self.thread, thread::current().id());
+            if self.position.is_some() {
+                return (-4, client::Receipt::default());
+            }
+            self.position = Some(7);
+            self.events.lock().unwrap().push("reserve");
+            (
+                0,
+                client::Receipt {
+                    ticket: 7,
+                    ..client::Receipt::default()
+                },
+            )
+        }
+        fn commit_subgraph_at(
+            &mut self,
+            a: mag_render_abi::packet::Admission,
+            source: client::Source,
+            _bindings: ImportPins,
+            ticket: u64,
+        ) -> Reply {
+            if self.position != Some(ticket) || self.prepared.get(a, source).is_err() {
+                return (-3, client::Receipt::default());
+            }
+            self.position = None;
+            self.events.lock().unwrap().push("at");
+            self.pending.push(self.prepared.remove(a, source).unwrap());
+            (
+                0,
+                client::Receipt {
+                    source,
+                    ticket,
+                    ..client::Receipt::default()
+                },
+            )
+        }
+        fn abandon_position(&mut self, ticket: u64) -> i32 {
+            if self.position.is_some_and(|p| ticket == 0 || p == ticket) {
+                self.position = None;
+                self.events.lock().unwrap().push("abandon");
+                return 0;
+            }
+            -3
+        }
         fn admit(
             &mut self,
             worker: u64,
@@ -2559,6 +2782,7 @@ mod tests {
                     status,
                     events,
                     thread: thread::current().id(),
+                    position: None,
                 })
             },
             32,
@@ -2566,6 +2790,54 @@ mod tests {
             reserved,
         )
         .unwrap()
+    }
+    /// Position reservations on the actor: one at a time; a commit into the
+    /// wrong position is refused and its preparation cancelled (the position
+    /// stays); the right one commits with the reserved ticket; close releases
+    /// an unconsumed position first.
+    #[test]
+    fn position_reservation_commits_in_its_slot_and_close_releases_it() {
+        let status = Arc::new(AtomicI32::new(0));
+        let events = Arc::new(Mutex::new(vec![]));
+        let worker = prepared_worker_with(status, events.clone(), true);
+        let (s, r) = worker.call(Command::ReservePosition, false).unwrap();
+        assert_eq!((s, r.ticket), (0, 7));
+        assert_eq!(worker.call(Command::ReservePosition, false).unwrap().0, -4);
+        with_input(|input, _, _| {
+            let mut host = unsafe { *input.target };
+            host.image = std::ptr::dangling_mut::<u8>().cast();
+            let binding = mag_render_abi::packet::ImageBinding {
+                image: 0,
+                reserved: 0,
+                source_key: 99,
+                host,
+                validate_planes: None,
+            };
+            let source = client::scene_packet::packet_tests::fixture().source;
+            let at = |ticket| {
+                let pins = unsafe { ImportPins::copy(&binding, 1) }.unwrap();
+                worker
+                    .call(
+                        |reply| {
+                            Command::AdmitSubgraphAt(fixture_admit(), source, pins, ticket, reply)
+                        },
+                        true,
+                    )
+                    .unwrap()
+            };
+            assert_eq!(at(8).0, -3);
+            let (s, r) = at(7);
+            assert_eq!((s, r.ticket), (0, 7));
+        });
+        assert_eq!(worker.call(Command::Poll, false).unwrap().0, 0);
+        assert_eq!(worker.call(Command::ReservePosition, false).unwrap().0, 0);
+        assert_eq!(worker.call(Command::Close, false).unwrap().0, 0);
+        assert_eq!(
+            *events.lock().unwrap(),
+            [
+                "reserve", "admit", "cancel", "admit", "at", "terminal", "reserve", "abandon"
+            ]
+        );
     }
     fn fixture_admit() -> AdmitInput {
         AdmitInput {

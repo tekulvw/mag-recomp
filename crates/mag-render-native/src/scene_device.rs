@@ -339,6 +339,29 @@ impl SceneDevice<'_> {
         }
         Ok((native.device_generation, native.submission_id))
     }
+    /// Reserve only the next submission's native queue position, before its
+    /// imports are known: the submission binds its imports later and the
+    /// backend validates them when it encodes. Same limits as
+    /// `reserve_submission`; UNSUPPORTED backends leave nothing reserved.
+    pub(crate) fn reserve_position(&mut self) -> Result<(u64, u64), i32> {
+        if self.target.is_some() || self.frame.is_some() {
+            return Err(-1);
+        }
+        if self.inner.pending.len() + self.inner.ready.len() >= 2 {
+            return Err(-4);
+        }
+        let mut native = Ticket::default();
+        let status =
+            unsafe { scene_extended::Plan::reserve_position(self.inner.api.device, &mut native) };
+        if status != 0 {
+            return Err(if status < 0 { status } else { -6 });
+        }
+        if native.device_generation == 0 || native.submission_id == 0 {
+            let _ = self.abandon_reservation();
+            return Err(-6);
+        }
+        Ok((native.device_generation, native.submission_id))
+    }
     /// Diagnostic counters of the opt-in chunked reserved encoding
     /// (`MAG_RENDER_MAIN_CHUNKED_COMMIT=1`): chunked submissions so far, and
     /// the reserved and non-empty command buffers of the last one.
