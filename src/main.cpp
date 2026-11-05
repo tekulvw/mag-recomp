@@ -103,6 +103,7 @@ uint64_t ppu_guest_call(uint32_t, uint64_t, uint64_t, uint64_t, uint64_t,
 
 /* The GCM half of the frame clock. */
 #include "gcm_flip_receipt.h"
+#include "frame_present_policy.h"
 void     cellGcmTickVBlank(void);
 void     cellGcmTickFlip(void);
 int      cellGcm_take_flip_pending(void);
@@ -231,7 +232,7 @@ static DWORD WINAPI frame_clock(LPVOID)
     fprintf(stderr, "[rsx] %s backend init %s\n", RSX_BACKEND_NAME,
             rsx_ok ? "OK -- window open" : "FAILED");
 
-    unsigned last_flip_count = 0;
+    MagFramePresentState present_state;
     ULONGLONG next_tick = GetTickCount64();
     ULONGLONG next_snapshot = next_tick + 1000;
     ULONGLONG next_fallback_present = next_tick + 4;
@@ -255,9 +256,7 @@ static DWORD WINAPI frame_clock(LPVOID)
              * mixed one. */
             if (rsx_ok && cellGcm_take_flip_receipt(&receipt)) {
                 present_guest_frame(receipt);
-                /* Preserve the historical post-present scheduling snapshot;
-                 * the immutable receipt above carries this submission's ID. */
-                last_flip_count = cellGcm_flip_request_count();
+                present_state.presented(receipt.flip_count);
             }
             /* Drain the FIFO every tick. This is what writes the RSX sync-fence
              * labels the game's per-frame logic blocks on, so it has to keep
@@ -275,9 +274,7 @@ static DWORD WINAPI frame_clock(LPVOID)
         if (rsx_ok) {
             if (cellGcm_take_flip_receipt(&receipt)) {
                 present_guest_frame(receipt);
-                /* Preserve the historical post-present scheduling snapshot;
-                 * the immutable receipt above carries this submission's ID. */
-                last_flip_count = cellGcm_flip_request_count();
+                present_state.presented(receipt.flip_count);
             }
             cellGcm_rsx_process_fifo();
 
@@ -296,9 +293,9 @@ static DWORD WINAPI frame_clock(LPVOID)
              * present at the original idle cadence, so completion wakes cannot
              * create a self-sustaining stream of fallback submissions. */
             cellGcm_latest_flip_receipt(&receipt);
-            if (receipt.flip_count != last_flip_count) {
+            if (present_state.latest_is_unpresented(receipt.flip_count)) {
                 present_guest_frame(receipt);
-                last_flip_count = receipt.flip_count;
+                present_state.presented(receipt.flip_count);
             } else if (receipt.flip_count == 0 &&
                        (!g_native_consumer || GetTickCount64() >= next_fallback_present)) {
                 MagRsxConsumerLease consumer_lease;
