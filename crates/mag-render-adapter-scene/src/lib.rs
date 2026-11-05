@@ -56,6 +56,7 @@ pub mod materials;
 #[allow(unsafe_code)] // Synchronous source copy; no retained guest pointer.
 pub mod producer_sources;
 pub mod ring_writer;
+pub mod shadow_run;
 pub mod shared_scene_sources;
 pub mod source_acquisition;
 pub mod vertex_inputs;
