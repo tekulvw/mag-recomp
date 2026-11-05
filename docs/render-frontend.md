@@ -211,6 +211,25 @@ Metal host-uploaded D32 textures need a staging path; D3D12 cannot expose a cube
 Texture2D view without an additional copy. Unsupported viewport, view, sampler or format cases
 refuse the complete scene. Native CPU and compiler checks are not real-game acceptance.
 
+`tools/check_render_frontend_d3d12_gpu.py` is the real-GPU D3D12 check on Windows. Its fixture
+creates a D3D12 device and direct queue on the adapter named by `--vendor-id` and `--device-id`,
+lends them through a synthetic host owner (no SDK owner, game data or presentation) and runs the
+owner retain/refusal contract, the compute and connected compute/draw probes, an uploaded-texture
+scene and the six-pass scene probe, with the pinned translator's HLSL compiled at run time by the
+pinned DXC library (`--dxc-dir`, an extracted DXC release). It also checks that the operations the
+D3D12 backend does not implement (in-place buffer writes, the memory census, reserved scene order,
+depth bounds) are refused as unsupported. `--validation` requires the D3D12 debug layer (the
+Windows Graphics Tools optional feature) and fails on any debug-layer error; `--gpu-validation`
+adds GPU-based validation. Run it from an x64 MSVC developer environment with `clang-cl`, for
+example:
+
+```sh
+python tools/check_render_frontend_d3d12_gpu.py --vendor-id 0x10de --device-id 0x2b85 \
+  --dxc-dir build/dxc-1.9.2609 --validation
+```
+
+CI only syntax-checks its fixture (`--compile-only`); it is not real-game acceptance.
+
 The existing CPU fixture runner accepts `--vulkan-include PATH` to exercise the actual Vulkan
 encoder through injected dispatch functions without a driver or GPU. Linux integration CI runs
 that fixture alongside shared image/view/viewport admission and D3D12 arithmetic checks.
