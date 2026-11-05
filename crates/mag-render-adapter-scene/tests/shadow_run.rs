@@ -440,6 +440,9 @@ fn deformable(n: usize) -> DepthImmutablePartition {
         )),
         indices: Ok(Arc::new((0..n as u16).collect())),
         attributes: Some(Ok(attributes)),
+        record: Box::new([0; 544]),
+        secondary_attributes: None,
+        skinning: None,
     }
 }
 fn wind_pass(mode: u32, workers: u32) -> Vec<u8> {
