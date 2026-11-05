@@ -294,6 +294,17 @@ int mag_render_client_worker_commit_scene_subgraph(uint64_t,const MagRenderScene
  * cancelled before return); zero accepted; positive indeterminate. No GPU
  * completion, presentation or original CPU publication is implied. */
 int mag_render_client_worker_submit_scene_subgraph_imported_v3(uint64_t,const MagRenderScenePacketV3Desc*,const MagRenderPacketImageRequirement*,uint32_t,const MagRenderPacketImageBinding*,uint32_t,MagRenderClientReceipt*);
+/* Position-only reservation for an imported subgraph commit whose packet is
+ * not planned yet: reserve_position fixes the next such commit's native queue
+ * position and ticket now and writes the receipt it will carry (one at a time:
+ * BUSY; UNSUPPORTED without backend support). submit_..._at commits a packet
+ * into that position (its imports are validated when it is encoded; negative
+ * is definitely uncommitted and releases the position; a later failure is a
+ * FAILED terminal receipt, declined when nothing reached the GPU).
+ * abandon_position releases it unused; close releases it too. */
+int mag_render_client_worker_reserve_position(uint64_t,MagRenderClientReceipt*);
+int mag_render_client_worker_submit_scene_subgraph_imported_v3_at(uint64_t,const MagRenderScenePacketV3Desc*,const MagRenderPacketImageRequirement*,uint32_t,const MagRenderPacketImageBinding*,uint32_t,uint64_t,MagRenderClientReceipt*);
+int mag_render_client_worker_abandon_position(uint64_t,uint64_t);
 /* Handed-over packets. With MAG_RENDER_PACKET_HANDOFF=1 (default off) the
  * worker borrows the packet's large byte ranges -- role-0 buffer bytes and
  * the texels of unkeyed images whose subresources already lie at their packed

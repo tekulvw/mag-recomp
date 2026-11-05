@@ -3425,6 +3425,10 @@ pub(crate) fn commit_subgraph_reserved(
             if p.imports.is_empty() || s.acknowledged_failure {
                 return Err(-1);
             }
+            // An outstanding position belongs to its own positioned commit.
+            if s.position.is_some() {
+                return Err(-4);
+            }
             let requirements = p.imports.clone();
             let mut receipt = p.receipt;
             unsafe {
@@ -3464,13 +3468,147 @@ pub(crate) fn commit_subgraph_reserved(
     if let Some(ack) = acknowledge.take() {
         ack((0, receipt));
     }
-    let failure = |s: &mut super::Session, status: i32| {
+    encode_reserved(id, admission, source, receipt, false);
+}
+/// Position-only reservation (for a caller whose packet is not planned yet):
+/// fixes the next submission's native queue position and ticket now and
+/// returns the receipt its positioned commit will carry. One at a time (-4);
+/// backends without position reservations return their status (UNSUPPORTED).
+pub(crate) fn reserve_position(id: u64) -> (i32, Receipt) {
+    let mut out = Receipt {
+        abi_version: 1,
+        struct_size: size_of::<Receipt>() as u32,
+        flags: DIAGNOSTIC,
+        ..Receipt::default()
+    };
+    let status = ffi(|| {
+        with_session(id, |s| {
+            if s.acknowledged_failure || s.position.is_some() {
+                return Err(-4);
+            }
+            let (generation, native) = s.backend.device().0.borrow_mut().reserve_position()?;
+            out.ticket = s.backend.next_submission_id();
+            out.native_generation = generation;
+            out.native_ticket = native;
+            out.status = 0;
+            s.position = Some(out);
+            Ok(())
+        })
+    });
+    out.status = status;
+    (status, out)
+}
+/// Releases the outstanding position reservation `ticket` (nothing encoded).
+pub(crate) fn abandon_position(id: u64, ticket: u64) -> i32 {
+    ffi(|| {
+        with_session(id, |s| {
+            if s.position.map(|p| p.ticket) != Some(ticket) {
+                return Err(-3);
+            }
+            s.position = None;
+            s.backend.device().0.borrow_mut().abandon_reservation()
+        })
+    })
+}
+/// Releases any outstanding position reservation (before close).
+pub(crate) fn abandon_any_position(id: u64) {
+    let _ = ffi(|| {
+        with_session(id, |s| {
+            if s.position.take().is_some() {
+                let _ = s.backend.device().0.borrow_mut().abandon_reservation();
+            }
+            Ok(())
+        })
+    });
+}
+/// Commits `admission` into the outstanding position reservation `ticket`:
+/// binds its imports (the backend validates them when it encodes), then
+/// encodes and commits as a reserved commit does. Returns the reservation's
+/// receipt once the imports are bound; a failure after that is published as
+/// a FAILED terminal receipt (declined when nothing reached the GPU). A
+/// refusal before (no such reservation, binding refused) releases the
+/// position and is definitely uncommitted.
+pub(crate) fn commit_subgraph_at(
+    id: u64,
+    admission: raw::Admission,
+    source: Source,
+    bindings: &[raw::ImageBinding],
+    ticket: u64,
+) -> (i32, Receipt) {
+    let mut receipt = None;
+    let status = ffi(|| {
+        with_session(id, |s| {
+            let Some(mut reserved) = s.position.filter(|p| p.ticket == ticket) else {
+                return Err(-3);
+            };
+            s.position = None;
+            let bound = s.admissions.get(admission, source).and_then(|p| {
+                let requirements = p.imports.clone();
+                unsafe {
+                    s.backend
+                        .device()
+                        .0
+                        .borrow_mut()
+                        .bind_imports(bindings, &requirements)
+                }
+            });
+            if let Err(e) = bound {
+                let _ = s.backend.device().0.borrow_mut().abandon_reservation();
+                return Err(e);
+            }
+            let mut r = s.admissions.get(admission, source)?.receipt;
+            r.ticket = reserved.ticket;
+            r.native_generation = reserved.native_generation;
+            r.native_ticket = reserved.native_ticket;
+            r.status = 0;
+            reserved = r;
+            receipt = Some(reserved);
+            Ok(())
+        })
+    });
+    let Some(receipt) = receipt.filter(|_| status == 0) else {
+        return (
+            if status == 0 { -6 } else { status },
+            Receipt {
+                abi_version: 1,
+                struct_size: size_of::<Receipt>() as u32,
+                flags: DIAGNOSTIC,
+                source,
+                status,
+                ..Receipt::default()
+            },
+        );
+    };
+    encode_reserved(id, admission, source, receipt, true);
+    (0, receipt)
+}
+/// The encoding and commit of a reserved submission whose receipt the caller
+/// already has (`receipt`, its ordering witness). `positioned`: a
+/// position-only reservation, whose definite failures (nothing reached the
+/// GPU) decline that commit instead of failing the session closed.
+fn encode_reserved(
+    id: u64,
+    admission: raw::Admission,
+    source: Source,
+    receipt: Receipt,
+    positioned: bool,
+) {
+    // A positioned commit that failed before any GPU work (definite) is a
+    // declined commit: FAILED but not UNCERTAIN, and later commits proceed.
+    let failure_as = |s: &mut super::Session, status: i32, definite: bool| {
         let _ = s.backend.device().0.borrow_mut().abandon_reservation();
         let _ = s.backend.device().0.borrow_mut().release_imports();
         let mut failed = receipt;
-        failed.flags |= TERMINAL | FAILED | UNCERTAIN;
+        let declined = positioned && definite;
+        failed.flags |= if declined {
+            TERMINAL | FAILED
+        } else {
+            TERMINAL | FAILED | UNCERTAIN
+        };
         failed.status = if status < 0 { status } else { -6 };
-        s.acknowledged_failure = true;
+        if !declined {
+            s.acknowledged_failure = true;
+        }
         s.ready.push_back(super::Pending {
             receipt: failed,
             identities: vec![],
@@ -3478,10 +3616,12 @@ pub(crate) fn commit_subgraph_reserved(
         // Make the FAILED terminal visible to the host at once.
         let _ = s.publish_ready();
     };
+    let failure = |s: &mut super::Session, status: i32| failure_as(s, status, false);
+    let definite = |s: &mut super::Session, status: i32| failure_as(s, status, true);
     let _ = ffi(|| {
         with_session(id, |s| {
             let Ok(p) = s.admissions.get(admission, source) else {
-                failure(s, -3);
+                definite(s, -3);
                 return Ok(());
             };
             let commands = p.commands.clone();
@@ -3498,7 +3638,7 @@ pub(crate) fn commit_subgraph_reserved(
                     return Ok(());
                 }
                 Err(_) => {
-                    failure(s, -6);
+                    definite(s, -6);
                     if let Ok(p) = s.admissions.remove(admission, source) {
                         let _ = s.packet_cache.unpin(&p.pipelines);
                     }
@@ -3549,6 +3689,10 @@ fn commit_impl(
     let mut effects = false;
     let status = ffi(|| {
         with_session(id, |s| {
+            // An outstanding position belongs to its own positioned commit.
+            if s.position.is_some() {
+                return Err(-4);
+            }
             let p = s.admissions.get(admission, source)?;
             if let Some((target, frame)) = target {
                 if !p.imports.is_empty()

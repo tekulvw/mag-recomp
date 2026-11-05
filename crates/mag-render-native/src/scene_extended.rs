@@ -481,7 +481,6 @@ impl Plan {
     /// when it is encoded (backends that cannot report UNSUPPORTED).
     /// # Safety
     /// `device` is the live native device.
-    #[allow(dead_code)] // The worker's position-only commit uses it next.
     pub(super) unsafe fn reserve_position(device: *mut c_void, out: &mut Ticket) -> i32 {
         unsafe { mag_native_reserve_scene_v5(device, std::ptr::null(), 0, out) }
     }
