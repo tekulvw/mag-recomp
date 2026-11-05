@@ -102,6 +102,18 @@ def classify_boot(log_text: str, returncode: int | None, timed_out: bool) -> dic
     return result
 
 
+# Runtime switches movie playback needs: timed Sail pictures and ATRAC audio, plus checked GCM
+# references, which timed playback requires before it opens a movie. Without them a decoder build
+# opens and immediately closes each movie and the game waits after the legal screen.
+MOVIE_PLAYBACK_ENV={'PS3RECOMP_SAIL_TIMED_THX':'1', 'PS3RECOMP_SAIL_ATRAC_AUDIO':'1',
+                    'PS3RECOMP_GCM_CHECKED_REF':'1'}
+
+
+def movie_environment(receipt: dict) -> dict:
+    """The playback switches for a binary whose receipt records the movie decoder, else none."""
+    return dict(MOVIE_PLAYBACK_ENV) if receipt.get('movie_playback') is True else {}
+
+
 def select_boot_image(profile: dict, image_name: str) -> tuple[dict, Path, str]:
     if image_name not in ('EBOOT','mage_g'):
         raise ValueError('Image must be EBOOT or mage_g')
@@ -182,9 +194,12 @@ def run_boot(binary: Path, seconds: float, output_dir: Path, syscall_trace: str 
             if engine_receipt['sdk_revision'] not in framework.get('first_nonblack_capture_revisions', []):
                 raise ValueError('The recorded engine runtime does not support first-nonblack frame capture')
         env.update(handoff_env)
+        # The engine plays the movies, so its receipt decides, not the launcher's.
+        env.update(movie_environment(checked_receipt(Path(mapping['binary']),mapping['elf_sha256'])))
         (output_dir/'handoff-provision.json').write_text(json.dumps(mapping,indent=2)+'\n')
         capture=capture_handoff(command,output_dir,env,output_dir/'console.log',seconds,mapping)
     else:
+        env.update(movie_environment(receipt))
         capture=capture_process(command, output_dir, env, output_dir/'console.log', seconds)
     final_log=Path(capture.get('final_log',output_dir/'console.log'))
     text=final_log.read_text(errors='replace')
