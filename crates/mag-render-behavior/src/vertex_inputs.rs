@@ -60,6 +60,9 @@ pub struct GpuLayoutPlan {
     pub stride: u32,
     /// One field slot per required slot, in ascending order of required slots.
     pub fields: Vec<u32>,
+    /// The number of vertices the GPU produces. With GPU-produced vertices the prepared
+    /// positions need not be held on the CPU, so the index check uses this count.
+    pub vertex_count: usize,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -472,7 +475,7 @@ pub fn plan_vertex_inputs<'a>(
                 "layout fields do not match required slots".into(),
             ));
         }
-        let count = prep.positions.len();
+        let count = plan.vertex_count;
         if let Some(&index) = prep.indices.iter().find(|i| **i as usize >= count) {
             return Err(VertexInputError::Index { index, count });
         }
@@ -1039,12 +1042,26 @@ mod tests {
                 array_mask: 0x1001,
                 stride: 48,
                 fields: vec![0, 12],
+                vertex_count: 3,
             }));
         }
         let out = pack_vertex_inputs(&draw, 0x1001, 1 << 20).unwrap();
         assert!(out.vertices.is_empty());
         assert_eq!(out.attributes, vec![(0, 0), (12, 16)]);
         assert_eq!(out.stride, 48);
+        // The index check uses the GPU vertex count, not the CPU positions.
+        if let Prepared::Present(prep) = &mut draw.group_zero {
+            prep.positions = &[];
+            prep.indices = &[0, 1, 2];
+        }
+        assert!(pack_vertex_inputs(&draw, 0x1001, 1 << 20).is_ok());
+        if let Prepared::Present(prep) = &mut draw.group_zero {
+            prep.indices = &[0, 1, 3];
+        }
+        assert_eq!(
+            pack_vertex_inputs(&draw, 0x1001, 1 << 20),
+            Err(VertexInputError::Index { index: 3, count: 3 })
+        );
         if let Prepared::Present(prep) = &mut draw.group_zero {
             prep.gpu = Some(Err("layout".into()));
         }

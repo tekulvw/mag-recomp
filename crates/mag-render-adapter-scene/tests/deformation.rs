@@ -317,6 +317,57 @@ fn group_zero_site_expands_instances_like_the_shared_entry_point() {
         Err(GroupZeroGeometryError::Budget)
     ));
     assert!(prepare_group_zero_geometry(input(), need).is_ok());
+    // The opt-in GPU path takes the same inputs: its indices are the CPU expansion's, and the
+    // kernel reference's positions stay within the specification's tolerance of the CPU rows.
+    let work = prepare_group_zero_gpu_work(&input(), usize::MAX).unwrap();
+    assert_eq!(work.indices, expected.indices);
+    assert_eq!(work.vertex_count, 15);
+    let rows = mag_render_behavior_glue::gpu_group_zero::reference(&work);
+    let validated =
+        mag_render_behavior_glue::gpu_group_zero::validated(&group_zero::GroupZeroInputs {
+            wind,
+            material: material_rows,
+            object: object_pose,
+            fade,
+            environment,
+            instances: &instances,
+            colour_frequency: frequency,
+            batch_max: batch as u32,
+            colour_pool: &pool,
+            positions: &positions,
+            normals: &normals,
+            weights: &weights,
+            indices: &indices,
+        })
+        .unwrap();
+    for (index, position) in expected.positions.iter().enumerate() {
+        let (instance, vertex) = (index / 5, index % 5);
+        for lane in 0..3 {
+            let error = (rows[2 * index][lane] - f32::from_bits(position[lane])).abs() as f64;
+            assert!(
+                error
+                    <= group_zero::position_tolerance(
+                        &validated,
+                        &validated.placements[instance],
+                        positions[vertex],
+                        normals[vertex],
+                        weights[vertex],
+                        lane,
+                    )
+            );
+        }
+        assert_eq!(
+            rows[2 * index + 1].map(f32::to_bits),
+            expected.colours[index]
+        );
+    }
+    assert_eq!(
+        prepare_group_zero_gpu_work(&input(), 64).err(),
+        Some(mag_render_behavior_glue::gpu_group_zero::GpuRefusal::Budget)
+    );
+    if std::env::var_os("MAG_RENDER_GPU_GROUP_ZERO").is_none() {
+        assert!(!group_zero_gpu_enabled());
+    }
     assert_eq!(
         required_color_population(5, 3, batch, 1),
         Err(GroupZeroGeometryError::ColorFrequency(1))

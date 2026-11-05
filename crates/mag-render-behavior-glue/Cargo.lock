@@ -250,6 +250,7 @@ dependencies = [
  "mag-render-behavior",
  "mag-render-native",
  "mag-render-programs",
+ "mag-render-shaders",
 ]
 
 [[package]]

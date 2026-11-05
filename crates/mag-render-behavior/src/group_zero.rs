@@ -239,11 +239,36 @@ fn finite(bits: u32, what: &'static str) -> Result<f64, GroupZeroError> {
     }
 }
 
-/// Expands and deforms every instance. All-or-nothing.
-pub fn deform_group_zero(
+/// One instance's placement: `placed = scale · (rotation · P) + offset`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct InstancePlacement {
+    pub rotation: [[f64; 3]; 3],
+    pub scale: f64,
+    pub offset: [f64; 3],
+}
+
+/// Everything the per-vertex evaluation needs once the inputs are admitted: the per-instance
+/// placements and the per-draw wind terms.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ValidatedGroupZero {
+    pub placements: Vec<InstancePlacement>,
+    /// `f = ω0 · M1.x`.
+    pub frequency: f64,
+    /// `A1 = M0.x · ω2` and `A2 = M0.y · ω3`.
+    pub amplitudes: [f64; 2],
+    /// `θ`.
+    pub phase: f64,
+    /// The colour pool entries the expansion reads.
+    pub pool_length: u64,
+}
+
+/// Checks every refusal that does not depend on a per-vertex result and computes the
+/// per-instance placements. [`deform_group_zero`] is this followed by [`deform_vertex`] for every
+/// (instance, vertex); a per-vertex non-finite position is its only remaining refusal.
+pub fn validate_group_zero(
     i: &GroupZeroInputs<'_>,
     max_vertices: u64,
-) -> Result<GroupZeroOutput, GroupZeroError> {
+) -> Result<ValidatedGroupZero, GroupZeroError> {
     let instances = i.instances.len() as u64;
     let vertices = i.positions.len() as u64;
     if instances == 0 {
@@ -306,20 +331,10 @@ pub fn deform_group_zero(
     }
 
     let f = |word: u32| f32::from_bits(word) as f64;
-    let frequency = f(i.wind[0]) * f(i.material[1][0]);
-    let a1 = f(i.material[0][0]) * f(i.wind[2]);
-    let a2 = f(i.material[0][1]) * f(i.wind[3]);
-    let theta = f(i.wind[4]);
     let translation = [f(i.object[4]), f(i.object[5]), f(i.object[6])];
     let e3 = i.environment[3].map(f);
-    let (ka1, kb1, kc) = (KA1 as f64, KB1 as f64, KC as f64);
-
-    let mut out = GroupZeroOutput {
-        positions: Vec::with_capacity((instances * vertices) as usize),
-        colours: Vec::with_capacity((instances * vertices) as usize),
-        indices: Vec::with_capacity(i.instances.len() * i.indices.len()),
-    };
-    for (instance, row) in i.instances.iter().enumerate() {
+    let mut placements = Vec::with_capacity(i.instances.len());
+    for row in i.instances {
         let h = row.map(rebased_half);
         let offset = [h[0], h[1], h[2]];
         let sigma = h[3];
@@ -361,23 +376,80 @@ pub fn deform_group_zero(
         if !product.is_finite() || product.abs() > f32::MAX as f64 {
             return Err(GroupZeroError::UnqualifiedFloat("fade product"));
         }
-        let scale = sigma * (1.0 - product.clamp(0.0, 1.0));
+        placements.push(InstancePlacement {
+            rotation,
+            scale: sigma * (1.0 - product.clamp(0.0, 1.0)),
+            offset,
+        });
+    }
+    Ok(ValidatedGroupZero {
+        placements,
+        frequency: f(i.wind[0]) * f(i.material[1][0]),
+        amplitudes: [
+            f(i.material[0][0]) * f(i.wind[2]),
+            f(i.material[0][1]) * f(i.wind[3]),
+        ],
+        phase: f(i.wind[4]),
+        pool_length,
+    })
+}
+
+/// The deformed `(x, y, z)` of one source vertex under one placement, before narrowing.
+pub fn deform_vertex(
+    v: &ValidatedGroupZero,
+    placement: &InstancePlacement,
+    position: [u32; 4],
+    normal: [u32; 4],
+    weight: [u32; 4],
+) -> [f64; 3] {
+    let f = |word: u32| f32::from_bits(word) as f64;
+    let (ka1, kb1, kc) = (KA1 as f64, KB1 as f64, KC as f64);
+    let p = [0, 1, 2].map(|l| f(position[l]));
+    let n = [0, 1, 2].map(|l| f(normal[l]));
+    let w3 = f(weight[3]);
+    let placed: [f64; 3] = std::array::from_fn(|r| {
+        placement.scale * (0..3).map(|c| placement.rotation[r][c] * p[c]).sum::<f64>()
+            + placement.offset[r]
+    });
+    let alpha = ka1 * (v.phase + placed[0] + placed[1]);
+    let beta = kb1 * (v.phase + kc * (placed[0] + placed[1] + placed[2]));
+    let displacement = (v.amplitudes[0] * wave(beta, v.frequency)
+        + v.amplitudes[1] * wave(alpha, v.frequency))
+        * (1.0 - w3);
+    [
+        placed[0] + displacement * n[0],
+        placed[1] + displacement * n[1],
+        placed[2] + displacement * n[0],
+    ]
+}
+
+/// The slot-12 colour row of a pool entry: `byte / 255` per channel.
+pub fn colour_row(entry: [u8; 4]) -> [u32; 4] {
+    entry.map(|byte| (byte as f32 / 255.0).to_bits())
+}
+
+/// Expands and deforms every instance. All-or-nothing.
+pub fn deform_group_zero(
+    i: &GroupZeroInputs<'_>,
+    max_vertices: u64,
+) -> Result<GroupZeroOutput, GroupZeroError> {
+    let v = validate_group_zero(i, max_vertices)?;
+    let vertices = i.positions.len() as u64;
+    let total = v.placements.len() * i.positions.len();
+    let mut out = GroupZeroOutput {
+        positions: Vec::with_capacity(total),
+        colours: Vec::with_capacity(total),
+        indices: Vec::with_capacity(i.instances.len() * i.indices.len()),
+    };
+    for (instance, placement) in v.placements.iter().enumerate() {
         for vertex in 0..i.positions.len() {
-            let p = [0, 1, 2].map(|l| f(i.positions[vertex][l]));
-            let n = [0, 1, 2].map(|l| f(i.normals[vertex][l]));
-            let w3 = f(i.weights[vertex][3]);
-            let placed: [f64; 3] = std::array::from_fn(|r| {
-                scale * (0..3).map(|c| rotation[r][c] * p[c]).sum::<f64>() + offset[r]
-            });
-            let alpha = ka1 * (theta + placed[0] + placed[1]);
-            let beta = kb1 * (theta + kc * (placed[0] + placed[1] + placed[2]));
-            let displacement =
-                (a1 * wave(beta, frequency) + a2 * wave(alpha, frequency)) * (1.0 - w3);
-            let lanes = [
-                placed[0] + displacement * n[0],
-                placed[1] + displacement * n[1],
-                placed[2] + displacement * n[0],
-            ];
+            let lanes = deform_vertex(
+                &v,
+                placement,
+                i.positions[vertex],
+                i.normals[vertex],
+                i.weights[vertex],
+            );
             let mut position = [0u32; 4];
             for (lane, value) in lanes.iter().enumerate() {
                 let value = *value as f32;
@@ -395,15 +467,37 @@ pub fn deform_group_zero(
                 i.colour_frequency as u64,
                 i.batch_max as u64,
             );
-            let entry = i.colour_pool[index as usize];
-            out.colours
-                .push(entry.map(|byte| (byte as f32 / 255.0).to_bits()));
+            out.colours.push(colour_row(i.colour_pool[index as usize]));
         }
         let base = instance as u32 * vertices as u32;
         out.indices
             .extend(i.indices.iter().map(|k| base + *k as u32));
     }
     Ok(out)
+}
+
+/// The allowed absolute error of output position lane `lane` (`group-zero-deformation.md`,
+/// Tolerance): `2^-18·M + (|A1| + |A2|)·|1 − w3|·|N_lane|·(2^-18 + 6·|f|·δ)` with
+/// `M = |s|·(|P.x| + |P.y| + |P.z|) + |o_lane|` and `δ = 2^-20·(1 + |θ| + 4·M)`. `N_lane` is
+/// `N.x` for the x and z lanes and `N.y` for the y lane.
+pub fn position_tolerance(
+    v: &ValidatedGroupZero,
+    placement: &InstancePlacement,
+    position: [u32; 4],
+    normal: [u32; 4],
+    weight: [u32; 4],
+    lane: usize,
+) -> f64 {
+    let f = |word: u32| f32::from_bits(word) as f64;
+    let size = placement.scale.abs() * (0..3).map(|l| f(position[l]).abs()).sum::<f64>()
+        + placement.offset[lane].abs();
+    let delta = 2f64.powi(-20) * (1.0 + v.phase.abs() + 4.0 * size);
+    let n = f(normal[if lane == 1 { 1 } else { 0 }]).abs();
+    2f64.powi(-18) * size
+        + (v.amplitudes[0].abs() + v.amplitudes[1].abs())
+            * (1.0 - f(weight[3])).abs()
+            * n
+            * (2f64.powi(-18) + 6.0 * v.frequency.abs() * delta)
 }
 
 #[cfg(test)]
