@@ -100,7 +100,13 @@ extern "C" int mag_render_dxc_compile_stage(const char *library_path,uint32_t st
         std::wstring wide_entry;for(uint32_t i=0;i<entry_length;++i)wide_entry.push_back(static_cast<wchar_t>(entry[i]));
         // Warnings stay errors, except Naga's redundant parentheses around
         // equality conditions (if ((a == b))), which are its normal output.
-        const wchar_t *args[]={L"-E",wide_entry.c_str(),L"-T",target,L"-HV",L"2021",L"-Ges",L"-WX",
+        // HLSL 2018 semantics: the owned programs come from the NV40 program
+        // decompilers, whose output is legacy HLSL (the dialect FXC and the
+        // glslang HLSL front end on Metal/Vulkan accept), including per-component
+        // `cond ? a : b` on vectors. HLSL 2021 rejects a vector condition there
+        // (it requires select()), so the same program would compile on Metal and
+        // Vulkan but not on D3D12. Naga's HLSL is valid in both versions.
+        const wchar_t *args[]={L"-E",wide_entry.c_str(),L"-T",target,L"-HV",L"2018",L"-Ges",L"-WX",
             L"-Wno-parentheses-equality"};
         DxcBuffer buffer={source,static_cast<size_t>(length),DXC_CP_UTF8};
         Com<IDxcResult> result;
