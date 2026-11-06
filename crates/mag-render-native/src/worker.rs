@@ -597,6 +597,10 @@ trait Driver {
     fn abandon_position(&mut self, _ticket: u64) -> i32 {
         -2
     }
+    /// Release the published position `ticket` with a completed terminal.
+    fn decline_position(&mut self, ticket: u64) -> i32 {
+        self.abandon_position(ticket)
+    }
 
     fn scene(&mut self, _: OwnedScene) -> (i32, client::Receipt) {
         (-2, client::Receipt::default())
@@ -683,6 +687,9 @@ impl Driver for ClientDriver {
         }
         client::scene_packet::abandon_position(self.session, ticket)
     }
+    fn decline_position(&mut self, ticket: u64) -> i32 {
+        client::scene_packet::decline_position(self.session, ticket)
+    }
 
     fn scene(&mut self, input: OwnedScene) -> (i32, client::Receipt) {
         client::scene_packet::submit(
@@ -751,6 +758,7 @@ enum Command {
         SyncSender<Reply>,
     ),
     AbandonPosition(u64, SyncSender<Reply>),
+    DeclinePosition(u64, SyncSender<Reply>),
     Scene(Box<OwnedScene>, SyncSender<Reply>),
     Submit(Box<OwnedInput>, SyncSender<Reply>),
     Poll(SyncSender<Reply>),
@@ -932,7 +940,9 @@ impl Worker {
                                 driver.admit(input.worker, *input.packet, input.prevalidated);
                             let result = match admitted {
                                 Err(status) => {
-                                    let _ = driver.abandon_position(ticket);
+                                    // A positioned commit follows its host's
+                                    // publication: complete the ticket empty.
+                                    let _ = driver.decline_position(ticket);
                                     (status, client::Receipt::default())
                                 }
                                 Ok(token) => {
@@ -952,6 +962,10 @@ impl Worker {
                         }
                         Command::AbandonPosition(ticket, reply) => {
                             let status = driver.abandon_position(ticket);
+                            let _ = reply.send((status, client::Receipt::default()));
+                        }
+                        Command::DeclinePosition(ticket, reply) => {
+                            let status = driver.decline_position(ticket);
                             let _ = reply.send((status, client::Receipt::default()));
                         }
                         Command::Close(reply) => {
@@ -1874,6 +1888,24 @@ pub unsafe extern "C" fn mag_render_client_worker_submit_scene_subgraph_imported
             Some(ticket),
         )
     }
+}
+/// Declines the position reservation `ticket` after the host published its
+/// receipt: released empty, and a completed terminal receipt for its ticket is
+/// published so nothing waits on that ticket.
+#[unsafe(no_mangle)]
+pub extern "C" fn mag_render_client_worker_decline_position(id: u64, ticket: u64) -> i32 {
+    if ticket == 0 {
+        return -1;
+    }
+    ffi(
+        || {
+            let worker = get(id)?;
+            let _serial = worker.serial.lock().map_err(|_| -6)?;
+            let (status, _) = worker.call_serial(|r| Command::DeclinePosition(ticket, r), false)?;
+            Ok(status)
+        },
+        -6,
+    )
 }
 /// Releases the position reservation `ticket` without committing anything.
 #[unsafe(no_mangle)]
