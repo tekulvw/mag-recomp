@@ -229,9 +229,6 @@ static void check_reservation_queue_order(const MagRenderHostOwner *owner,const 
  * - a late thread commits a packet into the position (or declines it);
  * - the later work completes, and the position's ticket reaches a terminal.
  * A clear-only packet on the imported target stands in for Main. */
-#ifndef HARNESS_ORDINARY
-#define HARNESS_ORDINARY 1
-#endif
 struct HarnessPacket {
     MagRenderPacketImage image{};
     MagRenderPacketPass pass{};
@@ -303,21 +300,25 @@ static void check_worker_position_sequence(const MagRenderHostOwner *owner,const
     assert(vs&&fs);
     id<MTLCommandQueue> queue=(__bridge id<MTLCommandQueue>)owner->queue;
     MagRenderHostOwnerV2 v2{};v2.abi_version=2;v2.struct_size=sizeof(v2);v2.base=*owner;
-    for(int decline=0;decline<2;++decline){
+    // Variants: commit or decline the position, each after one ordinary
+    // commit and after two still in flight (the reservation then waits,
+    // bounded, for capacity as an ordinary commit's admission does).
+    for(int variant=0;variant<4;++variant){
+        const int decline=variant&1;
+        const uint64_t ordinary=1+(variant>>1);
         uint64_t worker=0;
         int status=mag_render_client_worker_create_scene_v2(&v2,64,64u<<20,&worker);
         if(status)fprintf(stderr,"[worker position harness] create status=%d\n",status);
         assert(status==0&&worker);
         // An ordinary commit whose terminal is left unread (a reservation
         // needs fewer than two submissions in flight).
-        for(uint64_t p=1;p<=HARNESS_ORDINARY;++p){
+        for(uint64_t p=1;p<=ordinary;++p){
             HarnessPacket h(target,p,vs,fs);
             MagRenderClientReceipt r{};r.abi_version=1;r.struct_size=sizeof(r);
             status=mag_render_client_worker_submit_scene_subgraph_imported_v3(worker,&h.desc,&h.requirement,1,&h.binding,1,&r);
             if(status)fprintf(stderr,"[worker position harness] ordinary commit %llu status=%d\n",(unsigned long long)p,status);
             assert(status==0);
         }
-        usleep(100000); // their GPU work completes; their terminals stay unread
         HarnessPacket main(target,3,vs,fs);
         MagRenderClientReceipt reserved{};reserved.abi_version=1;reserved.struct_size=sizeof(reserved);
         status=mag_render_client_worker_reserve_position_imported(worker,&main.requirement,1,&main.binding,1,&reserved);
@@ -354,7 +355,7 @@ static void check_worker_position_sequence(const MagRenderHostOwner *owner,const
         if(status)fprintf(stderr,"[worker position harness] close status=%d\n",status);
         assert(status==0);
     }
-    fprintf(stderr,"[worker position harness] reserve_imported -> late commit and -> late decline both completed across threads\n");
+    fprintf(stderr,"[worker position harness] reserve_imported -> late commit and -> late decline both completed across threads, after one and two ordinary commits\n");
 }
 /* A position-only reservation (no imports yet) holds its queue position and
  * ticket; the encoding validates the scene's own import under a short lease

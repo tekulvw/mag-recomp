@@ -3570,6 +3570,12 @@ fn reserve_position_with(
                     if requirements.is_empty() {
                         return Err(-1);
                     }
+                    // The same bounded backpressure an ordinary commit's
+                    // admission applies: collect finished submissions (and
+                    // wait, bounded, for in-flight ones) instead of refusing
+                    // a frame because two earlier ones are still pending.
+                    // Nothing is held yet, so this cannot wait on itself.
+                    s.admission_capacity()?;
                     unsafe {
                         s.backend
                             .device()
