@@ -18,6 +18,7 @@ d3d12 = ["mag-render-native/d3d12"]
 
 [dependencies]
 mag-render-adapter-core = { path = "../mag-render-adapter-core" }
+mag-render-adapter-scene = { path = "../mag-render-adapter-scene" }
 mag-render-native = { path = "../mag-render-native" }
 
 [lints.rust]

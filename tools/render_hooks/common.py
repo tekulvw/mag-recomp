@@ -62,6 +62,8 @@ def check_pins(stage):
                 raise HookError(f'{stage.NAME}: malformed pin {name}')
     if set(stage.PINS) & set(stage.DEPENDENCIES):
         raise HookError(f'{stage.NAME}: a function is both instrumented and a dependency')
+    if not set(getattr(stage, 'SHARED', ())) <= set(stage.PINS):
+        raise HookError(f'{stage.NAME}: a shared function is not instrumented by the stage')
 
 
 def replace_once(body, old, new, what):
@@ -70,12 +72,16 @@ def replace_once(body, old, new, what):
     return body.replace(old, new, 1)
 
 
-def instrument_source(source, stage, pins=None, dependencies=None):
+def instrument_source(source, stage, pins=None, dependencies=None, others=()):
     """Return `source` with `stage`'s hooks; idempotent on already hooked source.
 
     `pins` and `dependencies` default to the stage's tables; tests pass their own.
     Each instrumented body is verified after removing this stage's hooks, so a
     second application reproduces the same text instead of stacking hooks.
+
+    A function that `stage` and other stages both declare in `SHARED` may already
+    carry their hooks. Its pin is checked with every stage's hooks removed, and
+    this stage's hooks are added next to theirs without touching them.
     """
     pins = stage.PINS if pins is None else pins
     dependencies = stage.DEPENDENCIES if dependencies is None else dependencies
@@ -89,11 +95,20 @@ def instrument_source(source, stage, pins=None, dependencies=None):
     for name, match in sorted(found.items(), key=lambda item: item[1].start(), reverse=True):
         if name not in pins:
             continue
-        original = stage.strip_body(match[0], name)
+        current = stage.strip_body(match[0], name)
+        sharing = [other for other in others if name in getattr(other, 'SHARED', ())]
+        if sharing and name not in getattr(stage, 'SHARED', ()):
+            raise HookError(f'{stage.NAME}: function {name} is not declared shared')
+        original = current
+        for other in sharing:
+            original = other.strip_body(original, name)
         if sha256_text(original) != pins[name]['sha256']:
             raise HookError(f'{stage.NAME}: function {name} does not match its pin')
-        hooked = stage.instrument_body(original, name)
-        if stage.strip_body(hooked, name) != original:
+        hooked = stage.instrument_body(current, name)
+        restored = stage.strip_body(hooked, name)
+        for other in sharing:
+            restored = other.strip_body(restored, name)
+        if stage.strip_body(hooked, name) != current or restored != original:
             raise HookError(f'{stage.NAME}: hooks for {name} would change original statements')
         source = source[:match.start()] + hooked + source[match.end():]
         changed = True

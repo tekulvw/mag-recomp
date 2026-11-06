@@ -74,7 +74,8 @@ class NativeRecipeTests(unittest.TestCase):
             self.assertIn(str(workspace / 'local/ps3recomp-lifter-ppu'), commands['lift-engine'])
             self.assertIn(PINS['spu-programs']['commit'], commands['spu-programs'])
             self.assertIn(str(workspace / 'generated/retail-v1.0/mage_g-dispatcher'), ' '.join(commands['configure-engine']))
-            self.assertIn(str(workspace / 'local/ps3recomp-runtime'), commands['splice-engine-dispatcher'])
+            splice = commands['splice-engine-dispatcher']
+            self.assertEqual(splice[splice.index('--after-sdk') + 1], str(workspace / 'local/ps3recomp-lifter-ppu'))
             self.assertIn('-DPS3RECOMP_DIR=' + str(workspace / 'local/ps3recomp-runtime'), commands['configure-engine'])
             streamed = commands['streamed-jobs']
             self.assertIn('wws_job_lift.py', ' '.join(streamed))

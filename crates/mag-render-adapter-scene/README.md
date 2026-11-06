@@ -43,6 +43,17 @@ Current contents:
   selected-material programs and fragment builtin requests;
 - `material_finish`, `material_group_twelve`: the Main pass's owned finish
   inputs and auxiliary records, and its group-twelve compact texture inputs;
+- `ring_writer`, `main_terminal_writer`, `main_terminal_job`,
+  `empty_pass_terminal`: the command-ring transport of a natively rendered
+  pass. `ring_writer` holds what every writer shares: the progress markers of
+  a writer slot, the two-bit ring generation that advances on each wrap, where
+  a segment continues (slot 0 runs on in the ring, side slots return through
+  their continuation), and the ordered fence, put, descriptor, epoch and
+  next-writer publication. `main_terminal_writer` and `main_terminal_job` are
+  Main's slot-0 transport and its CPU reference effects. `empty_pass_terminal`
+  is the empty-pass writer for any side slot (1 to 15), parameterised by the
+  pass's state block and reports; the Depth profile (slot 3) is defined.
+  Nothing here runs unless a host calls it;
 - `client_scene`: a position-only client scene prepared from the captured
   geometry, with every omission kept explicit;
 - `fragment_builtin_rows`: fragment constant rows for a material's decoded
@@ -63,6 +74,15 @@ Current contents:
 - `depth_source_ffi`: the C entry point that copies one depth pre-pass's
   sources (`mag_render_adapter_depth_sources`). It returns its refused result
   and records nothing while the master switch is off;
+- `shadow_run`: the adapter from one captured Shadow run (the Depth source
+  capture of its cohort camera slot) to the native depth-only cascade pass.
+  `mag_render_behavior::shadow` describes the pass and routes each caster.
+  Geometry is the run's retained immutable partitions, and the transform follows
+  Main's rule (the four vectors in the item's transform record). Questions the
+  behaviour crate leaves open are decided here and stated in the module: the
+  transform rows, row 42 (unused), culling (`CullPolicy`) and undeformed groups
+  3 and 4. Unprepared casters refuse the run unless the caller chooses to omit
+  and list them;
 - `capture_view`: optional copy-free comparison of guest spans through
   read-only views the host registers
   (`PS3_RENDER_CAPTURE_VIEW_VALIDATION=1`, default off).

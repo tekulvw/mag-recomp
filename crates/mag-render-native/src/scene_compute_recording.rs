@@ -17,6 +17,7 @@ struct Owner {
     buffers: BTreeMap<u64, Vec<u8>>,
     schemas: BTreeMap<u64, Vec<BindingLayout>>,
     records: Vec<Recorded>,
+    full: Vec<Vec<u64>>,
     released: usize,
     reads: usize,
     done: bool,
@@ -186,6 +187,86 @@ unsafe extern "C" fn record(p: *mut c_void, input: *const Scene, out: *mut Ticke
     };
     0
 }
+/// Records every field the native encoder reads, following each pointer,
+/// with buffer ids renumbered in first-use order so that two submissions of
+/// the same packet compare equal whatever fresh buffers they were given.
+unsafe extern "C" fn record_full(p: *mut c_void, input: *const Scene, out: *mut Ticket) -> i32 {
+    let scene = unsafe { &*input };
+    let s = unsafe { owner(p) };
+    let mut ids: Vec<u64> = Vec::new();
+    let mut w: Vec<u64> = Vec::new();
+    let mut buffer = |w: &mut Vec<u64>, b: Buffer| {
+        let n = ids.iter().position(|&i| i == b.id).unwrap_or_else(|| {
+            ids.push(b.id);
+            ids.len() - 1
+        });
+        w.extend([n as u64, b.device_generation, b.version]);
+    };
+    let binding = |w: &mut Vec<u64>, b: &Binding, buffer: &mut dyn FnMut(&mut Vec<u64>, Buffer)| {
+        w.extend([b.slot as u64, b.reserved as u64, b.offset, b.byte_length]);
+        buffer(w, b.buffer);
+    };
+    w.extend([
+        scene.resource_count as u64,
+        scene.image_count as u64,
+        scene.output_image as u64,
+    ]);
+    for r in unsafe { std::slice::from_raw_parts(scene.resources, scene.resource_count as usize) } {
+        w.extend([r.role as u64]);
+        buffer(&mut w, r.buffer);
+    }
+    for im in unsafe { std::slice::from_raw_parts(scene.images, scene.image_count as usize) } {
+        w.extend([im.format as u64, im.width as u64, im.height as u64]);
+        buffer(&mut w, im.upload);
+    }
+    for f in unsafe { std::slice::from_raw_parts(scene.dispatches, scene.dispatch_count as usize) }
+    {
+        w.extend([
+            f.pipeline.id,
+            f.binding_count as u64,
+            f.groups[0] as u64,
+            f.groups[1] as u64,
+            f.groups[2] as u64,
+        ]);
+        for b in unsafe { std::slice::from_raw_parts(f.bindings, f.binding_count as usize) } {
+            binding(&mut w, b, &mut buffer);
+        }
+    }
+    for pass in unsafe { std::slice::from_raw_parts(scene.passes, scene.pass_count as usize) } {
+        for a in [pass.color, pass.depth] {
+            w.extend([a.image as u64, a.load as u64, a.store as u64]);
+            w.extend(a.clear.map(|c| c.to_bits() as u64));
+        }
+        w.push(pass.draw_count as u64);
+        for d in unsafe { std::slice::from_raw_parts(pass.draws, pass.draw_count as usize) } {
+            w.extend([
+                d.pipeline.id,
+                d.vertex_offset,
+                d.vertex_length,
+                d.index_offset,
+                d.index_length,
+            ]);
+            w.extend([
+                d.index_count as u64,
+                d.buffer_count as u64,
+                d.texture_count as u64,
+            ]);
+            buffer(&mut w, d.vertices);
+            buffer(&mut w, d.indices);
+            for b in unsafe { std::slice::from_raw_parts(d.buffers, d.buffer_count as usize) } {
+                w.extend([b.stage as u64]);
+                binding(&mut w, &b.binding, &mut buffer);
+            }
+            for t in unsafe { std::slice::from_raw_parts(d.textures, d.texture_count as usize) } {
+                w.extend(
+                    [t.stage, t.texture_slot, t.sampler_slot, t.image, t.sampler].map(u64::from),
+                );
+            }
+        }
+    }
+    s.full.push(w);
+    unsafe { record(p, input, out) }
+}
 fn api(state: &mut Owner) -> SdkApi {
     let mut api = unsafe { MaybeUninit::<SdkApi>::zeroed().assume_init() };
     api.abi_version = 1;
@@ -207,7 +288,13 @@ fn api(state: &mut Owner) -> SdkApi {
     api
 }
 fn setup(state: &mut Owner) -> (SceneDevice<'static>, scene_packet::ScenePacket) {
-    let packet = scene_packet::compute::tests::copied_fixture_with_textures(false);
+    setup_with(state, false)
+}
+fn setup_with(
+    state: &mut Owner,
+    textures: bool,
+) -> (SceneDevice<'static>, scene_packet::ScenePacket) {
+    let packet = scene_packet::compute::tests::copied_fixture_with_textures(textures);
     let inner = BatchDevice::from_api_with_byte_cap(
         api(state),
         BatchDeviceLimits {
@@ -221,6 +308,7 @@ fn setup(state: &mut Owner) -> (SceneDevice<'static>, scene_packet::ScenePacket)
     .unwrap();
     let mut device = SceneDevice {
         submit_recorder: Some(record),
+        scratch: SubmitScratch::default(),
         samplers: scene_sampler::Cache::default(),
         frame: None,
         target: None,
@@ -376,4 +464,48 @@ fn resident_texture_uploads_survive_terminal_until_device_drop() {
     backend.try_shutdown().unwrap();
     drop(backend);
     assert!(state.buffers.is_empty());
+}
+
+#[test]
+fn reused_submit_scratch_describes_the_same_scene_every_time() {
+    // Texture bindings need the native sampler registry, which this
+    // CPU-only owner does not provide; the sampler tests cover their content.
+    submit_three_times_and_compare(false);
+}
+fn submit_three_times_and_compare(textures: bool) {
+    let mut state = Box::<Owner>::default();
+    let (mut device, packet) = setup_with(&mut state, textures);
+    device.submit_recorder = Some(record_full);
+    device.set_resident_uploads(false);
+    let mut backend = RenderBackend::new(
+        device,
+        BackendLimits {
+            max_leases_per_submission: 16,
+            max_bytes_per_submission: 1 << 20,
+        },
+    )
+    .unwrap();
+    for round in 0..3u64 {
+        let prepared = packet
+            .prepare(backend.device(), &[1, 2], 32, 1 << 20)
+            .unwrap();
+        let (commands, leases) = prepared.into_submission();
+        backend
+            .submit_diagnostic(3 + round, commands, leases)
+            .unwrap();
+        state.done = true;
+        backend.poll().unwrap();
+        assert_eq!(backend.pending_count(), 0);
+        state.done = false;
+    }
+    assert_eq!(state.full.len(), 3);
+    assert!(!state.full[0].is_empty());
+    // The first submission built every array from empty; the next two reused them.
+    assert_eq!(state.full[1], state.full[0]);
+    assert_eq!(state.full[2], state.full[0]);
+    if std::env::var_os("SCENE_SNAPSHOT_PRINT").is_some() {
+        println!("snapshot textures={textures}: {:?}", state.full[0]);
+    }
+    backend.try_shutdown().unwrap();
+    drop(backend);
 }

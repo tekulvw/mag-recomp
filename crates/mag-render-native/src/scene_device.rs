@@ -175,9 +175,28 @@ unsafe extern "C" {
 mod scene_extended;
 #[path = "scene_sampler.rs"]
 mod scene_sampler;
+/// Per-submission description arrays, kept on the device and cleared rather
+/// than reallocated each submission. The pointer-carrying entries (frames,
+/// draws, passes) point into the other vectors here and are only read by the
+/// synchronous native submit call; the next submission rebuilds them.
+#[derive(Default)]
+struct SubmitScratch {
+    textures: Vec<TextureBinding>,
+    texture_ranges: Vec<(usize, usize)>,
+    sampler_table: Vec<scene_sampler::Handle>,
+    bindings: Vec<Binding>,
+    binding_ranges: Vec<(usize, usize)>,
+    frames: Vec<Frame>,
+    images: Vec<Image>,
+    buffer_bindings: Vec<BufferBinding>,
+    buffer_ranges: Vec<(usize, usize)>,
+    draws: Vec<SceneDraw>,
+    passes: Vec<Pass>,
+}
 pub struct SceneDevice<'owner> {
     #[cfg(test)]
     submit_recorder: Option<unsafe extern "C" fn(*mut c_void, *const Scene, *mut Ticket) -> i32>,
+    scratch: SubmitScratch,
     samplers: scene_sampler::Cache,
     frame: Option<crate::host_frame::HostFrame>,
     target: Option<crate::host_image::NativeImage>,
@@ -192,6 +211,7 @@ impl NativeContext {
         Ok(SceneDevice {
             #[cfg(test)]
             submit_recorder: None,
+            scratch: SubmitScratch::default(),
             samplers: scene_sampler::Cache::default(),
             frame: None,
             target: None,
@@ -212,6 +232,7 @@ impl SceneDevice<'static> {
         Ok(Self {
             #[cfg(test)]
             submit_recorder: None,
+            scratch: SubmitScratch::default(),
             samplers: scene_sampler::Cache::default(),
             frame: None,
             target: None,
@@ -841,11 +862,18 @@ impl RenderDevice for SceneDevice<'_> {
         if self.inner.pending.len() + self.inner.ready.len() >= 2 {
             return reject(-4);
         }
-        let (mut draw_textures, sampler_table) =
-            match self.samplers.resolve(self.inner.api, commands) {
-                Ok(v) => v,
-                Err(c) => return reject(c),
-            };
+        {
+            let scratch = &mut self.scratch;
+            if let Err(c) = self.samplers.resolve(
+                self.inner.api,
+                commands,
+                &mut scratch.textures,
+                &mut scratch.texture_ranges,
+                &mut scratch.sampler_table,
+            ) {
+                return reject(c);
+            }
+        }
         let expected = commands
             .images()
             .iter()
@@ -867,8 +895,10 @@ impl RenderDevice for SceneDevice<'_> {
             Err(c) => return reject(c),
         };
         if let Some(plan) = &extended {
-            for (textures, codes) in draw_textures.iter_mut().zip(&plan.texture_codes) {
-                for (texture, code) in textures.iter_mut().zip(codes) {
+            let scratch = &mut self.scratch;
+            for (&(start, count), codes) in scratch.texture_ranges.iter().zip(&plan.texture_codes) {
+                for (texture, code) in scratch.textures[start..start + count].iter_mut().zip(codes)
+                {
                     texture.image = *code
                 }
             }
@@ -878,55 +908,57 @@ impl RenderDevice for SceneDevice<'_> {
             Err(c) => return reject(c),
         };
         let uploads = commands.texture_upload_start();
-        let binding_sets: Vec<Vec<Binding>> = commands
-            .compute()
-            .dispatches()
-            .iter()
-            .map(|d| {
-                d.bindings
-                    .iter()
-                    .map(|b| {
-                        let (slot, index, range) = match *b {
-                            batch::Binding::Read {
-                                slot,
-                                source,
-                                range,
-                            } => (slot, source_index(source, uploads), range),
-                            batch::Binding::Write {
-                                slot,
-                                buffer,
-                                range,
-                            } => (slot, uploads + buffer.index(), range),
-                        };
-                        Binding {
-                            slot,
-                            reserved: 0,
-                            buffer: buffers[index],
-                            offset: range.offset,
-                            byte_length: range.length,
-                        }
-                    })
-                    .collect()
-            })
-            .collect();
-        let frames: Vec<Frame> = commands
-            .compute()
-            .dispatches()
-            .iter()
-            .zip(&binding_sets)
-            .map(|(d, b)| Frame {
-                struct_size: size_of::<Frame>() as u32,
-                abi_version: 1,
-                pipeline: self.inner.pipelines[&d.pipeline].handle,
-                bindings: b.as_ptr(),
-                binding_count: b.len() as u32,
-                groups: d.groups,
-            })
-            .collect();
-        let images: Vec<Image> = commands
-            .images()
-            .iter()
-            .map(|im| Image {
+        let scratch = &mut self.scratch;
+        // Flat arrays first; the pointer-carrying entries are built only once
+        // the arrays they point into are complete, so no pointer moves.
+        scratch.bindings.clear();
+        scratch.binding_ranges.clear();
+        for d in commands.compute().dispatches() {
+            let start = scratch.bindings.len();
+            scratch.bindings.extend(d.bindings.iter().map(|b| {
+                let (slot, index, range) = match *b {
+                    batch::Binding::Read {
+                        slot,
+                        source,
+                        range,
+                    } => (slot, source_index(source, uploads), range),
+                    batch::Binding::Write {
+                        slot,
+                        buffer,
+                        range,
+                    } => (slot, uploads + buffer.index(), range),
+                };
+                Binding {
+                    slot,
+                    reserved: 0,
+                    buffer: buffers[index],
+                    offset: range.offset,
+                    byte_length: range.length,
+                }
+            }));
+            scratch
+                .binding_ranges
+                .push((start, scratch.bindings.len() - start));
+        }
+        scratch.frames.clear();
+        scratch.frames.extend(
+            commands
+                .compute()
+                .dispatches()
+                .iter()
+                .zip(&scratch.binding_ranges)
+                .map(|(d, &(start, count))| Frame {
+                    struct_size: size_of::<Frame>() as u32,
+                    abi_version: 1,
+                    pipeline: self.inner.pipelines[&d.pipeline].handle,
+                    bindings: scratch.bindings[start..start + count].as_ptr(),
+                    binding_count: count as u32,
+                    groups: d.groups,
+                }),
+        );
+        scratch.images.clear();
+        scratch.images.extend(commands.images().iter().map(|im| {
+            Image {
                 format: im.desc.format.native_id(),
                 width: im.desc.width,
                 height: im.desc.height,
@@ -935,83 +967,82 @@ impl RenderDevice for SceneDevice<'_> {
                     .upload
                     .map(|i| buffers[uploads + commands.compute().buffers().len() + i])
                     .unwrap_or_default(),
-            })
-            .collect();
-        let draw_buffers: Vec<Vec<BufferBinding>> = commands
-            .passes()
-            .iter()
-            .flat_map(|p| &p.draws)
-            .map(|d| {
-                d.buffers
-                    .iter()
-                    .map(|b| BufferBinding {
-                        stage: b.stage as u32,
-                        reserved: 0,
-                        binding: Binding {
-                            slot: b.slot,
-                            reserved: 0,
-                            buffer: buffers[source_index(b.source, uploads)],
-                            offset: b.range.offset,
-                            byte_length: b.range.length,
-                        },
-                    })
-                    .collect()
-            })
-            .collect();
-        let draws: Vec<SceneDraw> = commands
-            .passes()
-            .iter()
-            .flat_map(|p| &p.draws)
-            .zip(draw_buffers.iter().zip(&draw_textures))
-            .map(|(d, (b, t))| SceneDraw {
-                pipeline: self.inner.pipelines[&d.pipeline].handle,
-                vertices: buffers[source_index(d.vertices, uploads)],
-                indices: buffers[source_index(d.indices, uploads)],
-                vertex_offset: d.vertex_range.offset,
-                vertex_length: d.vertex_range.length,
-                index_offset: d.index_range.offset,
-                index_length: d.index_range.length,
-                index_count: d.index_count,
-                buffer_count: b.len() as u32,
-                texture_count: t.len() as u32,
-                reserved: 0,
-                buffers: b.as_ptr(),
-                textures: t.as_ptr(),
-            })
-            .collect();
-        let mut offset = 0;
-        let passes: Vec<Pass> = commands
-            .passes()
-            .iter()
-            .map(|p| {
-                let start = offset;
-                offset += p.draws.len();
-                Pass {
-                    color: p
-                        .color
-                        .map(|a| attachment(a.image, a.load, a.store, |v| v))
-                        .unwrap_or_else(absent),
-                    depth: p
-                        .depth
-                        .map(|a| attachment(a.image, a.load, a.store, |v| [v, 0., 0., 0.]))
-                        .unwrap_or_else(absent),
-                    draws: draws[start..].as_ptr(),
-                    draw_count: p.draws.len() as u32,
+            }
+        }));
+        scratch.buffer_bindings.clear();
+        scratch.buffer_ranges.clear();
+        for d in commands.passes().iter().flat_map(|p| &p.draws) {
+            let start = scratch.buffer_bindings.len();
+            scratch
+                .buffer_bindings
+                .extend(d.buffers.iter().map(|b| BufferBinding {
+                    stage: b.stage as u32,
                     reserved: 0,
-                }
-            })
-            .collect();
+                    binding: Binding {
+                        slot: b.slot,
+                        reserved: 0,
+                        buffer: buffers[source_index(b.source, uploads)],
+                        offset: b.range.offset,
+                        byte_length: b.range.length,
+                    },
+                }));
+            scratch
+                .buffer_ranges
+                .push((start, scratch.buffer_bindings.len() - start));
+        }
+        scratch.draws.clear();
+        scratch.draws.extend(
+            commands
+                .passes()
+                .iter()
+                .flat_map(|p| &p.draws)
+                .zip(scratch.buffer_ranges.iter().zip(&scratch.texture_ranges))
+                .map(|(d, (&(bs, bc), &(ts, tc)))| SceneDraw {
+                    pipeline: self.inner.pipelines[&d.pipeline].handle,
+                    vertices: buffers[source_index(d.vertices, uploads)],
+                    indices: buffers[source_index(d.indices, uploads)],
+                    vertex_offset: d.vertex_range.offset,
+                    vertex_length: d.vertex_range.length,
+                    index_offset: d.index_range.offset,
+                    index_length: d.index_range.length,
+                    index_count: d.index_count,
+                    buffer_count: bc as u32,
+                    texture_count: tc as u32,
+                    reserved: 0,
+                    buffers: scratch.buffer_bindings[bs..bs + bc].as_ptr(),
+                    textures: scratch.textures[ts..ts + tc].as_ptr(),
+                }),
+        );
+        let mut offset = 0;
+        scratch.passes.clear();
+        scratch.passes.extend(commands.passes().iter().map(|p| {
+            let start = offset;
+            offset += p.draws.len();
+            Pass {
+                color: p
+                    .color
+                    .map(|a| attachment(a.image, a.load, a.store, |v| v))
+                    .unwrap_or_else(absent),
+                depth: p
+                    .depth
+                    .map(|a| attachment(a.image, a.load, a.store, |v| [v, 0., 0., 0.]))
+                    .unwrap_or_else(absent),
+                draws: scratch.draws[start..].as_ptr(),
+                draw_count: p.draws.len() as u32,
+                reserved: 0,
+            }
+        }));
         let scene = Scene {
             struct_size: size_of::<Scene>() as u32,
             abi_version: 1,
             resources: resources.as_ptr(),
             resource_count: resources.len() as u32,
-            image_count: images.len() as u32,
-            images: images.as_ptr(),
-            dispatches: frames.as_ptr(),
-            dispatch_count: frames.len() as u32,
-            pass_count: passes.len() as u32,
-            passes: passes.as_ptr(),
+            image_count: scratch.images.len() as u32,
+            images: scratch.images.as_ptr(),
+            dispatches: scratch.frames.as_ptr(),
+            dispatch_count: scratch.frames.len() as u32,
+            pass_count: scratch.passes.len() as u32,
+            passes: scratch.passes.as_ptr(),
             output_image: commands
                 .output()
                 .map(|o| o.image.image().index() as u32)
@@ -1019,6 +1050,7 @@ impl RenderDevice for SceneDevice<'_> {
             reserved: 0,
             diagnostic_readback: readback.map(|r| r.0).unwrap_or_default(),
         };
+        let sampler_table = &scratch.sampler_table;
         let mut native = Ticket::default();
         #[cfg(test)]
         let recorder = self.submit_recorder;
@@ -1034,7 +1066,7 @@ impl RenderDevice for SceneDevice<'_> {
                     plan.submit(
                         self.inner.api.device,
                         &scene,
-                        &sampler_table,
+                        sampler_table,
                         &self.imports,
                         (self.target.as_ref(), self.frame.as_ref()),
                         &mut native,

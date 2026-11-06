@@ -445,3 +445,205 @@ fn actual_depth_and_main_partition_capture_share_the_same_decoded_banks() {
     assert!(!Arc::ptr_eq(&prior, &fresh.attributes[1].words));
     assert_eq!(prior, fresh.attributes[1].words);
 }
+
+#[test]
+fn deformation_sources_are_copied_only_when_asked() {
+    mag_render_adapter_core::runtime::enable();
+    const NAME: &str = "deformation_sources_are_copied_only_when_asked";
+    if std::env::var_os("MAG_DEPTH_CACHE_CHILD").is_none() {
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", NAME, "--nocapture"])
+            .env("MAG_DEPTH_CACHE_CHILD", "1")
+            .env("PS3_RENDER_DECODED_GEOMETRY_CACHE", "1")
+            .status()
+            .unwrap();
+        assert!(status.success());
+        return;
+    }
+    let (input, mut memory) = fixture();
+    // A skinned-partition item: no static-partition flag, the material's skinning flag, and a
+    // palette address beside the camera bit.
+    put(memory.get_mut(&0x40000).unwrap(), 0x9c, 0);
+    put(memory.get_mut(&0x30000).unwrap(), 0x58, 0x20);
+    put(memory.get_mut(&0x25000).unwrap(), 20, 0x50001);
+    let mut header = vec![0; 544];
+    for (slot, address, bytes) in [
+        (19, 0x29000, 16),
+        (7, 0x2a000, 32),
+        (1, 0x2b000, 6),
+        (20, 0x2c000, 24),
+        (3, 0, 48),
+        (4, 0, 96),
+        (5, 0x2d000, 8),
+        (10, 0x2e000, 0),
+        (21, 0x2f000, 16),
+    ] {
+        put(&mut header, 0x30 + 8 * slot, bytes);
+        put(&mut header, 0x34 + 8 * slot, address)
+    }
+    header[0x0a..0x0c].copy_from_slice(&16u16.to_be_bytes());
+    header[0x14..0x16].copy_from_slice(&0u16.to_be_bytes());
+    header[0x16..0x18].copy_from_slice(&0x100u16.to_be_bytes());
+    let mut config = vec![0; 16];
+    config[0] = 0x83;
+    config[2] = 255;
+    config[3] = 255;
+    config[6] = 17;
+    config[9] = 1;
+    config[11] = 3;
+    config[12..16].copy_from_slice(&[255; 4]);
+    let floats = |v: &[f32]| -> Vec<u8> { v.iter().flat_map(|f| f.to_be_bytes()).collect() };
+    memory.insert(0x28100, header.clone());
+    memory.insert(0x29000, config);
+    memory.insert(0x2a000, floats(&[1., 2., 3., 1., 0., 1., 0., 0.]));
+    memory.insert(0x2b000, vec![0; 6]);
+    memory.insert(
+        0x2c000,
+        vec![
+            2, 32, 0, 0, 0, 0, 0, 0, 0, 2, 3, 1, 16, 0, 0, 0, 16, 2, 4, 2, 16, 0, 0, 0,
+        ],
+    );
+    memory.insert(0x2d000, vec![255, 0, 0, 0, 0, 0, 0, 0]);
+    memory.insert(0x2e000, floats(&[1., 0., 0., 1.]));
+    memory.insert(
+        0x2f000,
+        vec![1, 16, 0, 0, 0, 0, 0, 0, 0, 2, 3, 3, 16, 0, 0, 0],
+    );
+    let palette: Vec<u8> = (0..48u8).collect();
+    let second: Vec<u8> = (48..144u8).collect();
+    memory.insert(0x50000, palette.clone());
+    memory.insert(0x50100, second.clone());
+    let copy = |memory: &BTreeMap<u32, Vec<u8>>, options| {
+        copy_depth_sources_with(input, DepthBudget::default(), options, &mut |a, n| {
+            memory
+                .get(&a)
+                .filter(|v| v.len() == n)
+                .cloned()
+                .ok_or(Error::OutsideSnapshot)
+        })
+        .unwrap()
+    };
+
+    // Off by default: the same reads as before, nothing extra retained.
+    let plain = copy(&memory, DepthCaptureOptions::default());
+    let reference = copy_depth_sources(input, DepthBudget::default(), &mut |a, n| {
+        memory
+            .get(&a)
+            .filter(|v| v.len() == n)
+            .cloned()
+            .ok_or(Error::OutsideSnapshot)
+    })
+    .unwrap();
+    assert_eq!(
+        (plain.reads, plain.copied_bytes),
+        (reference.reads, reference.copied_bytes)
+    );
+    assert!(matches!(
+        plain.items[0].geometry,
+        Some(GeometrySource::SkinnedPartitions {
+            palette_address: 0x50000,
+            ..
+        })
+    ));
+    assert!(partition(&plain).secondary_attributes.is_none());
+    assert!(partition(&plain).skinning.is_none());
+    assert_eq!(&partition(&plain).record[..], &header[..]);
+
+    let options = DepthCaptureOptions {
+        secondary_attributes: true,
+        skinning: true,
+    };
+    let full = copy(&memory, options);
+    assert_eq!(full.reads, plain.reads + 5);
+    let secondary = partition(&full)
+        .secondary_attributes
+        .as_ref()
+        .unwrap()
+        .as_ref()
+        .unwrap();
+    assert_eq!(
+        secondary.first_semantic(3).unwrap().unwrap().words[0],
+        [1f32.to_bits(), 0, 0, 1f32.to_bits()]
+    );
+    let skinning = partition(&full)
+        .skinning
+        .as_ref()
+        .unwrap()
+        .as_ref()
+        .unwrap();
+    assert_eq!(skinning.palette_addresses, [0x50000, 0x50100]);
+    assert_eq!(skinning.segments[0].bytes(), &palette[..]);
+    assert_eq!(skinning.segments[1].bytes(), &second[..]);
+    assert_eq!(skinning.influences.bytes(), &memory[&0x2d000][..]);
+    assert_eq!(skinning.config.bytes(), &memory[&0x29000][..]);
+
+    // A missing source stays with its partition; the capture itself still succeeds.
+    memory.remove(&0x50100);
+    let missing = copy(&memory, options);
+    assert_eq!(
+        partition(&missing)
+            .skinning
+            .as_ref()
+            .unwrap()
+            .as_ref()
+            .unwrap_err(),
+        &DeformationSourceError::Source(DepthError::Read)
+    );
+    put(memory.get_mut(&0x25000).unwrap(), 20, 1);
+    let unpaletted = copy(&memory, options);
+    assert_eq!(
+        partition(&unpaletted)
+            .skinning
+            .as_ref()
+            .unwrap()
+            .as_ref()
+            .unwrap_err(),
+        &DeformationSourceError::MissingPalette
+    );
+
+    // Static partitions never copy skinning sources.
+    put(memory.get_mut(&0x40000).unwrap(), 0x9c, 0x1000);
+    let fixed = copy(&memory, options);
+    assert!(partition(&fixed).skinning.is_none());
+    assert!(partition(&fixed).secondary_attributes.is_some());
+}
+
+fn partition(sources: &OwnedDepthSources) -> &DepthImmutablePartition {
+    &sources.items[0]
+        .immutable_partitions
+        .as_ref()
+        .unwrap()
+        .as_ref()
+        .unwrap()[0]
+}
+
+#[test]
+fn a_shadow_camera_slot_reads_its_own_family_lists() {
+    let (mut input, mut memory) = fixture();
+    // Cascade 0 of the Shadow job: cohort camera slot 1, whose four lists sit
+    // one 16-byte family row into the bucket's list table.
+    input.identity.camera = 1;
+    memory.get_mut(&input.pass).unwrap()[0x19b] = 1;
+    // The item carries a transform for camera slot 1 (camera bit 1 << 2).
+    memory.get_mut(&0x25000).unwrap()[20..24].copy_from_slice(&4u32.to_be_bytes());
+    let bucket = memory.get_mut(&input.bucket).unwrap();
+    bucket[0x58..0x5c].fill(0);
+    bucket[0x38..0x3c].copy_from_slice(&0x27000u32.to_be_bytes());
+    let copy = |memory: &BTreeMap<u32, Vec<u8>>| {
+        copy_depth_sources(input, DepthBudget::default(), &mut |a, n| {
+            memory
+                .get(&a)
+                .filter(|v| v.len() == n)
+                .cloned()
+                .ok_or(Error::OutsideSnapshot)
+        })
+    };
+    let source = copy(&memory).unwrap();
+    assert_eq!(source.items.len(), 2);
+    assert_eq!(source.items[0].route, DepthItemRoute::Prepare);
+    // The family-3 row is not read for camera slot 1.
+    let bucket = memory.get_mut(&input.bucket).unwrap();
+    bucket[0x38..0x3c].fill(0);
+    bucket[0x58..0x5c].copy_from_slice(&0x27000u32.to_be_bytes());
+    assert!(copy(&memory).is_err());
+}

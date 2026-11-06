@@ -56,12 +56,13 @@ lift to a new directory and adds the hooks of the chosen stages:
 | --- | --- | --- |
 | `configuration` | Shadow configuration manager init and shutdown | `MAG_RENDER_ADAPTER_CONFIGURATION` |
 | `shadow-view` | the Shadow view-corner helper (needs `configuration`) | `MAG_RENDER_ADAPTER_SHADOW_VIEW` |
-| `cohort` | retained visibility cohort ownership and publication (needs `configuration`) | `MAG_RENDER_ADAPTER_COHORT` |
+| `update-loop` | which accepted engine update a thread's render work belongs to | `MAG_RENDER_ADAPTER_UPDATE_LOOP` |
+| `cohort` | retained visibility cohort ownership and publication (needs `configuration` and `update-loop`) | `MAG_RENDER_ADAPTER_COHORT` |
 | `ui-handoff` | the UI packet writers at the pre-UI boundary (needs `cohort`) | `MAG_RENDER_ADAPTER_UI_HANDOFF` |
 
 ```sh
 python3 tools/render_hooks/prepare.py --base generated/retail-v1.0/mage_g-dispatcher \
-  --output generated/retail-v1.0/mage_g-render --stage configuration --stage cohort
+  --output generated/retail-v1.0/mage_g-render --stage configuration --stage update-loop --stage cohort
 ```
 
 Each stage pins the functions it changes, and the callees it relies on, inline by address to the
@@ -71,6 +72,9 @@ output of the PPU lifter pinned in `profiles/framework.json` (`LIFTER_REVISION` 
 and every seam is re-checked when a stage is applied; any mismatch refuses the whole preparation
 and writes no output. After a lifter pin change, regenerate the tables with
 `prepare.py --print-pins <unprepared lift>`, review them and commit them with the pin change.
+
+The update function carries both `update-loop` and `cohort` hooks. Each of those stages declares it
+shared and pins it identically, and checks its pin with both stages' hooks removed.
 
 Hooks only add lines, each under its stage's compile guard. Removing them restores every original
 body byte for byte, which the tool checks before writing. Every original call, drain, guest write
@@ -131,7 +135,7 @@ and clash at link time.
 | --- | --- | --- |
 | `MAG_RENDER_ADAPTER` | configuration lifetime observer (`src/render_adapter`) | available |
 | `MAG_RENDER_ADAPTER_SHADOW_VIEW` | Shadow view-corner observer | available |
-| `MAG_RENDER_ADAPTER_COHORT` | retained cohort observer | refused at configure until its bridge is published |
+| `MAG_RENDER_ADAPTER_COHORT` | update-loop identity, retained cohort observer and source copies (`src/render_adapter`); `PS3_RENDER_DEPTH_SOURCES=1` also copies depth sources | available; needs `cellGcmNativeReadLocatedRange` in the runtime's `libs/video/cellGcmSys.h` |
 | `MAG_RENDER_ADAPTER_UI_HANDOFF` | native scene handoff before the UI (needs `COHORT`) | refused at configure: needs `libs/video/rsx_native_handoff.h`, which the pinned runtime lacks, and its bridge |
 
 At configure time the option reads the `render_adapter_hooks` record in `RECOMP_DIR`. It refuses a
@@ -210,6 +214,25 @@ Current capability limits are explicit: original image/frame import is connected
 Metal host-uploaded D32 textures need a staging path; D3D12 cannot expose a cube face as a plain
 Texture2D view without an additional copy. Unsupported viewport, view, sampler or format cases
 refuse the complete scene. Native CPU and compiler checks are not real-game acceptance.
+
+`tools/check_render_frontend_d3d12_gpu.py` is the real-GPU D3D12 check on Windows. Its fixture
+creates a D3D12 device and direct queue on the adapter named by `--vendor-id` and `--device-id`,
+lends them through a synthetic host owner (no SDK owner, game data or presentation) and runs the
+owner retain/refusal contract, the compute and connected compute/draw probes, an uploaded-texture
+scene and the six-pass scene probe, with the pinned translator's HLSL compiled at run time by the
+pinned DXC library (`--dxc-dir`, an extracted DXC release). It also checks that the operations the
+D3D12 backend does not implement (in-place buffer writes, the memory census, reserved scene order,
+depth bounds) are refused as unsupported. `--validation` requires the D3D12 debug layer (the
+Windows Graphics Tools optional feature) and fails on any debug-layer error; `--gpu-validation`
+adds GPU-based validation. Run it from an x64 MSVC developer environment with `clang-cl`, for
+example:
+
+```sh
+python tools/check_render_frontend_d3d12_gpu.py --vendor-id 0x10de --device-id 0x2b85 \
+  --dxc-dir build/dxc-1.9.2609 --validation
+```
+
+CI only syntax-checks its fixture (`--compile-only`); it is not real-game acceptance.
 
 The existing CPU fixture runner accepts `--vulkan-include PATH` to exercise the actual Vulkan
 encoder through injected dispatch functions without a driver or GPU. Linux integration CI runs

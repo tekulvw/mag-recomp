@@ -35,6 +35,9 @@ MagRenderShadowCallResult mag_render_adapter_shadow_call(MagRenderShadowCallInpu
  * lifetime when none has begun; a host may also begin and end one explicitly. */
 void mag_render_frontend_vm_begin(const char* elf) noexcept;
 void mag_render_frontend_vm_end() noexcept;
+/* Begins a lifetime if none has begun yet; for hooks of other stages, called
+ * with no bridge lock held. */
+void mag_render_frontend_vm_ensure() noexcept;
 
 /* Scope at the entry of the configuration manager's init function. */
 class MagRenderShadowConfigInitScope {

@@ -41,6 +41,15 @@ function(mag_enable_render_frontend target)
             set(_backend metal)
         elseif(WIN32)
             set(_backend d3d12)
+            # build.rs configures the native C/C++ sources with CMake. Left alone it picks the
+            # Visual Studio generator and cl.exe, which lacks the C11 atomics they use; hand it
+            # this build's own compilers and generator instead.
+            set(_native_cc "${CMAKE_C_COMPILER}")
+            if(NOT _native_cc)
+                set(_native_cc "${CMAKE_CXX_COMPILER}")
+            endif()
+            list(APPEND _native_environment "CC=${_native_cc}" "CXX=${CMAKE_CXX_COMPILER}"
+                "CMAKE_GENERATOR=${CMAKE_GENERATOR}")
             if(MAG_RENDER_DXC_INCLUDE_DIR)
                 list(APPEND _native_environment "MAG_RENDER_DXC_INCLUDE_DIR=${MAG_RENDER_DXC_INCLUDE_DIR}")
             endif()

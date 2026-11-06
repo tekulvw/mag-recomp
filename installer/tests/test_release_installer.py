@@ -96,6 +96,20 @@ class ReleaseTests(unittest.TestCase):
             with self.assertRaisesRegex(InstallerError, 'Tcl/Tk'):
                 _check_tk_runtime()
 
+    def test_packager_environment_keeps_only_the_interpreter_library_path(self):
+        from mag_installer.releasing import _packager_environment
+        scratch = Path('/synthetic/scratch')
+        with patch.dict(os.environ, {'LD_LIBRARY_PATH': '/synthetic/python/lib', 'PYTHONPATH': '/elsewhere',
+                                     'PYTHONUSERBASE': '/elsewhere'}):
+            environment = _packager_environment(scratch)
+        self.assertEqual(environment['LD_LIBRARY_PATH'], '/synthetic/python/lib')
+        self.assertEqual(environment['PYTHONNOUSERSITE'], '1')
+        self.assertEqual(environment['HOME'], str(scratch / 'home'))
+        self.assertNotIn('PYTHONPATH', environment)
+        self.assertNotIn('PYTHONUSERBASE', environment)
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertNotIn('LD_LIBRARY_PATH', _packager_environment(scratch))
+
     def test_frozen_smoke_failure_retains_bounded_decoded_diagnostics(self):
         from mag_installer.releasing import _smoke_command
         import subprocess

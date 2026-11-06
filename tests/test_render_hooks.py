@@ -9,22 +9,33 @@ from pathlib import Path
 from unittest import mock
 
 from tools.movie_picture_hooks import RETAIL_ELF
-from tools.render_hooks import common, configuration, cohort, prepare, shadow_view, ui_handoff
+from tools.render_hooks import common, configuration, cohort, prepare, shadow_view, ui_handoff, update_loop
 from tools.render_hooks.common import HookError
 
 STAGES = list(prepare.STAGES.values())
 GUARD_LINE = re.compile(r'\n#if [^\n]*\n.*?\n#endif\n', re.S)
 
 
+def calls(stage, name):
+    """(return address, callee) of every original call a stage scopes in `name`."""
+    if stage is update_loop:
+        return [] if name == update_loop.UPDATE else [(lr, update_loop.UPDATE) for lr in update_loop.LOOP_CALLS]
+    return [(lr, target) for lr, target, _ in getattr(stage, 'CALLS', {}).get(name, [])]
+
+
 def synthetic_body(stage, name):
-    """A made-up body holding every seam the stage needs for `name`, once each."""
+    """A made-up body holding every seam the stage needs for `name`, once each.
+
+    A shared function holds the seams of every stage that instruments it."""
+    sharing = [s for s in STAGES if name in getattr(s, 'SHARED', ())] if name in getattr(stage, 'SHARED', ()) else [stage]
     entry = common.signature(name)
     lines = [entry, f'        synthetic_prologue(ctx, 0x{name});']
-    for old, _ in stage.patches(name):
-        if old != entry:
-            lines += ['        synthetic_step(ctx);', old.rstrip('\n')]
-    for lr, target, _ in getattr(stage, 'CALLS', {}).get(name, []):
-        lines += [f'        ctx->lr = 0x{lr}; func_{target}(ctx); DRAIN_TRAMPOLINE(ctx);', '        synthetic_after(ctx);']
+    for each in sharing:
+        for old, _ in each.patches(name):
+            if old != entry and old.rstrip('\n') not in lines:
+                lines += ['        synthetic_step(ctx);', old.rstrip('\n')]
+        for lr, target in calls(each, name):
+            lines += [f'        ctx->lr = 0x{lr}; func_{target}(ctx); DRAIN_TRAMPOLINE(ctx);', '        synthetic_after(ctx);']
     lines += ['        return;', '}']
     return '\n'.join(lines)
 
@@ -33,13 +44,18 @@ def dependency_body(name):
     return f'{common.signature(name)}\n        synthetic_dependency(ctx);\n        return;\n}}'
 
 
-def synthetic_lift(stage):
-    """Files and pin tables for one stage, laid out as its real pins say."""
+def synthetic_lift(stage, shared=()):
+    """Files and pin tables for one stage, laid out as its real pins say.
+
+    Functions in `shared` are pinned but left for another stage's files."""
     files, pins, dependencies = {}, {}, {}
     for table, make, out in ((stage.PINS, lambda n: synthetic_body(stage, n), pins),
                              (stage.DEPENDENCIES, dependency_body, dependencies)):
         for name, pin in table.items():
             body = make(name)
+            if name in shared:
+                out[name] = {'sha256': hashlib.sha256(body.encode()).hexdigest(), 'file': pin['file']}
+                continue
             files.setdefault(pin['file'], ['#include "ppu_recomp.h"'])
             files[pin['file']].append(body)
             out[name] = {'sha256': hashlib.sha256(body.encode()).hexdigest(), 'file': pin['file']}
@@ -142,9 +158,10 @@ class Prepare(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.tmp)
         self.base = self.tmp / 'base'
         self.base.mkdir()
-        tables = {}
+        tables, written = {}, set()
         for stage in STAGES:
-            files, pins, dependencies = synthetic_lift(stage)
+            files, pins, dependencies = synthetic_lift(stage, shared=written & set(getattr(stage, 'SHARED', ())))
+            written |= set(getattr(stage, 'SHARED', ()))
             for name, text in files.items():
                 path = self.base / name
                 path.write_text((path.read_text() + '\n' if path.exists() else '') + text)
@@ -167,10 +184,10 @@ class Prepare(unittest.TestCase):
     def test_prepares_a_verified_copy_and_leaves_the_base_untouched(self):
         before = {p.name: p.read_bytes() for p in self.base.iterdir()}
         output = self.tmp / 'out'
-        record = prepare.prepare(self.base, output, ['ui-handoff', 'configuration', 'cohort', 'shadow-view'])
+        record = prepare.prepare(self.base, output, ['ui-handoff', 'configuration', 'cohort', 'update-loop', 'shadow-view'])
         self.assertEqual({p.name: p.read_bytes() for p in self.base.iterdir()}, before)
         hooks = record['render_adapter_hooks']
-        self.assertEqual(hooks['stages'], ['configuration', 'shadow-view', 'cohort', 'ui-handoff'])
+        self.assertEqual(hooks['stages'], ['configuration', 'shadow-view', 'update-loop', 'cohort', 'ui-handoff'])
         self.assertEqual(set(hooks['tools']), set(prepare.tool_files()))
         self.assertTrue(all(name.startswith('tools/render_hooks/') for name in hooks['tools']))
         self.assertNotIn('ppu_recomp_999.cpp', hooks['changed_outputs'])
@@ -185,7 +202,7 @@ class Prepare(unittest.TestCase):
         path.write_text(path.read_text().replace('synthetic_prologue(ctx, 0x00D116B8);', 'changed(ctx);'))
         self.write_provenance(self.base)
         with self.assertRaisesRegex(HookError, '00D116B8 does not match'):
-            prepare.prepare(self.base, self.tmp / 'out', ['configuration', 'cohort'])
+            prepare.prepare(self.base, self.tmp / 'out', ['configuration', 'update-loop', 'cohort'])
         self.assertFalse((self.tmp / 'out').exists())
         self.assertFalse((self.tmp / 'out.partial').exists())
 
@@ -197,7 +214,7 @@ class Prepare(unittest.TestCase):
 
     def test_refuses_other_lifter_prepared_base_stale_output_and_bad_stage_sets(self):
         output = self.tmp / 'out'
-        for stages, message in ((['cohort'], 'requires configuration'), ([], 'choose stages'),
+        for stages, message in ((['cohort'], 'requires configuration, update-loop'), ([], 'choose stages'),
                                 (['shadow'], 'unknown: shadow')):
             with self.assertRaisesRegex(HookError, message):
                 prepare.prepare(self.base, output, stages)
@@ -219,6 +236,25 @@ class Prepare(unittest.TestCase):
         (self.base / 'ppu_recomp_999.cpp').write_text('changed\n')
         with self.assertRaisesRegex(ValueError, 'identity mismatch'):
             prepare.prepare(self.base, self.tmp / 'out', ['configuration'])
+
+    def test_shared_function_carries_both_stages_hooks_and_strips_back(self):
+        output = self.tmp / 'out'
+        prepare.prepare(self.base, output, ['configuration', 'update-loop', 'cohort'])
+        name = update_loop.UPDATE
+        hooked = common.bodies((output / update_loop.PINS[name]['file']).read_text(), {name})[name][0]
+        original = common.bodies((self.base / update_loop.PINS[name]['file']).read_text(), {name})[name][0]
+        self.assertIn('mag_render_update_accepted(ctx,', hooked)
+        self.assertIn('MagRenderCohortScope mag_render_cohort_00014200', hooked)
+        self.assertEqual(cohort.strip_body(update_loop.strip_body(hooked, name), name), original)
+        self.assertEqual(update_loop.strip_body(cohort.strip_body(hooked, name), name), original)
+
+    def test_shared_function_needs_identical_pins_and_both_declarations(self):
+        name = update_loop.UPDATE
+        changed = dict(update_loop.PINS, **{name: dict(update_loop.PINS[name], sha256='0' * 64)})
+        with mock.patch.object(update_loop, 'PINS', changed), self.assertRaisesRegex(HookError, 'different pins'):
+            prepare.check_tables(STAGES)
+        with mock.patch.object(cohort, 'SHARED', set()), self.assertRaisesRegex(HookError, 'instrumented by both'):
+            prepare.check_tables(STAGES)
 
     def test_print_pins_reproduces_the_tables(self):
         with mock.patch('builtins.print') as printed:

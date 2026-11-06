@@ -26,20 +26,36 @@ function(mag_render_adapter_apply target root)
     endif()
     set(_stages configuration)
     set(_definitions MAG_RENDER_ADAPTER_CONFIGURATION=1)
+    set(_bridges "${root}/src/render_adapter")
+    set(_sources "${_bridges}/mag_render_frontend_bridge.cpp")
     if(MAG_RENDER_ADAPTER_SHADOW_VIEW)
         list(APPEND _stages shadow-view)
         list(APPEND _definitions MAG_RENDER_ADAPTER_SHADOW_VIEW=1)
+    endif()
+    if(MAG_RENDER_ADAPTER_COHORT)
+        # Located guest reads need the runtime's checked located-range query.
+        set(_gcm "${PS3RECOMP_DIR}/libs/video/cellGcmSys.h")
+        set(_located "")
+        if(EXISTS "${_gcm}")
+            file(STRINGS "${_gcm}" _located REGEX "cellGcmNativeReadLocatedRange")
+        endif()
+        if(NOT _located)
+            message(FATAL_ERROR "MAG_RENDER_ADAPTER_COHORT needs cellGcmNativeReadLocatedRange in "
+                "libs/video/cellGcmSys.h, which the ps3recomp runtime at ${PS3RECOMP_DIR} does not declare.")
+        endif()
+        list(APPEND _stages update-loop cohort)
+        list(APPEND _definitions MAG_RENDER_ADAPTER_UPDATE_LOOP=1 MAG_RENDER_ADAPTER_COHORT=1)
+        list(APPEND _sources "${_bridges}/mag_render_update_loop.cpp" "${_bridges}/mag_render_cohort_bridge.cpp"
+            "${_bridges}/mag_render_texture_bridge.cpp")
     endif()
     if(MAG_RENDER_ADAPTER_UI_HANDOFF AND NOT EXISTS "${PS3RECOMP_DIR}/libs/video/rsx_native_handoff.h")
         message(FATAL_ERROR "MAG_RENDER_ADAPTER_UI_HANDOFF needs libs/video/rsx_native_handoff.h, which the "
             "ps3recomp runtime at ${PS3RECOMP_DIR} does not have. The runtime pinned in profiles/framework.json "
             "does not provide it yet.")
     endif()
-    foreach(_stage IN ITEMS COHORT UI_HANDOFF)
-        if(MAG_RENDER_ADAPTER_${_stage})
-            message(FATAL_ERROR "MAG_RENDER_ADAPTER_${_stage}: its hook bridge is not in this repository yet")
-        endif()
-    endforeach()
+    if(MAG_RENDER_ADAPTER_UI_HANDOFF)
+        message(FATAL_ERROR "MAG_RENDER_ADAPTER_UI_HANDOFF: its hook bridge is not in this repository yet")
+    endif()
 
     # The lift must have been prepared with every enabled stage by the current hook tools.
     set(_provenance "${RECOMP_DIR}/provenance.json")
@@ -109,15 +125,13 @@ function(mag_render_adapter_apply target root)
             list(APPEND _changed "${RECOMP_DIR}/${_name}")
         endforeach()
     endif()
-    set(_bridges "${root}/src/render_adapter")
     if(_changed)
         set_property(SOURCE ${_changed} APPEND PROPERTY INCLUDE_DIRECTORIES "${_bridges}")
         set_property(SOURCE ${_changed} APPEND PROPERTY COMPILE_DEFINITIONS ${_definitions})
     endif()
-    set(_sources "${_bridges}/mag_render_frontend_bridge.cpp")
     target_sources(${target} PRIVATE ${_sources})
     set_source_files_properties(${_sources} PROPERTIES
-        INCLUDE_DIRECTORIES "${RECOMP_DIR};${PS3RECOMP_DIR}/runtime;${PS3RECOMP_DIR};${_bridges}"
+        INCLUDE_DIRECTORIES "${RECOMP_DIR};${PS3RECOMP_DIR}/runtime;${PS3RECOMP_DIR};${PS3RECOMP_DIR}/include;${_bridges}"
         COMPILE_DEFINITIONS "${_definitions}")
 
     set(_receipt "render-adapter-bridges=${_bridges}")
