@@ -3212,7 +3212,13 @@ pub(crate) fn admit(
         if s.acknowledged_failure {
             return Err(-6);
         }
-        s.admission_capacity()?;
+        // An outstanding position already holds its in-flight slot (checked
+        // when it was reserved). Its commit must not wait for GPU work queued
+        // after that position, which cannot finish before the position is
+        // committed: a circular wait that holds the native queue.
+        if s.position.is_none() {
+            s.admission_capacity()?;
+        }
         if prevalidated != Some((s.max_draws, s.max_bytes)) {
             packet
                 .validate(s.max_draws, s.max_bytes)
@@ -3552,6 +3558,33 @@ pub(crate) fn abandon_position(id: u64, ticket: u64) -> i32 {
         })
     })
 }
+/// Declines the outstanding position `ticket` whose receipt the host already
+/// published (it may be waiting for that ticket's terminal): the position is
+/// released empty, as `abandon_position` does, and a terminal receipt for its
+/// ticket is published (completed, nothing drawn) so nothing waits on it.
+pub(crate) fn decline_position(id: u64, ticket: u64) -> i32 {
+    ffi(|| {
+        with_session(id, |s| {
+            let Some(reserved) = s.position.filter(|p| p.ticket == ticket) else {
+                return Err(-3);
+            };
+            s.position = None;
+            if s.position_imports.take().is_some() {
+                let _ = s.backend.device().0.borrow_mut().release_imports();
+            }
+            let released = s.backend.device().0.borrow_mut().abandon_reservation();
+            let mut terminal = reserved;
+            terminal.flags |= TERMINAL;
+            terminal.status = 0;
+            s.ready.push_back(super::Pending {
+                receipt: terminal,
+                identities: vec![],
+            });
+            let _ = s.publish_ready();
+            released
+        })
+    })
+}
 /// Releases any outstanding position reservation (before close).
 pub(crate) fn abandon_any_position(id: u64) {
     let _ = ffi(|| {
@@ -3660,12 +3693,20 @@ fn encode_reserved(
         let _ = s.backend.device().0.borrow_mut().release_imports();
         let mut failed = receipt;
         let declined = positioned && definite;
+        // A declined positioned commit completes empty (its state was
+        // published; nothing was drawn); anything else fails closed.
         failed.flags |= if declined {
-            TERMINAL | FAILED
+            TERMINAL
         } else {
             TERMINAL | FAILED | UNCERTAIN
         };
-        failed.status = if status < 0 { status } else { -6 };
+        failed.status = if declined {
+            0
+        } else if status < 0 {
+            status
+        } else {
+            -6
+        };
         if !declined {
             s.acknowledged_failure = true;
         }

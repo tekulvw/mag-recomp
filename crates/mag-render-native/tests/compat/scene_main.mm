@@ -1,3 +1,4 @@
+#import <Metal/Metal.h>
 #include "mag_render_scene.h"
 #include "metal_shader.h"
 #include <cassert>
@@ -174,6 +175,50 @@ static void check_reserved_submission(const MagRenderHostOwner *owner,const MagR
     fprintf(stderr,"[reserved submission] reserve=%llu abandoned busy/close then encoded=%llu completed\n",
         (unsigned long long)first.submission_id,(unsigned long long)encoded.submission_id);
 }
+/* Queue order around a held reservation, on the real queue: original work
+ * committed after a reservation waits for it; abandoning the reservation
+ * commits it empty and releases that work; so does encoding into it. */
+static int wait_completed(id<MTLCommandBuffer> b,int ms){
+    for(int i=0;i<ms;++i){if(b.status>=MTLCommandBufferStatusCompleted)return 1;usleep(1000);}
+    return b.status>=MTLCommandBufferStatusCompleted;
+}
+static void check_reservation_queue_order(const MagRenderHostOwner *owner,const MagRenderHostImage *target){
+    id<MTLCommandQueue> queue=(__bridge id<MTLCommandQueue>)owner->queue;
+    for(int abandon=1;abandon>=0;--abandon){
+        mag_native_device *device=NULL;assert(mag_native_create(owner,&device)==0);
+        mag_native_image_certificate certificate={*target,NULL};mag_native_image ref={};
+        assert(mag_native_image_import_certified(device,&certificate,&ref)==0);
+        mag_native_scene_import import={0,0,ref};
+        mag_native_ticket reserved={};
+        assert(mag_native_reserve_scene_v5(device,&import,1,&reserved)==0);
+        id<MTLCommandBuffer> later=[queue commandBuffer];
+        [later commit];
+        assert(!wait_completed(later,50)); // held behind the reservation
+        if(abandon){
+            assert(mag_native_abandon_scene_reservation(device)==0);
+        }else{
+            mag_native_scene_image image={MAG_NATIVE_SCENE_RGBA8,target->width,target->height,0,{}};
+            mag_native_scene_pass pass={};
+            pass.color.image=0;pass.color.load=MAG_NATIVE_SCENE_CLEAR;pass.color.store=1;
+            pass.color.clear[2]=0.5f;pass.color.clear[3]=1;pass.depth.image=MAG_NATIVE_SCENE_NONE;
+            mag_native_scene scene={};scene.struct_size=sizeof(scene);scene.abi_version=1;
+            scene.images=&image;scene.image_count=1;scene.passes=&pass;scene.pass_count=1;scene.output_image=MAG_NATIVE_SCENE_NONE;
+            mag_native_stencil_attachment stencil={MAG_NATIVE_SCENE_NONE,0,0,0,0,0};
+            mag_native_scene_v5 v5={};v5.struct_size=sizeof(v5);v5.abi_version=5;
+            v5.base.struct_size=sizeof(v5.base);v5.base.abi_version=4;v5.base.stencils=&stencil;v5.base.stencil_count=1;
+            v5.base.base.struct_size=sizeof(v5.base.base);v5.base.base.abi_version=3;
+            v5.base.base.base.struct_size=sizeof(v5.base.base.base);v5.base.base.base.abi_version=2;v5.base.base.base.scene=&scene;
+            v5.imports=&import;v5.import_count=1;
+            mag_native_ticket encoded={};
+            assert(mag_native_submit_scene_v5(device,&v5,NULL,NULL,&encoded)==0);
+        }
+        assert(wait_completed(later,2000)); // released in queue order
+        for(int i=0;i<2000;++i){mag_native_event event={};uint32_t count=0;assert(mag_native_poll(device,&event,1,&count)==0);if(!count&&abandon)break;if(count)break;usleep(1000);}
+        assert(mag_native_image_release(device,ref)==0);
+        assert(mag_native_close(device)==0);
+    }
+    fprintf(stderr,"[reservation queue order] later work held, then released by abandon and by encoding\n");
+}
 /* A position-only reservation (no imports yet) holds its queue position and
  * ticket; the encoding validates the scene's own import under a short lease
  * and completes with that ticket. An import that is no longer valid at
@@ -319,6 +364,7 @@ int mag_render_scene_target_main(const char *directory, bool diagnostic,bool imp
         // Before the probe's deliberate queue gate: this check needs completion.
         if(imported)check_reserved_submission(&owner,&target);
         if(imported)check_position_reservation(&owner,&target);
+        if(imported)check_reservation_queue_order(&owner,&target);
         if (mag_render_test_owner_gate()) {
             mag_render_test_owner_close(1);
             return 3;

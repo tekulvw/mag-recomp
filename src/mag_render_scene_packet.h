@@ -305,6 +305,10 @@ int mag_render_client_worker_submit_scene_subgraph_imported_v3(uint64_t,const Ma
 int mag_render_client_worker_reserve_position(uint64_t,MagRenderClientReceipt*);
 int mag_render_client_worker_submit_scene_subgraph_imported_v3_at(uint64_t,const MagRenderScenePacketV3Desc*,const MagRenderPacketImageRequirement*,uint32_t,const MagRenderPacketImageBinding*,uint32_t,uint64_t,MagRenderClientReceipt*);
 int mag_render_client_worker_abandon_position(uint64_t,uint64_t);
+/* Declines a position whose receipt the host already published: released
+ * empty, and a completed terminal receipt (nothing drawn) is published for its
+ * ticket, so nothing waits on that ticket. */
+int mag_render_client_worker_decline_position(uint64_t,uint64_t);
 /* reserve_position with the positioned commit's imports (requirements and
  * bindings as for submit_scene_subgraph_imported_v3) bound and validated now,
  * under the owner lease: for hosts whose image identities hold only at the
