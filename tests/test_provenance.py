@@ -192,6 +192,20 @@ class ProvenanceTests(unittest.TestCase):
             (root/'foreign.cpp').write_text('unrecorded')
             with self.assertRaises(ValueError): validate_generated(root,record['profile'],'firmware')
 
+    def test_generated_nested_outputs_validate_in_either_separator_form(self):
+        # A module lifted on one host is validated on another: the recorded
+        # relative names may use '/' or '\\', the files are the same.
+        for name in ('worker/firmware.cpp', 'worker\\firmware.cpp'):
+            with tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp); (root/'worker').mkdir()
+                src=root/'worker/firmware.cpp'; src.write_text('guarded code')
+                record=dict(status='complete',profile={'image_sha256':'firmware'},executed_todo_policy='halt',
+                            outputs={name:sha256_file(src)})
+                (root/'provenance.json').write_text(json.dumps(record))
+                validate_generated(root,record['profile'],'firmware')
+                src.write_text('modified')
+                with self.assertRaises(ValueError): validate_generated(root,record['profile'],'firmware')
+
     def test_spu_manifest_binds_nested_outputs_and_image(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp); (root/'worker').mkdir()
