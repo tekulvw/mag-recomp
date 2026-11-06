@@ -1,14 +1,24 @@
 #include "mag_render_host_bridge.h"
+// Host renderer behind the bridge: Metal on macOS; on Windows the D3D12
+// live-draw owner unless the runtime was built with its opt-in Vulkan backend
+// (PS3RECOMP_RSX_VULKAN), which then serves the same Vulkan seam as Linux.
+#if defined(__APPLE__)
+#define MAG_HOST_METAL 1
+#elif defined(_WIN32) && !defined(PS3RECOMP_RSX_VULKAN)
+#define MAG_HOST_D3D12 1
+#else
+#define MAG_HOST_VULKAN 1
+#endif
 #include <cstddef>
 #include <cstring>
 #if defined(__APPLE__)
 #include "rsx_metal_backend.h"
-#elif defined(_WIN32)
+#elif defined(MAG_HOST_D3D12)
 #include "rsx_live_draw_owner.h"
 #else
 #include "rsx_vulkan_backend.h"
 #endif
-#if !defined(__APPLE__) && !defined(_WIN32) && defined(RSX_NATIVE_VULKAN_IMAGE_ABI)
+#if defined(MAG_HOST_VULKAN) && defined(RSX_NATIVE_VULKAN_IMAGE_ABI)
 #include "mag_render_vulkan_image.h"
 static_assert(MAG_RENDER_VULKAN_IMAGE_ABI == RSX_NATIVE_VULKAN_IMAGE_ABI);
 static_assert(sizeof(MagRenderHostImage) == sizeof(rsx_native_image));
@@ -26,7 +36,7 @@ VULKAN_IMAGE_FIELD(mip_count);VULKAN_IMAGE_FIELD(layers);VULKAN_IMAGE_FIELD(samp
 VULKAN_IMAGE_FIELD(queue_family);VULKAN_IMAGE_FIELD(layout);
 #undef VULKAN_IMAGE_FIELD
 #endif
-#if defined(_WIN32) && defined(RSX_NATIVE_D3D12_IMAGE_ABI)
+#if defined(MAG_HOST_D3D12) && defined(RSX_NATIVE_D3D12_IMAGE_ABI)
 #include "mag_render_d3d12_image.h"
 static_assert(MAG_RENDER_D3D12_IMAGE_ABI==RSX_NATIVE_D3D12_IMAGE_ABI);
 static_assert(sizeof(MagRenderD3D12Image)==sizeof(rsx_native_d3d12_image));
@@ -39,7 +49,7 @@ static_assert(offsetof(MagRenderHostImage,image)==offsetof(rsx_native_image,imag
 static_assert(offsetof(MagRenderHostImage,retain)==offsetof(rsx_native_image,retain));
 static_assert(offsetof(MagRenderHostImage,validate)==offsetof(rsx_native_image,validate));
 #endif
-#if !defined(_WIN32)
+#if !defined(MAG_HOST_D3D12)
 static_assert(sizeof(MagRenderHostOwner) == sizeof(rsx_native_owner));
 static_assert(alignof(MagRenderHostOwner) == alignof(rsx_native_owner));
 static_assert(offsetof(MagRenderHostOwner, lifetime) == offsetof(rsx_native_owner, lifetime));
@@ -71,7 +81,7 @@ extern "C" int mag_render_frontend_borrow_owner(MagRenderHostOwner *out) {
         return -1;
     if (mag_render_native_abi_version() != 1)
         return -2;
-#if !defined(_WIN32)
+#if !defined(MAG_HOST_D3D12)
     rsx_native_owner owner = {};
     owner.abi_version = 1;
     owner.struct_size = sizeof(owner);
@@ -110,7 +120,7 @@ extern "C" int mag_render_frontend_borrow_owner(MagRenderHostOwner *out) {
 }
 extern "C" int mag_render_frontend_borrow_owner_v2(MagRenderHostOwnerV2 *out) {
     if(!out || out->abi_version!=2 || out->struct_size!=sizeof(*out))return -1;
-#if !defined(__APPLE__) && !defined(_WIN32) && defined(RSX_NATIVE_OWNER_FEATURE_BC)
+#if defined(MAG_HOST_VULKAN) && defined(RSX_NATIVE_OWNER_FEATURE_BC)
     static_assert(sizeof(MagRenderHostOwnerV2)==sizeof(rsx_native_owner_v2));
     static_assert(offsetof(MagRenderHostOwnerV2,base)==offsetof(rsx_native_owner_v2,base));
     static_assert(offsetof(MagRenderHostOwnerV2,known_features)==offsetof(rsx_native_owner_v2,known_features));
@@ -132,7 +142,7 @@ extern "C" int mag_render_frontend_borrow_owner_v2(MagRenderHostOwnerV2 *out) {
 extern "C" int mag_render_host_vulkan_queue_order(MagRenderVulkanQueueOrder *out) {
     if (!out || out->abi_version != MAG_RENDER_HOST_QUEUE_ORDER_ABI || out->struct_size != sizeof(*out))
         return -1;
-#if !defined(__APPLE__) && !defined(_WIN32) && defined(RSX_NATIVE_QUEUE_ORDER_ABI)
+#if defined(MAG_HOST_VULKAN) && defined(RSX_NATIVE_QUEUE_ORDER_ABI)
     static_assert(sizeof(MagRenderVulkanQueueOrder) == sizeof(rsx_native_queue_order));
     static_assert(offsetof(MagRenderVulkanQueueOrder, lifetime) == offsetof(rsx_native_queue_order, lifetime));
     static_assert(offsetof(MagRenderVulkanQueueOrder, userdata) == offsetof(rsx_native_queue_order, userdata));
@@ -160,12 +170,12 @@ extern "C" int mag_render_frontend_borrow_image(uint64_t life, uint32_t surface,
     if (!status)
         std::memcpy(out, &image, sizeof(image));
     return status;
-#elif defined(_WIN32) && defined(RSX_NATIVE_D3D12_IMAGE_ABI)
+#elif defined(MAG_HOST_D3D12) && defined(RSX_NATIVE_D3D12_IMAGE_ABI)
     rsx_native_image image={};image.abi_version=1;image.struct_size=sizeof(image);
     int status=rsx_live_draw_borrow_image(life,surface,&image);
     if(!status)std::memcpy(out,&image,sizeof(image));
     return status;
-#elif !defined(_WIN32) && defined(RSX_NATIVE_VULKAN_IMAGE_ABI)
+#elif !defined(MAG_HOST_D3D12) && defined(RSX_NATIVE_VULKAN_IMAGE_ABI)
     rsx_native_image image = {};
     image.abi_version = 1;
     image.struct_size = sizeof(image);
@@ -184,9 +194,9 @@ extern "C" int mag_render_frontend_validate_image_planes(void *user, uint64_t li
     uint64_t resource, uint64_t generation, uint32_t required) {
 #if defined(__APPLE__)
     return rsx_metal_backend_validate_image_planes(user, life, resource, generation, required);
-#elif defined(_WIN32) && defined(RSX_NATIVE_D3D12_IMAGE_ABI)
+#elif defined(MAG_HOST_D3D12) && defined(RSX_NATIVE_D3D12_IMAGE_ABI)
     return rsx_live_draw_validate_image_planes(user,life,resource,generation,required);
-#elif !defined(_WIN32) && defined(RSX_NATIVE_VULKAN_IMAGE_ABI)
+#elif !defined(MAG_HOST_D3D12) && defined(RSX_NATIVE_VULKAN_IMAGE_ABI)
     return rsx_vulkan_backend_validate_image_planes(user, life, resource, generation, required);
 #else
     (void)user; (void)life; (void)resource; (void)generation; (void)required;
@@ -251,9 +261,9 @@ extern "C" int mag_render_frontend_native_boundary(uint64_t *ticket) {
     *ticket = 0;
 #if defined(__APPLE__)
     return rsx_metal_backend_native_boundary(ticket);
-#elif defined(_WIN32) && defined(RSX_NATIVE_D3D12_IMAGE_ABI)
+#elif defined(MAG_HOST_D3D12) && defined(RSX_NATIVE_D3D12_IMAGE_ABI)
     return rsx_live_draw_native_boundary(ticket);
-#elif !defined(_WIN32) && defined(RSX_NATIVE_VULKAN_IMAGE_ABI)
+#elif !defined(MAG_HOST_D3D12) && defined(RSX_NATIVE_VULKAN_IMAGE_ABI)
     return rsx_vulkan_backend_native_boundary(ticket);
 #else
     return -2;
@@ -263,7 +273,7 @@ extern "C" int mag_render_frontend_native_boundary(uint64_t *ticket) {
 extern "C" int mag_render_frontend_shutdown_requested(uint64_t lifetime) {
 #if defined(__APPLE__)
     return rsx_metal_backend_owner_shutdown_requested(lifetime);
-#elif defined(_WIN32)
+#elif defined(MAG_HOST_D3D12)
     return rsx_live_draw_owner_shutdown_requested(lifetime);
 #else
     return rsx_vulkan_backend_owner_shutdown_requested(lifetime);
@@ -272,7 +282,7 @@ extern "C" int mag_render_frontend_shutdown_requested(uint64_t lifetime) {
 extern "C" int mag_render_frontend_retry_shutdown(uint64_t lifetime) {
 #if defined(__APPLE__)
     return rsx_metal_backend_owner_retry_shutdown(lifetime);
-#elif defined(_WIN32)
+#elif defined(MAG_HOST_D3D12)
     return rsx_live_draw_owner_retry_shutdown(lifetime);
 #else
     return rsx_vulkan_backend_owner_retry_shutdown(lifetime);
