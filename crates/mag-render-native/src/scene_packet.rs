@@ -3500,12 +3500,26 @@ pub(crate) fn commit_subgraph_reserved(
     }
     encode_reserved(id, admission, source, receipt, false);
 }
-/// Logs (the first 32, then every 1000th) which check refused a worker call.
-fn note_refusal(check: &str, status: i32, detail: std::fmt::Arguments<'_>) {
-    static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-    if n <= 32 || n.is_multiple_of(1000) {
-        eprintln!("[mag native worker refusal] n={n} check={check} status={status} {detail}");
+/// Logs which check refused a worker call: the first refusal of each check,
+/// then every 500th refusal overall with the counts per check.
+pub(crate) fn note_refusal(check: &'static str, status: i32, detail: std::fmt::Arguments<'_>) {
+    use std::sync::Mutex;
+    static COUNTS: Mutex<BTreeMap<&'static str, u64>> = Mutex::new(BTreeMap::new());
+    let Ok(mut counts) = COUNTS.lock() else {
+        return;
+    };
+    let n = counts.entry(check).or_default();
+    *n += 1;
+    let first = *n == 1;
+    let total: u64 = counts.values().sum();
+    if first {
+        eprintln!("[mag native worker refusal] first check={check} status={status} {detail}");
+    }
+    if total.is_multiple_of(500) {
+        eprintln!(
+            "[mag native worker refusal] total={total} by_check={:?}",
+            *counts
+        );
     }
 }
 /// Position-only reservation (for a caller whose packet is not planned yet):
@@ -3679,7 +3693,16 @@ pub(crate) fn commit_subgraph_at(
                 // exactly those.
                 Some(requirements) => match s.admissions.get(admission, source) {
                     Ok(p) if p.imports == requirements => Ok(()),
-                    Ok(_) => {
+                    Ok(p) => {
+                        note_refusal(
+                            "positioned-imports-differ",
+                            -5,
+                            format_args!(
+                                "reserved={} committed={}",
+                                requirements.len(),
+                                p.imports.len()
+                            ),
+                        );
                         let _ = s.backend.device().0.borrow_mut().release_imports();
                         Err(-5)
                     }

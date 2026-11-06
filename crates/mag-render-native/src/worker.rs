@@ -940,9 +940,21 @@ impl Worker {
                                 driver.admit(input.worker, *input.packet, input.prevalidated);
                             let result = match admitted {
                                 Err(status) => {
+                                    client::scene_packet::note_refusal(
+                                        "positioned-admit",
+                                        status,
+                                        format_args!("ticket={ticket}"),
+                                    );
                                     // A positioned commit follows its host's
                                     // publication: complete the ticket empty.
-                                    let _ = driver.decline_position(ticket);
+                                    let declined = driver.decline_position(ticket);
+                                    if declined != 0 {
+                                        client::scene_packet::note_refusal(
+                                            "positioned-admit-decline",
+                                            declined,
+                                            format_args!("ticket={ticket}"),
+                                        );
+                                    }
                                     (status, client::Receipt::default())
                                 }
                                 Ok(token) => {
@@ -950,6 +962,11 @@ impl Worker {
                                     let result =
                                         driver.commit_subgraph_at(token, source, bindings, ticket);
                                     if result.0 < 0 {
+                                        client::scene_packet::note_refusal(
+                                            "positioned-commit",
+                                            result.0,
+                                            format_args!("ticket={ticket}"),
+                                        );
                                         let _ = driver.cancel(token);
                                     }
                                     actor_timing
@@ -2043,6 +2060,13 @@ unsafe fn submit_subgraph_imported_v3(
         },
         1,
     );
+    if position.is_some() && status < 0 {
+        client::scene_packet::note_refusal(
+            "positioned-entry",
+            status,
+            format_args!("ticket={}", position.unwrap_or(0)),
+        );
+    }
     unsafe {
         (*out).status = status;
         if status > 0 {
