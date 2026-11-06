@@ -214,6 +214,9 @@ static void present_guest_frame(const CellGcmFlipReceipt& receipt)
         fprintf(stderr, "[mag] guest frame presented %ld\n", (long)count);
 }
 
+#ifdef MAG_RENDER_HOST_BRIDGE
+extern "C" void mag_render_owner_probe_tick(void);   /* opt-in, MAG_RENDER_OWNER_PROBE=1 */
+#endif
 static DWORD WINAPI frame_clock(LPVOID)
 {
     const char* title = getenv("PS3_TITLE");
@@ -240,6 +243,9 @@ static DWORD WINAPI frame_clock(LPVOID)
         if (g_native_consumer) cellGcm_fifo_kick_wait(4);
         else Sleep(4);
         if (auto poll = mag_extension()->frame_poll) poll();
+#ifdef MAG_RENDER_HOST_BRIDGE
+        if (rsx_ok) mag_render_owner_probe_tick();
+#endif
         ULONGLONG now = GetTickCount64();
         if (now >= next_snapshot) { mag_queue_snapshot(); mag_job_marker_snapshot(); next_snapshot = now + 1000; }
 

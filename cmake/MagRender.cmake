@@ -120,6 +120,7 @@ function(mag_enable_render_frontend target)
             set_property(TARGET mag_render APPEND PROPERTY INTERFACE_LINK_LIBRARIES "-framework Metal" "-framework Foundation")
         endif()
         target_sources(${target} PRIVATE "${_root}/src/mag_render_host_bridge.cpp")
+        target_compile_definitions(${target} PRIVATE MAG_RENDER_HOST_BRIDGE=1)
     endif()
     target_link_libraries(${target} PRIVATE mag_render)
     # Append only after mag_apply_extensions has initialized MAG_RECEIPT_EXTRA.

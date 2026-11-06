@@ -5,6 +5,10 @@
 #include "rsx_metal_backend.h"
 #elif defined(_WIN32)
 #include "rsx_live_draw_owner.h"
+#include "rsx_d3d12_backend.h"
+#if defined(RSX_D3D12_NATIVE_OWNER_ABI)
+#include "rsx_native_owner.h"
+#endif
 #else
 #include "rsx_vulkan_backend.h"
 #endif
@@ -84,6 +88,27 @@ extern "C" int mag_render_frontend_borrow_owner(MagRenderHostOwner *out) {
         std::memcpy(out, &owner, sizeof(owner));
     return status;
 #else
+#if defined(RSX_D3D12_NATIVE_OWNER_ABI)
+    // The opt-in D3D12 register-file engine (PS3RECOMP_D3D12_DRAW_ENGINE=1)
+    // owns the device and queue when it is active; -2 means it is not, and
+    // the live-draw owner below is the provider as before.
+    {
+        static_assert(sizeof(MagRenderHostOwner) == sizeof(rsx_native_owner), "owner layout");
+        static_assert(offsetof(MagRenderHostOwner, lifetime) == offsetof(rsx_native_owner, lifetime), "owner layout");
+        static_assert(offsetof(MagRenderHostOwner, retain) == offsetof(rsx_native_owner, retain), "owner layout");
+        static_assert(offsetof(MagRenderHostOwner, try_begin) == offsetof(rsx_native_owner, try_begin), "owner layout");
+        static_assert(MAG_RENDER_HOST_D3D12 == RSX_NATIVE_OWNER_D3D12, "owner backend id");
+        rsx_native_owner engine = {};
+        engine.abi_version = 1;
+        engine.struct_size = sizeof(engine);
+        const int engine_status = rsx_d3d12_backend_borrow_owner(&engine);
+        if (engine_status != -2) {
+            if (!engine_status)
+                std::memcpy(out, &engine, sizeof(engine));
+            return engine_status;
+        }
+    }
+#endif
     rsx_live_draw_owner owner = {};
     owner.abi_version = RSX_LIVE_DRAW_OWNER_ABI;
     owner.struct_size = sizeof(owner);
@@ -120,6 +145,16 @@ extern "C" int mag_render_frontend_borrow_owner_v2(MagRenderHostOwnerV2 *out) {
     if(!status)std::memcpy(out,&owner,sizeof(owner));
     return status;
 #else
+#if defined(_WIN32) && defined(RSX_D3D12_NATIVE_OWNER_ABI)
+    {   // The D3D12 engine reports its enabled features with the same generation.
+        static_assert(sizeof(MagRenderHostOwnerV2)==sizeof(rsx_native_owner_v2), "owner v2 layout");
+        static_assert(offsetof(MagRenderHostOwnerV2,enabled_features)==offsetof(rsx_native_owner_v2,enabled_features), "owner v2 layout");
+        rsx_native_owner_v2 engine={};engine.abi_version=2;engine.struct_size=sizeof(engine);
+        engine.base.abi_version=1;engine.base.struct_size=sizeof(engine.base);
+        const int engine_status=rsx_d3d12_backend_borrow_owner_v2(&engine);
+        if(engine_status!=-2){if(!engine_status)std::memcpy(out,&engine,sizeof(engine));return engine_status;}
+    }
+#endif
     MagRenderHostOwner owner={};owner.abi_version=1;owner.struct_size=sizeof(owner);
     int status=mag_render_frontend_borrow_owner(&owner);
     if(!status){out->base=owner;out->known_features=out->enabled_features=0;}
@@ -277,4 +312,49 @@ extern "C" int mag_render_frontend_retry_shutdown(uint64_t lifetime) {
 #else
     return rsx_vulkan_backend_owner_retry_shutdown(lifetime);
 #endif
+}
+
+/* Opt-in observe-only owner probe (MAG_RENDER_OWNER_PROBE=1): borrows and
+ * retains the host owner once the renderer is up, then on every frame-clock
+ * tick asks for a native lease and gives it straight back without touching
+ * the device. It measures how often a native consumer could run, and proves
+ * the lease protocol against the live engine, without drawing anything. */
+#include <cstdio>
+#include <cstdlib>
+extern "C" void mag_render_owner_probe_tick(void) {
+    static int enabled = -1;
+    if (enabled < 0) { const char *e = std::getenv("MAG_RENDER_OWNER_PROBE"); enabled = e && e[0] == '1' && !e[1]; }
+    if (!enabled) return;
+    static MagRenderHostOwner owner;
+    static int state; /* 0 untried, 1 retained, -1 gave up */
+    static unsigned long long attempts, grants, busy, stale, failed, other, borrow_tries;
+    if (state < 0) return;
+    if (!state) {
+        owner = MagRenderHostOwner{};
+        owner.abi_version = MAG_RENDER_HOST_OWNER_ABI;
+        owner.struct_size = sizeof(owner);
+        const int status = mag_render_frontend_borrow_owner(&owner);
+        ++borrow_tries;
+        if (status) {
+            if (borrow_tries == 1 || borrow_tries % 1000 == 0)
+                std::fprintf(stderr, "[owner probe] borrow status %d (try %llu)\n", status, borrow_tries);
+            if (status == -1 || borrow_tries > 100000) state = -1;
+            return;
+        }
+        const int retained = owner.retain(owner.userdata, owner.lifetime);
+        std::fprintf(stderr, "[owner probe] borrowed backend=%u lifetime=%llu retain=%d\n", owner.backend,
+                     (unsigned long long)owner.lifetime, retained);
+        state = retained ? -1 : 1;
+        return;
+    }
+    const int status = owner.try_begin(owner.userdata, owner.lifetime);
+    ++attempts;
+    if (!status) { ++grants; owner.end(owner.userdata, owner.lifetime); }
+    else if (status == -4) ++busy;
+    else if (status == -3) ++stale;
+    else if (status == -6) ++failed;
+    else ++other;
+    if (attempts % 2000 == 0)
+        std::fprintf(stderr, "[owner probe] attempts=%llu grants=%llu refused_busy=%llu refused_stale=%llu "
+                     "refused_failed=%llu other=%llu\n", attempts, grants, busy, stale, failed, other);
 }
