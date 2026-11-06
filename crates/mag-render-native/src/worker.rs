@@ -1884,7 +1884,9 @@ pub extern "C" fn mag_render_client_worker_abandon_position(id: u64, ticket: u64
     ffi(
         || {
             let worker = get(id)?;
-            let _serial = worker.serial.try_lock().map_err(|_| -4)?;
+            // Releasing a position must not fail for a busy caller lock: an
+            // unreleased position holds the native queue.
+            let _serial = worker.serial.lock().map_err(|_| -6)?;
             let (status, _) = worker.call_serial(|r| Command::AbandonPosition(ticket, r), false)?;
             Ok(status)
         },
