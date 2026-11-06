@@ -206,8 +206,10 @@ extern "C" int mag_render_frontend_borrow_image(uint64_t life, uint32_t surface,
 #elif defined(_WIN32) && defined(RSX_NATIVE_D3D12_IMAGE_ABI)
     rsx_native_image image={};image.abi_version=1;image.struct_size=sizeof(image);
 #if defined(RSX_D3D12_IMAGE_LEASE_ABI)
-    int status=s_d3d12_engine_owner.load()?rsx_d3d12_backend_borrow_image(life,surface,&image):
-                                           rsx_live_draw_borrow_image(life,surface,&image);
+    // The engine answers whenever its owner seam is active (-2 otherwise),
+    // even before this bridge itself has borrowed the owner.
+    int status=rsx_d3d12_backend_borrow_image(life,surface,&image);
+    if(status==-2)status=rsx_live_draw_borrow_image(life,surface,&image);
 #else
     int status=rsx_live_draw_borrow_image(life,surface,&image);
 #endif
@@ -304,7 +306,10 @@ extern "C" int mag_render_frontend_native_boundary(uint64_t *ticket) {
     return rsx_metal_backend_native_boundary(ticket);
 #elif defined(_WIN32) && defined(RSX_NATIVE_D3D12_IMAGE_ABI)
 #if defined(RSX_D3D12_IMAGE_LEASE_ABI)
-    if(s_d3d12_engine_owner.load())return rsx_d3d12_backend_native_boundary(ticket);
+    {   // A frontend may take the boundary before it borrows the owner.
+        const int status=rsx_d3d12_backend_native_boundary(ticket);
+        if(status!=-2)return status;
+    }
 #endif
     return rsx_live_draw_native_boundary(ticket);
 #elif !defined(_WIN32) && defined(RSX_NATIVE_VULKAN_IMAGE_ABI)
