@@ -539,11 +539,11 @@ static void check_textured_scene(const MagRenderHostOwner *owner) {
     CHECK(mag_native_buffer_create(device, &d, &ib) == 0);
     d.byte_length = sizeof view_data; d.initial_bytes = view_data;
     CHECK(mag_native_buffer_create(device, &d, &view) == 0);
-    /* Case 2 repeats green with the target at a scene image index above the
+    /* Case 2 repeats red with the target at a scene image index above the
      * batch command limit: its render-target view must still land inside the
      * device's attachment heap (scene indices reach MAG_NATIVE_SCENE_MAX_IMAGES). */
     enum { HighTarget = 40 };
-    const uint32_t expected[3] = {0xff0000ffu, 0xff00ff00u, 0xff00ff00u};
+    const uint32_t expected[3] = {0xff0000ffu, 0xff00ff00u, 0xff0000ffu};
     for (unsigned k = 0; k < 3; ++k) {
         mag_native_buffer upload = {0}, readback = {0};
         d.byte_length = sizeof texels[k & 1]; d.initial_bytes = texels[k & 1];
