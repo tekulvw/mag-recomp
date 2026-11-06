@@ -8,6 +8,8 @@
 #include <vector>
 #include <unistd.h>
 #include "mag_render_imported_image.h"
+#include "mag_render_scene_packet.h"
+#include <thread>
 extern "C" int mag_render_test_owner_open(MagRenderHostOwner *);
 extern "C" int mag_render_test_owner_gate(void);
 extern "C" int mag_render_test_owner_image(MagRenderHostImage*);
@@ -219,6 +221,90 @@ static void check_reservation_queue_order(const MagRenderHostOwner *owner,const 
     }
     fprintf(stderr,"[reservation queue order] later work held, then released by abandon and by encoding\n");
 }
+/* The state-first sequence through the real registered worker and its C
+ * entry points, across two threads, on the real queue:
+ * - the boundary thread commits ordinary Mains (their terminals left unread,
+ *   as a host waiting on later queue work leaves them), then reserves a
+ *   position with its imports, and queues later original work;
+ * - a late thread commits a packet into the position (or declines it);
+ * - the later work completes, and the position's ticket reaches a terminal.
+ * A clear-only packet on the imported target stands in for Main. */
+struct HarnessPacket {
+    MagRenderPacketImage image{};
+    MagRenderPacketPass pass{};
+    mag_native_viewport viewport{};
+    uint32_t view_dimension=2;
+    MagRenderScenePacketV3Desc desc{};
+    MagRenderPacketImageRequirement requirement{};
+    MagRenderPacketImageBinding binding{};
+    HarnessPacket(const MagRenderHostImage *target,uint64_t publication){
+        const MagRenderClientSource source={1,2,publication,4};
+        image={MAG_NATIVE_SCENE_RGBA8,2,target->width,target->height,1,1,1,1,NULL,0,0};
+        pass.source=source;
+        pass.color={0,MAG_NATIVE_SCENE_CLEAR,1,0,{0.1f,0.2f,0.3f,1}};
+        pass.depth={MAG_NATIVE_SCENE_NONE,0,0,0,{0,0,0,0}};
+        viewport={0,0,float(target->width),float(target->height),0,1,0,0,target->width,target->height,0x3ff,0};
+        auto &b=desc.base.base;
+        b.abi_version=1;b.struct_size=sizeof(b);b.source=source;b.intended_items=0;
+        b.image_count=1;b.images=&image;b.pass_count=1;b.passes=&pass;b.output_image=0;
+        desc.base.abi_version=2;desc.base.struct_size=sizeof(desc.base);
+        desc.base.viewports=&viewport;desc.base.viewport_count=1;
+        desc.abi_version=3;desc.struct_size=sizeof(desc);
+        requirement={0,0,1};
+        binding.image=0;binding.source_key=1;binding.host=*target;binding.validate_planes=NULL;
+    }
+};
+static int poll_ticket(uint64_t worker,uint64_t ticket,int ms){
+    for(int i=0;i<ms;++i){
+        MagRenderClientReceipt r{};r.abi_version=1;r.struct_size=sizeof(r);
+        const int s=mag_render_client_worker_poll(worker,&r);
+        if(s==0&&r.ticket==ticket&&(r.flags&MAG_RENDER_CLIENT_TERMINAL))return 1;
+        usleep(1000);
+    }
+    return 0;
+}
+static void check_worker_position_sequence(const MagRenderHostOwner *owner,const MagRenderHostImage *target){
+    id<MTLCommandQueue> queue=(__bridge id<MTLCommandQueue>)owner->queue;
+    MagRenderHostOwnerV2 v2{};v2.abi_version=2;v2.struct_size=sizeof(v2);v2.base=*owner;
+    for(int decline=0;decline<2;++decline){
+        uint64_t worker=0;
+        int status=mag_render_client_worker_create_scene_v2(&v2,64,64u<<20,&worker);
+        if(status)fprintf(stderr,"[worker position harness] create status=%d\n",status);
+        assert(status==0&&worker);
+        // Two ordinary commits whose terminals are left unread.
+        for(uint64_t p=1;p<=2;++p){
+            HarnessPacket h(target,p);
+            MagRenderClientReceipt r{};r.abi_version=1;r.struct_size=sizeof(r);
+            status=mag_render_client_worker_submit_scene_subgraph_imported_v3(worker,&h.desc,&h.requirement,1,&h.binding,1,&r);
+            if(status)fprintf(stderr,"[worker position harness] ordinary commit %llu status=%d\n",(unsigned long long)p,status);
+            assert(status==0);
+        }
+        HarnessPacket main(target,3);
+        MagRenderClientReceipt reserved{};reserved.abi_version=1;reserved.struct_size=sizeof(reserved);
+        status=mag_render_client_worker_reserve_position_imported(worker,&main.requirement,1,&main.binding,1,&reserved);
+        if(status)fprintf(stderr,"[worker position harness] reserve status=%d\n",status);
+        assert(status==0&&reserved.ticket&&reserved.native_ticket);
+        id<MTLCommandBuffer> later=[queue commandBuffer];[later commit];
+        int late_status=1;
+        std::thread late([&]{
+            if(decline){late_status=mag_render_client_worker_decline_position(worker,reserved.ticket);return;}
+            MagRenderClientReceipt r{};r.abi_version=1;r.struct_size=sizeof(r);
+            late_status=mag_render_client_worker_submit_scene_subgraph_imported_v3_at(worker,&main.desc,&main.requirement,1,&main.binding,1,reserved.ticket,&r);
+        });
+        // The boundary thread keeps calling the worker meanwhile.
+        for(int i=0;i<20;++i){MagRenderClientReceipt r{};r.abi_version=1;r.struct_size=sizeof(r);(void)mag_render_client_worker_poll(worker,&r);usleep(500);}
+        late.join();
+        if(late_status)fprintf(stderr,"[worker position harness] late %s status=%d\n",decline?"decline":"commit",late_status);
+        assert(late_status==0);
+        assert(wait_completed(later,2000));
+        assert(poll_ticket(worker,reserved.ticket,2000));
+        for(int i=0;i<200;++i){MagRenderClientReceipt r{};r.abi_version=1;r.struct_size=sizeof(r);(void)mag_render_client_worker_poll(worker,&r);usleep(1000);}
+        status=mag_render_client_worker_close(worker);
+        if(status)fprintf(stderr,"[worker position harness] close status=%d\n",status);
+        assert(status==0);
+    }
+    fprintf(stderr,"[worker position harness] reserve_imported -> late commit and -> late decline both completed across threads\n");
+}
 /* A position-only reservation (no imports yet) holds its queue position and
  * ticket; the encoding validates the scene's own import under a short lease
  * and completes with that ticket. An import that is no longer valid at
@@ -365,6 +451,7 @@ int mag_render_scene_target_main(const char *directory, bool diagnostic,bool imp
         if(imported)check_reserved_submission(&owner,&target);
         if(imported)check_position_reservation(&owner,&target);
         if(imported)check_reservation_queue_order(&owner,&target);
+        if(imported)check_worker_position_sequence(&owner,&target);
         if (mag_render_test_owner_gate()) {
             mag_render_test_owner_close(1);
             return 3;
