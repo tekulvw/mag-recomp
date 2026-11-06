@@ -3343,16 +3343,35 @@ pub(crate) fn admit(
             receipt,
             identities,
         };
+        // An outstanding position already holds one of the two in-flight
+        // slots (checked when it was reserved): its own commit's admission
+        // does not count submitted work, whose terminals may be unread only
+        // because the host is waiting on work queued behind that position.
+        let other_slots = if s.position.is_some() {
+            0
+        } else {
+            s.pending.len()
+        };
         match s.admissions.insert(
             (worker, generation),
             packet.source,
             packet.intended,
             receipt.draws,
             prepared,
-            s.pending.len(),
+            other_slots,
         ) {
             Ok(a) => Ok(a),
             Err(e) => {
+                note_refusal(
+                    "admission-bound",
+                    e,
+                    format_args!(
+                        "prepared={} pending={} position={:?}",
+                        s.admissions.len(),
+                        s.pending.len(),
+                        s.position.map(|p| p.ticket)
+                    ),
+                );
                 s.packet_cache.unpin(&ids)?;
                 Err(e)
             }
@@ -3433,6 +3452,11 @@ pub(crate) fn commit_subgraph_reserved(
             }
             // An outstanding position belongs to its own positioned commit.
             if s.position.is_some() {
+                note_refusal(
+                    "commit-while-position",
+                    -4,
+                    format_args!("outstanding={:?}", s.position.map(|p| p.ticket)),
+                );
                 return Err(-4);
             }
             let requirements = p.imports.clone();
@@ -3476,6 +3500,28 @@ pub(crate) fn commit_subgraph_reserved(
     }
     encode_reserved(id, admission, source, receipt, false);
 }
+/// Logs which check refused a worker call: the first refusal of each check,
+/// then every 500th refusal overall with the counts per check.
+pub(crate) fn note_refusal(check: &'static str, status: i32, detail: std::fmt::Arguments<'_>) {
+    use std::sync::Mutex;
+    static COUNTS: Mutex<BTreeMap<&'static str, u64>> = Mutex::new(BTreeMap::new());
+    let Ok(mut counts) = COUNTS.lock() else {
+        return;
+    };
+    let n = counts.entry(check).or_default();
+    *n += 1;
+    let first = *n == 1;
+    let total: u64 = counts.values().sum();
+    if first {
+        eprintln!("[mag native worker refusal] first check={check} status={status} {detail}");
+    }
+    if total.is_multiple_of(500) {
+        eprintln!(
+            "[mag native worker refusal] total={total} by_check={:?}",
+            *counts
+        );
+    }
+}
 /// Position-only reservation (for a caller whose packet is not planned yet):
 /// fixes the next submission's native queue position and ticket now and
 /// returns the receipt its positioned commit will carry. One at a time (-4);
@@ -3507,6 +3553,15 @@ fn reserve_position_with(
     let status = ffi(|| {
         with_session(id, |s| {
             if s.acknowledged_failure || s.position.is_some() {
+                note_refusal(
+                    "reserve-position-busy",
+                    -4,
+                    format_args!(
+                        "acknowledged_failure={} outstanding={:?}",
+                        s.acknowledged_failure,
+                        s.position.map(|p| p.ticket)
+                    ),
+                );
                 return Err(-4);
             }
             let (generation, native) = match imports {
@@ -3515,6 +3570,12 @@ fn reserve_position_with(
                     if requirements.is_empty() {
                         return Err(-1);
                     }
+                    // The same bounded backpressure an ordinary commit's
+                    // admission applies: collect finished submissions (and
+                    // wait, bounded, for in-flight ones) instead of refusing
+                    // a frame because two earlier ones are still pending.
+                    // Nothing is held yet, so this cannot wait on itself.
+                    s.admission_capacity()?;
                     unsafe {
                         s.backend
                             .device()
@@ -3525,6 +3586,11 @@ fn reserve_position_with(
                     match s.backend.device().0.borrow_mut().reserve_submission() {
                         Ok(v) => v,
                         Err(e) => {
+                            note_refusal(
+                                "reserve-position-device",
+                                e,
+                                format_args!("pending={} ready={}", s.pending.len(), s.ready.len()),
+                            );
                             let _ = s.backend.device().0.borrow_mut().release_imports();
                             return Err(e);
                         }
@@ -3551,10 +3617,12 @@ pub(crate) fn abandon_position(id: u64, ticket: u64) -> i32 {
                 return Err(-3);
             }
             s.position = None;
+            // The reserved buffer first (see decline_position).
+            let released = s.backend.device().0.borrow_mut().abandon_reservation();
             if s.position_imports.take().is_some() {
                 let _ = s.backend.device().0.borrow_mut().release_imports();
             }
-            s.backend.device().0.borrow_mut().abandon_reservation()
+            released
         })
     })
 }
@@ -3566,13 +3634,31 @@ pub(crate) fn decline_position(id: u64, ticket: u64) -> i32 {
     ffi(|| {
         with_session(id, |s| {
             let Some(reserved) = s.position.filter(|p| p.ticket == ticket) else {
+                note_refusal(
+                    "decline-no-position",
+                    -3,
+                    format_args!(
+                        "requested={ticket} outstanding={:?}",
+                        s.position.map(|p| p.ticket)
+                    ),
+                );
                 return Err(-3);
             };
             s.position = None;
+            // Commit the reserved buffer first: releasing image pins may wait
+            // for the host's owner lock, whose holder may itself be waiting on
+            // work queued behind this position.
+            let released = s.backend.device().0.borrow_mut().abandon_reservation();
             if s.position_imports.take().is_some() {
                 let _ = s.backend.device().0.borrow_mut().release_imports();
             }
-            let released = s.backend.device().0.borrow_mut().abandon_reservation();
+            if released != Ok(()) {
+                note_refusal(
+                    "decline-release",
+                    released.err().unwrap_or(0),
+                    format_args!("ticket={ticket}"),
+                );
+            }
             let mut terminal = reserved;
             terminal.flags |= TERMINAL;
             terminal.status = 0;
@@ -3590,10 +3676,10 @@ pub(crate) fn abandon_any_position(id: u64) {
     let _ = ffi(|| {
         with_session(id, |s| {
             if s.position.take().is_some() {
+                let _ = s.backend.device().0.borrow_mut().abandon_reservation();
                 if s.position_imports.take().is_some() {
                     let _ = s.backend.device().0.borrow_mut().release_imports();
                 }
-                let _ = s.backend.device().0.borrow_mut().abandon_reservation();
             }
             Ok(())
         })
@@ -3617,23 +3703,41 @@ pub(crate) fn commit_subgraph_at(
     let status = ffi(|| {
         with_session(id, |s| {
             let Some(mut reserved) = s.position.filter(|p| p.ticket == ticket) else {
+                note_refusal(
+                    "positioned-commit-no-position",
+                    -3,
+                    format_args!(
+                        "requested={ticket} outstanding={:?}",
+                        s.position.map(|p| p.ticket)
+                    ),
+                );
                 return Err(-3);
             };
-            s.position = None;
-            let bound = match s.position_imports.take() {
+            // A refusal below keeps the position: the caller declines it
+            // (committing it empty, then releasing its imports, and
+            // completing its published ticket).
+            let bound = match s.position_imports.clone() {
                 // Bound and validated at reservation: the commit must import
                 // exactly those.
                 Some(requirements) => match s.admissions.get(admission, source) {
                     Ok(p) if p.imports == requirements => Ok(()),
-                    Ok(_) => {
-                        let _ = s.backend.device().0.borrow_mut().release_imports();
+                    Ok(p) => {
+                        note_refusal(
+                            "positioned-imports-differ",
+                            -5,
+                            format_args!(
+                                "reserved={} committed={}",
+                                requirements.len(),
+                                p.imports.len()
+                            ),
+                        );
                         Err(-5)
                     }
-                    Err(e) => {
-                        let _ = s.backend.device().0.borrow_mut().release_imports();
-                        Err(e)
-                    }
+                    Err(e) => Err(e),
                 },
+                // A position reserved without imports binds them now. (Its
+                // commit carries no retained bindings: see the worker's
+                // positioned entry; hosts reserve with imports.)
                 None => s.admissions.get(admission, source).and_then(|p| {
                     let requirements = p.imports.clone();
                     unsafe {
@@ -3645,11 +3749,10 @@ pub(crate) fn commit_subgraph_at(
                     }
                 }),
             };
-            if let Err(e) = bound {
-                let _ = s.backend.device().0.borrow_mut().abandon_reservation();
-                return Err(e);
-            }
+            bound?;
             let mut r = s.admissions.get(admission, source)?.receipt;
+            s.position = None;
+            s.position_imports = None;
             r.ticket = reserved.ticket;
             r.native_generation = reserved.native_generation;
             r.native_ticket = reserved.native_ticket;
@@ -3792,6 +3895,11 @@ fn commit_impl(
         with_session(id, |s| {
             // An outstanding position belongs to its own positioned commit.
             if s.position.is_some() {
+                note_refusal(
+                    "commit-while-position",
+                    -4,
+                    format_args!("outstanding={:?}", s.position.map(|p| p.ticket)),
+                );
                 return Err(-4);
             }
             let p = s.admissions.get(admission, source)?;

@@ -8,6 +8,8 @@
 #include <vector>
 #include <unistd.h>
 #include "mag_render_imported_image.h"
+#include "mag_render_scene_packet.h"
+#include <thread>
 extern "C" int mag_render_test_owner_open(MagRenderHostOwner *);
 extern "C" int mag_render_test_owner_gate(void);
 extern "C" int mag_render_test_owner_image(MagRenderHostImage*);
@@ -219,6 +221,142 @@ static void check_reservation_queue_order(const MagRenderHostOwner *owner,const 
     }
     fprintf(stderr,"[reservation queue order] later work held, then released by abandon and by encoding\n");
 }
+/* The state-first sequence through the real registered worker and its C
+ * entry points, across two threads, on the real queue:
+ * - the boundary thread commits ordinary Mains (their terminals left unread,
+ *   as a host waiting on later queue work leaves them), then reserves a
+ *   position with its imports, and queues later original work;
+ * - a late thread commits a packet into the position (or declines it);
+ * - the later work completes, and the position's ticket reaches a terminal.
+ * A clear-only packet on the imported target stands in for Main. */
+struct HarnessPacket {
+    MagRenderPacketImage image{};
+    MagRenderPacketPass pass{};
+    mag_native_viewport viewport{};
+    MagRenderPacketStencilAttachment stencil{MAG_NATIVE_SCENE_NONE,0,0,0,0,0};
+    MagRenderPacketProgram programs[2]{};
+    uint32_t location0=0;
+    mag_native_vertex_attribute attribute{0,4,0,0};
+    MagRenderPacketPipeline pipeline{};
+    float vertices[12]={-1,-1,0,1, 3,-1,0,1, -1,3,0,1};
+    uint32_t indices[3]={0,1,2};
+    MagRenderPacketBuffer buffers[2]{};
+    MagRenderPacketDraw draw{};
+    MagRenderPacketItem item{};
+    MagRenderScenePacketV3Desc desc{};
+    MagRenderPacketImageRequirement requirement{};
+    MagRenderPacketImageBinding binding{};
+    // One full-target triangle with the fixture's scene vertex/fragment
+    // programs, written into the imported target.
+    HarnessPacket(const MagRenderHostImage *target,uint64_t publication,NSData *vs,NSData *fs){
+        const MagRenderClientSource source={1,2,publication,4};
+        image={MAG_NATIVE_SCENE_RGBA8,2,target->width,target->height,1,1,1,1,NULL,0,0};
+        programs[0].stage=0;
+        programs[0].shader={vs.bytes,(uint64_t)vs.length,"scene_vertex",12,1};
+        programs[0].vertex_location_count=1;programs[0].vertex_locations=&location0;
+        programs[1].stage=1;
+        programs[1].shader={fs.bytes,(uint64_t)fs.length,"scene_fragment",14,1};
+        pipeline.vertex_program=0;pipeline.fragment_program=1;pipeline.vertex_stride=16;
+        pipeline.attribute_count=1;pipeline.attributes=&attribute;
+        pipeline.color_format=MAG_NATIVE_SCENE_RGBA8;pipeline.depth_format=0;pipeline.binding_model=1;
+        pipeline.state.known_fields=511;pipeline.state.color_write_mask=15;pipeline.state.samples=1;
+        buffers[0]={0,0,vertices,sizeof(vertices)};
+        buffers[1]={0,0,indices,sizeof(indices)};
+        draw.source_item=0;draw.source_partition=0;draw.pipeline=0;draw.index_count=3;
+        draw.vertices={0,0,0,sizeof(vertices)};draw.indices={1,0,0,sizeof(indices)};
+        item={0,0,0,0};
+        pass.source=source;
+        pass.color={0,MAG_NATIVE_SCENE_CLEAR,0,0,{0.1f,0.2f,0.3f,1}}; // packet store 0 = store
+        pass.depth={MAG_NATIVE_SCENE_NONE,0,0,0,{0,0,0,0}};
+        pass.draws=&draw;pass.draw_count=1;
+        viewport={0,0,float(target->width),float(target->height),0,1,0,0,target->width,target->height,7,0};
+        auto &b=desc.base.base;
+        b.abi_version=1;b.struct_size=sizeof(b);b.source=source;b.intended_items=1;
+        b.programs=programs;b.program_count=2;b.pipelines=&pipeline;b.pipeline_count=1;
+        b.buffers=buffers;b.buffer_count=2;
+        b.image_count=1;b.images=&image;b.pass_count=1;b.passes=&pass;b.output_image=0;
+        b.items=&item;b.item_count=1;
+        desc.base.abi_version=2;desc.base.struct_size=sizeof(desc.base);
+        desc.base.viewports=&viewport;desc.base.viewport_count=1;
+        desc.abi_version=3;desc.struct_size=sizeof(desc);
+        desc.stencils=&stencil;desc.stencil_count=1;
+        requirement={0,0,1};
+        binding.image=0;binding.source_key=1;binding.host=*target;binding.validate_planes=NULL;
+    }
+};
+static int poll_ticket(uint64_t worker,uint64_t ticket,int ms){
+    for(int i=0;i<ms;++i){
+        MagRenderClientReceipt r{};r.abi_version=1;r.struct_size=sizeof(r);
+        const int s=mag_render_client_worker_poll(worker,&r);
+        if(s==0&&r.ticket==ticket&&(r.flags&MAG_RENDER_CLIENT_TERMINAL))return 1;
+        usleep(1000);
+    }
+    return 0;
+}
+static void check_worker_position_sequence(const MagRenderHostOwner *owner,const MagRenderHostImage *target,const char *directory){
+    NSString *root=[NSString stringWithUTF8String:directory];
+    NSData *vs=[NSData dataWithContentsOfFile:[root stringByAppendingPathComponent:@"scene_vertex/shader.metal"]];
+    NSData *fs=[NSData dataWithContentsOfFile:[root stringByAppendingPathComponent:@"scene_fragment/shader.metal"]];
+    assert(vs&&fs);
+    id<MTLCommandQueue> queue=(__bridge id<MTLCommandQueue>)owner->queue;
+    MagRenderHostOwnerV2 v2{};v2.abi_version=2;v2.struct_size=sizeof(v2);v2.base=*owner;
+    // Variants: commit or decline the position, each after one ordinary
+    // commit and after two still in flight (the reservation then waits,
+    // bounded, for capacity as an ordinary commit's admission does).
+    for(int variant=0;variant<4;++variant){
+        const int decline=variant&1;
+        const uint64_t ordinary=1+(variant>>1);
+        uint64_t worker=0;
+        int status=mag_render_client_worker_create_scene_v2(&v2,64,64u<<20,&worker);
+        if(status)fprintf(stderr,"[worker position harness] create status=%d\n",status);
+        assert(status==0&&worker);
+        // An ordinary commit whose terminal is left unread (a reservation
+        // needs fewer than two submissions in flight).
+        for(uint64_t p=1;p<=ordinary;++p){
+            HarnessPacket h(target,p,vs,fs);
+            MagRenderClientReceipt r{};r.abi_version=1;r.struct_size=sizeof(r);
+            status=mag_render_client_worker_submit_scene_subgraph_imported_v3(worker,&h.desc,&h.requirement,1,&h.binding,1,&r);
+            if(status)fprintf(stderr,"[worker position harness] ordinary commit %llu status=%d\n",(unsigned long long)p,status);
+            assert(status==0);
+        }
+        HarnessPacket main(target,3,vs,fs);
+        MagRenderClientReceipt reserved{};reserved.abi_version=1;reserved.struct_size=sizeof(reserved);
+        status=mag_render_client_worker_reserve_position_imported(worker,&main.requirement,1,&main.binding,1,&reserved);
+        if(status)fprintf(stderr,"[worker position harness] reserve status=%d\n",status);
+        assert(status==0&&reserved.ticket&&reserved.native_ticket);
+        id<MTLCommandBuffer> later=[queue commandBuffer];[later commit];
+        // The boundary thread holds the host's owner lease while the late half
+        // starts (as the FIFO does during its own native work), making no
+        // worker call meanwhile, then releases it.
+        assert(owner->try_begin(owner->userdata,owner->lifetime)==0);
+        int late_status=1;
+        std::thread late([&]{
+            if(decline){late_status=mag_render_client_worker_decline_position(worker,reserved.ticket);return;}
+            MagRenderClientReceipt r{};r.abi_version=1;r.struct_size=sizeof(r);
+            late_status=mag_render_client_worker_submit_scene_subgraph_imported_v3_at(worker,&main.desc,&main.requirement,1,&main.binding,1,reserved.ticket,&r);
+        });
+        usleep(20000);
+        owner->end(owner->userdata,owner->lifetime);
+        // Then it tries the next frame's ordinary commit (refused while the
+        // position is held, its preparation cancelled).
+        {
+            HarnessPacket next(target,5,vs,fs);
+            MagRenderClientReceipt r{};r.abi_version=1;r.struct_size=sizeof(r);
+            const int refused=mag_render_client_worker_submit_scene_subgraph_imported_v3(worker,&next.desc,&next.requirement,1,&next.binding,1,&r);
+            fprintf(stderr,"[worker position harness] ordinary commit while held status=%d\n",refused);
+        }
+        late.join();
+        if(late_status)fprintf(stderr,"[worker position harness] late %s status=%d\n",decline?"decline":"commit",late_status);
+        assert(late_status==0);
+        assert(wait_completed(later,2000));
+        assert(poll_ticket(worker,reserved.ticket,2000));
+        for(int i=0;i<200;++i){MagRenderClientReceipt r{};r.abi_version=1;r.struct_size=sizeof(r);(void)mag_render_client_worker_poll(worker,&r);usleep(1000);}
+        status=mag_render_client_worker_close(worker);
+        if(status)fprintf(stderr,"[worker position harness] close status=%d\n",status);
+        assert(status==0);
+    }
+    fprintf(stderr,"[worker position harness] reserve_imported -> late commit and -> late decline both completed across threads, after one and two ordinary commits\n");
+}
 /* A position-only reservation (no imports yet) holds its queue position and
  * ticket; the encoding validates the scene's own import under a short lease
  * and completes with that ticket. An import that is no longer valid at
@@ -362,6 +500,7 @@ int mag_render_scene_target_main(const char *directory, bool diagnostic,bool imp
             return 3;
         }
         // Before the probe's deliberate queue gate: this check needs completion.
+        if(imported)check_worker_position_sequence(&owner,&target,directory);
         if(imported)check_reserved_submission(&owner,&target);
         if(imported)check_position_reservation(&owner,&target);
         if(imported)check_reservation_queue_order(&owner,&target);
