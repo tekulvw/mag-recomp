@@ -3343,16 +3343,35 @@ pub(crate) fn admit(
             receipt,
             identities,
         };
+        // An outstanding position already holds one of the two in-flight
+        // slots (checked when it was reserved): its own commit's admission
+        // does not count submitted work, whose terminals may be unread only
+        // because the host is waiting on work queued behind that position.
+        let other_slots = if s.position.is_some() {
+            0
+        } else {
+            s.pending.len()
+        };
         match s.admissions.insert(
             (worker, generation),
             packet.source,
             packet.intended,
             receipt.draws,
             prepared,
-            s.pending.len(),
+            other_slots,
         ) {
             Ok(a) => Ok(a),
             Err(e) => {
+                note_refusal(
+                    "admission-bound",
+                    e,
+                    format_args!(
+                        "prepared={} pending={} position={:?}",
+                        s.admissions.len(),
+                        s.pending.len(),
+                        s.position.map(|p| p.ticket)
+                    ),
+                );
                 s.packet_cache.unpin(&ids)?;
                 Err(e)
             }
@@ -3433,6 +3452,11 @@ pub(crate) fn commit_subgraph_reserved(
             }
             // An outstanding position belongs to its own positioned commit.
             if s.position.is_some() {
+                note_refusal(
+                    "commit-while-position",
+                    -4,
+                    format_args!("outstanding={:?}", s.position.map(|p| p.ticket)),
+                );
                 return Err(-4);
             }
             let requirements = p.imports.clone();
@@ -3476,6 +3500,14 @@ pub(crate) fn commit_subgraph_reserved(
     }
     encode_reserved(id, admission, source, receipt, false);
 }
+/// Logs (the first 32, then every 1000th) which check refused a worker call.
+fn note_refusal(check: &str, status: i32, detail: std::fmt::Arguments<'_>) {
+    static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+    if n <= 32 || n.is_multiple_of(1000) {
+        eprintln!("[mag native worker refusal] n={n} check={check} status={status} {detail}");
+    }
+}
 /// Position-only reservation (for a caller whose packet is not planned yet):
 /// fixes the next submission's native queue position and ticket now and
 /// returns the receipt its positioned commit will carry. One at a time (-4);
@@ -3507,6 +3539,15 @@ fn reserve_position_with(
     let status = ffi(|| {
         with_session(id, |s| {
             if s.acknowledged_failure || s.position.is_some() {
+                note_refusal(
+                    "reserve-position-busy",
+                    -4,
+                    format_args!(
+                        "acknowledged_failure={} outstanding={:?}",
+                        s.acknowledged_failure,
+                        s.position.map(|p| p.ticket)
+                    ),
+                );
                 return Err(-4);
             }
             let (generation, native) = match imports {
@@ -3525,6 +3566,11 @@ fn reserve_position_with(
                     match s.backend.device().0.borrow_mut().reserve_submission() {
                         Ok(v) => v,
                         Err(e) => {
+                            note_refusal(
+                                "reserve-position-device",
+                                e,
+                                format_args!("pending={} ready={}", s.pending.len(), s.ready.len()),
+                            );
                             let _ = s.backend.device().0.borrow_mut().release_imports();
                             return Err(e);
                         }
@@ -3617,6 +3663,14 @@ pub(crate) fn commit_subgraph_at(
     let status = ffi(|| {
         with_session(id, |s| {
             let Some(mut reserved) = s.position.filter(|p| p.ticket == ticket) else {
+                note_refusal(
+                    "positioned-commit-no-position",
+                    -3,
+                    format_args!(
+                        "requested={ticket} outstanding={:?}",
+                        s.position.map(|p| p.ticket)
+                    ),
+                );
                 return Err(-3);
             };
             s.position = None;
@@ -3792,6 +3846,11 @@ fn commit_impl(
         with_session(id, |s| {
             // An outstanding position belongs to its own positioned commit.
             if s.position.is_some() {
+                note_refusal(
+                    "commit-while-position",
+                    -4,
+                    format_args!("outstanding={:?}", s.position.map(|p| p.ticket)),
+                );
                 return Err(-4);
             }
             let p = s.admissions.get(admission, source)?;
