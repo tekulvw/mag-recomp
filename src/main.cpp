@@ -113,9 +113,10 @@ unsigned cellGcm_flip_request_count(void);
 /* ---------------------------------------------------------------------------
  * RSX present backend
  * -----------------------------------------------------------------------*/
-/* Match the toolkit's backend selection: D3D12, Metal, Linux Vulkan,
+/* Match the toolkit's backend selection: D3D12, Metal, Vulkan (Linux, or
+ * Windows when the runtime is built with its opt-in PS3RECOMP_RSX_VULKAN),
  * or the headless fallback. All expose the same frame-clock entry points. */
-#if defined(_WIN32)
+#if defined(_WIN32) && !defined(PS3RECOMP_RSX_VULKAN)
 extern "C" int  rsx_d3d12_backend_init(uint32_t w, uint32_t h, const char* title);
 extern "C" void rsx_d3d12_backend_present(void);
 extern "C" int  rsx_d3d12_backend_pump_messages(void);
@@ -132,7 +133,7 @@ extern "C" int  rsx_metal_backend_pump_messages(void);
 #  define rsx_backend_present rsx_metal_backend_present
 #  define rsx_backend_pump    rsx_metal_backend_pump_messages
 #  define RSX_BACKEND_NAME    "Metal"
-#elif defined(__linux__) && defined(PS3RECOMP_RSX_VULKAN)
+#elif (defined(__linux__) || defined(_WIN32)) && defined(PS3RECOMP_RSX_VULKAN)
 extern "C" int  rsx_vulkan_backend_init(uint32_t w, uint32_t h, const char* title);
 extern "C" void rsx_vulkan_backend_present(void);
 extern "C" int  rsx_vulkan_backend_pump_messages(void);
