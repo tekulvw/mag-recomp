@@ -234,6 +234,7 @@ struct HarnessPacket {
     MagRenderPacketPass pass{};
     mag_native_viewport viewport{};
     uint32_t view_dimension=2;
+    MagRenderPacketStencilAttachment stencil{MAG_NATIVE_SCENE_NONE,0,0,0,0,0};
     MagRenderScenePacketV3Desc desc{};
     MagRenderPacketImageRequirement requirement{};
     MagRenderPacketImageBinding binding{};
@@ -243,15 +244,19 @@ struct HarnessPacket {
         pass.source=source;
         pass.color={0,MAG_NATIVE_SCENE_CLEAR,1,0,{0.1f,0.2f,0.3f,1}};
         pass.depth={MAG_NATIVE_SCENE_NONE,0,0,0,{0,0,0,0}};
-        viewport={0,0,float(target->width),float(target->height),0,1,0,0,target->width,target->height,0x3ff,0};
+        viewport={0,0,float(target->width),float(target->height),0,1,0,0,target->width,target->height,7,0};
         auto &b=desc.base.base;
         b.abi_version=1;b.struct_size=sizeof(b);b.source=source;b.intended_items=0;
         b.image_count=1;b.images=&image;b.pass_count=1;b.passes=&pass;b.output_image=0;
         desc.base.abi_version=2;desc.base.struct_size=sizeof(desc.base);
         desc.base.viewports=&viewport;desc.base.viewport_count=1;
         desc.abi_version=3;desc.struct_size=sizeof(desc);
-        requirement={0,0,1};
-        binding.image=0;binding.source_key=1;binding.host=*target;binding.validate_planes=NULL;
+        desc.stencils=&stencil;desc.stencil_count=1;
+        // The imported target counts as initialized (a stand-in provider
+        // that vouches for its planes), as Main's surfaces are.
+        requirement={0,1,1};
+        binding.image=0;binding.source_key=1;binding.host=*target;
+        binding.validate_planes=[](void*,uint64_t,uint64_t,uint64_t,uint32_t){return 0;};
     }
 };
 static int poll_ticket(uint64_t worker,uint64_t ticket,int ms){
@@ -448,10 +453,10 @@ int mag_render_scene_target_main(const char *directory, bool diagnostic,bool imp
             return 3;
         }
         // Before the probe's deliberate queue gate: this check needs completion.
+        if(imported)check_worker_position_sequence(&owner,&target);
         if(imported)check_reserved_submission(&owner,&target);
         if(imported)check_position_reservation(&owner,&target);
         if(imported)check_reservation_queue_order(&owner,&target);
-        if(imported)check_worker_position_sequence(&owner,&target);
         if (mag_render_test_owner_gate()) {
             mag_render_test_owner_close(1);
             return 3;
