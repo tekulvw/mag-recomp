@@ -79,6 +79,7 @@ struct Pipeline {
   uint32_t scene_model=0;
   mag_native_scene_graphics_desc scene_desc={};
   mag_native_raster_state raster={};bool explicit_raster=false;
+  bool depth_bounds=false;   // built with the depth bounds test on (DEPTH_STENCIL1)
   std::vector<mag_native_scene_buffer_layout> scene_buffers;
   std::vector<mag_native_scene_texture_layout> scene_textures;
   std::array<uint32_t,2> scene_resource_count={},scene_resource_root={},scene_sampler_mask={},scene_sampler_index={};
@@ -109,6 +110,7 @@ struct Slot {
   std::vector<mag_native_sampler_entry*> sampler_entries;
   Ref<ID3D12CommandAllocator> allocator;
   Ref<ID3D12GraphicsCommandList> list;
+  Ref<ID3D12GraphicsCommandList1> list1;   // OMSetDepthBounds, with the depth-bounds feature
   Ref<ID3D12DescriptorHeap> descriptors, rtv, dsv,samplers;
   uint32_t descriptor_capacity=HeapDescriptors;
   std::vector<SceneImage> scene_images;
@@ -140,6 +142,7 @@ struct Context {
   Ref<ID3D12DescriptorHeap> sampler_cpu;
   std::array<bool,MAG_NATIVE_MAX_SAMPLERS> sampler_slots={};
   MagRenderHostOwner owner = {};
+  uint64_t features = 0;   // owner features both known and enabled, confirmed on this device
   bool pinned = false, failed = false;
   uint64_t generation = 0, next_buffer = 0, next_pipeline = 0, next_ticket = 0,
            next_fence = 0, next_image = 0;
@@ -1383,8 +1386,8 @@ static bool queue_matches_device(Context *c) {
   return SUCCEEDED(result) && device_identity.p == queue_identity.p;
 }
 } // namespace
-extern "C" int mag_native_d3d12_create(const MagRenderHostOwner *owner,
-                                       mag_native_device **out) {
+static int create_context(const MagRenderHostOwner *owner, uint64_t features,
+                          mag_native_device **out) {
   if (out)
     *out = nullptr;
   if (!owner || !out || owner->abi_version != 1 ||
@@ -1402,6 +1405,7 @@ extern "C" int mag_native_d3d12_create(const MagRenderHostOwner *owner,
   try {
     c = new Context;
     c->owner = *owner;
+    c->features = features;
     c->pinned = true;
     status = compiler_path(c->compiler);
     if (status) {
@@ -1491,6 +1495,20 @@ extern "C" int mag_native_d3d12_create(const MagRenderHostOwner *owner,
         return status;
       }
     }
+    if (c->features & MAG_RENDER_HOST_FEATURE_DEPTH_BOUNDS) {
+      // The owner enabled it; keep it only if this device and its lists have
+      // the test (OPTIONS2, ID3D12Device2 streams, OMSetDepthBounds).
+      D3D12_FEATURE_DATA_D3D12_OPTIONS2 options2 = {};
+      Ref<ID3D12Device2> device2;
+      bool ok = SUCCEEDED(c->device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS2, &options2, sizeof(options2))) &&
+                options2.DepthBoundsTestSupported &&
+                SUCCEEDED(c->device->QueryInterface(__uuidof(ID3D12Device2), reinterpret_cast<void **>(device2.put())));
+      for (auto &slot : c->slots)
+        ok = ok && SUCCEEDED(slot.list->QueryInterface(__uuidof(ID3D12GraphicsCommandList1),
+                                                       reinterpret_cast<void **>(slot.list1.put())));
+      if (!ok)
+        c->features &= ~MAG_RENDER_HOST_FEATURE_DEPTH_BOUNDS;
+    }
     *out = mag_native_wrap(&operations, c);
     if (!*out) {
       destroy(c);
@@ -1504,4 +1522,18 @@ extern "C" int mag_native_d3d12_create(const MagRenderHostOwner *owner,
       owner->release(owner->userdata, owner->lifetime);
     return MAG_NATIVE_ALLOCATION_FAILED;
   }
+}
+extern "C" int mag_native_d3d12_create(const MagRenderHostOwner *owner,
+                                       mag_native_device **out) {
+  return create_context(owner, 0, out);
+}
+/* The v2 owner adds the features the owner device has enabled; a feature is
+ * used only when it is both known and enabled, and confirmed on the device. */
+extern "C" int mag_native_d3d12_create_v2(const MagRenderHostOwnerV2 *owner,
+                                          mag_native_device **out) {
+  if (out)
+    *out = nullptr;
+  if (!owner || owner->abi_version != 2 || owner->struct_size != sizeof(*owner))
+    return MAG_NATIVE_INVALID;
+  return create_context(&owner->base, owner->known_features & owner->enabled_features, out);
 }
