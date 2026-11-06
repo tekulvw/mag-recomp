@@ -65,12 +65,14 @@ def validate_generated(directory: Path, profile: dict, kind: str) -> dict:
         raise ValueError('Firmware lift must stop at executed unsupported code')
     if record.get('profile') != profile or not record.get('outputs'):
         raise ValueError('Generated image/profile identity does not match this build')
-    files={str(p.relative_to(directory)) for p in directory.rglob('*')
+    # Output names are relative paths. Compare them in one separator form, so a
+    # module generated on one host validates on another (Windows writes '\\').
+    files={p.relative_to(directory).as_posix() for p in directory.rglob('*')
            if p.is_file() and p.suffix in ('.c','.h','.cpp')}
-    if files != set(record['outputs']):
+    if files != {name.replace('\\','/') for name in record['outputs']}:
         raise ValueError('Generated source set has changed')
     for name,digest in record['outputs'].items():
-        path=directory/name
+        path=directory/name.replace('\\','/')
         if path.is_symlink() or not path.resolve().is_relative_to(directory.resolve()):
             raise ValueError('Generated source must stay inside its output directory')
         verify_hash(path,digest)
