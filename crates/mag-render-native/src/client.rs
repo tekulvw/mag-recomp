@@ -479,7 +479,14 @@ fn ffi(f: impl FnOnce() -> Result<(), i32>) -> i32 {
 }
 fn with_session<T>(id: u64, f: impl FnOnce(&mut Session) -> Result<T, i32>) -> Result<T, i32> {
     SESSIONS.with(|s| {
-        let mut s = s.try_borrow_mut().map_err(|_| -4)?;
+        let mut s = s.try_borrow_mut().map_err(|_| {
+            crate::client::scene_packet::note_refusal(
+                "session-borrowed",
+                -4,
+                format_args!("session={id}"),
+            );
+            -4
+        })?;
         f(s.get_mut(&id).ok_or(-3)?)
     })
 }
