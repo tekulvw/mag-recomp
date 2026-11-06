@@ -3611,10 +3611,12 @@ pub(crate) fn abandon_position(id: u64, ticket: u64) -> i32 {
                 return Err(-3);
             }
             s.position = None;
+            // The reserved buffer first (see decline_position).
+            let released = s.backend.device().0.borrow_mut().abandon_reservation();
             if s.position_imports.take().is_some() {
                 let _ = s.backend.device().0.borrow_mut().release_imports();
             }
-            s.backend.device().0.borrow_mut().abandon_reservation()
+            released
         })
     })
 }
@@ -3626,13 +3628,31 @@ pub(crate) fn decline_position(id: u64, ticket: u64) -> i32 {
     ffi(|| {
         with_session(id, |s| {
             let Some(reserved) = s.position.filter(|p| p.ticket == ticket) else {
+                note_refusal(
+                    "decline-no-position",
+                    -3,
+                    format_args!(
+                        "requested={ticket} outstanding={:?}",
+                        s.position.map(|p| p.ticket)
+                    ),
+                );
                 return Err(-3);
             };
             s.position = None;
+            // Commit the reserved buffer first: releasing image pins may wait
+            // for the host's owner lock, whose holder may itself be waiting on
+            // work queued behind this position.
+            let released = s.backend.device().0.borrow_mut().abandon_reservation();
             if s.position_imports.take().is_some() {
                 let _ = s.backend.device().0.borrow_mut().release_imports();
             }
-            let released = s.backend.device().0.borrow_mut().abandon_reservation();
+            if released != Ok(()) {
+                note_refusal(
+                    "decline-release",
+                    released.err().unwrap_or(0),
+                    format_args!("ticket={ticket}"),
+                );
+            }
             let mut terminal = reserved;
             terminal.flags |= TERMINAL;
             terminal.status = 0;
@@ -3650,10 +3670,10 @@ pub(crate) fn abandon_any_position(id: u64) {
     let _ = ffi(|| {
         with_session(id, |s| {
             if s.position.take().is_some() {
+                let _ = s.backend.device().0.borrow_mut().abandon_reservation();
                 if s.position_imports.take().is_some() {
                     let _ = s.backend.device().0.borrow_mut().release_imports();
                 }
-                let _ = s.backend.device().0.borrow_mut().abandon_reservation();
             }
             Ok(())
         })
@@ -3687,8 +3707,10 @@ pub(crate) fn commit_subgraph_at(
                 );
                 return Err(-3);
             };
-            s.position = None;
-            let bound = match s.position_imports.take() {
+            // A refusal below keeps the position: the caller declines it
+            // (committing it empty, then releasing its imports, and
+            // completing its published ticket).
+            let bound = match s.position_imports.clone() {
                 // Bound and validated at reservation: the commit must import
                 // exactly those.
                 Some(requirements) => match s.admissions.get(admission, source) {
@@ -3703,14 +3725,13 @@ pub(crate) fn commit_subgraph_at(
                                 p.imports.len()
                             ),
                         );
-                        let _ = s.backend.device().0.borrow_mut().release_imports();
                         Err(-5)
                     }
-                    Err(e) => {
-                        let _ = s.backend.device().0.borrow_mut().release_imports();
-                        Err(e)
-                    }
+                    Err(e) => Err(e),
                 },
+                // A position reserved without imports binds them now. (Its
+                // commit carries no retained bindings: see the worker's
+                // positioned entry; hosts reserve with imports.)
                 None => s.admissions.get(admission, source).and_then(|p| {
                     let requirements = p.imports.clone();
                     unsafe {
@@ -3722,11 +3743,10 @@ pub(crate) fn commit_subgraph_at(
                     }
                 }),
             };
-            if let Err(e) = bound {
-                let _ = s.backend.device().0.borrow_mut().abandon_reservation();
-                return Err(e);
-            }
+            bound?;
             let mut r = s.admissions.get(admission, source)?.receipt;
+            s.position = None;
+            s.position_imports = None;
             r.ticket = reserved.ticket;
             r.native_generation = reserved.native_generation;
             r.native_ticket = reserved.native_ticket;

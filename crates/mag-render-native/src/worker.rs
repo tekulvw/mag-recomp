@@ -968,6 +968,16 @@ impl Worker {
                                             format_args!("ticket={ticket}"),
                                         );
                                         let _ = driver.cancel(token);
+                                        // Still held: decline it (its ticket was
+                                        // published by the host).
+                                        let declined = driver.decline_position(ticket);
+                                        if declined != 0 && declined != -3 {
+                                            client::scene_packet::note_refusal(
+                                                "positioned-commit-decline",
+                                                declined,
+                                                format_args!("ticket={ticket}"),
+                                            );
+                                        }
                                     }
                                     actor_timing
                                         .commit_ns
@@ -2030,7 +2040,16 @@ unsafe fn submit_subgraph_imported_v3(
             timing.copy_ns = elapsed_ns(copy_start);
             let single = admit.prevalidated.is_some();
             let pin_start = Instant::now();
-            let pins = unsafe { ImportPins::copy(bindings, binding_count) }?;
+            // A positioned commit's imports were bound, retained and validated
+            // when its position was reserved, at the boundary. Retaining them
+            // again here, from the late thread, needs the host's owner lock,
+            // which the boundary thread may hold (the host refuses BUSY), so
+            // it takes none.
+            let pins = if position.is_some() {
+                ImportPins(Vec::new())
+            } else {
+                unsafe { ImportPins::copy(bindings, binding_count) }?
+            };
             timing.pin_ns = elapsed_ns(pin_start);
             if timed {
                 worker.timing.reset();

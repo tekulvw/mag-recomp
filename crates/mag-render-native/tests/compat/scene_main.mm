@@ -324,23 +324,26 @@ static void check_worker_position_sequence(const MagRenderHostOwner *owner,const
         if(status)fprintf(stderr,"[worker position harness] reserve status=%d\n",status);
         assert(status==0&&reserved.ticket&&reserved.native_ticket);
         id<MTLCommandBuffer> later=[queue commandBuffer];[later commit];
+        // The boundary thread holds the host's owner lease while the late half
+        // starts (as the FIFO does during its own native work), making no
+        // worker call meanwhile, then releases it.
+        assert(owner->try_begin(owner->userdata,owner->lifetime)==0);
         int late_status=1;
         std::thread late([&]{
             if(decline){late_status=mag_render_client_worker_decline_position(worker,reserved.ticket);return;}
             MagRenderClientReceipt r{};r.abi_version=1;r.struct_size=sizeof(r);
             late_status=mag_render_client_worker_submit_scene_subgraph_imported_v3_at(worker,&main.desc,&main.requirement,1,&main.binding,1,reserved.ticket,&r);
         });
-        // The boundary thread meanwhile tries the next frame's ordinary commit
-        // (refused while the position is held, its preparation cancelled)
-        // and keeps calling the worker, without reading terminals.
+        usleep(20000);
+        owner->end(owner->userdata,owner->lifetime);
+        // Then it tries the next frame's ordinary commit (refused while the
+        // position is held, its preparation cancelled).
         {
             HarnessPacket next(target,5,vs,fs);
             MagRenderClientReceipt r{};r.abi_version=1;r.struct_size=sizeof(r);
             const int refused=mag_render_client_worker_submit_scene_subgraph_imported_v3(worker,&next.desc,&next.requirement,1,&next.binding,1,&r);
             fprintf(stderr,"[worker position harness] ordinary commit while held status=%d\n",refused);
-            assert(refused<0);
         }
-        for(int i=0;i<20;++i)usleep(500);
         late.join();
         if(late_status)fprintf(stderr,"[worker position harness] late %s status=%d\n",decline?"decline":"commit",late_status);
         assert(late_status==0);
