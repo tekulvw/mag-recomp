@@ -407,7 +407,8 @@ static void check_unsupported_operations(const MagRenderHostOwner *owner) {
     mag_native_scene_import import = {0};
     mag_native_ticket ticket = {0};
     CHECK(mag_native_reserve_scene_v5(device, &import, 1, &ticket) == MAG_NATIVE_UNSUPPORTED && !ticket.submission_id);
-    /* Depth bounds: refused at pipeline creation. */
+    /* Depth bounds: refused at pipeline creation on a device made without the
+     * owner's depth-bounds feature (check_depth_bounds covers the feature). */
     static const mag_native_vertex_attribute position = {0, MAG_NATIVE_VERTEX_FLOAT4, 0, 0};
     mag_native_scene_graphics_v3_desc d;
     memset(&d, 0, sizeof(d));
@@ -590,6 +591,139 @@ static void check_textured_scene(const MagRenderHostOwner *owner) {
     fprintf(stderr, "[textured scene] uploaded red then green 8x8 textures sampled exactly\n");
 }
 
+/* ---- Stored-depth bounds through the device's depth bounds test ------------------------------------
+ * Pass 0 writes depth 0.25 into the left half and 0.75 into the right; pass 1
+ * loads it and draws a full quad at depth 0.5 with depth test and writes off
+ * and bounds on. A pixel is coloured exactly when min <= stored <= max -- the
+ * predicate the Metal stored-depth program evaluates -- with equality at both
+ * ends. A bounds draw whose pipeline writes depth is refused, and so is a
+ * bounds pipeline on a device created without the owner's feature. */
+static mag_native_raster_state bounds_raster(int write_depth, int bounds) {
+    mag_native_raster_state r;
+    memset(&r, 0, sizeof(r));
+    r.known_fields = MAG_NATIVE_RASTER_KNOWN_ALL;
+    r.depth_enabled = (uint32_t)write_depth; r.depth_write = (uint32_t)write_depth; r.depth_compare = 7; /* ALWAYS */
+    r.color_write_mask = write_depth ? 0u : 15u;   /* the depth pass writes no colour */
+    r.samples = 1; r.src_rgb = r.src_alpha = 1;
+    r.depth_bounds_enabled = (uint32_t)bounds; r.depth_bounds_max = 1;
+    return r;
+}
+static int bounds_pipeline(mag_native_device *device, int write_depth, int bounds, mag_native_pipeline *out) {
+    static const mag_native_vertex_attribute position = {0, MAG_NATIVE_VERTEX_FLOAT4, 0, 0};
+    mag_native_scene_graphics_v3_desc d;
+    memset(&d, 0, sizeof(d));
+    d.struct_size = sizeof(d); d.abi_version = 3;
+    d.base.struct_size = sizeof(d.base); d.base.abi_version = 2;
+    d.base.base.struct_size = sizeof(d.base.base); d.base.base.abi_version = 1;
+    d.base.base.vertex = stage(&scene_vertex_fixture); d.base.base.fragment = stage(&scene_fragment_fixture);
+    d.base.base.vertex_stride = 16; d.base.base.color_format = MAG_NATIVE_SCENE_RGBA8;
+    d.base.base.depth_format = MAG_NATIVE_SCENE_D32;
+    d.base.attributes = &position; d.base.attribute_count = 1; d.base.binding_model = 1;
+    d.raster = bounds_raster(write_depth, bounds);
+    return mag_native_scene_graphics_create_v3(device, &d, out);
+}
+static void check_depth_bounds(const MagRenderHostOwner *owner) {
+    D3D12_FEATURE_DATA_D3D12_OPTIONS2 options2;
+    memset(&options2, 0, sizeof(options2));
+    const int supported = SUCCEEDED(ID3D12Device_CheckFeatureSupport(g.device, D3D12_FEATURE_D3D12_OPTIONS2, &options2,
+                                                                     sizeof(options2))) && options2.DepthBoundsTestSupported;
+    mag_native_device *device = NULL;
+    mag_native_pipeline test = {0}, write = {0}, refused = {0};
+    CHECK(mag_native_create(owner, &device) == 0);                /* no owner features */
+    CHECK(bounds_pipeline(device, 0, 1, &test) == MAG_NATIVE_UNSUPPORTED);
+    CHECK(mag_native_close(device) == 0);
+    MagRenderHostOwnerV2 v2;
+    memset(&v2, 0, sizeof(v2));
+    v2.abi_version = 2; v2.struct_size = sizeof(v2); v2.base = *owner;
+    v2.known_features = MAG_RENDER_HOST_FEATURE_DEPTH_BOUNDS;
+    v2.enabled_features = supported ? MAG_RENDER_HOST_FEATURE_DEPTH_BOUNDS : 0;
+    device = NULL;
+    CHECK(mag_native_create_v2(&v2, &device) == 0);
+    CHECK(bounds_pipeline(device, 1, 0, &write) == 0);
+    if (!supported) {
+        CHECK(bounds_pipeline(device, 0, 1, &test) == MAG_NATIVE_UNSUPPORTED);
+        fprintf(stderr, "[depth bounds] device has no depth bounds test: refused\n");
+        CHECK(mag_native_pipeline_release(device, write) == 0 && mag_native_close(device) == 0);
+        return;
+    }
+    CHECK(bounds_pipeline(device, 0, 1, &test) == 0);
+    CHECK(bounds_pipeline(device, 1, 1, &refused) == 0);         /* admitted; its bounds draws are not */
+    enum { W = 16, H = 16 };
+    float v[18][4] = {
+        {-1,-1,.25f,1},{0,-1,.25f,1},{-1,1,.25f,1},{0,-1,.25f,1},{0,1,.25f,1},{-1,1,.25f,1},
+        {0,-1,.75f,1},{1,-1,.75f,1},{0,1,.75f,1},{1,-1,.75f,1},{1,1,.75f,1},{0,1,.75f,1},
+        {-1,-1,.5f,1},{1,-1,.5f,1},{-1,1,.5f,1},{1,-1,.5f,1},{1,1,.5f,1},{-1,1,.5f,1}};
+    uint32_t idx[18];
+    for (uint32_t i = 0; i < 18; ++i) idx[i] = i;
+    mag_native_buffer_desc vd = {sizeof(vd), 1, sizeof v, v}, id = {sizeof(id), 1, sizeof idx, idx},
+                           rd = {sizeof(rd), 1, W * H * 4, NULL};
+    mag_native_buffer vb = {0}, ib = {0}, rb = {0};
+    CHECK(mag_native_buffer_create(device, &vd, &vb) == 0 && mag_native_buffer_create(device, &id, &ib) == 0);
+    static const struct { float min, max; int left, right; } cases[] = {
+        {.2f, .3f, 1, 0}, {.7f, .8f, 0, 1}, {.25f, .25f, 1, 0}, {.75f, .75f, 0, 1}, {.5f, .5f, 0, 0}, {0, 1, 1, 1}};
+    const unsigned n_cases = sizeof cases / sizeof cases[0];
+    for (unsigned k = 0; k <= n_cases; ++k) {
+        const int bad = k == n_cases;                              /* the depth-writing bounds pipeline */
+        const unsigned c = bad ? 0 : k;
+        CHECK(mag_native_buffer_create(device, &rd, &rb) == 0);
+        mag_native_scene_image images[2] = {{MAG_NATIVE_SCENE_RGBA8, W, H, 0, {0}}, {MAG_NATIVE_SCENE_D32, W, H, 0, {0}}};
+        mag_native_scene_draw draws[2];
+        memset(draws, 0, sizeof(draws));
+        draws[0].pipeline = write; draws[0].vertices = vb; draws[0].indices = ib;
+        draws[0].vertex_length = sizeof v; draws[0].index_length = 12 * 4; draws[0].index_count = 12;
+        draws[1] = draws[0]; draws[1].pipeline = bad ? refused : test;
+        draws[1].index_offset = 12 * 4; draws[1].index_length = 6 * 4; draws[1].index_count = 6;
+        mag_native_scene_pass passes[2];
+        memset(passes, 0, sizeof(passes));
+        passes[0].color.image = 0; passes[0].color.load = MAG_NATIVE_SCENE_CLEAR; passes[0].color.clear[3] = 1;
+        passes[0].depth.image = 1; passes[0].depth.load = MAG_NATIVE_SCENE_CLEAR; passes[0].depth.clear[0] = 1;
+        passes[0].draws = &draws[0]; passes[0].draw_count = 1;
+        passes[1].color.image = 0; passes[1].color.load = MAG_NATIVE_SCENE_LOAD;
+        passes[1].depth.image = 1; passes[1].depth.load = MAG_NATIVE_SCENE_LOAD;
+        passes[1].draws = &draws[1]; passes[1].draw_count = 1;
+        mag_native_batch_resource resources[3] = {{vb, MAG_NATIVE_UPLOAD, 0}, {ib, MAG_NATIVE_UPLOAD, 0},
+                                                  {rb, MAG_NATIVE_READBACK, 0}};
+        mag_native_scene scene;
+        memset(&scene, 0, sizeof(scene));
+        scene.struct_size = sizeof(scene); scene.abi_version = 1;
+        scene.resources = resources; scene.resource_count = 3;
+        scene.images = images; scene.image_count = 2; scene.passes = passes; scene.pass_count = 2;
+        scene.output_image = 0; scene.diagnostic_readback = rb;
+        mag_native_stencil_attachment stencils[2] = {{MAG_NATIVE_SCENE_NONE, 0, 0, 0, 0, 0},
+                                                     {MAG_NATIVE_SCENE_NONE, 0, 0, 0, 0, 0}};
+        mag_native_depth_bounds bounds[2] = {{0, 0, 0, 1}, {1, 0, cases[c].min, cases[c].max}};
+        mag_native_scene_v5 v5;
+        memset(&v5, 0, sizeof(v5));
+        v5.struct_size = sizeof(v5); v5.abi_version = 5;
+        v5.base.struct_size = sizeof(v5.base); v5.base.abi_version = 4; v5.base.stencils = stencils; v5.base.stencil_count = 2;
+        v5.base.base.struct_size = sizeof(v5.base.base); v5.base.base.abi_version = 3;
+        v5.base.base.base.struct_size = sizeof(v5.base.base.base); v5.base.base.base.abi_version = 2;
+        v5.base.base.base.scene = &scene;
+        v5.bounds = bounds; v5.bounds_count = 2;
+        mag_native_ticket ticket = {0};
+        const int status = mag_native_submit_scene_v5(device, &v5, NULL, NULL, &ticket);
+        if (bad) {
+            CHECK(status == MAG_NATIVE_UNSUPPORTED && !ticket.submission_id);
+            CHECK(mag_native_buffer_release(device, rb) == 0);
+            break;
+        }
+        if (status) fprintf(stderr, "[depth bounds] submit status=%d\n", status);
+        CHECK(status == 0);
+        wait_one(device, ticket.submission_id);
+        uint32_t px[W * H];
+        CHECK(mag_native_buffer_read(device, rb, 0, px, sizeof px) == 0);
+        const uint32_t lit = 0xffff9933u, dark = 0xff000000u, l = px[8 * W + 4], r = px[8 * W + 12];
+        fprintf(stderr, "[depth bounds] [%.2f, %.2f]: left(0.25)=%08x right(0.75)=%08x\n", cases[c].min, cases[c].max, l, r);
+        CHECK(l == (cases[c].left ? lit : dark) && r == (cases[c].right ? lit : dark));
+        CHECK(mag_native_buffer_release(device, rb) == 0);
+    }
+    CHECK(mag_native_buffer_release(device, vb) == 0 && mag_native_buffer_release(device, ib) == 0);
+    CHECK(mag_native_pipeline_release(device, write) == 0 && mag_native_pipeline_release(device, test) == 0 &&
+          mag_native_pipeline_release(device, refused) == 0);
+    CHECK(mag_native_close(device) == 0);
+    fprintf(stderr, "[depth bounds] hardware bounds test matches the inclusive stored-depth predicate\n");
+}
+
 /* ---- Six-pass scene probe (same graphics descriptors as the Metal fixture) ------------------------ */
 static int scene_main(const MagRenderHostOwner *owner, int diagnostic, SceneProbeReport *report) {
     mag_native_pipeline_desc first = compute(&scene_transform_fixture), second = compute(&scene_prepare_fixture);
@@ -684,6 +818,7 @@ int main(int argc, char **argv) {
         if (diagnostic) {
             check_unsupported_operations(&owner);
             check_textured_scene(&owner);
+            check_depth_bounds(&owner);
         }
         mag_native_graphics_desc graphics = {sizeof(graphics), 1, stage(&scene_vertex_fixture),
                                              stage(&scene_fragment_fixture), 16, 0};

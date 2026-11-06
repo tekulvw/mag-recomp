@@ -55,6 +55,9 @@ int mag_native_create_v2(const MagRenderHostOwnerV2 *owner,mag_native_device **o
 #ifdef MAG_RENDER_NATIVE_VULKAN
     if(base->backend==MAG_RENDER_HOST_VULKAN)return mag_native_vulkan_create_v2(owner,out);
 #endif
+#ifdef MAG_RENDER_NATIVE_D3D12
+    if(base->backend==MAG_RENDER_HOST_D3D12)return mag_native_d3d12_create_v2(owner,out);
+#endif
     return mag_native_create(base,out);
 }
 #define VALID(d) ((d) && (d)->struct_size == sizeof(*(d)) && (d)->abi_version == MAG_NATIVE_ABI_VERSION)

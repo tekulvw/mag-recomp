@@ -11,6 +11,56 @@ static DXGI_FORMAT scene_format(uint32_t format) {
     DXGI_FORMAT_R32_FLOAT, DXGI_FORMAT_R16G16_FLOAT,DXGI_FORMAT_D24_UNORM_S8_UINT,DXGI_FORMAT_D32_FLOAT_S8X24_UINT};
   return format < sizeof(formats)/sizeof(formats[0]) ? formats[format] : DXGI_FORMAT_UNKNOWN;
 }
+/* Stored-depth bounds: the device's depth bounds test passes exactly when
+ * min <= the depth already in the attachment <= max, both ends inclusive,
+ * before any colour or stencil effect -- the predicate a stored-depth program
+ * evaluates. Only DEPTH_STENCIL1 carries the test, so such a pipeline is the
+ * same state as an ordinary one, built as a pipeline state stream; each
+ * draw's range is set on the list (OMSetDepthBounds). */
+template <D3D12_PIPELINE_STATE_SUBOBJECT_TYPE Type, typename T>
+struct alignas(void *) SceneSubobject {
+  D3D12_PIPELINE_STATE_SUBOBJECT_TYPE type = Type;
+  T value;
+};
+static HRESULT scene_pso_with_depth_bounds(Context *c, const D3D12_GRAPHICS_PIPELINE_STATE_DESC &gpu,
+                                           Ref<ID3D12PipelineState> &out) {
+  Ref<ID3D12Device2> device2;
+  HRESULT result = c->device->QueryInterface(__uuidof(ID3D12Device2), reinterpret_cast<void **>(device2.put()));
+  if (FAILED(result))
+    return result;
+  struct Stream {
+    SceneSubobject<D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_ROOT_SIGNATURE, ID3D12RootSignature *> root;
+    SceneSubobject<D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_VS, D3D12_SHADER_BYTECODE> vs;
+    SceneSubobject<D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_PS, D3D12_SHADER_BYTECODE> ps;
+    SceneSubobject<D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_BLEND, D3D12_BLEND_DESC> blend;
+    SceneSubobject<D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_SAMPLE_MASK, UINT> sample_mask;
+    SceneSubobject<D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_RASTERIZER, D3D12_RASTERIZER_DESC> rasterizer;
+    SceneSubobject<D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_DEPTH_STENCIL1, D3D12_DEPTH_STENCIL_DESC1> depth;
+    SceneSubobject<D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_INPUT_LAYOUT, D3D12_INPUT_LAYOUT_DESC> input;
+    SceneSubobject<D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_PRIMITIVE_TOPOLOGY, D3D12_PRIMITIVE_TOPOLOGY_TYPE> topology;
+    SceneSubobject<D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_RENDER_TARGET_FORMATS, D3D12_RT_FORMAT_ARRAY> formats;
+    SceneSubobject<D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_DEPTH_STENCIL_FORMAT, DXGI_FORMAT> depth_format;
+    SceneSubobject<D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_SAMPLE_DESC, DXGI_SAMPLE_DESC> sample;
+  } stream = {};
+  stream.root.value = gpu.pRootSignature;
+  stream.vs.value = gpu.VS;
+  stream.ps.value = gpu.PS;
+  stream.blend.value = gpu.BlendState;
+  stream.sample_mask.value = gpu.SampleMask;
+  stream.rasterizer.value = gpu.RasterizerState;
+  const auto &d = gpu.DepthStencilState;
+  stream.depth.value = {d.DepthEnable, d.DepthWriteMask, d.DepthFunc, d.StencilEnable, d.StencilReadMask,
+                        d.StencilWriteMask, d.FrontFace, d.BackFace, TRUE};
+  stream.input.value = gpu.InputLayout;
+  stream.topology.value = gpu.PrimitiveTopologyType;
+  stream.formats.value.NumRenderTargets = gpu.NumRenderTargets;
+  for (UINT i = 0; i < 8; ++i)
+    stream.formats.value.RTFormats[i] = gpu.RTVFormats[i];
+  stream.depth_format.value = gpu.DSVFormat;
+  stream.sample.value = gpu.SampleDesc;
+  const D3D12_PIPELINE_STATE_STREAM_DESC desc = {sizeof(stream), &stream};
+  return device2->CreatePipelineState(&desc, __uuidof(ID3D12PipelineState), reinterpret_cast<void **>(out.put()));
+}
 struct SceneBlob {
   mag_render_dxc_blob value = {};
   ~SceneBlob() { mag_render_dxc_free(&value); }
@@ -254,9 +304,13 @@ static int scene_graphics_layout(Context *c,
       blend.SrcBlendAlpha=factors[raster->src_alpha];blend.DestBlendAlpha=factors[raster->dst_alpha];
       blend.BlendOp=equations[raster->rgb_equation];blend.BlendOpAlpha=equations[raster->alpha_equation];blend.RenderTargetWriteMask=static_cast<UINT8>(raster->color_write_mask);
     }
-    result = c->device->CreateGraphicsPipelineState(
-        &gpu, __uuidof(ID3D12PipelineState),
-        reinterpret_cast<void **>(p->gpu.put()));
+    if (raster && raster->depth_bounds_enabled) {
+      p->depth_bounds = true;
+      result = scene_pso_with_depth_bounds(c, gpu, p->gpu);
+    } else
+      result = c->device->CreateGraphicsPipelineState(
+          &gpu, __uuidof(ID3D12PipelineState),
+          reinterpret_cast<void **>(p->gpu.put()));
     if (FAILED(result))
       return failure(c, result);
     if (c->next_pipeline == UINT64_MAX)
@@ -297,7 +351,10 @@ scene_graphics_create_v2(void *opaque,
 }
 static int scene_graphics_create_v3(void *opaque,const mag_native_scene_graphics_v3_desc *desc,mag_native_pipeline *out){
   int status=mag_native_scene_graphics_v3_validate(desc);if(status)return status;
-    if(desc->raster.depth_bounds_enabled)return MAG_NATIVE_UNSUPPORTED;
+  /* Bounds need the owner device's enabled depth-bounds feature; the
+   * bounds-gated program itself is the ordinary one (no Metal aux). */
+  if(desc->raster.depth_bounds_enabled&&(!desc->base.base.depth_format||
+     !(static_cast<Context*>(opaque)->features&MAG_RENDER_HOST_FEATURE_DEPTH_BOUNDS)))return MAG_NATIVE_UNSUPPORTED;
   mag_native_scene_graphics_desc schema;mag_native_scene_graphics_v3_schema(desc,&schema);
   return scene_graphics_layout(static_cast<Context*>(opaque),&schema,desc->base.attributes,desc->base.attribute_count,desc->base.binding_model,&desc->raster,out);
 }
@@ -387,7 +444,18 @@ static int scene_prepare(Context *c, const mag_native_scene *scene,
             if(color->width!=depth->width||color->height!=depth->height)return MAG_NATIVE_UNSUPPORTED;
         }
     }
-  if(imported)for(uint32_t i=0;i<imported->bounds_count;++i)if(imported->bounds[i].enabled)return MAG_NATIVE_UNSUPPORTED;
+  /* Bounds-tested draws: the shared validator already required a loaded
+   * depth attachment, no stencil writes and ranges inside [0, 1]; as on
+   * Metal and Vulkan, the draw must also leave the depth unwritten. */
+  if(imported&&imported->bounds_count){
+    uint32_t flat=0;
+    for(uint32_t n=0;n<scene->pass_count;++n)for(uint32_t j=0;j<scene->passes[n].draw_count;++j,++flat){
+      if(!imported->bounds[flat].enabled)continue;
+      auto p=pipeline(c,scene->passes[n].draws[j].pipeline);
+      if(!p||!p->explicit_raster||!p->depth_bounds)return MAG_NATIVE_INVALID;
+      if(p->raster.depth_enabled&&p->raster.depth_write)return MAG_NATIVE_UNSUPPORTED;
+    }
+  }
   plan.buffers.buffers.resize(scene->resource_count);
   plan.buffers.roles.resize(scene->resource_count);
   plan.buffers.resources = scene->resource_count;
@@ -902,6 +970,7 @@ static int scene_execute(Context *c, const mag_native_scene *scene,
       list->RSSetViewports(1, &viewport);
       list->RSSetScissorRects(1, &scissor);
       for (uint32_t j = 0; j < pass.draw_count; ++j) {
+        const uint32_t flat = draw_index;
         const auto &record = plan.draws[draw_index++];
         const auto &draw = *record.source;
         const auto &p = *record.program;
@@ -948,6 +1017,13 @@ static int scene_execute(Context *c, const mag_native_scene *scene,
           if(p.raster.stencil_enabled)list->OMSetStencilRef(p.raster.front_stencil.reference&255u);
         }
         list->SetPipelineState(p.gpu.p);
+        if (p.depth_bounds) {
+          // A bounds draw's own range; any other draw of a bounds pipeline
+          // admits every stored depth.
+          const bool ranged = plan.imported && flat < plan.imported->bounds_count && plan.imported->bounds[flat].enabled;
+          slot->list1->OMSetDepthBounds(ranged ? plan.imported->bounds[flat].minimum : 0.f,
+                                        ranged ? plan.imported->bounds[flat].maximum : 1.f);
+        }
         for (uint32_t stage = 0; stage < 2; ++stage) {
           if (p.scene_resource_root[stage] != UINT32_MAX)
             list->SetGraphicsRootDescriptorTable(

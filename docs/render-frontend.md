@@ -220,9 +220,12 @@ creates a D3D12 device and direct queue on the adapter named by `--vendor-id` an
 lends them through a synthetic host owner (no SDK owner, game data or presentation) and runs the
 owner retain/refusal contract, the compute and connected compute/draw probes, an uploaded-texture
 scene and the six-pass scene probe, with the pinned translator's HLSL compiled at run time by the
-pinned DXC library (`--dxc-dir`, an extracted DXC release). It also checks that the operations the
-D3D12 backend does not implement (in-place buffer writes, the memory census, reserved scene order,
-depth bounds) are refused as unsupported. `--validation` requires the D3D12 debug layer (the
+pinned DXC library (`--dxc-dir`, an extracted DXC release). Stored-depth bounds use the device's
+depth bounds test, as on Vulkan: with a v2 owner that enables `MAG_RENDER_HOST_FEATURE_DEPTH_BOUNDS`
+the fixture checks that each range lights exactly the stored depths inside it, ends included. It
+also checks that the operations the D3D12 backend does not implement (in-place buffer writes, the
+memory census, reserved scene order, and depth bounds without the owner's feature) are refused as
+unsupported. `--validation` requires the D3D12 debug layer (the
 Windows Graphics Tools optional feature) and fails on any debug-layer error; `--gpu-validation`
 adds GPU-based validation. Run it from an x64 MSVC developer environment with `clang-cl`, for
 example:

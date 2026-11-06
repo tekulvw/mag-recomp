@@ -52,4 +52,5 @@ int mag_native_metal_create(const MagRenderHostOwner *,mag_native_device **);
 int mag_native_vulkan_create(const MagRenderHostOwner *,mag_native_device **);
 int mag_native_vulkan_create_v2(const MagRenderHostOwnerV2 *,mag_native_device **);
 int mag_native_d3d12_create(const MagRenderHostOwner *,mag_native_device **);
+int mag_native_d3d12_create_v2(const MagRenderHostOwnerV2 *,mag_native_device **);
 #endif
