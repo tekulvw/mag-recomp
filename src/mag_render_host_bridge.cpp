@@ -70,6 +70,12 @@ static_assert(offsetof(MagRenderFrameEvent, target_generation) ==
 static_assert(offsetof(MagRenderFrameEvent, presented_time) ==
               offsetof(rsx_native_frame_event, presented_time));
 #endif
+#if defined(_WIN32) && defined(RSX_D3D12_NATIVE_OWNER_ABI)
+#include <atomic>
+// Set once the D3D12 register-file engine handed out its owner: the image,
+// boundary and shutdown calls below then go to the engine, not live-draw.
+static std::atomic<bool> s_d3d12_engine_owner{false};
+#endif
 extern "C" int mag_render_frontend_borrow_owner(MagRenderHostOwner *out) {
     if (!out || out->abi_version != MAG_RENDER_HOST_OWNER_ABI || out->struct_size != sizeof(*out))
         return -1;
@@ -103,8 +109,10 @@ extern "C" int mag_render_frontend_borrow_owner(MagRenderHostOwner *out) {
         engine.struct_size = sizeof(engine);
         const int engine_status = rsx_d3d12_backend_borrow_owner(&engine);
         if (engine_status != -2) {
-            if (!engine_status)
+            if (!engine_status) {
                 std::memcpy(out, &engine, sizeof(engine));
+                s_d3d12_engine_owner.store(true);
+            }
             return engine_status;
         }
     }
@@ -152,7 +160,7 @@ extern "C" int mag_render_frontend_borrow_owner_v2(MagRenderHostOwnerV2 *out) {
         rsx_native_owner_v2 engine={};engine.abi_version=2;engine.struct_size=sizeof(engine);
         engine.base.abi_version=1;engine.base.struct_size=sizeof(engine.base);
         const int engine_status=rsx_d3d12_backend_borrow_owner_v2(&engine);
-        if(engine_status!=-2){if(!engine_status)std::memcpy(out,&engine,sizeof(engine));return engine_status;}
+        if(engine_status!=-2){if(!engine_status){std::memcpy(out,&engine,sizeof(engine));s_d3d12_engine_owner.store(true);}return engine_status;}
     }
 #endif
     MagRenderHostOwner owner={};owner.abi_version=1;owner.struct_size=sizeof(owner);
@@ -197,7 +205,12 @@ extern "C" int mag_render_frontend_borrow_image(uint64_t life, uint32_t surface,
     return status;
 #elif defined(_WIN32) && defined(RSX_NATIVE_D3D12_IMAGE_ABI)
     rsx_native_image image={};image.abi_version=1;image.struct_size=sizeof(image);
+#if defined(RSX_D3D12_IMAGE_LEASE_ABI)
+    int status=s_d3d12_engine_owner.load()?rsx_d3d12_backend_borrow_image(life,surface,&image):
+                                           rsx_live_draw_borrow_image(life,surface,&image);
+#else
     int status=rsx_live_draw_borrow_image(life,surface,&image);
+#endif
     if(!status)std::memcpy(out,&image,sizeof(image));
     return status;
 #elif !defined(_WIN32) && defined(RSX_NATIVE_VULKAN_IMAGE_ABI)
@@ -220,6 +233,9 @@ extern "C" int mag_render_frontend_validate_image_planes(void *user, uint64_t li
 #if defined(__APPLE__)
     return rsx_metal_backend_validate_image_planes(user, life, resource, generation, required);
 #elif defined(_WIN32) && defined(RSX_NATIVE_D3D12_IMAGE_ABI)
+#if defined(RSX_D3D12_IMAGE_LEASE_ABI)
+    if(s_d3d12_engine_owner.load())return rsx_d3d12_backend_validate_image_planes(user,life,resource,generation,required);
+#endif
     return rsx_live_draw_validate_image_planes(user,life,resource,generation,required);
 #elif !defined(_WIN32) && defined(RSX_NATIVE_VULKAN_IMAGE_ABI)
     return rsx_vulkan_backend_validate_image_planes(user, life, resource, generation, required);
@@ -287,6 +303,9 @@ extern "C" int mag_render_frontend_native_boundary(uint64_t *ticket) {
 #if defined(__APPLE__)
     return rsx_metal_backend_native_boundary(ticket);
 #elif defined(_WIN32) && defined(RSX_NATIVE_D3D12_IMAGE_ABI)
+#if defined(RSX_D3D12_IMAGE_LEASE_ABI)
+    if(s_d3d12_engine_owner.load())return rsx_d3d12_backend_native_boundary(ticket);
+#endif
     return rsx_live_draw_native_boundary(ticket);
 #elif !defined(_WIN32) && defined(RSX_NATIVE_VULKAN_IMAGE_ABI)
     return rsx_vulkan_backend_native_boundary(ticket);
@@ -299,6 +318,11 @@ extern "C" int mag_render_frontend_shutdown_requested(uint64_t lifetime) {
 #if defined(__APPLE__)
     return rsx_metal_backend_owner_shutdown_requested(lifetime);
 #elif defined(_WIN32)
+#if defined(RSX_D3D12_NATIVE_OWNER_ABI)
+    // The engine has no deferred host shutdown: its lifecycle refuses while
+    // an owner is retained, so no request is ever pending.
+    if(s_d3d12_engine_owner.load())return 0;
+#endif
     return rsx_live_draw_owner_shutdown_requested(lifetime);
 #else
     return rsx_vulkan_backend_owner_shutdown_requested(lifetime);
@@ -308,6 +332,9 @@ extern "C" int mag_render_frontend_retry_shutdown(uint64_t lifetime) {
 #if defined(__APPLE__)
     return rsx_metal_backend_owner_retry_shutdown(lifetime);
 #elif defined(_WIN32)
+#if defined(RSX_D3D12_NATIVE_OWNER_ABI)
+    if(s_d3d12_engine_owner.load())return 0;
+#endif
     return rsx_live_draw_owner_retry_shutdown(lifetime);
 #else
     return rsx_vulkan_backend_owner_retry_shutdown(lifetime);
