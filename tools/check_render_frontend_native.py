@@ -134,7 +134,7 @@ def check(args):
         arguments = {"owner": ["--owner-contract"], "compute": [args.shader_root / "copy_transform"],
                      "draw": ["--draw", args.shader_root], "draw-no-readback": ["--draw-no-readback", args.shader_root]}[mode]
         if args.backend == "vulkan": arguments = [mode, str(args.vendor_id), str(args.device_id)]
-        result = run([executable, *arguments], timeout=20, env=dict(environment, **(extra or {})))
+        result = run([executable, *arguments], timeout=20, env=dict(environment or os.environ, **(extra or {})))
         if any(marker in result.stdout + result.stderr for marker in ("VUID-", "SYNC-HAZARD", "THREADING ERROR")): raise RuntimeError("Vulkan validation rejected native execution:\n" + result.stdout + result.stderr)
         return result
     owner, native = execute("owner"), execute("compute")
