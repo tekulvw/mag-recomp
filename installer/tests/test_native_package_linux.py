@@ -99,6 +99,9 @@ int main(void) {
  if(!settings||!strstr(settings,"/config/MAG/settings.json")||!owned||!strstr(owned,"player"))return 49;
  if(request&&(!getenv("MAG_PLAYER_SETUP")||strcmp(getenv("MAG_PLAYER_SET_SERVER"),"example.org")||getenv("MAG_PLAYER_SET_NAME")))return 50;
  if(!request&&(getenv("MAG_PLAYER_SETUP")||getenv("MAG_PLAYER_SET_SERVER")))return 51;
+ const char* gamedata=getenv("PS3_GAMEDATA_ROOT");
+ if(!gamedata||!strstr(gamedata,"home") || !strstr(gamedata,"gamedata"))return 53;
+ if(!request){char save[4096];snprintf(save,sizeof save,"%s/save.txt",gamedata);FILE* s=fopen(save,"a");if(!s)return 54;fputs("x\n",s);fclose(s);}
  if(request){FILE* f=fopen(request,"wx");if(!f)return 46;
  fprintf(f,"{\"version\":1,\"token\":\"%s\",\"guest_path\":\"/dev_bdvd/PS3_GAME/USRDIR/bin/mage_g.self\",\"kind\":\"mage_g\"}\n",getenv("MAG_HANDOFF_TOKEN"));fclose(f);puts("launcher fixture");return 90;}
  if(getenv("MAG_ENGINE_ELF")||strcmp(getenv("PS3_BOOT_PATH"),"/dev_bdvd/PS3_GAME/USRDIR/bin/mage_g.self"))return 47;
@@ -119,6 +122,7 @@ int main(void) {
             run=subprocess.run([str(moved/'MAG/MAG'),'--server','example.org'],env=env,capture_output=True,text=True,timeout=15)
             self.assertEqual(run.returncode,23,run.stderr)
             self.assertEqual((root/'config/MAG').stat().st_mode&0o777,0o700)
+            save=moved/'home/gamedata/save.txt';self.assertEqual(save.read_text(),'x\n')  # saves stay in the installation
             bad=subprocess.run([str(moved/'MAG/MAG'),'--sever','example.org'],env=env,capture_output=True,text=True,timeout=15)
             self.assertEqual(bad.returncode,1);self.assertIn('Usage: MAG',bad.stderr)
             logs=list((moved/'logs').glob('launch-*'));self.assertEqual(len(logs),1)

@@ -290,6 +290,11 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR arguments, int
     join(request, logs, L"handoff-request.json");
     join(home, g_root, L"home");
     CreateDirectoryW(home, NULL);
+    /* Saves and trophies live in the installation, not in this launch's log folder (the
+     * runtime's default is the working directory), so progress survives every launch. */
+    wchar_t gamedata[MAX_PATH];
+    join(gamedata, home, L"gamedata");
+    if (!CreateDirectoryW(gamedata, NULL) && GetLastError() != ERROR_ALREADY_EXISTS) fail(L"Cannot create the save data folder", gamedata);
     wchar_t player_root[MAX_PATH], appdata[MAX_PATH], config[MAX_PATH], settings[MAX_PATH];
     join(player_root, home, L"player");
     CreateDirectoryW(player_root, NULL);
@@ -303,6 +308,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR arguments, int
 
     clear_inherited();
     set_env(L"HOME", home);
+    set_env(L"PS3_GAMEDATA_ROOT", gamedata);
     set_env(L"PS3_VFS_ROOT", vfs);
     set_env(L"PS3_BOOT_PATH", L"/dev_bdvd/PS3_GAME/USRDIR/EBOOT.BIN");
     set_env(L"PS3_HLE_UNRESOLVED", L"halt");

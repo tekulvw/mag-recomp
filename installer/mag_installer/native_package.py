@@ -132,6 +132,11 @@ int main(int argc,char **argv) { @autoreleasepool {
  // Required runtime defaults recorded at packaging (movie playback for decoder builds).
  NSDictionary *defaults=m[@"environment"]?:@{};if(![defaults isKindOfClass:NSDictionary.class])fail(@"Invalid runtime defaults");
  for(NSString *k in defaults){if(![k isKindOfClass:NSString.class]||![k hasPrefix:@"PS3RECOMP_"]||![defaults[k] isKindOfClass:NSString.class])fail(@"Invalid runtime defaults");env[k]=defaults[k];}
+ // Saves and trophies live in the installation, not in this launch's log folder (the runtime's
+ // default is the working directory), so progress survives every launch.
+ NSString *gamedata=[root stringByAppendingPathComponent:@"home/gamedata"];
+ if(![NSFileManager.defaultManager createDirectoryAtPath:gamedata withIntermediateDirectories:YES attributes:@{NSFilePosixPermissions:@0700} error:nil])fail(@"Cannot create the save data folder");
+ env[@"PS3_GAMEDATA_ROOT"]=gamedata;
  NSString *tmp=NSTemporaryDirectory();if(tmp)env[@"TMPDIR"]=tmp;
  char *overlayTemplate=strdup([[tmp?:@"/tmp" stringByAppendingPathComponent:@"mag-player-XXXXXX"] fileSystemRepresentation]);
  char *created=mkdtemp(overlayTemplate);
