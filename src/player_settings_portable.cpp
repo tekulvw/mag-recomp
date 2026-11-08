@@ -136,6 +136,21 @@ bool write_file(const fs::path &path, const std::string &text, std::string &erro
 }
 
 void say(const std::string &message) { std::fprintf(stderr, "[mag settings] %s\n", message.c_str()); }
+
+#ifdef _WIN32
+const char *const program = "MAG.exe";
+#else
+const char *const program = "./MAG";
+#endif
+const char *const name_rule = "A name has 3 to 15 letters, digits, - or _, and starts with a letter.";
+
+// A launch the player must correct: logged, and left in launch-message.txt for the supervisor's dialog.
+int stop(const fs::path &owned, const std::string &message) {
+    say(message);
+    std::string ignored;
+    write_file(owned / "launch-message.txt", message + "\n", ignored);
+    return -1;
+}
 }
 
 bool mag::check_server_address(std::string &host, std::string &error) {
@@ -226,19 +241,19 @@ extern "C" int mag_player_settings_prepare(void) {
             bool changed = !exists;
             if (const char *server = variable("MAG_PLAYER_SET_SERVER")) {
                 std::string host = server;
-                if (!mag::check_server_address(host, error)) { say("--server: " + error); return -1; }
+                if (!mag::check_server_address(host, error)) return stop(owned, "--server " + std::string(server) + ": " + error);
                 settings.server_address = host; changed = true;
             }
             if (const char *name = variable("MAG_PLAYER_SET_NAME")) {
-                if (!mag::check_player_name(name, error)) { say("--name: " + error); return -1; }
+                if (!mag::check_player_name(name, error)) return stop(owned, "--name " + std::string(name) + ": " + error);
                 settings.player_name = name; changed = true;
             }
             if (changed && !write_file(file, mag::format_portable_settings(settings), error)) { say(error); return -1; }
         }
         if (!settings.server_address.empty() && settings.player_name.empty()) {
             // The server signs players in by this name; without one the launcher can never connect.
-            say("Choose your player name to play on " + settings.server_address + ": start MAG once with --name <name>.");
-            return -1;
+            return stop(owned, "Choose a player name to play on " + settings.server_address + ". Run " + program +
+                               " --name YourName once; MAG remembers it. " + name_rule);
         }
         if (!write_file(snapshot, mag::format_portable_settings(settings), error)) { say(error); return -1; }
     } else {

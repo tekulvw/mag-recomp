@@ -186,6 +186,8 @@ class PortablePlayerSettingsTests(unittest.TestCase):
             settings.write_text(json.dumps({'server_address': '127.0.0.1'}))
             unnamed, _, unnamed_err = self.prepare(root, **common, MAG_PLAYER_SETUP='1')
             self.assertEqual(unnamed, 9); self.assertIn('--name', unnamed_err)
+            note = (owned / 'launch-message.txt').read_text()  # what the supervisor's dialog shows
+            self.assertIn('--name YourName', note); self.assertIn('3 to 15', note)
             settings.write_text(saved)
             # A non-retail archive never hangs or fails the launch: it is reported, and play is offline.
             self.assertIn('Playing offline', err)
