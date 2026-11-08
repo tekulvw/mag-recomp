@@ -114,9 +114,10 @@ unsigned cellGcm_flip_request_count(void);
 /* ---------------------------------------------------------------------------
  * RSX present backend
  * -----------------------------------------------------------------------*/
-/* Match the toolkit's backend selection: D3D12, Metal, Linux Vulkan,
+/* Match the toolkit's backend selection: D3D12, Metal, Vulkan (Linux, or
+ * Windows when the runtime is built with its opt-in PS3RECOMP_RSX_VULKAN),
  * or the headless fallback. All expose the same frame-clock entry points. */
-#if defined(_WIN32)
+#if defined(_WIN32) && !defined(PS3RECOMP_RSX_VULKAN)
 extern "C" int  rsx_d3d12_backend_init(uint32_t w, uint32_t h, const char* title);
 extern "C" void rsx_d3d12_backend_present(void);
 extern "C" int  rsx_d3d12_backend_pump_messages(void);
@@ -133,7 +134,7 @@ extern "C" int  rsx_metal_backend_pump_messages(void);
 #  define rsx_backend_present rsx_metal_backend_present
 #  define rsx_backend_pump    rsx_metal_backend_pump_messages
 #  define RSX_BACKEND_NAME    "Metal"
-#elif defined(__linux__) && defined(PS3RECOMP_RSX_VULKAN)
+#elif (defined(__linux__) || defined(_WIN32)) && defined(PS3RECOMP_RSX_VULKAN)
 extern "C" int  rsx_vulkan_backend_init(uint32_t w, uint32_t h, const char* title);
 extern "C" void rsx_vulkan_backend_present(void);
 extern "C" int  rsx_vulkan_backend_pump_messages(void);
@@ -406,6 +407,22 @@ int main(int argc, char** argv)
      * thing. POSIX timers are already fine-grained. */
     timeBeginPeriod(1);
     setvbuf(stdout, NULL, _IONBF, 0);   /* unbuffered: do not lose prints on a kill */
+#endif
+#if defined(_WIN32) && defined(PS3RECOMP_RSX_VULKAN)
+    /* Windows Vulkan builds present through the runtime's Vulkan backend:
+     * open its window and draw with the register-file engine (guest programs
+     * through glslang, batched recording), as the Linux player does. Without
+     * these the backend stays headless on its fixed-function path. An
+     * explicit value, including 0, is kept. */
+    {
+        static const char *const defaults[][2] = {
+            {"PS3RECOMP_VK_WINDOW", "1"},
+            {"PS3RECOMP_VK_GUEST_PROGRAMS", "1"},
+            {"PS3RECOMP_VK_BATCHED_ENGINE", "1"},
+        };
+        for (const auto &d : defaults)
+            if (!getenv(d[0])) _putenv_s(d[0], d[1]);
+    }
 #endif
 
     printf("=== ps3recomp game runner ===\n");
