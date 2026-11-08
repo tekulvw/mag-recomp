@@ -218,7 +218,8 @@ static void present_guest_frame(const CellGcmFlipReceipt& receipt)
 static DWORD WINAPI frame_clock(LPVOID)
 {
     const char* title = getenv("PS3_TITLE");
-    if (!title || !*title) title = "MAG v1.0 — native macOS";
+    /* One default for every backend (Metal, D3D12, Vulkan, null); PS3_TITLE overrides. */
+    if (!title || !*title) title = "MAG v1.0";
 
 #if defined(__APPLE__)
     // Native diagnostics default on; an explicit 0 preserves the plain title.
