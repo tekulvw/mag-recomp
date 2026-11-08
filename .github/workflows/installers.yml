@@ -83,6 +83,20 @@ jobs:
             mkdir -p "kit-$host"
             cp "$RUNNER_TEMP/installer-$host/release/native-kit.tar.gz" "$RUNNER_TEMP/installer-$host/release/player-build.json" "kit-$host/"
           done
+      - name: Every kit holds the dispatcher splice's pinned lifters
+        # Build MAG reads both splice lifters from the kit's PPU lifter checkout by
+        # revision; a kit without the tagged after commit fails only on a player's
+        # machine. Check each kit as the installer lays it out (a clone of the
+        # packed checkout), with no game input.
+        run: |
+          for host in windows-x86_64 macos-arm64 linux-x86_64; do
+            dir="$RUNNER_TEMP/kit-check-$host"; mkdir -p "$dir"
+            tar -xzf "kit-$host/native-kit.tar.gz" -C "$dir"
+            git clone --quiet --no-hardlinks --no-checkout "$dir/sdks/lifter-ppu" "$dir/lifter-ppu"
+            python tools/installer_ppu_splice.py --check-lifters \
+              --profile profiles/retail-v1.0-ppu-jumptable-splice.json \
+              --before-sdk "$dir/lifter-ppu" --after-sdk "$dir/lifter-ppu"
+          done
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: kit-windows-x86_64

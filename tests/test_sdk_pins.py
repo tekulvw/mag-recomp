@@ -38,6 +38,9 @@ class PinTableTests(unittest.TestCase):
     def test_dispatcher_splice_uses_the_pinned_lifter_and_a_tagged_fix(self):
         profile = load('retail-v1.0-ppu-jumptable-splice.json')
         self.assertEqual(profile['before']['revision'], self.table['lifter-ppu']['commit'])
+        # The fix is pinned in the table too, so every checkout and kit holds it.
+        self.assertEqual(self.table['lifter-ppu']['splice_after'],
+                         {'tag': profile['after']['tag'], 'commit': profile['after']['revision']})
         self.assertRegex(profile['after']['revision'], '^[0-9a-f]{40}$')
         self.assertTrue(profile['after']['tag'].startswith('mag-recomp/lifter-'))
 

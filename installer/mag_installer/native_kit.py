@@ -129,6 +129,14 @@ def prepare(source_tree, sdks, output_archive, token=None, events=None):
             _git([git,'-C',str(clone),'-c','advice.detachedHead=false','checkout','--quiet','--detach',sdk['revision']],temp,env,token)
             if _git([git,'-C',str(clone),'rev-parse','HEAD'],temp,env,token) != sdk['revision']:
                 raise InstallerError(f'SDK {role} checkout identity mismatch')
+            # A second pinned commit read from this checkout by revision (the
+            # dispatcher splice's fixed lifter): pack it with its tag.
+            extra=pins[role].get('splice_after')
+            if extra:
+                ref='refs/tags/'+extra['tag']
+                _git([git,'-C',str(clone),'-c','protocol.file.allow=always','fetch','--quiet','--no-tags','--depth=1','--',str(sdk['path']),'+'+ref+':'+ref],temp,env,token)
+                if _git([git,'-C',str(clone),'rev-parse','--verify','--quiet',ref+'^{commit}'],temp,env,token) != extra['commit']:
+                    raise InstallerError(f"SDK {role} tag {extra['tag']} does not name its pinned splice commit")
             tracked=_git([git,'-C',str(clone),'ls-files','--stage'],temp,env,token)
             if any(line.startswith('160000 ') for line in tracked.splitlines()):
                 raise InstallerError(f'SDK {role} contains submodules; a complete curated source kit is required')

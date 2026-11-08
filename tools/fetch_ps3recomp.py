@@ -36,6 +36,13 @@ def fetch(root, url, role, pin):
     tagged = git(path, 'rev-parse', '--verify', '--quiet', f"refs/tags/{pin['tag']}^{{commit}}")
     if tagged != pin['commit']:
         raise ValueError(f"{role}: tag {pin['tag']} is {tagged}, pinned commit is {pin['commit']}")
+    # A second tagged commit the role's checkout must also hold (the dispatcher
+    # splice's fixed lifter, read from the PPU lifter checkout by revision).
+    extra = pin.get('splice_after')
+    if extra:
+        tagged = git(path, 'rev-parse', '--verify', '--quiet', f"refs/tags/{extra['tag']}^{{commit}}")
+        if tagged != extra['commit']:
+            raise ValueError(f"{role}: tag {extra['tag']} is {tagged}, pinned splice commit is {extra['commit']}")
     git(path, 'checkout', '--quiet', '--detach', pin['commit'])
     if git(path, 'rev-parse', 'HEAD') != pin['commit'] or git(path, 'status', '--porcelain', '--untracked-files=no'):
         raise ValueError(f'{role}: checkout at {path} is not clean at the pinned commit')

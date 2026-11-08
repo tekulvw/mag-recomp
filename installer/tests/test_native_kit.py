@@ -59,6 +59,34 @@ class NativeKitTests(unittest.TestCase):
                     self.assertEqual(actual,record['revision'])
             self.assertEqual((root/'sdk/.git/index').read_bytes(),original_index)
 
+    def test_packs_the_tagged_splice_commit_beside_the_pinned_lifter(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp).resolve();source,sdks=self.fixture(root)
+            sdk=root/'sdk';identity=['-c','user.name=Fixture','-c','user.email=fixture@example.invalid']
+            (sdk/'runtime.txt').write_text('fixed\n')
+            self.git('-C',str(sdk),*identity,'commit','-qam','fix')
+            fixed=self.git('-C',str(sdk),'rev-parse','HEAD').strip()
+            self.git('-C',str(sdk),*identity,'tag','-a','-m','fix','mag-recomp/lifter-fixture',fixed)
+            pins={r:{'commit':s['revision'],'tag':'fixture'} for r,s in sdks.items()}
+            pins['lifter-ppu']['splice_after']={'tag':'mag-recomp/lifter-fixture','commit':fixed}
+            with patch('mag_installer.native_kit.validate_source_tree',return_value=pins):
+                native_kit.prepare(source,sdks,root/'kit.tar.gz')
+            extracted=root/'extracted';extracted.mkdir()
+            with tarfile.open(root/'kit.tar.gz') as archive:
+                archive.extractall(extracted,filter='data')
+            lifter=extracted/'sdks/lifter-ppu'
+            self.assertEqual(self.git('-C',str(lifter),'rev-parse','HEAD').strip(),sdks['lifter-ppu']['revision'])
+            self.assertEqual(self.git('-C',str(lifter),'rev-parse','refs/tags/mag-recomp/lifter-fixture^{commit}').strip(),fixed)
+            self.assertEqual(self.git('-C',str(lifter),'show',fixed+':runtime.txt'),'fixed\n')
+            # Roles without a splice commit stay single-commit.
+            with self.assertRaises(subprocess.CalledProcessError):
+                self.git('-C',str(extracted/'sdks/runtime'),'rev-parse','--verify','refs/tags/mag-recomp/lifter-fixture')
+            # A tag that names another commit is refused.
+            pins['lifter-ppu']['splice_after']['commit']=sdks['lifter-ppu']['revision']
+            with patch('mag_installer.native_kit.validate_source_tree',return_value=pins):
+                with self.assertRaisesRegex(InstallerError,'does not name its pinned splice commit'):
+                    native_kit.prepare(source,sdks,root/'refused.tar.gz')
+
     def test_git_checkout_source_refuses_untracked_files_in_allowlisted_directories(self):
         with tempfile.TemporaryDirectory() as temp:
             root=Path(temp).resolve();source,sdks=self.fixture(root)
