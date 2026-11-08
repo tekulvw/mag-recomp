@@ -55,7 +55,8 @@ vendor owns the compiler:
 Progress, cancellation, *Open output* and *Open logs* are in the wizard. On failure, use **Retry build**
 to keep the same installation folder. The installer checks your inputs again, reuses verified
 downloads and completed tool dependencies, and rebuilds unfinished work. Earlier logs remain under
-`logs/attempts/`. Changed inputs, a different installer kit, and unknown output folders are preserved
+`logs/attempts/`, and the most recent failed attempt's output is kept beside its logs there (older
+attempts keep only their logs). Changed inputs, a different installer kit, and unknown output folders are preserved
 and require a new destination. From the command line, use `build --retry` with the same paths. See
 [docs/testing.md](docs/testing.md) for what to report.
 
