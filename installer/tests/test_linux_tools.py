@@ -81,11 +81,32 @@ class LinuxToolsTests(unittest.TestCase):
             workspace = fixture.workspace(root / 'work')
             plan = build_plan(config, workspace)
             argv = next(s['argv'] for s in plan if s['id'] == 'configure-engine')
-            self.assertIn('-DCMAKE_C_COMPILER=' + str((root / 'cmake').resolve()), argv)
-            self.assertIn('-DCMAKE_CXX_COMPILER=' + str((root / 'ninja').resolve()), argv)
+            self.assertIn('-DCMAKE_C_COMPILER=' + str((root / 'cmake').absolute()), argv)
+            self.assertIn('-DCMAKE_CXX_COMPILER=' + str((root / 'ninja').absolute()), argv)
             self.assertFalse(any('OSX' in a for a in argv))
             self.assertIn('-DPS3RECOMP_RSX_VULKAN=ON', argv)
             self.assertIn('-DPS3RECOMP_FFMPEG_RUNTIME=ON', argv)
+
+    def test_linux_compiler_driver_names_survive_symlinks(self):
+        # Ubuntu: /usr/bin/clang++ -> ../lib/llvm-18/bin/clang++ -> clang. Clang picks its C or
+        # C++ driver from the invoked name, so resolving the link would hand CMake a C driver.
+        fixture = recipe_tests.NativeRecipeTests()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            raw = fixture.config(root)
+            llvm = root / 'llvm' / 'bin'; llvm.mkdir(parents=True)
+            (llvm / 'clang').write_text('#!/bin/sh\n'); (llvm / 'clang').chmod(0o755)
+            (llvm / 'clang++').symlink_to('clang')
+            bin_dir = root / 'usr-bin'; bin_dir.mkdir()
+            (bin_dir / 'clang').symlink_to(llvm / 'clang'); (bin_dir / 'clang++').symlink_to(llvm / 'clang++')
+            raw.update(host='linux-x86_64', linux_toolchain={'cc': str(bin_dir / 'clang'), 'cxx': str(bin_dir / 'clang++')})
+            (root / 'config.json').write_text(json.dumps(raw))
+            config = load_config(root / 'config.json')
+            self.assertEqual(config['linux_toolchain']['cxx'], str(bin_dir / 'clang++'))
+            argv = next(s['argv'] for s in build_plan(config, fixture.workspace(root / 'work')) if s['id'] == 'configure-engine')
+            self.assertIn('-DCMAKE_CXX_COMPILER=' + str(bin_dir / 'clang++'), argv)
+            self.assertIn('-DCMAKE_C_COMPILER=' + str(bin_dir / 'clang'), argv)
+            self.assertFalse(any(a.startswith('-DCMAKE_CXX_COMPILER=') and a.endswith('/clang') for a in argv))
 
 
 if __name__ == '__main__': unittest.main()

@@ -33,7 +33,7 @@ def _object(value, required, optional, label):
         raise InstallerError(f'{label} requires {", ".join(sorted(required))}; unknown fields are unsupported')
 
 
-def _path(value, base, label, directory=False, executable=False, dependency=False):
+def _path(value, base, label, directory=False, executable=False, dependency=False, keep_name=False):
     if not isinstance(value, str) or not value or '\x00' in value:
         raise InstallerError(f'{label} must name an existing local path')
     path = Path(value).expanduser()
@@ -43,7 +43,10 @@ def _path(value, base, label, directory=False, executable=False, dependency=Fals
         raise InstallerError(f'{label} must name an existing ordinary {"directory" if directory else "file"}: {path}')
     if executable and not os.access(path, os.X_OK):
         raise InstallerError(f'{label} must be executable: {path}')
-    return str(path.resolve())
+    # A compiler driver picks its language from the name it is run as: Ubuntu's
+    # /usr/bin/clang++ resolves to llvm-18/bin/clang, a C driver that links without
+    # the C++ runtime defaults (libstdc++, libm). Keep such paths unresolved.
+    return str(path) if keep_name else str(path.resolve())
 
 
 def load_config(path):
@@ -66,7 +69,7 @@ def load_config(path):
         if 'msvc' in raw or 'linux_toolchain' not in raw:
             raise InstallerError('Linux configuration requires linux_toolchain')
         _object(raw['linux_toolchain'], {'cc', 'cxx'}, set(), 'linux_toolchain')
-        result['linux_toolchain'] = {key: _path(raw['linux_toolchain'][key], path.parent, 'linux_toolchain.' + key, executable=True) for key in ('cc', 'cxx')}
+        result['linux_toolchain'] = {key: _path(raw['linux_toolchain'][key], path.parent, 'linux_toolchain.' + key, executable=True, keep_name=True) for key in ('cc', 'cxx')}
     elif 'linux_toolchain' in raw:
         raise InstallerError('linux_toolchain requires host=linux-x86_64')
     for key in ('source_tree', 'disc_root'):
