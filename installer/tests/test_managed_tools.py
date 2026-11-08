@@ -118,3 +118,35 @@ class ManagedToolTests(unittest.TestCase):
         self.assertIn('-DENABLE_OPT=OFF',next(s for s in plan if s['id']=='configure-glslang')['argv'])
         self.assertIn('--disable-autodetect',next(s for s in plan if s['id']=='configure-ffmpeg')['argv'])
 if __name__=='__main__':unittest.main()
+
+class ManagedBytecodeTests(unittest.TestCase):
+    """Running a managed Python writes bytecode caches into its tree; a retry
+    must not refuse the verified tool for that, and nothing else may change."""
+    def test_stray_or_rewritten_bytecode_is_discarded_and_other_changes_refused(self):
+        import json as _json
+        from mag_installer import managed_tools
+        from mag_installer.safety import Cancellation
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp); spec = {'id': 'python', 'sha256': 'a' * 64}
+            final = root / ('python-' + 'a' * 16)
+            (final / 'lib/__pycache__').mkdir(parents=True)
+            (final / 'lib/module.py').write_text('x = 1\n')
+            (final / 'lib/__pycache__/shipped.cpython-312.pyc').write_bytes(b'shipped')
+            receipt = final / 'MANAGED-INVENTORY.json'
+            receipt.write_text(_json.dumps(managed_tools._inventory(final, Cancellation())))
+            # What a build leaves behind: a new cache and a rewritten shipped one.
+            (final / 'lib/__pycache__/module.cpython-312.pyc').write_bytes(b'new')
+            (final / 'lib/__pycache__/shipped.cpython-312.pyc').write_bytes(b'rewritten')
+            self.assertEqual(managed_tools.materialize(spec, root, root / 'cache', Cancellation(), lambda e: None), final)
+            self.assertEqual(sorted(p.name for p in (final / 'lib/__pycache__').iterdir()), [])
+            # The verified source itself changing is still refused.
+            (final / 'lib/module.py').write_text('x = 2\n')
+            with self.assertRaisesRegex(InstallerError, 'inventory changed'):
+                managed_tools.materialize(spec, root, root / 'cache', Cancellation(), lambda e: None)
+
+    def test_build_commands_cache_bytecode_outside_the_tools(self):
+        from mag_installer import managed_tools, native_build
+        self.assertTrue(managed_tools._env('p/python', 'c/cmake', 'n/ninja', Path('/scratch/home'))['PYTHONPYCACHEPREFIX'].startswith('/scratch/home'))
+        env = native_build._environment({'python': '/t/python', 'cmake': '/t/cmake', 'ninja': '/t/ninja', 'git': '/t/git'}, Path('/scratch/home'))
+        self.assertEqual(env['PYTHONPYCACHEPREFIX'], str(Path('/scratch/home') / 'pycache'))
+
