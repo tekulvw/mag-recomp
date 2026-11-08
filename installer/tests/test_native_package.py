@@ -138,9 +138,15 @@ int main(int argc,char**argv) {
  if(!path||!overlay)return 61;
  FILE *f=fopen(launcher?"launcher-env.json":"engine-env.json","w");
  if(!f)return 62;
- const char *movie=getenv("PS3RECOMP_SAIL_TIMED_THX");
- fprintf(f,"{\"settings_path\":\"%s\",\"overlay_root\":\"%s\",\"setup\":%s,\"show\":%s,\"movie\":\"%s\"}",
-  path,overlay,getenv("MAG_PLAYER_SETUP")?"true":"false",getenv("MAG_PLAYER_SHOW_SETTINGS")?"true":"false",movie?movie:"");fclose(f);
+ const char *movie=getenv("PS3RECOMP_SAIL_TIMED_THX"),*gamedata=getenv("PS3_GAMEDATA_ROOT");
+ if(!gamedata)return 64;
+ /* Each engine stage adds one line to a save file: a later launch must see the earlier ones. */
+ int saves=0;
+ if(!launcher){char save[4096];snprintf(save,sizeof save,"%s/save.txt",gamedata);
+  FILE *s=fopen(save,"a");if(!s)return 65;fputs("x\n",s);fclose(s);
+  s=fopen(save,"r");for(int c;(c=fgetc(s))!=EOF;)saves+=c=='\n';fclose(s);}
+ fprintf(f,"{\"settings_path\":\"%s\",\"overlay_root\":\"%s\",\"setup\":%s,\"show\":%s,\"movie\":\"%s\",\"gamedata\":\"%s\",\"saves\":%d}",
+  path,overlay,getenv("MAG_PLAYER_SETUP")?"true":"false",getenv("MAG_PLAYER_SHOW_SETTINGS")?"true":"false",movie?movie:"",gamedata,saves);fclose(f);
  if(!launcher)return 17;
  f=fopen(getenv("MAG_HANDOFF_REQUEST"),"w");if(!f)return 63;
  fprintf(f,"{\"version\":1,\"token\":\"%s\",\"guest_path\":\"/dev_bdvd/PS3_GAME/USRDIR/bin/mage_g.self\",\"kind\":\"mage_g\"}",getenv("MAG_HANDOFF_TOKEN"));fclose(f);
@@ -177,6 +183,15 @@ int main(int argc,char**argv) {
             self.assertTrue(before['setup']);self.assertTrue(before['show'])
             self.assertFalse(after['setup']);self.assertFalse(after['show'])
             self.assertEqual((before['movie'],after['movie']),('1','1'))  # decoder build: playback switches ship
+            # Saves live in the installation's home/gamedata for both stages, not in the launch folder.
+            self.assertEqual(Path(before['gamedata']).resolve(),(root/'home/gamedata').resolve())
+            self.assertEqual(before['gamedata'],after['gamedata']);self.assertEqual(after['saves'],1)
+            # A second launch gets a new log folder but the same saves.
+            again=subprocess.run([str(app/'Contents/MacOS/MAG')],capture_output=True,text=True,timeout=15)
+            self.assertEqual(again.returncode,17,again.stderr)
+            second=next(p for p in (root/'logs').glob('launch-*') if p!=launch)
+            later=json.loads((second/'engine-env.json').read_text())
+            self.assertEqual(later['gamedata'],after['gamedata']);self.assertEqual(later['saves'],2)
             self.assertEqual(before['settings_path'],after['settings_path'])
             self.assertTrue(before['settings_path'].endswith('/Library/Application Support/MAG/settings.json'))
             self.assertEqual(before['overlay_root'],after['overlay_root'])

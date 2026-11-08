@@ -32,6 +32,8 @@ workflow artifacts.
 2. Start the installer, choose that folder and a new installation folder, then click **Build MAG**.
 3. Keep the installation folder together: the app reads its game files from the private workspace
    beside it.
+   Your saves and trophies are in its `home/gamedata` folder, so keep that folder (and back it up)
+   when you move or rebuild MAG.
 
 The installer downloads pinned Python, CMake and Ninja (plus MinGit on Windows) into the
 installation folder; players install neither Python nor a package manager. The operating system
