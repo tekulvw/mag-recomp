@@ -129,6 +129,9 @@ int main(int argc,char **argv) { @autoreleasepool {
  if(![NSFileManager.defaultManager createDirectoryAtPath:logs withIntermediateDirectories:YES attributes:@{NSFilePosixPermissions:@0700} error:nil])fail(@"Cannot create launch log directory");
  NSString *request=[logs stringByAppendingPathComponent:@"handoff-request.json"];
  NSMutableDictionary *env=[NSMutableDictionary dictionaryWithDictionary:@{@"PATH":@"/usr/bin:/bin",@"HOME":[root stringByAppendingPathComponent:@"home"],@"LANG":@"en_US.UTF-8",@"PS3_VFS_ROOT":vfs,@"PS3_BOOT_PATH":@"/dev_bdvd/PS3_GAME/USRDIR/EBOOT.BIN",@"PS3_HLE_UNRESOLVED":@"halt",@"PS3_SYSCALL_UNRESOLVED":@"halt",@"MAG_HANDOFF_REQUEST":request,@"MAG_HANDOFF_TOKEN":token,@"MAG_ENGINE_BINARY":engine,@"MAG_ENGINE_BINARY_SHA256":er[@"binary_sha256"],@"MAG_ENGINE_ELF":engineElf,@"MAG_ENGINE_ELF_SHA256":er[@"elf_sha256"],@"MAG_ENGINE_SELF":engineSelf,@"MAG_ENGINE_SELF_SHA256":m[@"engine_self_sha256"],@"MAG_ENGINE_KEY_SHA256":keyHash(launcherElf)}];
+ // Required runtime defaults recorded at packaging (movie playback for decoder builds).
+ NSDictionary *defaults=m[@"environment"]?:@{};if(![defaults isKindOfClass:NSDictionary.class])fail(@"Invalid runtime defaults");
+ for(NSString *k in defaults){if(![k isKindOfClass:NSString.class]||![k hasPrefix:@"PS3RECOMP_"]||![defaults[k] isKindOfClass:NSString.class])fail(@"Invalid runtime defaults");env[k]=defaults[k];}
  NSString *tmp=NSTemporaryDirectory();if(tmp)env[@"TMPDIR"]=tmp;
  char *overlayTemplate=strdup([[tmp?:@"/tmp" stringByAppendingPathComponent:@"mag-player-XXXXXX"] fileSystemRepresentation]);
  char *created=mkdtemp(overlayTemplate);
@@ -155,6 +158,19 @@ int main(int argc,char **argv) { @autoreleasepool {
  }
 } }
 '''
+
+
+# The runtime's movie playback switches, as tools/boot.py applies them (MOVIE_PLAYBACK_ENV there).
+# A build with the movie decoder needs them: without them it opens and closes each movie at once,
+# and the game waits forever after the legal screen. A build without the decoder must not have them.
+MOVIE_PLAYBACK_ENV = {'PS3RECOMP_SAIL_TIMED_THX': '1', 'PS3RECOMP_SAIL_ATRAC_AUDIO': '1',
+                      'PS3RECOMP_GCM_CHECKED_REF': '1'}
+
+
+def playback_environment(records):
+    """The playback switches when either image's source receipt records the movie decoder."""
+    decoder = [records[role].get('movie_playback') is True for role in ('launcher', 'engine')]
+    return dict(MOVIE_PLAYBACK_ENV) if any(decoder) else {}
 
 
 def package(config, workspace, destination, token=None, events=None):
@@ -244,7 +260,8 @@ def package(config, workspace, destination, token=None, events=None):
         runtime = {'schema_version':1,'workspace':os.path.relpath(workspace,destination),
                    'launcher':'Contents/MacOS/MagRecomp','engine':'Contents/MacOS/MagEngine',
                    'engine_self_sha256':manifest['images']['mage_g']['source_sha256'],
-                   'signing':'local-ad-hoc','adjustments':adjustments}
+                   'signing':'local-ad-hoc','adjustments':adjustments,
+                   'environment':playback_environment(records)}
         for role, name in [('launcher','MagRecomp'),('engine','MagEngine')]:
             target=macos/name
             # A distinct package receipt binds transformed bytes and points to

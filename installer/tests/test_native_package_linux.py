@@ -93,6 +93,7 @@ class LinuxPackageTests(unittest.TestCase):
 int main(void) {
  if(strcmp(getenv("PS3RECOMP_VK_WINDOW"),"1")||strcmp(getenv("PS3RECOMP_VK_GUEST_PROGRAMS"),"1"))return 48;
  if(getenv("PS3_DIAGNOSTIC_TEST")||getenv("MAG_DIAGNOSTIC_TEST")||!getenv("DISPLAY"))return 45;
+ if(!getenv("PS3RECOMP_SAIL_TIMED_THX")||strcmp(getenv("PS3RECOMP_SAIL_ATRAC_AUDIO"),"1"))return 52;  /* decoder build defaults */
  const char* request=getenv("MAG_HANDOFF_REQUEST");
  const char* settings=getenv("MAG_PLAYER_SETTINGS_PATH");const char* owned=getenv("MAG_PLAYER_OVERLAY_ROOT");
  if(!settings||!strstr(settings,"/config/MAG/settings.json")||!owned||!strstr(owned,"player"))return 49;
@@ -109,7 +110,7 @@ int main(void) {
             for folder,image,elfpath in [('build','EBOOT',disc/'EBOOT.elf'),('build-engine','mage_g',disc/'bin/mage_g.elf')]:
                 binary=workspace/folder/'MagRecomp';binary.write_bytes((root/'fixture').read_bytes())
                 digest=lambda p:hashlib.sha256(p.read_bytes()).hexdigest()
-                receipt=binary.with_suffix('.receipt.json');record=json.loads(receipt.read_text());record.update(binary_sha256=digest(binary),elf_sha256=digest(elfpath));receipt.write_text(json.dumps(record));manifest['images'][image]['elf_sha256']=digest(elfpath)
+                receipt=binary.with_suffix('.receipt.json');record=json.loads(receipt.read_text());record.update(binary_sha256=digest(binary),elf_sha256=digest(elfpath),movie_playback=True);receipt.write_text(json.dumps(record));manifest['images'][image]['elf_sha256']=digest(elfpath)
             manifest['images']['mage_g']['source_sha256']=digest(disc/'bin/mage_g.self')
             (workspace/'profiles/retail-v1.0.json').write_text(json.dumps(manifest))
             package({'host':'linux-x86_64'},workspace,install/'MAG')
