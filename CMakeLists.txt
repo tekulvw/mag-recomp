@@ -277,6 +277,7 @@ if(MAG_FIRMWARE_DIR)
 endif()
 add_executable(${PROJECT_NAME}
     src/main.cpp
+    src/mag_runtime_defaults_early.cpp
     src/mag_extension.cpp
     src/mag_jobio_selector.cpp
     src/mag_timer_gcm_pump_diagnostics.cpp

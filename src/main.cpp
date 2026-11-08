@@ -448,20 +448,8 @@ int main(int argc, char** argv)
     /* Install the guest-callback hook, then start the frame clock. It no-ops
      * until the title registers its vblank and flip handlers during init. */
     g_ps3_guest_caller = harness_guest_caller;
-#if defined(__APPLE__)
-    /* MAG patches fragment-program constants through NV308A inline data about
-     * 1,100 times per menu frame. Draining the GPU before each one held the
-     * menu near 10 fps; report ordering is kept without it. An explicit 0
-     * restores the drain for comparison. */
-    if (!getenv("PS3RECOMP_GCM_INLINE_NO_GPU_WAIT"))
-        setenv("PS3RECOMP_GCM_INLINE_NO_GPU_WAIT", "1", 0);
-    /* Wake the FIFO drain when the guest moves the put pointer instead of
-     * polling it every 4 ms: SPU jobs that wait on RSX labels otherwise sit
-     * out the rest of the poll (training mission ~99 -> ~93 ms per update).
-     * An explicit 0 restores the timed poll. */
-    if (!getenv("MAG_NATIVE_CONSUMER"))
-        setenv("MAG_NATIVE_CONSUMER", "1", 0);
-#endif
+    /* PS3RECOMP_GCM_INLINE_NO_GPU_WAIT and MAG_NATIVE_CONSUMER default on for
+     * every host in mag_apply_runtime_defaults(). */
     cellGcm_native_consumer_init();
     const char* native_consumer = getenv("MAG_NATIVE_CONSUMER");
     if (native_consumer && !strcmp(native_consumer, "1")) {
