@@ -16,6 +16,10 @@ Synthetic tests, repeated presentations and CPU diagnostic timings do not establ
 Original-program verification (differential tests against the original program) remains outside
 this public repository.
 
+Design notes on the adapter's Main path (chunked planning, early completion and the torn-capture
+re-commit, state-first, the FIFO thread and the native worker) and the conclusions of each measured
+round are in [render-frontend/design](render-frontend/design/README.md).
+
 ## Game adapter
 
 The adapter reads the game's render sources from guest memory and turns them into owned scenes for
