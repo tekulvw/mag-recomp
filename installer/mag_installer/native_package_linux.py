@@ -33,6 +33,9 @@ _SUPERVISOR = r'''
 #include <signal.h>
 #include <unistd.h>
 #include "supervisor_config.h"
+#ifndef MAG_RUNTIME_DEFAULTS  // a config written before packaged defaults existed: none
+#define MAG_RUNTIME_DEFAULTS {}
+#endif
 namespace fs=std::filesystem;
 static fs::path root;
 static volatile sig_atomic_t child=0;

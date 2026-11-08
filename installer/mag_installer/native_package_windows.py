@@ -32,6 +32,9 @@ _SUPERVISOR = r'''
 #include <string.h>
 #include <wchar.h>
 #include "supervisor_config.h"
+#ifndef MAG_RUNTIME_DEFAULTS  /* a config written before packaged defaults existed: none */
+#define MAG_RUNTIME_DEFAULTS {{NULL, NULL}}
+#endif
 
 static wchar_t g_root[MAX_PATH] = L".";
 
