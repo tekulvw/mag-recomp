@@ -9,11 +9,49 @@
 #ifdef __linux__
 #include <sys/syscall.h>
 #endif
+#include "mag_job_wait_watchdog.h"
+#include <chrono>
+#include <cstdio>
+#include <cstdlib>
+/* Opt-in watchdog for stalled job-completion waits (src/mag_job_wait_watchdog.h).
+ * Unset, the cached threshold is zero and each scope pays one branch. It only
+ * reads guest memory, and runs on the waiting thread inside its predicate pass. */
+extern "C" uint8_t* vm_base;
+extern "C" uint32_t ppu_vm_size;
+namespace {
+const uint64_t job_wait_threshold_ms=[](){
+ const char*text=std::getenv("MAG_JOB_WAIT_WATCHDOG");const uint64_t ms=mag_job_wait_watchdog::threshold_ms(text);
+ if(text&&*text&&!ms)std::fprintf(stderr,"%s{\"disabled\":\"MAG_JOB_WAIT_WATCHDOG must be decimal milliseconds 1..86400000\"}\n",mag_job_wait_watchdog::prefix());
+ return ms;}();
+thread_local mag_job_wait_watchdog::Wait job_wait;
+thread_local uint64_t job_wait_predicate_args[3];
+std::atomic<unsigned> job_wait_reports{0};
+uint64_t job_wait_now_ns(){return (uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();}
+bool job_wait_read(uint64_t ea,unsigned width,uint32_t&value){
+ const uint64_t limit=ppu_vm_size?uint64_t(ppu_vm_size):(uint64_t(1)<<32);
+ if(!vm_base||ea<0x10000||ea>=limit||width>limit-ea)return false;
+ value=width==2?vm_read16(ea):vm_read32(ea);return true;
+}
+void job_wait_enter(ppu_context*c,uint32_t f){
+ if(f==mag_job_wait_watchdog::kWaitFunction)mag_job_wait_watchdog::begin(job_wait,c,(uint32_t)c->gpr[3],job_wait_now_ns());
+ else if(f==mag_job_wait_watchdog::kPredicateFunction)for(int i=0;i<3;i++)job_wait_predicate_args[i]=c->gpr[3+i];
+}
+void job_wait_leave(ppu_context*c,uint32_t f){
+ if(f==mag_job_wait_watchdog::kWaitFunction){mag_job_wait_watchdog::end(job_wait,c);return;}
+ if(f!=mag_job_wait_watchdog::kPredicateFunction)return;
+ mag_job_wait_watchdog::Context info;info.thread=c->thread_id;info.predicate_result=c->gpr[3];
+ for(int i=0;i<3;i++)info.predicate_args[i]=job_wait_predicate_args[i];
+ std::string line;
+ if(mag_job_wait_watchdog::poll(job_wait,c,job_wait_now_ns(),job_wait_threshold_ms,job_wait_read,info,line)&&
+    job_wait_reports.fetch_add(1)<mag_job_wait_watchdog::kMaxReports){std::fprintf(stderr,"%s\n",line.c_str());std::fflush(stderr);}
+}
+}
 static std::atomic<uint64_t> sequence{0};
 static thread_local uint64_t current_span;
 struct PredState {uint64_t capture,ctx,object,array,target,result,markers0,markers1;};
 static thread_local PredState last[2];
 MagGraphicsTraceScope::MagGraphicsTraceScope(ppu_context *c,uint32_t f):ctx(c),function(f),start(0),token(0),capture(0),parent(0),predicate(f==0xA047D8||f==0xA05438),exceptions(0),marker_mask(0),wait_identity_valid(false){
+ if(job_wait_threshold_ms){const int saved=errno;try{job_wait_enter(c,f);}catch(...){}errno=saved;}
  if(auto enter=mag_extension()->trace_enter){const int ext_errno=errno;for(int i=0;i<3;i++)ext_args[i]=c->gpr[3+i];ext_exceptions=std::uncaught_exceptions();enter(c,f,ext_args,ext_scratch);errno=ext_errno;}
  if(!ps3_critical_enabled())return;
  int saved=errno;capture=ps3_critical_capture_id();for(int i=0;i<3;i++)args[i]=c->gpr[3+i];
@@ -25,6 +63,7 @@ MagGraphicsTraceScope::~MagGraphicsTraceScope(){
  const int caller_errno=errno;
  if(auto leave=mag_extension()->trace_exit)leave(ctx,function,ext_args,std::uncaught_exceptions()==ext_exceptions,ext_scratch);
  errno=caller_errno;
+ if(job_wait_threshold_ms){try{job_wait_leave(ctx,function);}catch(...){}errno=caller_errno;}
  if(!capture)return;int saved=errno;
  if(!predicate)current_span=parent;
  if(!ps3_critical_enabled()||capture!=ps3_critical_capture_id()){errno=saved;return;}
