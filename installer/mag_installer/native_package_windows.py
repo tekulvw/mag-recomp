@@ -380,7 +380,7 @@ def _c_hex(value):
 def _compile(clang_cl, environment, source_dir, output, token):
     token.check()
     argv = [clang_cl, '/nologo', '/O2', '/MT', '/W3', '/DUNICODE', '/D_UNICODE', str(source_dir / 'supervisor.c'),
-            f'/Fe{output}', f'/Fo{source_dir / "supervisor.obj"}', '/link', '/SUBSYSTEM:WINDOWS', 'bcrypt.lib', 'user32.lib', 'shell32.lib']
+            f'/Fe{output}', f'/Fo{source_dir / "supervisor.obj"}', '/link', '/SUBSYSTEM:WINDOWS', 'bcrypt.lib', 'user32.lib', 'shell32.lib', 'gdi32.lib']
     try:
         result = subprocess.run(argv, cwd=source_dir, env=environment, stdin=subprocess.DEVNULL,
                                 capture_output=True, text=True, timeout=300)

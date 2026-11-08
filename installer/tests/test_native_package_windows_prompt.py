@@ -42,6 +42,12 @@ class WindowsNamePromptTests(unittest.TestCase):
         # The chosen name never reaches the engine as a first-run option.
         self.assertIn('L"MAG_PLAYER_SET_NAME"};', source)
 
+    def test_supervisor_links_the_prompt_libraries(self):
+        import inspect
+        compile_source = inspect.getsource(windows._compile)
+        for library in ('user32.lib', 'gdi32.lib', 'shell32.lib'):  # windows, the dialog font, the command line
+            self.assertIn(library, compile_source)
+
 
 if __name__ == '__main__':
     unittest.main()
