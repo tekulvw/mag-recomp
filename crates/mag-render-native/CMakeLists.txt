@@ -26,6 +26,8 @@ elseif(MAG_RENDER_NATIVE_BACKEND STREQUAL "vulkan")
         find_path(MAG_RENDER_VULKAN_INCLUDE_DIR NAMES vulkan/vulkan.h
             HINTS ENV MAG_RENDER_VULKAN_INCLUDE_DIR REQUIRED)
         target_include_directories(mag_render_native_impl PRIVATE ${MAG_RENDER_VULKAN_INCLUDE_DIR})
+        # The backend reads its opt-in switches with getenv, as on Linux.
+        target_compile_definitions(mag_render_native_impl PRIVATE _CRT_SECURE_NO_WARNINGS)
     else()
         find_package(PkgConfig REQUIRED)
         pkg_check_modules(VULKAN_HEADERS REQUIRED vulkan)
