@@ -146,7 +146,8 @@ def _retry_status(output, binding):
 
 
 def _prepare_retry(output, status, token):
-    """Retain small diagnostics, then discard only journal-owned scratch roots.
+    """Retain diagnostics, and move the failed attempt's journal-owned scratch roots
+    beside its journal (keeping its output) instead of deleting them.
 
     This is replayable after a power failure: the attempt number changes only
     after all cleanup succeeds, and the original attempt journal is never replaced.
@@ -177,20 +178,43 @@ def _clean_retry_scratch(output, status, token):
     stages = ['build-kit', 'build-work', 'MAG', 'MAG.app']
     if not status['managed_complete']:
         stages.append('managed-tools')
+    # Only the most recent failed attempt keeps its output: older attempts keep
+    # their logs and journal, so a series of retries holds at most one extra copy.
+    for older in (output / 'logs' / 'attempts').iterdir():
+        token.check()
+        if older == attempt or older.is_symlink() or not older.is_dir():
+            continue
+        for name in ('build-kit', 'build-work', 'MAG', 'MAG.app', 'managed-tools'):
+            kept = older / name
+            if kept.is_symlink() or not kept.is_dir():
+                continue
+            for entry in kept.iterdir():
+                if entry.name == 'logs':
+                    continue
+                if entry.is_dir() and not entry.is_symlink():
+                    shutil.rmtree(entry)
+                else:
+                    entry.unlink()
     for name in stages:
         token.check()
         stage = output / name
         if not stage.exists():
             continue
-        logs = stage / 'logs'
-        if logs.is_dir() and not logs.is_symlink():
-            if any(path.is_symlink() for path in logs.rglob('*')):
-                raise InstallerError('Stage logs contain symlinks; retry cleanup was stopped.')
-            shutil.copytree(logs, attempt / name / 'logs', dirs_exist_ok=True)
-        # These exact roots are owned scratch recorded by the matching journal;
-        # rmtree unlinks SDK symlinks rather than following their targets.
         if stage.is_symlink() or not stage.is_dir():
             raise InstallerError('Retry scratch must be an ordinary owned directory.')
+        logs = stage / 'logs'
+        if logs.is_dir() and not logs.is_symlink() and any(path.is_symlink() for path in logs.rglob('*')):
+            raise InstallerError('Stage logs contain symlinks; retry cleanup was stopped.')
+        # The failed attempt's output is kept, not deleted: these exact roots are
+        # owned scratch recorded by the matching journal, moved intact (their SDK
+        # and tool symlinks are never followed) beside that attempt's journal.
+        kept = attempt / name
+        if not kept.exists():
+            stage.rename(kept)
+            continue
+        # An interrupted earlier cleanup already kept a copy: keep its logs too.
+        if logs.is_dir() and not logs.is_symlink():
+            shutil.copytree(logs, kept / 'logs', dirs_exist_ok=True)
         shutil.rmtree(stage)
     for name in ('build-settings.json', 'build.pending', 'build-settings.pending'):
         path = output / name
