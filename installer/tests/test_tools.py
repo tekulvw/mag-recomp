@@ -2,6 +2,7 @@ import contextlib
 import hashlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import io
+import os
 from pathlib import Path
 import socket
 import tarfile
@@ -216,10 +217,117 @@ class TlsContextTests(unittest.TestCase):
         events = []
         with tempfile.TemporaryDirectory() as temp, \
                 patch('urllib.request.build_opener', return_value=Opener()):
-            with self.assertRaisesRegex(InstallerError, 'certificate could not be verified'):
+            with self.assertRaisesRegex(InstallerError, 'certificate for example.invalid could not be verified.*ca-certificates'):
                 acquire(tool_spec(payload), Path(temp), Cancellation(), events.append)
         self.assertEqual(len(calls), 1)
         self.assertFalse(any(e['event'] == 'download-retry' for e in events))
+
+
+
+class _Response:
+    def __init__(self, body, status=200):
+        self.body, self.status, self.headers = body, status, {'Content-Length': str(len(body))}
+    def __enter__(self): return self
+    def __exit__(self, *args): return False
+    def read(self, limit=-1):
+        chunk, self.body = (self.body, b'') if limit < 0 else (self.body[:limit], self.body[limit:])
+        return chunk
+
+
+class _Opener:
+    """Serves scripted answers by URL; a callable answer may raise."""
+    def __init__(self, answers):
+        self.answers, self.requests = answers, []
+    def open(self, request, timeout):
+        self.requests.append(request)
+        answer = self.answers[request.full_url]
+        if isinstance(answer, BaseException): raise answer
+        return _Response(answer)
+
+
+class DownloadFallbackTests(unittest.TestCase):
+    ASSET = 'https://github.com/example/tools/releases/download/v1.0/tool.zip'
+    TAG = 'https://api.github.com/repos/example/tools/releases/tags/v1.0'
+    API = 'https://api.github.com/repos/example/tools/releases/assets/42'
+
+    def acquire(self, tool, answers, env=None):
+        import types
+        from unittest.mock import patch
+        from mag_installer import tools
+        clock = iter(range(10 ** 6))
+        opener, events = _Opener(answers), []
+        with tempfile.TemporaryDirectory() as temp, patch('urllib.request.build_opener', return_value=opener), \
+                patch.object(tools, 'time', types.SimpleNamespace(monotonic=lambda: next(clock), sleep=lambda s: None)), \
+                patch.dict(os.environ, env or {}, clear=False):
+            if not env: os.environ.pop(tools.MIRRORS_VARIABLE, None)
+            try:
+                blob = acquire(tool, Path(temp), Cancellation(), events.append)
+                return blob.read_bytes(), opener, events
+            except InstallerError as exc:
+                return exc, opener, events
+
+    def http(self, url, code):
+        import urllib.error
+        return urllib.error.HTTPError(url, code, 'Gateway Timeout', {}, None)
+
+    def release(self, size, name='tool.zip'):
+        import json
+        return json.dumps({'assets': [{'name': 'other.zip', 'id': 7, 'size': 1}, {'name': name, 'id': 42, 'size': size}]}).encode()
+
+    def test_github_cdn_failure_falls_back_to_the_api(self):
+        import urllib.error
+        payload = zip_bytes([('bin/tool', b'fixture')])
+        for failure in (self.http(self.ASSET, 504), urllib.error.URLError(TimeoutError('timed out')), TimeoutError('timed out')):
+            with self.subTest(failure=type(failure).__name__):
+                result, opener, events = self.acquire(tool_spec(payload, self.ASSET),
+                    {self.ASSET: failure, self.TAG: self.release(len(payload)), self.API: payload})
+                self.assertEqual(result, payload)
+                self.assertEqual([r.full_url for r in opener.requests], [self.ASSET, self.TAG, self.API])
+                self.assertEqual(opener.requests[2].get_header('Accept'), 'application/octet-stream')
+                fallback = [e for e in events if e['event'] == 'download-fallback']
+                self.assertEqual(len(fallback), 1)
+                self.assertIn('github.com', fallback[0]['message'])
+                self.assertIn({'event': 'download-source', 'tool': 'fixture-tool', 'host': 'api.github.com'}, events)
+
+    def test_api_answers_are_still_held_to_the_pins(self):
+        payload = zip_bytes([('bin/tool', b'fixture')])
+        tool = tool_spec(payload, self.ASSET)
+        result, _, _ = self.acquire(tool, {self.ASSET: self.http(self.ASSET, 502), self.TAG: self.release(len(payload) + 1)})
+        self.assertIsInstance(result, InstallerError); self.assertIn('different size', str(result))
+        result, _, _ = self.acquire(tool, {self.ASSET: self.http(self.ASSET, 502), self.TAG: self.release(len(payload)),
+                                           self.API: payload[:-1] + b'x'})
+        self.assertIsInstance(result, InstallerError); self.assertIn('SHA-256', str(result))
+
+    def test_every_source_failing_names_each_and_retries(self):
+        payload = zip_bytes([('bin/tool', b'fixture')])
+        result, opener, events = self.acquire(tool_spec(payload, self.ASSET),
+            {self.ASSET: self.http(self.ASSET, 504), self.TAG: self.http(self.TAG, 403)})
+        self.assertIsInstance(result, InstallerError)
+        self.assertIn('HTTP 504 from github.com', str(result)); self.assertIn('GitHub API HTTP 403 from api.github.com', str(result))
+        retries = [e for e in events if e['event'] == 'download-retry']
+        self.assertEqual(len(retries), 2); self.assertIn('HTTP 504 from github.com', retries[0]['message'])
+        self.assertEqual(len(opener.requests), 6)
+
+    def test_other_hosts_report_status_and_use_mirrors(self):
+        payload = zip_bytes([('bin/tool', b'fixture')])
+        tool = tool_spec(payload, 'https://downloads.example.invalid/tool.zip')
+        result, opener, events = self.acquire(tool, {tool['url']: self.http(tool['url'], 503)})
+        self.assertIn('HTTP 503 from downloads.example.invalid', str(result))
+        self.assertEqual(len(opener.requests), 3)  # no API lookup for other hosts
+        mirror = f'https://mirror.example.invalid/mag/{tool["sha256"]}.blob'
+        result, opener, events = self.acquire(tool, {tool['url']: self.http(tool['url'], 503), mirror: payload},
+                                              env={'MAG_INSTALLER_MIRRORS': 'http://bad.example.invalid https://mirror.example.invalid/mag/'})
+        self.assertEqual(result, payload)
+        self.assertIn({'event': 'download-source', 'tool': 'fixture-tool', 'host': 'mirror.example.invalid'}, events)
+        self.assertNotIn('http://bad.example.invalid/' + tool['sha256'] + '.blob', [r.full_url for r in opener.requests])
+
+    def test_release_url_recognition(self):
+        from mag_installer.tools import _github_release_asset
+        self.assertEqual(_github_release_asset(self.ASSET), ('example', 'tools', 'v1.0', 'tool.zip'))
+        self.assertEqual(_github_release_asset('https://github.com/o/r/releases/download/v%2B1/a%20b.zip'), ('o', 'r', 'v+1', 'a b.zip'))
+        for other in ('https://github.com/o/r/archive/v1.zip', 'https://example.com/o/r/releases/download/t/n',
+                      'https://github.com/o/r/releases/download/t/n?x=1', 'https://github.com/o/r/releases/download//n'):
+            self.assertIsNone(_github_release_asset(other))
 
 
 if __name__ == '__main__': unittest.main()

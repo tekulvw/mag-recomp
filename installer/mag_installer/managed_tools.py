@@ -833,12 +833,17 @@ def _bootstrap_windows(root, cache, token, events):
 
 # Ubuntu owns compiler, C library and desktop headers. All downloaded tools and
 # dependency builds remain private. No sudo shell or password collection.
-LINUX_PACKAGES = ('clang', 'build-essential', 'git', 'pkg-config', 'libssl-dev',
+LINUX_PACKAGES = ('clang', 'lld', 'build-essential', 'git', 'pkg-config', 'ca-certificates', 'libssl-dev',
                   'zlib1g-dev', 'libx11-dev', 'libxext-dev', 'libxrandr-dev',
                   'libxcursor-dev', 'libxi-dev', 'libxfixes-dev', 'libxss-dev',
                   'libxkbcommon-dev', 'libwayland-dev', 'libgl1-mesa-dev',
                   'libasound2-dev', 'libpulse-dev', 'libudev-dev', 'libvulkan-dev',
                   'libvulkan1', 'mesa-vulkan-drivers')
+
+
+def linux_install_command():
+    """The one command that installs every required Ubuntu package."""
+    return 'sudo apt-get update && sudo apt-get install --yes --no-install-recommends ' + ' '.join(LINUX_PACKAGES)
 
 
 def linux_platform_probe():
@@ -890,7 +895,8 @@ def ensure_linux_build_tools(cache=None, token=None, events=None):
     toolchain, detail = linux_toolchain_probe()
     if toolchain: return toolchain
     if not Path('/usr/bin/pkexec').is_file():
-        raise InstallerError(detail + '. Install them using Ubuntu Software or apt, then retry Build MAG (PolicyKit is unavailable).')
+        raise InstallerError(detail + '. PolicyKit is unavailable, so install them yourself, then retry Build MAG:\n'
+                             + linux_install_command())
     events({'event': 'stage-start', 'stage': 'build-tools', 'message':
             'Ubuntu development packages are required. Approve the system authorization dialog. Packages: ' + ', '.join(LINUX_PACKAGES)})
     cache = Path(cache) if cache else Path(tempfile.gettempdir()) / 'mag-installer'
