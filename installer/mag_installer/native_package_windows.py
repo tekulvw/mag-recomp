@@ -14,6 +14,7 @@ import subprocess
 
 from .model import InstallerError
 from .safety import Cancellation, contained, file_digest
+from .native_package import playback_environment
 
 
 # Mirrors the macOS supervisor and the src/retail_handoff.cpp contract: verify the
@@ -200,6 +201,9 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR arguments, int
     set_env(L"PS3_BOOT_PATH", L"/dev_bdvd/PS3_GAME/USRDIR/EBOOT.BIN");
     set_env(L"PS3_HLE_UNRESOLVED", L"halt");
     set_env(L"PS3_SYSCALL_UNRESOLVED", L"halt");
+    /* Required runtime defaults recorded at packaging (movie playback for decoder builds). */
+    static const wchar_t *defaults[][2] = MAG_RUNTIME_DEFAULTS;
+    for (size_t i = 0; defaults[i][0]; i++) set_env(defaults[i][0], defaults[i][1]);
     set_env(L"MAG_HANDOFF_REQUEST", request);
     set_env(L"MAG_HANDOFF_TOKEN", wtoken);
     set_env(L"MAG_ENGINE_BINARY", engine);
@@ -319,7 +323,10 @@ def package(config, workspace, destination, token=None, events=None, environment
             '#define MAG_ENGINE_SHA256 ' + _c_hex(_digest(bin_dir / 'MagEngine.exe', token)) + '\n'
             '#define MAG_LAUNCHER_ELF_SHA256 ' + _c_hex(records['launcher']['elf_sha256']) + '\n'
             '#define MAG_ENGINE_ELF_SHA256 ' + _c_hex(records['engine']['elf_sha256']) + '\n'
-            '#define MAG_ENGINE_SELF_SHA256 ' + _c_hex(engine_self) + '\n', encoding='utf-8')
+            '#define MAG_ENGINE_SELF_SHA256 ' + _c_hex(engine_self) + '\n'
+            '#define MAG_RUNTIME_DEFAULTS {' + ''.join('{' + _c_wide(key) + ', ' + _c_wide(value) + '}, '
+                                                      for key, value in sorted(playback_environment(records).items()))
+            + '{NULL, NULL}}\n', encoding='utf-8')
         (scratch / 'supervisor.c').write_text(_SUPERVISOR, encoding='utf-8')
         _compile(config['msvc']['clang_cl'], environment, scratch, destination / 'MAG.exe', token)
         shutil.rmtree(scratch)

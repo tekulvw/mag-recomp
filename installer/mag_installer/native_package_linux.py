@@ -82,6 +82,8 @@ int main() {
  unsigned char random[16];int rng=open("/dev/urandom",O_RDONLY|O_CLOEXEC);if(rng<0)fail("No system random source");size_t got=0;while(got<16){auto c=read(rng,random+got,16-got);if(c<0&&errno==EINTR)continue;if(c<=0)fail("No system randomness");got+=c;}close(rng);auto token=hex(random,16);
  auto logs=root/"logs"/("launch-"+token);private_directory(logs.parent_path());if(!fs::create_directory(logs))fail("Cannot create private launch directory");auto request=logs/"handoff-request.json";private_directory(root/"home");
  std::map<std::string,std::string> env={{"PATH","/usr/bin:/bin"},{"HOME",(root/"home").string()},{"LANG","C.UTF-8"},{"LD_LIBRARY_PATH",(app/"lib").string()},{"PS3_VFS_ROOT",vfs.string()},{"PS3_BOOT_PATH","/dev_bdvd/PS3_GAME/USRDIR/EBOOT.BIN"},{"PS3RECOMP_VK_WINDOW","1"},{"PS3RECOMP_VK_GUEST_PROGRAMS","1"},{"PS3_HLE_UNRESOLVED","halt"},{"PS3_SYSCALL_UNRESOLVED","halt"},{"MAG_HANDOFF_REQUEST",request.string()},{"MAG_HANDOFF_TOKEN",token},{"MAG_ENGINE_BINARY",engine.string()},{"MAG_ENGINE_ELF",ee.string()},{"MAG_ENGINE_SELF",es.string()},{"MAG_ENGINE_BINARY_SHA256",MAG_ENGINE_SHA256},{"MAG_ENGINE_ELF_SHA256",MAG_ENGINE_ELF_SHA256},{"MAG_ENGINE_SELF_SHA256",MAG_ENGINE_SELF_SHA256},{"MAG_ENGINE_KEY_SHA256",key}};
+ // Required runtime defaults recorded at packaging (movie playback for decoder builds).
+ for(auto& d:std::map<std::string,std::string>MAG_RUNTIME_DEFAULTS)env[d.first]=d.second;
  // Preserve only desktop transport/session variables, never inherited game diagnostics.
  for(auto name:{"DISPLAY","WAYLAND_DISPLAY","XDG_RUNTIME_DIR","DBUS_SESSION_BUS_ADDRESS","XAUTHORITY","PULSE_SERVER","PIPEWIRE_REMOTE"})if(auto value=getenv(name))env[name]=value;
  signal(SIGINT,interrupted);signal(SIGTERM,interrupted);signal(SIGHUP,interrupted);
@@ -196,9 +198,14 @@ def package(config, workspace, destination, token=None, events=None):
             'MAG_ENGINE_ELF_SHA256': records['engine']['elf_sha256'],
             'MAG_ENGINE_SELF_SHA256': engine_self,
         }
+        from .native_package import playback_environment
+        defaults = playback_environment(records)
+        runtime['environment'] = defaults
         (scratch / 'supervisor_config.h').write_text(''.join(
             '#define ' + key + ' ' + json.dumps(value, ensure_ascii=False) + '\n'
-            for key, value in definitions.items()), encoding='utf-8')
+            for key, value in definitions.items()) + '#define MAG_RUNTIME_DEFAULTS {' + ','.join(
+            '{' + json.dumps(key) + ',' + json.dumps(value) + '}' for key, value in sorted(defaults.items())) + '}\n',
+            encoding='utf-8')
         source = scratch / 'supervisor.cpp'
         source.write_text(_SUPERVISOR, encoding='utf-8')
         from .native_package import _run_tool

@@ -184,7 +184,9 @@ mismatches.
 The launcher starts, hands off to the engine and runs offline. `boot.py` clears inherited runtime
 diagnostic variables and caps a run at 120 seconds. When the engine was built with FFmpeg (its
 receipt records `movie_playback`), `boot.py` also turns on the runtime's movie playback switches
-(`PS3RECOMP_SAIL_TIMED_THX`, `PS3RECOMP_SAIL_ATRAC_AUDIO` and `PS3RECOMP_GCM_CHECKED_REF`).
+(`PS3RECOMP_SAIL_TIMED_THX`, `PS3RECOMP_SAIL_ATRAC_AUDIO` and `PS3RECOMP_GCM_CHECKED_REF`). The installer's packaged
+MAG app sets the same switches whenever its build has the decoder: without them, the game opens
+and closes each movie at once and then waits forever after the legal screen.
 
 | Keys | PS3 control |
 | --- | --- |
