@@ -104,7 +104,7 @@ int main(int argc,char** argv) {
  auto expected="{\"version\":1,\"token\":\""+token+"\",\"guest_path\":\"/dev_bdvd/PS3_GAME/USRDIR/bin/mage_g.self\",\"kind\":\"mage_g\"}\n";
  if(read_file(request,4096)!=expected)fail("Engine handoff request identity mismatch");
  check(engine,MAG_ENGINE_SHA256);check(ee,MAG_ENGINE_ELF_SHA256);check(es,MAG_ENGINE_SELF_SHA256);
- for(auto i=env.begin();i!=env.end();)if(i->first.find("MAG_HANDOFF_")==0||i->first.find("MAG_ENGINE_")==0||i->first.find("MAG_PLAYER_SET")==0)i=env.erase(i);else ++i;
+ for(auto i=env.begin();i!=env.end();)if(i->first.find("MAG_HANDOFF_")==0||i->first.find("MAG_ENGINE_")==0||i->first=="MAG_PLAYER_SETUP"||i->first=="MAG_PLAYER_SET_SERVER"||i->first=="MAG_PLAYER_SET_NAME")i=env.erase(i);else ++i;
  env["PS3_BOOT_PATH"]="/dev_bdvd/PS3_GAME/USRDIR/bin/mage_g.self";return run(engine,ee,logs,env,"engine.log");
  }catch(const std::exception& e){std::string msg="MAG could not start: "+std::string(e.what())+"\n";std::cerr<<msg;if(!root.empty()){int fd=open((root/"launch-error.log").c_str(),O_WRONLY|O_CREAT|O_TRUNC|O_NOFOLLOW,0600);if(fd>=0){write(fd,msg.data(),msg.size());close(fd);}}return 1;}
 }
