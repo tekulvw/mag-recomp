@@ -68,22 +68,39 @@ You build MAG on your own computer from your own copy; nothing game-derived is e
      ```sh
      sudo apt-get update && sudo apt-get install --yes --no-install-recommends clang lld build-essential git pkg-config ca-certificates libssl-dev zlib1g-dev libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxfixes-dev libxss-dev libxkbcommon-dev libwayland-dev libgl1-mesa-dev libasound2-dev libpulse-dev libudev-dev libvulkan-dev libvulkan1 mesa-vulkan-drivers
      ```
-5. **Choose the server and your player name.**
-   - **macOS:** the setup window opens on first launch. Enter the **Game server** and an optional
-     **Player name**, then click **Play MAG**.
-   - **Windows and Linux:** start MAG once with them; later launches remember them:
+   - **macOS, once MAG starts:** macOS may show a permission prompt. *(What it asks and what to
+     choose will be added here.)* <!-- placeholder: the first-launch system prompt -->
+5. **Choose your player name.** You need one to play online. The server is already set
+   (`play.magtest.online`); change it only if you were given another.
+   - **macOS:** the setup window opens on first launch. Fill in **Player name** (and **Game server**
+     if needed), then click **Play MAG**.
+   - **Windows:** double-click `MAG.exe`. The first time, a small window asks for your name.
+   - **Linux:** run it once from the MAG folder with your name: `./MAG --name YourName`
+     (add `--server <address>` for another server).
 
-     ```sh
-     MAG --server <server address> --name <your name>          # Linux, in the MAG folder
-     MAG.exe --server <server address> --name <your name>      # Windows
-     ```
-
-   When the game asks for your name at sign-in, it is already typed in: just confirm it.
-   [Player settings](docs/player-settings.md) has the details.
+   A name has 3 to 15 letters, digits, `-` or `_`, and starts with a letter. MAG remembers it, and
+   types it in for you when the game asks you to sign in: just confirm it. On Linux that sign-in box
+   is a small text window. [Player settings](docs/player-settings.md) has the details.
 6. **Use a controller.** A standard USB or Bluetooth gamepad works on every system and is the
-   recommended way to play. Keyboard support is limited.
+   recommended way to play. On Linux the keyboard also works as a controller while the game window
+   has focus, until a controller is connected (set `PAD_NO_KEYBOARD=1` to turn it off):
 
-If something goes wrong, each launch writes its logs under the installation's `logs/` folder.
+   | Keys | Controller |
+   | --- | --- |
+   | X / Z / C / V | Cross / Square / Circle / Triangle |
+   | Return / Space | Start / Select |
+   | Q / E, R / T, F / G | L1 / R1, L2 / R2, L3 / R3 |
+   | Arrow keys | D-pad |
+   | WASD / IJKL | Left / right stick |
+
+**If a download fails** (for example during a GitHub outage), retry later. Or point the installer
+at a folder of previously downloaded tools with `build --cache <folder>`, or at a mirror with
+`MAG_INSTALLER_MIRRORS`; see [Downloads](installer/README.md#downloads). Every tool is checked
+against its pinned hash, so a mirror cannot change what you install.
+
+**If something goes wrong,** each launch writes its logs in the installation folder, under
+`logs/launch-*/` (`launcher.log`, then `engine.log`). On Windows and Linux, a launch that needs
+something from you, such as a player name, also leaves its message in `home/player/launch-message.txt`.
 
 ## Releases
 
