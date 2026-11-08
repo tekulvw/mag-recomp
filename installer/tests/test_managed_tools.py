@@ -146,7 +146,10 @@ class ManagedBytecodeTests(unittest.TestCase):
 
     def test_build_commands_cache_bytecode_outside_the_tools(self):
         from mag_installer import managed_tools, native_build
-        self.assertTrue(managed_tools._env('p/python', 'c/cmake', 'n/ninja', Path('/scratch/home'))['PYTHONPYCACHEPREFIX'].startswith('/scratch/home'))
-        env = native_build._environment({'python': '/t/python', 'cmake': '/t/cmake', 'ninja': '/t/ninja', 'git': '/t/git'}, Path('/scratch/home'))
-        self.assertEqual(env['PYTHONPYCACHEPREFIX'], str(Path('/scratch/home') / 'pycache'))
+        home = Path('/scratch/home')
+        prefix = Path(managed_tools._env('p/python', 'c/cmake', 'n/ninja', home)['PYTHONPYCACHEPREFIX'])
+        self.assertEqual(prefix, home / 'pycache')
+        if os.name != 'nt':  # The Windows environment comes from the MSVC toolchain.
+            env = native_build._environment({'python': '/t/python', 'cmake': '/t/cmake', 'ninja': '/t/ninja', 'git': '/t/git'}, home)
+            self.assertEqual(Path(env['PYTHONPYCACHEPREFIX']), home / 'pycache')
 
