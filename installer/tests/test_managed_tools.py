@@ -117,4 +117,24 @@ class ManagedToolTests(unittest.TestCase):
         self.assertEqual(plan[-2]['argv'],['/usr/bin/make','-j2'])
         self.assertIn('-DENABLE_OPT=OFF',next(s for s in plan if s['id']=='configure-glslang')['argv'])
         self.assertIn('--disable-autodetect',next(s for s in plan if s['id']=='configure-ffmpeg')['argv'])
+    def test_windows_vulkan_dependencies_are_pinned_and_built_with_the_static_crt(self):
+        from mag_installer.managed_tools import WINDOWS_LOCK, WINDOWS_DEPENDENCIES, windows_dependency_plan
+        for key in WINDOWS_DEPENDENCIES:
+            record=WINDOWS_LOCK[key]
+            self.assertTrue(record['url'].startswith('https://github.com/KhronosGroup/'));self.assertEqual(len(record['sha256']),64);self.assertGreater(record['size'],0)
+        self.assertNotIn('source-ffmpeg',WINDOWS_LOCK);self.assertNotIn('source-sdl2',WINDOWS_LOCK)
+        paths={'cmake':'C:/owned/cmake.exe','ninja':'C:/owned/ninja.exe','python':'C:/owned/python.exe',
+               **{'source-'+k:'C:/owned/'+k for k in ('glslang','vulkan-headers','spirv-headers','spirv-tools')}}
+        plan=windows_dependency_plan(paths,Path('C:/owned/prefix'),'C:/VS/clang-cl.exe')
+        self.assertEqual([s['id'] for s in plan],[f'{step}-{key}' for key in ('vulkan-headers','spirv-headers','spirv-tools','glslang')
+                                                  for step in ('configure','build','install')])
+        glslang=next(s for s in plan if s['id']=='configure-glslang')['argv']
+        # The optimizer drops unused bindings; reflection depends on it (never ENABLE_OPT=OFF).
+        for flag in ('-DENABLE_OPT=ON','-DALLOW_EXTERNAL_SPIRV_TOOLS=ON','-DCMAKE_PREFIX_PATH=C:/owned/prefix','-DBUILD_SHARED_LIBS=OFF',
+                     '-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded','-DCMAKE_CXX_COMPILER=C:/VS/clang-cl.exe'):
+            self.assertIn(flag,glslang)
+        tools=next(s for s in plan if s['id']=='configure-spirv-tools')['argv']
+        self.assertIn('-DSPIRV-Headers_SOURCE_DIR=C:/owned/spirv-headers',tools);self.assertIn('-DPython3_EXECUTABLE=C:/owned/python.exe',tools)
+        self.assertIn('ef96ed763b43b59b33b31b362f09a02b729fa1c9',WINDOWS_LOCK['source-spirv-tools']['url'])
+        self.assertIn('496543121ce6419f23d6fa5d7194ba66c36212d2',WINDOWS_LOCK['source-spirv-headers']['url'])
 if __name__=='__main__':unittest.main()

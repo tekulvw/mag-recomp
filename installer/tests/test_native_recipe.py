@@ -109,6 +109,14 @@ class NativeRecipeTests(unittest.TestCase):
             self.assertIn('-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded', configure)
             self.assertFalse(any('FFMPEG' in argument for argument in configure))
             self.assertTrue(all('\\' not in argument for argument in configure if argument.startswith('-D')))
+            self.assertFalse(any('PS3RECOMP_RSX_VULKAN' in argument for argument in configure))
+            prefix = root / 'prefix'; prefix.mkdir()
+            vulkan = self.load(root, dict(data, managed_prefix='prefix'))
+            configure = {stage['id']: stage['argv'] for stage in build_plan(vulkan, root / 'workspace')}['configure-engine']
+            self.assertIn('-DPS3RECOMP_RSX_VULKAN=ON', configure)
+            self.assertIn('-DPS3RECOMP_VULKAN_INCLUDE_DIR=' + (prefix.resolve() / 'include').as_posix(), configure)
+            self.assertIn('-DCMAKE_PREFIX_PATH=' + prefix.resolve().as_posix(), configure)
+            self.assertTrue(all('\\' not in argument for argument in configure if argument.startswith('-D')))
 
 
 if __name__ == '__main__': unittest.main()

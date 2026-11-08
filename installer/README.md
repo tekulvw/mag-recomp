@@ -44,7 +44,9 @@ vendor owns the compiler:
   installation has them, Build MAG downloads Microsoft's bootstrapper, checks that it is validly
   signed by Microsoft, and runs it with its own progress window, license and UAC prompt. Choose an
   installation path that is ASCII and at most 100 characters, such as `C:\MAG`. The executables use
-  the static C runtime. Movie playback is not yet built on Windows.
+  the static C runtime. MAG presents through Vulkan: glslang and the Vulkan headers are built from
+  pinned sources, and the Vulkan loader comes with the GPU driver. Movie playback is not yet built on
+  Windows.
 
 - **Linux** targets Ubuntu 24.04 or later on x86_64 with a graphical desktop and Vulkan driver.
   Build MAG requests Ubuntu authorization for required compiler and desktop development packages

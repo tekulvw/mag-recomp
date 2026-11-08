@@ -228,6 +228,11 @@ def build_plan(config, workspace):
                   '-DCMAKE_C_COMPILER=' + clang_cl, '-DCMAKE_CXX_COMPILER=' + clang_cl,
                   # Static CRT: the packaged executables need no VC++ redistributable.
                   '-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded']
+        if config.get('managed_prefix'):
+            # The player presents through the runtime's Vulkan backend: Vulkan-Headers and
+            # glslang come from the managed prefix (glslang through CMAKE_PREFIX_PATH below).
+            common += ['-DPS3RECOMP_RSX_VULKAN=ON',
+                       '-DPS3RECOMP_VULKAN_INCLUDE_DIR=' + cmake_path(Path(config['managed_prefix']) / 'include')]
     else:
         def cmake_path(value): return str(value)
         ffmpeg = config['ffmpeg']
@@ -243,7 +248,7 @@ def build_plan(config, workspace):
                '-DCMAKE_MAKE_PROGRAM=' + cmake_path(config['ninja']), '-DMAG_FIRMWARE_DIR=' + cmake_path(paths['firmware'])]
     common += config.get('cmake_args', [])
     if config.get('managed_prefix'):
-        common.append('-DCMAKE_PREFIX_PATH=' + config['managed_prefix'])
+        common.append('-DCMAKE_PREFIX_PATH=' + cmake_path(config['managed_prefix']))
     for name, image, spu, build in [('launcher', 'EBOOT', 'worker-spu', 'build'),
                                     ('engine', 'mage_g', 'engine-spu', 'build-engine')]:
         extra = ['-DMAG_SPU_PROGRAMS_DIR=' + cmake_path(paths['spu-programs'])] if name == 'engine' else []
