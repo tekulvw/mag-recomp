@@ -137,6 +137,7 @@ message(STATUS "Retail image:   ${MAG_IMAGE}")
 # imported one arrives without SDL2, pthreads, the Metal frameworks or the
 # Winsock/XInput imports -- the link then fails on every platform for a
 # different reason. add_subdirectory hands all of that over with the target.
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/MagLinuxRuntime.cmake")
 add_subdirectory("${PS3RECOMP_DIR}" "${CMAKE_BINARY_DIR}/ps3recomp_sdk"
                  EXCLUDE_FROM_ALL)
 if(WIN32)
