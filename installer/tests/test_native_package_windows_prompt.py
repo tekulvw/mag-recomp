@@ -42,6 +42,13 @@ class WindowsNamePromptTests(unittest.TestCase):
         # The chosen name never reaches the engine as a first-run option.
         self.assertIn('L"MAG_PLAYER_SET_NAME"};', source)
 
+    def test_modal_loop_wakes_when_the_window_closes(self):
+        source = windows._SUPERVISOR
+        destroy = source[source.index('case WM_DESTROY:'):source.index('return DefWindowProcW(window, message, w, l);')]
+        self.assertIn('state->done = 1', destroy)
+        self.assertIn('PostMessageW(NULL, WM_NULL, 0, 0);', destroy)  # a sent click must not leave GetMessageW waiting
+        self.assertIn('while (!state.done && GetMessageW(&message, NULL, 0, 0) > 0)', source)
+
     def test_supervisor_links_the_prompt_libraries(self):
         import inspect
         compile_source = inspect.getsource(windows._compile)

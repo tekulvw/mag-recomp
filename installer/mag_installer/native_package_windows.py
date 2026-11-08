@@ -207,7 +207,12 @@ static LRESULT CALLBACK name_prompt_proc(HWND window, UINT message, WPARAM w, LP
         if (LOWORD(w) == IDCANCEL) { DestroyWindow(window); return 0; }
         break;
     case WM_CLOSE: DestroyWindow(window); return 0;
-    case WM_DESTROY: if (state) state->done = 1; return 0;
+    case WM_DESTROY:
+        if (state) state->done = 1;
+        /* A sent OK/Cancel (BM_CLICK from an accessibility tool) destroys the window inside
+         * GetMessageW; post a thread message so the modal loop wakes and sees done. */
+        PostMessageW(NULL, WM_NULL, 0, 0);
+        return 0;
     }
     return DefWindowProcW(window, message, w, l);
 }
