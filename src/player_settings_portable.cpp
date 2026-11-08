@@ -233,6 +233,7 @@ extern "C" int mag_player_settings_prepare(void) {
     mag::PortableSettings settings;
     std::string text, error; bool exists = false;
     if (launcher) {
+        { std::error_code none; fs::remove(owned / "needs-player-name", none); }  // a fresh check each launch
         if (!read_file(file, text, exists, error) || (exists && !mag::parse_portable_settings(text, settings, error))) {
             // Never guess a server from a damaged file: say so, and play offline this launch.
             say(file.string() + ": " + error + " Playing offline; fix or delete the file to choose a server.");
@@ -252,6 +253,9 @@ extern "C" int mag_player_settings_prepare(void) {
         }
         if (!settings.server_address.empty() && settings.player_name.empty()) {
             // The server signs players in by this name; without one the launcher can never connect.
+            // The Windows supervisor asks for the name when it finds this marker, then starts again.
+            std::string ignored;
+            write_file(owned / "needs-player-name", "", ignored);
             return stop(owned, "Choose a player name to play on " + settings.server_address + ". Run " + program +
                                " --name YourName once; MAG remembers it. " + name_rule);
         }
