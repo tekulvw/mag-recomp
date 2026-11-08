@@ -66,3 +66,9 @@ and never commit installer builds.
 Before a new feature or agent task, fetch `origin main`, inspect the working tree, and fast-forward a clean `main` checkout with `git merge --ff-only origin/main`. Create focused PR branches from that updated main. Never use a historical feature branch, unpublished SDK checkout, or temporary linked objects as an implicit baseline. Preserve existing edits and indices; use an isolated checkout from current main when necessary. Reconcile against freshly fetched main before publishing.
 
 `profiles/framework.json` is the single source of runtime and lifter pins. Use `tools/fetch_ps3recomp.py` to obtain those exact revisions. SDK changes require source, applicable synthetic checks, and an explicit pin update; do not bypass revision checks by adding local commits to allowlists. Keep required build and launch defaults versioned with the feature. Diagnostic captures and experimental rendering options remain opt-in.
+
+- When you add, remove or change a ps3recomp switch mag-recomp sets (a compiled runtime default, a
+  packaged supervisor's environment, a player setting or a CMake option), update
+  [docs/ps3recomp-flags.md](docs/ps3recomp-flags.md) and run `python3 tools/check_ps3recomp_flags.py`.
+  When you move the runtime pin, also run it with `--runtime local/ps3recomp-runtime` and review the
+  runtime's new opt-in switches for ones worth an A/B run.
