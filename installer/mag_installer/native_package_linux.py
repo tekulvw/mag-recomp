@@ -72,26 +72,45 @@ static int run(const fs::path& binary,const fs::path& elf,const fs::path& cwd,st
  close(fd);child=pid;int status;while(waitpid(pid,&status,0)<0){if(errno!=EINTR)fail("Cannot wait for game");}child=0;
  return WIFEXITED(status)?WEXITSTATUS(status):128+WTERMSIG(status);
 }
-int main() {
+static const char* usage="Usage: MAG [--server <hostname or IPv4>] [--name <player name>]";
+int main(int argc,char** argv) {
  umask(0077);
  try {
+ // First-run choices; the game validates and saves them in the player's settings file.
+ std::map<std::string,std::string> choices;
+ for(int i=1;i<argc;i++){std::string a=argv[i];
+  if(a=="--help"||a=="-h"){std::cout<<usage<<"\n";return 0;}
+  std::string key=a.rfind("--server",0)==0?"MAG_PLAYER_SET_SERVER":a.rfind("--name",0)==0?"MAG_PLAYER_SET_NAME":"";
+  if(key.empty())fail(std::string(usage)+" (unknown option "+a+")");
+  auto eq=a.find('=');if(eq!=std::string::npos)choices[key]=a.substr(eq+1);else if(i+1<argc&&(a=="--server"||a=="--name"))choices[key]=argv[++i];else fail(usage);}
+ const char* config=getenv("XDG_CONFIG_HOME");fs::path settings;
+ if(config&&*config=='/')settings=fs::path(config)/"MAG";else if(const char* h=getenv("HOME");h&&*h=='/')settings=fs::path(h)/".config/MAG";
+ else fail("Cannot find your configuration folder (set HOME or XDG_CONFIG_HOME)");
+ fs::create_directories(settings.parent_path());private_directory(settings);settings/="settings.json";
  char self[65536];auto n=readlink("/proc/self/exe",self,sizeof self-1);if(n<=0||n==(ssize_t)sizeof self-1)fail("Cannot locate MAG executable");self[n]=0;
  fs::path app=fs::path(self).parent_path();root=app.parent_path();auto workspace=(app/MAG_WORKSPACE).lexically_normal();auto vfs=workspace/"local/retail-v1.0";
  auto launcher=app/"bin/MagRecomp",engine=app/"bin/MagEngine",le=vfs/"PS3_GAME/USRDIR/EBOOT.elf",ee=vfs/"PS3_GAME/USRDIR/bin/mage_g.elf",es=vfs/"PS3_GAME/USRDIR/bin/mage_g.self";
  check(launcher,MAG_LAUNCHER_SHA256);check(engine,MAG_ENGINE_SHA256);check(le,MAG_LAUNCHER_ELF_SHA256);check(ee,MAG_ENGINE_ELF_SHA256);check(es,MAG_ENGINE_SELF_SHA256);auto key=key_hash(le);
  unsigned char random[16];int rng=open("/dev/urandom",O_RDONLY|O_CLOEXEC);if(rng<0)fail("No system random source");size_t got=0;while(got<16){auto c=read(rng,random+got,16-got);if(c<0&&errno==EINTR)continue;if(c<=0)fail("No system randomness");got+=c;}close(rng);auto token=hex(random,16);
- auto logs=root/"logs"/("launch-"+token);private_directory(logs.parent_path());if(!fs::create_directory(logs))fail("Cannot create private launch directory");auto request=logs/"handoff-request.json";private_directory(root/"home");
- std::map<std::string,std::string> env={{"PATH","/usr/bin:/bin"},{"HOME",(root/"home").string()},{"LANG","C.UTF-8"},{"LD_LIBRARY_PATH",(app/"lib").string()},{"PS3_VFS_ROOT",vfs.string()},{"PS3_BOOT_PATH","/dev_bdvd/PS3_GAME/USRDIR/EBOOT.BIN"},{"PS3RECOMP_VK_WINDOW","1"},{"PS3RECOMP_VK_GUEST_PROGRAMS","1"},{"PS3_HLE_UNRESOLVED","halt"},{"PS3_SYSCALL_UNRESOLVED","halt"},{"MAG_HANDOFF_REQUEST",request.string()},{"MAG_HANDOFF_TOKEN",token},{"MAG_ENGINE_BINARY",engine.string()},{"MAG_ENGINE_ELF",ee.string()},{"MAG_ENGINE_SELF",es.string()},{"MAG_ENGINE_BINARY_SHA256",MAG_ENGINE_SHA256},{"MAG_ENGINE_ELF_SHA256",MAG_ENGINE_ELF_SHA256},{"MAG_ENGINE_SELF_SHA256",MAG_ENGINE_SELF_SHA256},{"MAG_ENGINE_KEY_SHA256",key}};
+ auto logs=root/"logs"/("launch-"+token);private_directory(logs.parent_path());if(!fs::create_directory(logs))fail("Cannot create private launch directory");auto request=logs/"handoff-request.json";private_directory(root/"home");private_directory(root/"home/player");{std::error_code none;fs::remove(root/"home/player/launch-message.txt",none);}
+ std::map<std::string,std::string> env={{"PATH","/usr/bin:/bin"},{"HOME",(root/"home").string()},{"LANG","C.UTF-8"},{"LD_LIBRARY_PATH",(app/"lib").string()},{"PS3_VFS_ROOT",vfs.string()},{"PS3_BOOT_PATH","/dev_bdvd/PS3_GAME/USRDIR/EBOOT.BIN"},{"PS3RECOMP_VK_WINDOW","1"},{"PS3RECOMP_VK_GUEST_PROGRAMS","1"},{"PS3_HLE_UNRESOLVED","halt"},{"PS3_SYSCALL_UNRESOLVED","halt"},{"MAG_HANDOFF_REQUEST",request.string()},{"MAG_HANDOFF_TOKEN",token},{"MAG_ENGINE_BINARY",engine.string()},{"MAG_ENGINE_ELF",ee.string()},{"MAG_ENGINE_SELF",es.string()},{"MAG_ENGINE_BINARY_SHA256",MAG_ENGINE_SHA256},{"MAG_ENGINE_ELF_SHA256",MAG_ENGINE_ELF_SHA256},{"MAG_ENGINE_SELF_SHA256",MAG_ENGINE_SELF_SHA256},{"MAG_ENGINE_KEY_SHA256",key},
+  {"MAG_PLAYER_SETTINGS_PATH",settings.string()},{"MAG_PLAYER_OVERLAY_ROOT",(root/"home/player").string()},{"MAG_PLAYER_SETUP","1"}};
+ for(auto& c:choices)env[c.first]=c.second;
  // Required runtime defaults recorded at packaging (movie playback for decoder builds).
  for(auto& d:std::map<std::string,std::string>MAG_RUNTIME_DEFAULTS)env[d.first]=d.second;
  // Preserve only desktop transport/session variables, never inherited game diagnostics.
  for(auto name:{"DISPLAY","WAYLAND_DISPLAY","XDG_RUNTIME_DIR","DBUS_SESSION_BUS_ADDRESS","XAUTHORITY","PULSE_SERVER","PIPEWIRE_REMOTE"})if(auto value=getenv(name))env[name]=value;
  signal(SIGINT,interrupted);signal(SIGTERM,interrupted);signal(SIGHUP,interrupted);
- int result=run(launcher,le,logs,env,"launcher.log");if(result!=90)return result;
+ int result=run(launcher,le,logs,env,"launcher.log");
+ if(result!=90){
+  // A launch the player must correct (such as choosing a name) explains itself.
+  std::error_code none;auto note=root/"home/player/launch-message.txt";
+  if(fs::is_regular_file(fs::symlink_status(note,none))){auto text=read_file(note,4096);fs::remove(note,none);fail(text);}
+  if(result)fail("The game stopped before it started (exit "+std::to_string(result)+"). Details: "+(logs/"launcher.log").string());return 0;}
  auto expected="{\"version\":1,\"token\":\""+token+"\",\"guest_path\":\"/dev_bdvd/PS3_GAME/USRDIR/bin/mage_g.self\",\"kind\":\"mage_g\"}\n";
  if(read_file(request,4096)!=expected)fail("Engine handoff request identity mismatch");
  check(engine,MAG_ENGINE_SHA256);check(ee,MAG_ENGINE_ELF_SHA256);check(es,MAG_ENGINE_SELF_SHA256);
- for(auto i=env.begin();i!=env.end();)if(i->first.find("MAG_HANDOFF_")==0||i->first.find("MAG_ENGINE_")==0)i=env.erase(i);else ++i;
+ for(auto i=env.begin();i!=env.end();)if(i->first.find("MAG_HANDOFF_")==0||i->first.find("MAG_ENGINE_")==0||i->first=="MAG_PLAYER_SETUP"||i->first=="MAG_PLAYER_SET_SERVER"||i->first=="MAG_PLAYER_SET_NAME")i=env.erase(i);else ++i;
  env["PS3_BOOT_PATH"]="/dev_bdvd/PS3_GAME/USRDIR/bin/mage_g.self";return run(engine,ee,logs,env,"engine.log");
  }catch(const std::exception& e){std::string msg="MAG could not start: "+std::string(e.what())+"\n";std::cerr<<msg;if(!root.empty()){int fd=open((root/"launch-error.log").c_str(),O_WRONLY|O_CREAT|O_TRUNC|O_NOFOLLOW,0600);if(fd>=0){write(fd,msg.data(),msg.size());close(fd);}}return 1;}
 }

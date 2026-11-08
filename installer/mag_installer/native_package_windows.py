@@ -26,6 +26,7 @@ _SUPERVISOR = r'''
 #define _UNICODE
 #include <windows.h>
 #include <bcrypt.h>
+#include <shellapi.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -162,6 +163,20 @@ static DWORD run(HANDLE job, const wchar_t *binary, const wchar_t *elf, const wc
 
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR arguments, int show) {
     (void)instance; (void)previous; (void)arguments; (void)show;
+    /* First-run choices; the game validates and saves them in the player's settings file. */
+    static const wchar_t *usage = L"Usage: MAG.exe [--server <hostname or IPv4>] [--name <player name>]";
+    const wchar_t *server = NULL, *player = NULL;
+    int argc = 0; LPWSTR *argv = CommandLineToArgvW(GetCommandLineW(), &argc);
+    if (!argv) fail(L"Cannot read the command line", NULL);
+    for (int i = 1; i < argc; i++) {
+        const wchar_t *a = argv[i], **target = NULL; size_t prefix = 0;
+        if (!wcsncmp(a, L"--server", 8)) { target = &server; prefix = 8; }
+        else if (!wcsncmp(a, L"--name", 6)) { target = &player; prefix = 6; }
+        if (!target) fail(usage, a);
+        if (a[prefix] == L'=') *target = a + prefix + 1;
+        else if (!a[prefix] && i + 1 < argc) *target = argv[++i];
+        else fail(usage, a);
+    }
     wchar_t self[MAX_PATH], app[MAX_PATH];
     DWORD n = GetModuleFileNameW(NULL, self, MAX_PATH);
     if (!n || n >= MAX_PATH) fail(L"Cannot locate MAG.exe", NULL);
@@ -194,6 +209,15 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR arguments, int
     join(request, logs, L"handoff-request.json");
     join(home, g_root, L"home");
     CreateDirectoryW(home, NULL);
+    wchar_t player_root[MAX_PATH], appdata[MAX_PATH], config[MAX_PATH], settings[MAX_PATH];
+    join(player_root, home, L"player");
+    CreateDirectoryW(player_root, NULL);
+    { wchar_t stale[MAX_PATH]; join(stale, player_root, L"launch-message.txt"); DeleteFileW(stale); }
+    DWORD length = GetEnvironmentVariableW(L"APPDATA", appdata, MAX_PATH);
+    if (!length || length >= MAX_PATH) fail(L"Cannot find your application data folder (APPDATA)", NULL);
+    join(config, appdata, L"MAG");
+    if (!CreateDirectoryW(config, NULL) && GetLastError() != ERROR_ALREADY_EXISTS) fail(L"Cannot create the settings folder", config);
+    join(settings, config, L"settings.json");
 
     clear_inherited();
     set_env(L"HOME", home);
@@ -213,6 +237,11 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR arguments, int
     set_env_utf8(L"MAG_ENGINE_ELF_SHA256", MAG_ENGINE_ELF_SHA256);
     set_env_utf8(L"MAG_ENGINE_SELF_SHA256", MAG_ENGINE_SELF_SHA256);
     set_env_utf8(L"MAG_ENGINE_KEY_SHA256", key);
+    set_env(L"MAG_PLAYER_SETTINGS_PATH", settings);
+    set_env(L"MAG_PLAYER_OVERLAY_ROOT", player_root);
+    set_env(L"MAG_PLAYER_SETUP", L"1");
+    if (server) set_env(L"MAG_PLAYER_SET_SERVER", server);
+    if (player) set_env(L"MAG_PLAYER_SET_NAME", player);
 
     /* Closing the supervisor (or its crash) also ends the game processes. */
     HANDLE job = CreateJobObjectW(NULL, NULL);
@@ -222,7 +251,17 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR arguments, int
 
     join(log, logs, L"launcher.log");
     DWORD result = run(job, launcher, launcher_elf, logs, log);
-    if (result != 90) return (int)result;
+    if (result != 90) {
+        /* A launch the player must correct (such as choosing a name) explains itself. */
+        wchar_t note[MAX_PATH]; join(note, player_root, L"launch-message.txt");
+        if (GetFileAttributesW(note) != INVALID_FILE_ATTRIBUTES) {
+            DWORD size; unsigned char *text = read_file(note, &size); wchar_t message[2048];
+            int n = MultiByteToWideChar(CP_UTF8, 0, (const char *)text, (int)(size < 4000 ? size : 4000), message, 2047);
+            message[n > 0 ? n : 0] = 0; free(text); DeleteFileW(note); fail(message, NULL);
+        }
+        if (result) fail(L"The game stopped before it started. Details are in", log);
+        return 0;
+    }
 
     char expected[256];
     snprintf(expected, sizeof expected, "{\"version\":1,\"token\":\"%s\",\"guest_path\":\"/dev_bdvd/PS3_GAME/USRDIR/bin/mage_g.self\",\"kind\":\"mage_g\"}\n", token);
@@ -231,7 +270,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR arguments, int
     free(body);
     check(engine, MAG_ENGINE_SHA256); check(engine_elf, MAG_ENGINE_ELF_SHA256); check(engine_self, MAG_ENGINE_SELF_SHA256);
     const wchar_t *cleared[] = {L"MAG_HANDOFF_REQUEST", L"MAG_HANDOFF_TOKEN", L"MAG_ENGINE_BINARY", L"MAG_ENGINE_ELF",
-        L"MAG_ENGINE_SELF", L"MAG_ENGINE_BINARY_SHA256", L"MAG_ENGINE_ELF_SHA256", L"MAG_ENGINE_SELF_SHA256", L"MAG_ENGINE_KEY_SHA256"};
+        L"MAG_ENGINE_SELF", L"MAG_ENGINE_BINARY_SHA256", L"MAG_ENGINE_ELF_SHA256", L"MAG_ENGINE_SELF_SHA256", L"MAG_ENGINE_KEY_SHA256",
+        L"MAG_PLAYER_SETUP", L"MAG_PLAYER_SET_SERVER", L"MAG_PLAYER_SET_NAME"};
     for (size_t i = 0; i < sizeof cleared / sizeof cleared[0]; i++) SetEnvironmentVariableW(cleared[i], NULL);
     set_env(L"PS3_BOOT_PATH", L"/dev_bdvd/PS3_GAME/USRDIR/bin/mage_g.self");
     join(log, logs, L"engine.log");
@@ -256,7 +296,7 @@ def _c_hex(value):
 def _compile(clang_cl, environment, source_dir, output, token):
     token.check()
     argv = [clang_cl, '/nologo', '/O2', '/MT', '/W3', '/DUNICODE', '/D_UNICODE', str(source_dir / 'supervisor.c'),
-            f'/Fe{output}', f'/Fo{source_dir / "supervisor.obj"}', '/link', '/SUBSYSTEM:WINDOWS', 'bcrypt.lib', 'user32.lib']
+            f'/Fe{output}', f'/Fo{source_dir / "supervisor.obj"}', '/link', '/SUBSYSTEM:WINDOWS', 'bcrypt.lib', 'user32.lib', 'shell32.lib']
     try:
         result = subprocess.run(argv, cwd=source_dir, env=environment, stdin=subprocess.DEVNULL,
                                 capture_output=True, text=True, timeout=300)

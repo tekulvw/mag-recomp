@@ -319,6 +319,20 @@ if(APPLE)
     enable_language(OBJC OBJCXX)
     include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/MagPlayerSettings.cmake")
     mag_enable_player_settings(${PROJECT_NAME} "${PS3RECOMP_DIR}")
+else()
+    # Windows and Linux players choose their server and name in a settings file. Inert unless
+    # the packaged supervisor supplies MAG_PLAYER_SETTINGS_PATH (src/player_settings_portable.cpp).
+    target_sources(${PROJECT_NAME} PRIVATE src/player_settings_portable.cpp src/player_server_overlay_portable.cpp
+        src/player_archive.cpp src/player_inflate.cpp src/player_sha256.cpp)
+    set_source_files_properties(src/player_archive.cpp TARGET_DIRECTORY ${PROJECT_NAME}
+        PROPERTIES COMPILE_DEFINITIONS MAG_PLAYER_ARCHIVE_NO_ZLIB=1)
+    set_source_files_properties(src/player_server_overlay_portable.cpp TARGET_DIRECTORY ${PROJECT_NAME}
+        PROPERTIES INCLUDE_DIRECTORIES "${PS3RECOMP_DIR}/runtime/ppu")
+    set_property(SOURCE src/main.cpp TARGET_DIRECTORY ${PROJECT_NAME}
+        APPEND PROPERTY COMPILE_DEFINITIONS MAG_PLAYER_PORTABLE_SETTINGS=1)
+    if(WIN32)
+        target_link_libraries(${PROJECT_NAME} PRIVATE ws2_32)
+    endif()
 endif()
 
 # The lifted SPU sources use bare #include "spu_context.h". Scope that include
