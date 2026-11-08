@@ -671,7 +671,8 @@ def _download_bootstrapper(cache, token, events):
     request = urllib.request.Request(VS_BOOTSTRAPPER_URL, headers={'User-Agent': 'mag-installer'})
     received = 0
     try:
-        with urllib.request.urlopen(request, timeout=60) as response, target.open('xb') as output:
+        from .tools import tls_context
+        with urllib.request.urlopen(request, timeout=60, context=tls_context()) as response, target.open('xb') as output:
             if not response.geturl().startswith('https://'):
                 raise InstallerError('Visual Studio installer download left HTTPS')
             while block := response.read(1024 * 1024):

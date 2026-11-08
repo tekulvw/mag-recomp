@@ -177,4 +177,49 @@ class ToolTests(unittest.TestCase):
             with self.assertRaises(InstallerError): extract_archive(blob, root / 'limited', tool, Cancellation())
 
 
+
+class TlsContextTests(unittest.TestCase):
+    """A frozen interpreter's OpenSSL may find no CAs on a player's machine; the
+    download context then trusts the system bundle, never weaker verification."""
+    def test_adds_the_system_bundle_only_when_no_ca_was_loaded(self):
+        import ssl
+        from unittest.mock import patch
+        from mag_installer import tools
+        class Context:
+            def __init__(self, cas): self.cas = cas; self.loaded = []
+            def cert_store_stats(self): return {'x509_ca': self.cas}
+            def load_verify_locations(self, cafile): self.loaded.append(cafile)
+        empty = Context(0)
+        with patch.object(ssl, 'create_default_context', return_value=empty), \
+                patch('os.path.isfile', side_effect=lambda p: p == '/etc/ssl/certs/ca-certificates.crt'):
+            self.assertIs(tools.tls_context(), empty)
+        self.assertEqual(empty.loaded, ['/etc/ssl/certs/ca-certificates.crt'])
+        loaded = Context(120)
+        with patch.object(ssl, 'create_default_context', return_value=loaded):
+            self.assertIs(tools.tls_context(), loaded)
+        self.assertEqual(loaded.loaded, [])
+        # The real context always verifies.
+        real = tools.tls_context()
+        self.assertEqual(real.verify_mode, ssl.CERT_REQUIRED)
+        self.assertTrue(real.check_hostname)
+
+    def test_certificate_failure_is_reported_once_not_retried(self):
+        import ssl
+        import urllib.error
+        from unittest.mock import patch
+        from mag_installer import tools
+        payload = zip_bytes([('bin/tool', b'fixture')])
+        failing = urllib.error.URLError(ssl.SSLCertVerificationError('certificate verify failed'))
+        calls = []
+        class Opener:
+            def open(self, request, timeout): calls.append(request); raise failing
+        events = []
+        with tempfile.TemporaryDirectory() as temp, \
+                patch('urllib.request.build_opener', return_value=Opener()):
+            with self.assertRaisesRegex(InstallerError, 'certificate could not be verified'):
+                acquire(tool_spec(payload), Path(temp), Cancellation(), events.append)
+        self.assertEqual(len(calls), 1)
+        self.assertFalse(any(e['event'] == 'download-retry' for e in events))
+
+
 if __name__ == '__main__': unittest.main()

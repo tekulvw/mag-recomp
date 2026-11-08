@@ -7,6 +7,7 @@ import http.client
 import os
 from pathlib import Path
 import shutil
+import ssl
 import stat
 import tarfile
 import tempfile
@@ -18,6 +19,26 @@ import urllib.request
 import zipfile
 
 from .model import InstallerError, relative_path
+
+# The operating system's CA bundle, by the paths its vendors use: macOS (and
+# Alpine), Debian/Ubuntu, Fedora/RHEL.
+SYSTEM_CA_BUNDLES = ('/etc/ssl/cert.pem', '/etc/ssl/certs/ca-certificates.crt', '/etc/pki/tls/certs/ca-bundle.crt')
+
+
+def tls_context():
+    """A verifying TLS context that trusts the operating system's CAs.
+
+    A frozen installer's interpreter looks for CAs where its OpenSSL was built,
+    which on a player's Mac does not exist, so every HTTPS download failed
+    certificate verification. When the default context loaded no CA, the system
+    bundle is added; verification itself is never relaxed."""
+    context = ssl.create_default_context()
+    if not context.cert_store_stats().get('x509_ca'):
+        for bundle in SYSTEM_CA_BUNDLES:
+            if os.path.isfile(bundle):
+                context.load_verify_locations(cafile=bundle)
+                break
+    return context
 from .safety import contained, file_digest
 
 
@@ -86,7 +107,8 @@ def _acquire_once(tool, cache, token, events, allow_loopback):
     try:
         digest = hashlib.sha256()
         count = 0
-        opener = urllib.request.build_opener(_RedirectPolicy(allow_loopback))
+        opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=tls_context()),
+                                             _RedirectPolicy(allow_loopback))
         request = urllib.request.Request(tool['url'], headers={'User-Agent': 'MAG-Local-Installer/0.1', 'Accept-Encoding': 'identity'})
         with os.fdopen(handle, 'wb') as target, opener.open(request, timeout=30) as response:
             if response.status != 200:
@@ -113,7 +135,13 @@ def _acquire_once(tool, cache, token, events, allow_loopback):
         os.replace(partial, blob)
         events({'event': 'tool-verified', 'tool': tool['id']})
         return blob
-    except (OSError, urllib.error.URLError, http.client.HTTPException, ValueError) as exc:
+    except urllib.error.URLError as exc:
+        if isinstance(exc.reason, ssl.SSLCertVerificationError):
+            # Not a dropped connection: retrying the same trust store cannot help.
+            raise InstallerError('Tool download failed: the server certificate could not be verified with this '
+                                 "computer's certificate authorities") from exc.reason
+        raise InstallerError(f'Tool acquisition failed ({type(exc).__name__}); retry restarts safely') from exc
+    except (OSError, http.client.HTTPException, ValueError) as exc:
         raise InstallerError(f'Tool acquisition failed ({type(exc).__name__}); retry restarts safely') from exc
     finally:
         partial.unlink(missing_ok=True)
