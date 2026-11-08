@@ -38,6 +38,35 @@ for (auto k : {'''+','.join(f'"{k}"' for k in DEFAULTS)+'''}) { const char* v=st
             result=subprocess.run([str(tmp/'test')],env={**base,**overrides},check=True,capture_output=True,text=True)
             self.assertEqual(result.stdout.splitlines(),[f'{k}={v}' for k,v in overrides.items()])
 
+    @unittest.skipUnless(shutil.which('clang') and shutil.which('ar'),'clang and ar required')
+    def test_defaults_reach_sdk_constructors(self):
+        """An SDK constructor that reads its switches before main() sees the defaults."""
+        keys=('PS3RECOMP_RSX_DEFERRED_REPORTS','PS3RECOMP_RSX_DEFERRED_REPORT_CAPACITY',
+              'PS3RECOMP_RSX_EARLY_LABEL_RELEASE','PS3RECOMP_RSX_EARLY_FIFO_SYNC')
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp=Path(tmp)
+            # Stands in for cellGcmSys.c: a default-priority constructor in a static library.
+            (tmp/'sdk.c').write_text('#include <stdio.h>\n#include <stdlib.h>\nchar seen[512];\n'
+                '__attribute__((constructor)) static void sdk_init(void) { size_t n = 0;\n'
+                + ''.join(f'  {{ const char* v = getenv("{k}"); n += snprintf(seen + n, sizeof seen - n, "{k}=%s\\n", v ? v : "<unset>"); }}\n' for k in keys)
+                + '}\n')
+            (tmp/'main.cpp').write_text('#include <cstdio>\nextern "C" char seen[512];\nint main() { std::fputs(seen, stdout); }\n')
+            run=lambda *argv: subprocess.run(list(argv),check=True,capture_output=True,text=True,cwd=tmp)
+            run('clang','-c','sdk.c','-o','sdk.o'); run('ar','rcs','libsdk.a','sdk.o')
+            run('clang++','-std=c++17','-Wall','-Wextra','-Werror','-I'+str(ROOT/'src'),'-c',
+                str(ROOT/'src/mag_runtime_defaults_early.cpp'),'-o','early.o')
+            run('clang++','-std=c++17','-c','main.cpp','-o','main.o')
+            builds=[['main.o','early.o','libsdk.a']]  # as the game links: its objects, then the SDK library
+            if sys.platform.startswith('linux'):
+                builds.append(['sdk.o','main.o','early.o'])  # ELF honours the constructor priority in any order
+            base={k:v for k,v in os.environ.items() if k not in KEYS}
+            for i,objects in enumerate(builds):
+                run('clang++',*objects,'-o',f'game{i}')
+                result=subprocess.run([str(tmp/f'game{i}')],env=base,check=True,capture_output=True,text=True)
+                self.assertEqual(result.stdout.splitlines(),[f'{k}={DEFAULTS[k]}' for k in keys],objects)
+                result=subprocess.run([str(tmp/f'game{i}')],env={**base,**{k:'0' for k in keys}},check=True,capture_output=True,text=True)
+                self.assertEqual(result.stdout.splitlines(),[f'{k}=0' for k in keys])  # explicit values still win
+
     @unittest.skipUnless(sys.platform.startswith('linux'),'glibc static TLS is carved from thread stacks only on Linux')
     def test_rust_threads_keep_their_stack_beside_static_tls(self):
         # A large static TLS block, as the runtime has: a Rust-style 2 MiB
