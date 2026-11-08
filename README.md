@@ -27,10 +27,11 @@ Only the v1.0 retail release is supported; any other release or modified file is
 
 Installer-built MAG has been tested on three systems:
 
-- **macOS** (Apple Silicon, Metal): boots to the menus and signs in to a community server.
-- **Windows** (x86_64, Vulkan): boots, signs in and plays the Training mission. Movies play through
-  an FFmpeg the installer downloads.
-- **Linux** (x86_64, Vulkan; tested on Ubuntu 24.04): boots and plays the Training mission.
+- **macOS** (Apple Silicon, Metal): signs in to a community server's menus.
+- **Windows** (x86_64, Vulkan): signs in, plays the Training mission and has joined online matches
+  on a community server. Movies play through an FFmpeg the installer downloads.
+- **Linux** (x86_64, Vulkan; tested on Ubuntu 24.04): signs in, plays the Training mission and has
+  joined online matches on a community server.
 
 Online play needs a compatible community server, which is not part of this repository. MAG connects
 to `play.magtest.online` by default. The game is not complete: rendering has known gaps, audio
