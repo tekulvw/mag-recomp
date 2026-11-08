@@ -102,6 +102,11 @@ You build MAG on your own computer from your own copy; nothing game-derived is e
    | Arrow keys | D-pad |
    | WASD / IJKL | Left / right stick |
 
+   On Windows, a controller is needed to play matches. The keyboard only covers menus (arrow keys,
+   Z / X / A / S for the face buttons, Return for Start), has no camera or aim, and is ignored
+   whenever any controller is present, including virtual gamepads created by Steam Input or
+   remote-desktop and streaming software. Mouse aim is not available on any system yet.
+
 **If a download fails** (for example during a GitHub outage), retry later. Or point the installer
 at a folder of previously downloaded tools with `build --cache <folder>`, or at a mirror with
 `MAG_INSTALLER_MIRRORS`; see [Downloads](installer/README.md#downloads). Every tool is checked
