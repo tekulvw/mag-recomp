@@ -100,7 +100,7 @@ static NSStackView *row(NSString *title,NSString *hint,NSView *control) {
     NSStackView *connection=stack(NSUserInterfaceLayoutOrientationVertical,5);
     add(connection,row(@"Game server",@"Hostname or IPv4 address",_server));add(connection,separator());
     _name=[NSTextField textFieldWithString:@""];_name.placeholderString=@"Default";_name.identifier=@"player_name";_name.delegate=self;
-    add(connection,row(@"Player name",@"Typed in for you when the game asks for your name",_name));add(connection,separator());
+    add(connection,row(@"Player name",@"Your name on the server, typed in for you at sign-in",_name));add(connection,separator());
     _advancedButton=[NSButton buttonWithTitle:@"▸ Advanced connection settings" target:self action:@selector(toggleAdvanced:)];
     _advancedButton.bordered=NO;_advancedButton.alignment=NSTextAlignmentLeft;_advancedButton.font=[NSFont systemFontOfSize:11];
     add(connection,_advancedButton);

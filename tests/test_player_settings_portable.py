@@ -103,11 +103,12 @@ class PortablePlayerSettingsTests(unittest.TestCase):
             self.assertEqual((settings['server_address'], settings['tcp_port'], settings['udp_port'], settings['player_name']),
                              ('example.org', 1, 2, 'Rook_7'))
             self.assertEqual(parse({'server_address': ''})[0]['server_address'], '')
+            self.assertEqual(parse({'player_name': 'a' * 15})[0]['player_name'], 'a' * 15)  # the launcher's name capacity
             self.assertEqual(parse({'server_address': '192.0.2.5'})[0]['server_address'], '192.0.2.5')
             for bad in ({'schema_version': 2}, {'server_address': 'http://x.org'}, {'server_address': 'x.org:80'},
                         {'server_address': '-x.org'}, {'server_address': '300.1.1.1'}, {'server_address': 5},
                         {'tcp_port': 70000}, {'tcp_port': '1'}, {'udp_port': -1}, {'player_name': 'ab'},
-                        {'player_name': '7up'}, {'player_name': 'a' * 17}, {'player_name': 'bad name'},
+                        {'player_name': '7up'}, {'player_name': 'a' * 16}, {'player_name': 'bad name'},
                         '{"tcp_port": 1.5}', '{"a": 1, "a": 2}', '[]', '{"a": 1} x', '{"a" 1}'):
                 self.assertIsNone(parse(bad)[0], bad)
 
@@ -180,9 +181,17 @@ class PortablePlayerSettingsTests(unittest.TestCase):
             self.assertEqual(code, 0, err)
             self.assertEqual(json.loads(settings.read_text())['server_address'], '127.0.0.1')
             self.assertEqual(values['PS3_NP_ONLINE_ID'], 'Rook_7'); self.assertEqual(values['PS3RECOMP_OSK_INITIAL_TEXT'], 'Rook_7')
+            # A server needs a name: the launcher signs in with it, so the launch stops and says how.
+            saved = settings.read_text()
+            settings.write_text(json.dumps({'server_address': '127.0.0.1'}))
+            unnamed, _, unnamed_err = self.prepare(root, **common, MAG_PLAYER_SETUP='1')
+            self.assertEqual(unnamed, 9); self.assertIn('--name', unnamed_err)
+            note = (owned / 'launch-message.txt').read_text()  # what the supervisor's dialog shows
+            self.assertIn('--name YourName', note); self.assertIn('3 to 15', note)
+            settings.write_text(saved)
             # A non-retail archive never hangs or fails the launch: it is reported, and play is offline.
             self.assertIn('Playing offline', err)
-            self.assertEqual((values['PS3_VFS_ROOT'], values['PS3_NET_ONLINE']), (str(vfs), ''))
+            self.assertEqual((values['PS3_VFS_ROOT'], values['PS3_NET_ONLINE'], values['MAG_LOCAL_ACCOUNT_NAME']), (str(vfs), '', ''))
             # The engine phase applies the launcher's snapshot, not a file edited meanwhile.
             settings.write_text(json.dumps({'player_name': 'Other'}))
             code, values, _ = self.prepare(root, **common)

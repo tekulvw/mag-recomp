@@ -52,6 +52,10 @@ int mag_player_settings_prepare(void) { @autoreleasepool {
             BOOL snapshotExists=NO;settings=MAGSettingsLoad(snapshot,&snapshotExists,&error);
             if(!settings||!snapshotExists){showError(error.localizedDescription?:@"The launch settings snapshot is missing.");return -1;}
         }
+        if(launcherPhase&&[settings[@"server_address"] length]&&![settings[@"player_name"] length]){
+            // The server signs players in by this name; without one the launcher can never connect.
+            showError(@"Enter a player name to play on a server. It is the name you sign in with.");setup=YES;continue;
+        }
         if([settings[@"player_name"] length]){
             // The runtime takes the online ID from this, and the sign-in keyboard opens with it typed in.
             setenv("PS3_NP_ONLINE_ID",[settings[@"player_name"] UTF8String],1);
@@ -68,6 +72,9 @@ int mag_player_settings_prepare(void) { @autoreleasepool {
             setenv("MAG_LOCAL_NO_TICKET","1",1);
         }
         setenv("PS3_AA",[settings[@"anti_aliasing"] UTF8String],1);
+        // In the community no-ticket profile the launcher signs in to the server with this name.
+        if(environment("MAG_LOCAL_NO_TICKET")&&[settings[@"player_name"] length])
+            setenv("MAG_LOCAL_ACCOUNT_NAME",[settings[@"player_name"] UTF8String],1);
         setenv("MAG_PLAYER_RENDER_SCALE",[settings[@"render_scale"] stringValue].UTF8String,1);
         return 1;
     }

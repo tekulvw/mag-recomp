@@ -38,7 +38,7 @@ int main(int argc, char **argv) {
     }
     if (mode == "prepare") {
         int result = mag_player_settings_prepare();
-        for (const char *name : {"PS3_VFS_ROOT", "PS3_NET_ONLINE", "MAG_LOCAL_NO_TICKET", "PS3_NP_ONLINE_ID", "PS3RECOMP_OSK_INITIAL_TEXT"}) {
+        for (const char *name : {"PS3_VFS_ROOT", "PS3_NET_ONLINE", "MAG_LOCAL_NO_TICKET", "PS3_NP_ONLINE_ID", "PS3RECOMP_OSK_INITIAL_TEXT", "MAG_LOCAL_ACCOUNT_NAME"}) {
             const char *value = std::getenv(name);
             std::cout << name << '=' << (value ? value : "") << '\n';
         }

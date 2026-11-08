@@ -12,7 +12,11 @@ Server changes made while playing apply on the **next launch**. They do not move
 
 For a custom server, the runner creates a private temporary view of the player's game files. Only the verified retail local-settings archive member receives the connection override. All other members and the original game files are preserved. The launcher and engine use the same connection snapshot; the supervisor removes the private view after the session ends.
 
-**Player name** is optional. When set, the game uses it as the player's online name, and the sign-in keyboard opens with it already typed, so the player only confirms it. Names have 3 to 16 letters, digits, `-` or `_` and start with a letter. Blank keeps the runtime's default name.
+**Player name** is required to play on a server, and optional otherwise.
+- **On a server,** the launcher signs in to the server's account service with this name, in the community no-ticket profile (`MAG_LOCAL_ACCOUNT_NAME`). Without a name it could never connect, so setup asks for one.
+- **Everywhere,** the game uses it as the player's online name, and the sign-in keyboard opens with it already typed, so the player only confirms it.
+- **Format:** 3 to 15 letters, digits, `-` or `_`, starting with a letter. 15 is the length of the retail sign-in name field.
+- **Blank** keeps the runtime's default name, and is only possible without a server.
 
 ## Graphics
 
@@ -47,7 +51,7 @@ MAG --server play.example.org --name Rook_7        # Linux, from the MAG folder
 MAG.exe --server play.example.org --name Rook_7    # Windows
 ```
 
-You can also edit the file. It uses the macOS file's connection fields: `server_address`, `tcp_port`, `udp_port` (0 for the game default) and `player_name`. Other keys are ignored, and the same validation rules apply. A damaged file is never overwritten. It is reported in `logs/launch-*/launcher.log`, and that launch plays offline.
+A server needs a player name. Without one, the launch stops and says to add `--name`. You can also edit the file. It uses the macOS file's connection fields: `server_address`, `tcp_port`, `udp_port` (0 for the game default) and `player_name`. Other keys are ignored, and the same validation rules apply. A damaged file is never overwritten. It is reported in `logs/launch-*/launcher.log`, and that launch plays offline.
 
 The game builds the same connection override as macOS (`src/player_settings_portable.cpp`, `src/player_server_overlay_portable.cpp`). The private view of the game files lives in `home/player/server/vfs`, inside the installation. It holds real folders and hard links to the original files, plus the one rewritten archive, so it costs no copy and it is rebuilt whenever the server changes. MAG and its game files must be on the same drive, which an installer-built folder always is.
 

@@ -211,6 +211,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR arguments, int
     wchar_t player_root[MAX_PATH], appdata[MAX_PATH], config[MAX_PATH], settings[MAX_PATH];
     join(player_root, home, L"player");
     CreateDirectoryW(player_root, NULL);
+    { wchar_t stale[MAX_PATH]; join(stale, player_root, L"launch-message.txt"); DeleteFileW(stale); }
     DWORD length = GetEnvironmentVariableW(L"APPDATA", appdata, MAX_PATH);
     if (!length || length >= MAX_PATH) fail(L"Cannot find your application data folder (APPDATA)", NULL);
     join(config, appdata, L"MAG");
@@ -247,6 +248,13 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR arguments, int
     join(log, logs, L"launcher.log");
     DWORD result = run(job, launcher, launcher_elf, logs, log);
     if (result != 90) {
+        /* A launch the player must correct (such as choosing a name) explains itself. */
+        wchar_t note[MAX_PATH]; join(note, player_root, L"launch-message.txt");
+        if (GetFileAttributesW(note) != INVALID_FILE_ATTRIBUTES) {
+            DWORD size; unsigned char *text = read_file(note, &size); wchar_t message[2048];
+            int n = MultiByteToWideChar(CP_UTF8, 0, (const char *)text, (int)(size < 4000 ? size : 4000), message, 2047);
+            message[n > 0 ? n : 0] = 0; free(text); DeleteFileW(note); fail(message, NULL);
+        }
         if (result) fail(L"The game stopped before it started. Details are in", log);
         return 0;
     }
