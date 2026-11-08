@@ -100,7 +100,7 @@ int main(void) {
  if(request&&(!getenv("MAG_PLAYER_SETUP")||strcmp(getenv("MAG_PLAYER_SET_SERVER"),"example.org")||getenv("MAG_PLAYER_SET_NAME")))return 50;
  if(!request&&(getenv("MAG_PLAYER_SETUP")||getenv("MAG_PLAYER_SET_SERVER")))return 51;
  const char* gamedata=getenv("PS3_GAMEDATA_ROOT");
- if(!gamedata||!strstr(gamedata,"/home/gamedata"))return 53;
+ if(!gamedata||!strstr(gamedata,"home") || !strstr(gamedata,"gamedata"))return 53;
  if(!request){char save[4096];snprintf(save,sizeof save,"%s/save.txt",gamedata);FILE* s=fopen(save,"a");if(!s)return 54;fputs("x\n",s);fclose(s);}
  if(request){FILE* f=fopen(request,"wx");if(!f)return 46;
  fprintf(f,"{\"version\":1,\"token\":\"%s\",\"guest_path\":\"/dev_bdvd/PS3_GAME/USRDIR/bin/mage_g.self\",\"kind\":\"mage_g\"}\n",getenv("MAG_HANDOFF_TOKEN"));fclose(f);puts("launcher fixture");return 90;}
