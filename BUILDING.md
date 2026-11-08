@@ -56,6 +56,10 @@ python3 -m venv .venv
 | `local/ps3recomp-lifter-dfa7073` | `mag-recomp/lifter-ppu-2026.10.12` | `dfa7073` | PPU and firmware lifting |
 | `local/ps3recomp-spu-programs` | `mag-recomp/spu-programs-2026.10.21` | `4c5c05f` | Lifting every embedded engine SPU program |
 
+The PPU lifter checkout must also hold one more tagged commit, `mag-recomp/lifter-2026.11.04`
+(`d31e3fd`), pinned as `splice_after` of `lifter-ppu`: step 4's engine dispatcher splice reads its
+fixed lifter from that checkout by revision. The helper fetches the fork's tags and checks it.
+
 Keep them clean and at these exact commits: the tools refuse other or dirty revisions, and the build
 accepts only the pinned runtime. To keep a lifter elsewhere, set `MAG_SPU_LIFTER_REPOSITORY` or
 `MAG_FIRMWARE_LIFTER_REPOSITORY`.

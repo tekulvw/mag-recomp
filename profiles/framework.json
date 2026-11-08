@@ -16,7 +16,11 @@
     "lifter-ppu": {
       "tag": "mag-recomp/lifter-ppu-2026.10.12",
       "commit": "dfa7073d2e164aec6890866c4951d8dedc28619d",
-      "path": "local/ps3recomp-lifter-dfa7073"
+      "path": "local/ps3recomp-lifter-dfa7073",
+      "splice_after": {
+        "tag": "mag-recomp/lifter-2026.11.04",
+        "commit": "d31e3fd72c9abb2e823e8f12eca9c9adb63493ef"
+      }
     },
     "spu-programs": {
       "tag": "mag-recomp/spu-programs-2026.10.21",

@@ -127,6 +127,11 @@ def framework_pins(workspace):
             if (re.fullmatch('[0-9a-f]{40}', str(pin.get('commit', ''))) is None
                     or not isinstance(pin.get('tag'), str) or not isinstance(pin.get('path'), str)):
                 raise ValueError(role)
+            extra = pin.get('splice_after')
+            if extra is not None and (not isinstance(extra, dict) or set(extra) != {'tag', 'commit'}
+                                      or re.fullmatch('[0-9a-f]{40}', str(extra.get('commit', ''))) is None
+                                      or not str(extra.get('tag', '')).startswith('mag-recomp/')):
+                raise ValueError(role)
             contained(Path(workspace), pin['path'])
         return table
     except (OSError, ValueError, KeyError, TypeError) as exc:

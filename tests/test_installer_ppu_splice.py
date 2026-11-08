@@ -2,6 +2,7 @@
 import copy
 import hashlib
 import json
+import subprocess
 from pathlib import Path
 import tempfile
 import unittest
@@ -100,3 +101,50 @@ class InstallerPPUSpliceTests(unittest.TestCase):
                         patch.object(tool, 'tag_commit', return_value=found), self.assertRaisesRegex(ValueError, 'after lifter tag'):
                     tool.prepare(**args)
                 read.assert_not_called()
+
+
+class CheckLiftersTests(unittest.TestCase):
+    """The check-only mode reads real Git objects: a shallow kit-style checkout
+    must hold the after commit and its tag, not just the pinned before commit."""
+    def git(self, repo, *args):
+        return subprocess.check_output(['git', '-C', str(repo), '-c', 'user.name=Fixture',
+                                        '-c', 'user.email=fixture@example.invalid', *args], text=True).strip()
+
+    def lifter_repo(self, root):
+        repo = root / 'lifter'; (repo / 'tools').mkdir(parents=True)
+        subprocess.check_call(['git', 'init', '-q', str(repo)])
+        for name, data in (('ppu_disasm.py', b'decoder'), ('elf_parser.py', b'parser'), ('ppu_lifter.py', b'lifter 1')):
+            (repo / 'tools' / name).write_bytes(data)
+        self.git(repo, 'add', '-A'); self.git(repo, 'commit', '-qm', 'before')
+        before = self.git(repo, 'rev-parse', 'HEAD')
+        (repo / 'tools/ppu_lifter.py').write_bytes(b'lifter 2')
+        self.git(repo, 'commit', '-qam', 'after')
+        after = self.git(repo, 'rev-parse', 'HEAD')
+        self.git(repo, 'tag', '-a', '-m', 'fix', 'mag-recomp/lifter-synthetic', after)
+        self.git(repo, 'checkout', '-q', '--detach', before)
+        profile = {'decoder_sha256': sha(b'decoder'), 'parser_sha256': sha(b'parser'),
+                   'before': {'revision': before, 'lifter_sha256': sha(b'lifter 1')},
+                   'after': {'revision': after, 'tag': 'mag-recomp/lifter-synthetic', 'lifter_sha256': sha(b'lifter 2')}}
+        return repo, profile
+
+    def test_a_checkout_with_the_tagged_after_commit_passes(self):
+        with tempfile.TemporaryDirectory() as temp:
+            repo, profile = self.lifter_repo(Path(temp))
+            decoder, parser, lifters = tool.check_lifters(profile, repo, repo)
+            self.assertEqual((decoder, parser, lifters['before'], lifters['after']),
+                             (b'decoder', b'parser', b'lifter 1', b'lifter 2'))
+
+    def test_a_shallow_pinned_only_checkout_is_refused(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp); repo, profile = self.lifter_repo(root)
+            # As the source kit packed it before the after commit was pinned.
+            shallow = root / 'shallow'; subprocess.check_call(['git', 'init', '-q', str(shallow)])
+            self.git(shallow, '-c', 'protocol.file.allow=always', 'fetch', '-q', '--no-tags', '--depth=1',
+                     str(repo), profile['before']['revision'])
+            with self.assertRaisesRegex(ValueError, 'after lifter tag'):
+                tool.check_lifters(profile, shallow, shallow)
+            # With the after tag fetched too (what the kit now packs), it passes.
+            ref = 'refs/tags/' + profile['after']['tag']
+            self.git(shallow, '-c', 'protocol.file.allow=always', 'fetch', '-q', '--no-tags', '--depth=1',
+                     str(repo), '+' + ref + ':' + ref)
+            self.assertEqual(tool.check_lifters(profile, shallow, shallow)[2]['after'], b'lifter 2')

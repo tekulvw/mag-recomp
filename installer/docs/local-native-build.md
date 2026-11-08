@@ -47,7 +47,9 @@ your permissions; use only ones you trust.
 ```
 
 The `sdks` roles and commits must match the `ps3recomp` table in `profiles/framework.json`
-exactly; `tools/fetch_ps3recomp.py` creates those checkouts. Each must be clean. On Windows,
+exactly; `tools/fetch_ps3recomp.py` creates those checkouts. Each must be clean. The `lifter-ppu`
+checkout must also hold the tag named by its `splice_after` pin (the dispatcher splice reads that
+commit by revision). On Windows,
 replace `ffmpeg` with
 `"msvc": {"vcvars": ".../VC/Auxiliary/Build/vcvars64.bat", "clang_cl": ".../VC/Tools/Llvm/x64/bin/clang-cl.exe"}`.
 
