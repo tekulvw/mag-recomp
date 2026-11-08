@@ -147,6 +147,22 @@ def _verify_identities_unwrapped(source, disc, config, token=None):
         _verify_hash(config[key], decrypted, token)
     firmware = json.loads((source / 'profiles/retail-v1.0-firmware.json').read_text(encoding='utf-8'))
     _verify_hash(config['firmware'], firmware['image_sha256'], token)
+    # The server overlay rewrites one member of this archive at launch; a copy an
+    # earlier tool already changed would only fail there, after the whole build.
+    literal = {node.targets[0].id: ast.literal_eval(node.value) for node in module.body
+               if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)
+               and node.targets[0].id in ('RETAIL_SETTINGS_ARCHIVE', 'RETAIL_SETTINGS_ARCHIVE_SHA256')}
+    archive = disc / 'USRDIR' / literal['RETAIL_SETTINGS_ARCHIVE']
+    accepted = literal['RETAIL_SETTINGS_ARCHIVE_SHA256']
+    _ordinary(archive, False)
+    with archive.open('rb') as stream:
+        hasher = hashlib.sha256()
+        while chunk := stream.read(1024 * 1024):
+            if token: token.check()
+            hasher.update(chunk)
+    if hasher.hexdigest() not in accepted:
+        raise InstallerError('USRDIR/run/mag/ps3/game.psarc.sdat is not the unmodified retail file (an earlier tool may '
+                             'have changed its settings). Copy it from your disc again, then retry.')
 
 
 def _verify_identities(source, disc, config, token=None):
@@ -180,7 +196,7 @@ def preflight(config_path, output, token=None):
     validate_source_tree(source)
     disc = _ordinary(config['disc_root'], True)
     if (disc / 'PS3_GAME').is_dir(): disc = _ordinary(disc / 'PS3_GAME', True)
-    for name in ('USRDIR/EBOOT.BIN', 'USRDIR/bin/mage_g.self', 'PARAM.SFO'):
+    for name in ('USRDIR/EBOOT.BIN', 'USRDIR/bin/mage_g.self', 'PARAM.SFO', 'USRDIR/run/mag/ps3/game.psarc.sdat'):
         _ordinary(disc / name, False)
     inputs = [source, disc, _ordinary(config_path, False)]
     for key in ('eboot_elf', 'engine_elf', 'firmware', 'python', 'cmake', 'ninja', 'git'):

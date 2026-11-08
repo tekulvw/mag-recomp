@@ -124,14 +124,37 @@ class NativeBuildTests(unittest.TestCase):
             root=Path(temp).resolve(); source=root/'source'; disc=root/'disc'
             (source/'tools').mkdir(parents=True); (source/'profiles').mkdir(); (disc/'USRDIR/bin').mkdir(parents=True)
             a=hashlib.sha256(b'original').hexdigest(); b=hashlib.sha256(b'decrypted').hexdigest()
-            (source/'tools/prepare_inputs.py').write_text('RETAIL = '+repr({'EBOOT.BIN':(a,b),'bin/mage_g.self':(a,b)}))
+            settings=hashlib.sha256(b'retail settings').hexdigest()
+            (source/'tools/prepare_inputs.py').write_text('RETAIL = '+repr({'EBOOT.BIN':(a,b),'bin/mage_g.self':(a,b)})
+                +"\nRETAIL_SETTINGS_ARCHIVE = 'run/settings.sdat'\nRETAIL_SETTINGS_ARCHIVE_SHA256 = "+repr((settings,)))
             (source/'profiles/retail-v1.0-firmware.json').write_text(json.dumps({'image_sha256':b}))
             for name in ('EBOOT.BIN','bin/mage_g.self'): (disc/'USRDIR'/name).write_bytes(b'original')
+            (disc/'USRDIR/run').mkdir(); (disc/'USRDIR/run/settings.sdat').write_bytes(b'retail settings')
             config={}
             for key in ('eboot_elf','engine_elf','firmware'):
                 p=root/key; p.write_bytes(b'decrypted'); config[key]=str(p)
             native._verify_identities(source,disc,config); Path(config['engine_elf']).write_bytes(b'wrong')
             with self.assertRaisesRegex(InstallerError,'identity'): native._verify_identities(source,disc,config)
+    def test_changed_settings_archive_refused_before_build(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp).resolve(); source=root/'source'; disc=root/'disc'
+            (source/'tools').mkdir(parents=True); (source/'profiles').mkdir(); (disc/'USRDIR/bin').mkdir(parents=True)
+            a=hashlib.sha256(b'original').hexdigest(); b=hashlib.sha256(b'decrypted').hexdigest()
+            accepted=(hashlib.sha256(b'sdata').hexdigest(),hashlib.sha256(b'psarc').hexdigest())
+            (source/'tools/prepare_inputs.py').write_text('RETAIL = '+repr({'EBOOT.BIN':(a,b),'bin/mage_g.self':(a,b)})
+                +"\nRETAIL_SETTINGS_ARCHIVE = 'run/settings.sdat'\nRETAIL_SETTINGS_ARCHIVE_SHA256 = "+repr(accepted))
+            (source/'profiles/retail-v1.0-firmware.json').write_text(json.dumps({'image_sha256':b}))
+            for name in ('EBOOT.BIN','bin/mage_g.self'): (disc/'USRDIR'/name).write_bytes(b'original')
+            (disc/'USRDIR/run').mkdir(); archive=disc/'USRDIR/run/settings.sdat'
+            config={}
+            for key in ('eboot_elf','engine_elf','firmware'):
+                p=root/key; p.write_bytes(b'decrypted'); config[key]=str(p)
+            for good in (b'sdata',b'psarc'):
+                archive.write_bytes(good); native._verify_identities(source,disc,config)
+            archive.write_bytes(b'psarc with changed settings')
+            with self.assertRaisesRegex(InstallerError,'unmodified retail'): native._verify_identities(source,disc,config)
+            archive.unlink()
+            with self.assertRaises(InstallerError): native._verify_identities(source,disc,config)
     def test_receipts_bind_both_binaries(self):
         with tempfile.TemporaryDirectory() as temp:
             root=Path(temp).resolve()
