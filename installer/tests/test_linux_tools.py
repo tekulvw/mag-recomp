@@ -32,6 +32,15 @@ class LinuxToolsTests(unittest.TestCase):
             self.assertEqual(run.call_args.args[0], ['/usr/bin/pkexec', '/usr/bin/apt-get', 'install', '--yes', '--no-install-recommends', *tools.LINUX_PACKAGES])
             self.assertIn('libssl-dev', tools.LINUX_PACKAGES)
 
+    def test_without_policykit_the_one_line_apt_command_is_shown(self):
+        with patch.object(tools, 'linux_platform_probe', return_value=(True, '')), patch.object(tools, 'linux_toolchain_probe', return_value=(None, 'Required Ubuntu development packages: lld')), \
+                patch.object(Path, 'is_file', return_value=False), patch.object(tools, 'run_command') as run:
+            with self.assertRaises(InstallerError) as raised: tools.ensure_linux_build_tools()
+            run.assert_not_called()
+        command = str(raised.exception).splitlines()[-1]
+        self.assertEqual(command, 'sudo apt-get update && sudo apt-get install --yes --no-install-recommends ' + ' '.join(tools.LINUX_PACKAGES))
+        for package in ('lld', 'ca-certificates', 'clang', 'libvulkan-dev'): self.assertIn(package, tools.LINUX_PACKAGES)
+
     def test_unsupported_distribution_cannot_install(self):
         with patch.object(tools, 'linux_platform_probe', return_value=(False, 'Unsupported distribution')), patch.object(tools, 'run_command') as run:
             with self.assertRaisesRegex(InstallerError, 'Unsupported'): tools.ensure_linux_build_tools()

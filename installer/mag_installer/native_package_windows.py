@@ -359,6 +359,14 @@ def package(config, workspace, destination, token=None, events=None, environment
                           source_receipt_sha256=_digest(receipts / (role + '.json'), token),
                           original_binary_sha256=records[role]['binary_sha256'])
             (package_receipts / (role + '.json')).write_text(json.dumps(record, indent=2) + '\n', encoding='utf-8')
+        if config.get('ffmpeg'):
+            # The movie decoder the executables link: its DLLs beside them, and its LGPL notice.
+            from .managed_tools import WINDOWS_FFMPEG_DLLS
+            ffmpeg_root = Path(config['ffmpeg']['include']).parent
+            for name in WINDOWS_FFMPEG_DLLS:
+                shutil.copyfile(_ordinary(ffmpeg_root / 'bin' / name), bin_dir / name)
+            licenses = resources / 'licenses'; licenses.mkdir()
+            shutil.copyfile(_ordinary(ffmpeg_root / 'LICENSE.txt'), licenses / 'FFmpeg-LICENSE.txt')
         workspace_relative = os.path.relpath(workspace, destination)
         engine_self = manifest['images']['mage_g']['source_sha256']
         runtime = {'schema_version': 1, 'workspace': Path(workspace_relative).as_posix(),

@@ -46,13 +46,36 @@ vendor owns the compiler:
   installation has them, Build MAG downloads Microsoft's bootstrapper, checks that it is validly
   signed by Microsoft, and runs it with its own progress window, license and UAC prompt. Choose an
   installation path that is ASCII and at most 100 characters, such as `C:\MAG`. The executables use
-  the static C runtime. Movie playback is not yet built on Windows.
+  the static C runtime. MAG presents through Vulkan: glslang and the Vulkan headers are built from
+  pinned sources, and the Vulkan loader comes with the GPU driver. Movie playback is not yet built on
+  Windows.
 
 - **Linux** targets Ubuntu 24.04 or later on x86_64 with a graphical desktop and Vulkan driver.
   Build MAG requests Ubuntu authorization for required compiler and desktop development packages
   if missing, then downloads the pinned tools and builds dependencies privately. No system Python
   installation is required to use the bundled wizard. Other distributions and ARM Linux are not
-  supported by this installer yet.
+  supported by this installer yet. Without PolicyKit (for example over SSH or in a container),
+  install the packages yourself first:
+
+  ```sh
+  sudo apt-get update && sudo apt-get install --yes --no-install-recommends clang lld build-essential git pkg-config ca-certificates libssl-dev zlib1g-dev libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxfixes-dev libxss-dev libxkbcommon-dev libwayland-dev libgl1-mesa-dev libasound2-dev libpulse-dev libudev-dev libvulkan-dev libvulkan1 mesa-vulkan-drivers
+  ```
+
+### Downloads
+
+Every downloaded tool is pinned by size and SHA-256, so its source does not matter. If a GitHub
+release download fails with a server error or times out, the installer fetches the same asset
+through GitHub's REST API (one unauthenticated request per tool). Errors name the HTTP status and
+host, and a certificate failure says so instead of retrying.
+
+Two optional fallbacks cover longer outages:
+
+- **A pre-filled cache:** `build --cache <folder>` reads `<folder>/<sha256>.blob` files before
+  downloading. Copy them from a previous installation's cache: by default `~/Library/Caches/MAG Installer`,
+  `%LOCALAPPDATA%\MAG Installer\Cache` or `~/.cache/mag-installer`.
+- **Mirrors:** set `MAG_INSTALLER_MIRRORS` to one or more space-separated HTTPS base URLs. Each is
+  tried after GitHub, as `<base>/<sha256>.blob`, which is the same layout as the cache. A plain
+  static copy of a cache folder therefore works as a mirror.
 
 Progress, cancellation, *Open output* and *Open logs* are in the wizard. On failure, use **Retry build**
 to keep the same installation folder. The installer checks your inputs again, reuses verified

@@ -137,6 +137,7 @@ message(STATUS "Retail image:   ${MAG_IMAGE}")
 # imported one arrives without SDL2, pthreads, the Metal frameworks or the
 # Winsock/XInput imports -- the link then fails on every platform for a
 # different reason. add_subdirectory hands all of that over with the target.
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/MagLinuxRuntime.cmake")
 add_subdirectory("${PS3RECOMP_DIR}" "${CMAKE_BINARY_DIR}/ps3recomp_sdk"
                  EXCLUDE_FROM_ALL)
 if(WIN32)
@@ -236,6 +237,7 @@ if(PORT_ENABLE_SPU)
         execute_process(
             COMMAND ${MAG_TOOL_ENV} "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/spu_programs_lift.py"
                     --check "${MAG_SPU_PROGRAMS_DIR}"
+                    --sources-out "${CMAKE_BINARY_DIR}/mag-spu-program-sources.cmake"
             RESULT_VARIABLE MAG_SPU_PROGRAMS_RESULT
             OUTPUT_VARIABLE MAG_SPU_PROGRAMS_OUTPUT
             ERROR_VARIABLE MAG_SPU_PROGRAMS_ERROR)
@@ -244,7 +246,8 @@ if(PORT_ENABLE_SPU)
         endif()
         string(STRIP "${MAG_SPU_PROGRAMS_OUTPUT}" MAG_SPU_PROGRAMS_OUTPUT)
         message(STATUS "${MAG_SPU_PROGRAMS_OUTPUT}")
-        include("${MAG_SPU_PROGRAMS_DIR}/sources.cmake")
+        # The checked directory's own files, not the paths recorded where it was lifted.
+        include("${CMAKE_BINARY_DIR}/mag-spu-program-sources.cmake")
         list(APPEND SPU_SOURCES ${SPU_GENERATED_SOURCES})
         set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
             "${MAG_SPU_PROGRAMS_DIR}/inventory.json"
