@@ -358,6 +358,27 @@ def _inventory(root, token):
     return records
 
 
+def _bytecode(name):
+    parts=name.split('/')
+    return len(parts)>1 and parts[-2]=='__pycache__' and parts[-1].endswith('.pyc')
+
+
+def _discard_stray_bytecode(root, recorded, token):
+    """Python caches bytecode beside a tool's sources when a build runs it. Those
+    files are derived, so a cache the inventory does not vouch for is deleted (the
+    interpreter rebuilds it from the verified source) instead of failing a retry."""
+    for path in sorted(root.rglob('*.pyc')):
+        token.check(); name=path.relative_to(root).as_posix()
+        if not _bytecode(name) or path.is_symlink() or not path.is_file(): continue
+        expected=recorded.get(name)
+        if expected is not None:
+            with path.open('rb') as stream:
+                digest=hashlib.sha256()
+                while chunk:=stream.read(1024*1024): digest.update(chunk)
+            if expected.get('sha256')==digest.hexdigest() and expected.get('mode')==stat.S_IMODE(path.stat().st_mode): continue
+        path.unlink()
+
+
 def materialize(spec, root, cache, token, events):
     root=Path(root); root.mkdir(parents=True,exist_ok=True)
     if root.is_symlink(): raise InstallerError('Managed root must not be a symlink')
@@ -365,7 +386,12 @@ def materialize(spec, root, cache, token, events):
     if final.exists():
         receipt=final/'MANAGED-INVENTORY.json'
         if final.is_symlink() or receipt.is_symlink() or not receipt.is_file(): raise InstallerError('Managed tool has no verified inventory; choose fresh storage')
-        if json.loads(receipt.read_text()) != _inventory(final,token): raise InstallerError('Managed tool inventory changed; choose fresh storage')
+        recorded=json.loads(receipt.read_text())
+        _discard_stray_bytecode(final,recorded,token)
+        current=_inventory(final,token)
+        # A recorded bytecode file that was rewritten is gone now; nothing else may differ.
+        expected={name:item for name,item in recorded.items() if not _bytecode(name) or name in current}
+        if expected != current: raise InstallerError('Managed tool inventory changed; choose fresh storage')
         return final
     blob=acquire(spec,cache,token,events)
     with tempfile.TemporaryDirectory(prefix='.managed-',dir=root) as scratch:
@@ -377,7 +403,9 @@ def materialize(spec, root, cache, token, events):
 
 def _env(python, cmake, ninja, home, site=None):
     env={'PATH':os.pathsep.join((str(Path(python).parent),str(Path(cmake).parent),str(Path(ninja).parent),'/usr/bin','/bin','/usr/sbin','/sbin')),
-         'HOME':str(home),'TMPDIR':str(home),'PYTHONNOUSERSITE':'1','GIT_OPTIONAL_LOCKS':'0','CMAKE_BUILD_PARALLEL_LEVEL':'2'}
+         'HOME':str(home),'TMPDIR':str(home),'PYTHONNOUSERSITE':'1','GIT_OPTIONAL_LOCKS':'0','CMAKE_BUILD_PARALLEL_LEVEL':'2',
+         # Bytecode caches go to scratch, never into the verified tool trees.
+         'PYTHONPYCACHEPREFIX':str(Path(home)/'pycache')}
     if site: env['PYTHONPATH']=os.pathsep.join(map(str,site))
     return env
 

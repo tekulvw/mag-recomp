@@ -32,6 +32,7 @@
 /* The lifter's generated header, which declares ppu_context and the function
  * table. It comes first: everything below is written against that struct. */
 #include "ppu_recomp.h"
+#include "mag_guest_arena.h"
 
 /* The Win32 names -- Sleep, GetTickCount64, CreateThread, InterlockedIncrement,
  * VirtualAlloc, the scalar typedefs -- from one place. On Windows this is a
@@ -40,7 +41,7 @@
 #include "win32_compat.h"
 #include "macos_runloop.h"
 #include "mag_extension.h"
-#ifdef MAG_PLAYER_SETTINGS
+#if defined(MAG_PLAYER_SETTINGS) || defined(MAG_PLAYER_PORTABLE_SETTINGS)
 #include "player_settings_runtime.h"
 #endif
 
@@ -362,7 +363,7 @@ static bool alloc_guest_vm(void)
      * front and lazily backed by the OS: only pages the title touches cost
      * anything. It stops below the 0xE0000000 mark, so ppu_vm_size arms the
      * loader's bounds check for what is left. */
-    vm_base = (uint8_t*)calloc(1, 0xE0000000u);
+    vm_base = mag_map_guest_arena(0xE0000000u, (size_t)1 << 32);
     ppu_vm_size = 0xE0000000u;
 #endif
     return vm_base != nullptr;
@@ -391,7 +392,7 @@ int main(int argc, char** argv)
         return 2;
     }
     if (auto prepare = mag_extension()->prepare) prepare(argv[1]);
-#ifdef MAG_PLAYER_SETTINGS
+#if defined(MAG_PLAYER_SETTINGS) || defined(MAG_PLAYER_PORTABLE_SETTINGS)
     // Setup and recovery run before allocating guest memory or connecting.
     const int settings_result = mag_player_settings_prepare();
     if (settings_result <= 0) return settings_result < 0 ? 1 : 0;

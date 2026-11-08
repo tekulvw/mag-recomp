@@ -2,7 +2,11 @@
 #include <algorithm>
 #include <cstring>
 #include <stdexcept>
+#ifdef MAG_PLAYER_ARCHIVE_NO_ZLIB
+#include "player_inflate.h"  // Builds without zlib decode with our own decoder and store raw.
+#else
 #include <zlib.h>
+#endif
 
 namespace {
 void require(bool ok,const char* message) {if(!ok)throw std::runtime_error(message);}
@@ -54,8 +58,12 @@ public:
         for(size_t j=0;j<e.blocks;++j){
             size_t stored=sizes[e.block+j],expected=std::min(block_size,e.length-dest);
             if(stored==expected)std::memcpy(result.data()+dest,bytes.data()+at,expected);
+#ifdef MAG_PLAYER_ARCHIVE_NO_ZLIB
+            else require(mag::zlib_decode(bytes.data()+at,stored,result.data()+dest,expected),"Cannot decode settings archive member");
+#else
             else{uLongf length=expected;require(uncompress(result.data()+dest,&length,bytes.data()+at,stored)==Z_OK&&length==expected,
                                               "Cannot decode settings archive member");}
+#endif
             at+=stored;dest+=expected;
         }
         return result;
@@ -73,9 +81,14 @@ mag::PsarcReplacement mag::rewrite_psarc_member(const std::vector<uint8_t>& sour
     require(e.blocks==1&&!replacement.empty()&&replacement.size()<=archive.block_size,"Settings replacement must fit one archive block");
     for(size_t i=0;i<archive.entries.size();++i)if(i!=index){const auto& other=archive.entries[i];
         require(!(other.block<=e.block&&e.block-other.block<other.blocks),"Settings archive shares its replacement block");}
+#ifdef MAG_PLAYER_ARCHIVE_NO_ZLIB
+    // A block whose stored size equals its length is raw, as the reader above treats it.
+    std::vector<uint8_t> stored=replacement;
+#else
     uLongf length=compressBound(replacement.size());std::vector<uint8_t> stored(length);
     require(compress2(stored.data(),&length,replacement.data(),replacement.size(),Z_BEST_COMPRESSION)==Z_OK,"Cannot compress settings");
     stored.resize(length);if(stored.size()>=replacement.size())stored=replacement;
+#endif
     require(stored.size()<(uint64_t(1)<<(archive.width*8)),"Settings block length cannot be encoded");
     require(source.size()<(uint64_t(1)<<40),"Settings archive is too large");
     PsarcReplacement result{source,archive.extract(index)};

@@ -11,6 +11,7 @@ int main(int argc, char **argv) { @autoreleasepool {
     assert([defaults[@"output_width"] intValue] == 1280);
     assert([defaults[@"output_height"] intValue] == 720);
     assert([defaults[@"render_scale"] intValue] == 100);
+    assert([defaults[@"player_name"] isEqual:@""]);
     BOOL exists = YES; NSError *error = nil;
     assert([MAGSettingsLoad(path, &exists, &error) isEqual:defaults] && !exists && !error);
     NSMutableDictionary *settings = defaults.mutableCopy;
@@ -50,6 +51,16 @@ int main(int argc, char **argv) { @autoreleasepool {
         assert(!MAGSettingsSave(path, s, &error));
         assert([[NSData dataWithContentsOfFile:path] isEqual:before]);
     }
+    for (id good in @[@"Rook_7", @"abc", @" Pilot-1 "]) {
+        NSMutableDictionary *s = defaults.mutableCopy; s[@"player_name"] = good;
+        assert([MAGSettingsValidate(s, &error)[@"player_name"] isEqual:[good stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet]]);
+    }
+    for (id bad in @[@"ab", @"7up", @"seventeen-chars-x", @"bad name", @"näme", @7]) {
+        NSMutableDictionary *s = defaults.mutableCopy; s[@"player_name"] = bad;
+        assert(!MAGSettingsValidate(s, &error));
+    }
+    NSMutableDictionary *nameless = normalized.mutableCopy; [nameless removeObjectForKey:@"player_name"];
+    assert([MAGSettingsValidate(nameless, &error)[@"player_name"] isEqual:@""]);
     NSMutableDictionary *unsupported = defaults.mutableCopy; unsupported[@"unknown"] = @100;
     [unsupported removeObjectForKey:@"render_scale"];
     assert(!MAGSettingsValidate(unsupported, &error));

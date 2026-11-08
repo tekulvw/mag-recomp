@@ -5,6 +5,22 @@ fn run(command: &mut Command) {
         "compiler build failed"
     );
 }
+/// Link name stem of a library file. Linux packages commonly expose their
+/// shared libraries' real versioned files (`libSPIRV.so.16.0.0`); the linker
+/// resolves the same stem through the unversioned development link.
+fn library_stem(file: &str) -> Option<&str> {
+    if let Some((stem, version)) = file.split_once(".so.")
+        && !version.is_empty()
+        && version
+            .split('.')
+            .all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit()))
+    {
+        return Some(stem);
+    }
+    [".dylib", ".so", ".a", ".lib"]
+        .iter()
+        .find_map(|suffix| file.strip_suffix(suffix))
+}
 fn native_compiler() {
     assert_eq!(
         env::var("HOST"),
@@ -51,10 +67,7 @@ fn native_compiler() {
             path.parent().unwrap().display()
         );
         let file = path.file_name().unwrap().to_str().unwrap();
-        let stem = [".dylib", ".so", ".a", ".lib"]
-            .iter()
-            .find_map(|suffix| file.strip_suffix(suffix))
-            .expect("recognized native library suffix");
+        let stem = library_stem(file).expect("recognized native library suffix");
         let name = if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
             stem
         } else {
