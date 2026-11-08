@@ -539,15 +539,24 @@ static void check_textured_scene(const MagRenderHostOwner *owner) {
     CHECK(mag_native_buffer_create(device, &d, &ib) == 0);
     d.byte_length = sizeof view_data; d.initial_bytes = view_data;
     CHECK(mag_native_buffer_create(device, &d, &view) == 0);
-    const uint32_t expected[2] = {0xff0000ffu, 0xff00ff00u};
-    for (unsigned k = 0; k < 2; ++k) {
+    /* Case 2 repeats red with the target at a scene image index above the
+     * batch command limit: its render-target view must still land inside the
+     * device's attachment heap (scene indices reach MAG_NATIVE_SCENE_MAX_IMAGES). */
+    enum { HighTarget = 40 };
+    const uint32_t expected[3] = {0xff0000ffu, 0xff00ff00u, 0xff0000ffu};
+    for (unsigned k = 0; k < 3; ++k) {
         mag_native_buffer upload = {0}, readback = {0};
-        d.byte_length = sizeof texels[k]; d.initial_bytes = texels[k];
+        d.byte_length = sizeof texels[k & 1]; d.initial_bytes = texels[k & 1];
         CHECK(mag_native_buffer_create(device, &d, &upload) == 0);
         mag_native_buffer_desc rd = {sizeof(rd), 1, 8 * 8 * 4, NULL};
         CHECK(mag_native_buffer_create(device, &rd, &readback) == 0);
-        mag_native_scene_image images[2] = {{MAG_NATIVE_SCENE_RGBA8, 8, 8, 0, {0}},
-                                            {MAG_NATIVE_SCENE_RGBA8, 8, 8, 0, upload}};
+        mag_native_scene_image images[HighTarget + 1];
+        for (unsigned i = 0; i <= HighTarget; ++i) {
+            const mag_native_scene_image blank = {MAG_NATIVE_SCENE_RGBA8, 8, 8, 0, {0}};
+            images[i] = blank;
+        }
+        images[1].upload = upload;
+        const uint32_t target = k == 2 ? HighTarget : 0;
         mag_native_scene_buffer_binding buffer = {MAG_NATIVE_SCENE_VERTEX, 0, {0, 0, view, 0, 32}};
         mag_native_scene_texture_binding texture = {MAG_NATIVE_SCENE_FRAGMENT, 1, 2, 1, MAG_NATIVE_SCENE_NEAREST, 0};
         mag_native_scene_draw draw;
@@ -557,7 +566,7 @@ static void check_textured_scene(const MagRenderHostOwner *owner) {
         draw.buffer_count = 1; draw.buffers = &buffer; draw.texture_count = 1; draw.textures = &texture;
         mag_native_scene_pass pass;
         memset(&pass, 0, sizeof(pass));
-        pass.color.image = 0; pass.color.load = MAG_NATIVE_SCENE_CLEAR; pass.depth.image = MAG_NATIVE_SCENE_NONE;
+        pass.color.image = target; pass.color.load = MAG_NATIVE_SCENE_CLEAR; pass.depth.image = MAG_NATIVE_SCENE_NONE;
         pass.draws = &draw; pass.draw_count = 1;
         mag_native_batch_resource resources[5] = {{vb, MAG_NATIVE_UPLOAD, 0}, {ib, MAG_NATIVE_UPLOAD, 0},
                                                   {view, MAG_NATIVE_UPLOAD, 0}, {upload, MAG_NATIVE_UPLOAD, 0},
@@ -566,8 +575,9 @@ static void check_textured_scene(const MagRenderHostOwner *owner) {
         memset(&scene, 0, sizeof(scene));
         scene.struct_size = sizeof(scene); scene.abi_version = 1;
         scene.resources = resources; scene.resource_count = 5;
-        scene.images = images; scene.image_count = 2; scene.passes = &pass; scene.pass_count = 1;
-        scene.output_image = 0; scene.diagnostic_readback = readback;
+        scene.images = images; scene.image_count = k == 2 ? HighTarget + 1 : 2;
+        scene.passes = &pass; scene.pass_count = 1;
+        scene.output_image = target; scene.diagnostic_readback = readback;
         mag_native_ticket ticket = {0};
         const int status = mag_native_submit_scene(device, &scene, &ticket);
         if (status) fprintf(stderr, "[textured scene] submit status=%d\n", status);
@@ -588,7 +598,8 @@ static void check_textured_scene(const MagRenderHostOwner *owner) {
           mag_native_buffer_release(device, view) == 0);
     CHECK(mag_native_pipeline_release(device, pipeline) == 0);
     CHECK(mag_native_close(device) == 0);
-    fprintf(stderr, "[textured scene] uploaded red then green 8x8 textures sampled exactly\n");
+    fprintf(stderr, "[textured scene] uploaded red then green 8x8 textures sampled exactly, "
+                    "including into scene image %u\n", (unsigned)HighTarget);
 }
 
 /* ---- Stored-depth bounds through the device's depth bounds test ------------------------------------

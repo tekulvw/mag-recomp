@@ -93,6 +93,14 @@ struct Pipeline {
 constexpr uint32_t MaxResources = MAG_NATIVE_BATCH_MAX_RESOURCES;
 constexpr uint32_t MaxCommands = MAG_NATIVE_BATCH_MAX_COMMANDS;
 constexpr uint32_t HeapDescriptors = MaxCommands * MAG_NATIVE_MAX_BINDINGS;
+// Render-target and depth-stencil views live at the attachment's index: the
+// batch path's command index, or the scene path's image index. A scene may
+// hold MAG_NATIVE_SCENE_MAX_IMAGES images, so both CPU heaps cover that range;
+// sizing them by the batch command limit alone let a scene attachment above it
+// write views past the end of the heap.
+constexpr uint32_t AttachmentDescriptors =
+    MaxCommands > MAG_NATIVE_SCENE_MAX_IMAGES ? MaxCommands
+                                              : MAG_NATIVE_SCENE_MAX_IMAGES;
 struct Attachment {
   Resource color, depth;
   std::shared_ptr<ImageReadback> readback;
@@ -1485,11 +1493,11 @@ static int create_context(const MagRenderHostOwner *owner, uint64_t features,
       status = heap(c, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, HeapDescriptors,
                     true, slot.descriptors);
       if (!status)
-        status = heap(c, D3D12_DESCRIPTOR_HEAP_TYPE_RTV, MaxCommands, false,
-                      slot.rtv);
+        status = heap(c, D3D12_DESCRIPTOR_HEAP_TYPE_RTV, AttachmentDescriptors,
+                      false, slot.rtv);
       if (!status)
-        status = heap(c, D3D12_DESCRIPTOR_HEAP_TYPE_DSV, MaxCommands, false,
-                      slot.dsv);
+        status = heap(c, D3D12_DESCRIPTOR_HEAP_TYPE_DSV, AttachmentDescriptors,
+                      false, slot.dsv);
       if (status) {
         destroy(c);
         return status;
