@@ -188,7 +188,10 @@ class PortablePlayerSettingsTests(unittest.TestCase):
             self.assertEqual(unnamed, 9); self.assertIn('--name', unnamed_err)
             note = (owned / 'launch-message.txt').read_text()  # what the supervisor's dialog shows
             self.assertIn('--name YourName', note); self.assertIn('3 to 15', note)
+            self.assertTrue((owned / 'needs-player-name').is_file())  # the Windows supervisor's cue to ask
             settings.write_text(saved)
+            self.assertEqual(self.prepare(root, **common, MAG_PLAYER_SETUP='1')[0], 0)
+            self.assertFalse((owned / 'needs-player-name').exists())  # cleared once a name is set
             # A non-retail archive never hangs or fails the launch: it is reported, and play is offline.
             self.assertIn('Playing offline', err)
             self.assertEqual((values['PS3_VFS_ROOT'], values['PS3_NET_ONLINE'], values['MAG_LOCAL_ACCOUNT_NAME']), (str(vfs), '', ''))

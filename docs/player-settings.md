@@ -51,7 +51,7 @@ MAG --server play.example.org --name Rook_7        # Linux, from the MAG folder
 MAG.exe --server play.example.org --name Rook_7    # Windows
 ```
 
-A server needs a player name. Without one, the launch stops and says to add `--name`. You can also edit the file. It uses the macOS file's connection fields: `server_address`, `tcp_port`, `udp_port` (0 for the game default) and `player_name`. Other keys are ignored, and the same validation rules apply. A damaged file is never overwritten. It is reported in `logs/launch-*/launcher.log`, and that launch plays offline.
+A server needs a player name. On Windows, MAG asks for it in a small window the first time and remembers it (`--no-prompt` turns the window off for automation). On Linux, the launch stops and says to add `--name`. You can also edit the file. It uses the macOS file's connection fields: `server_address`, `tcp_port`, `udp_port` (0 for the game default) and `player_name`. Other keys are ignored, and the same validation rules apply. A damaged file is never overwritten. It is reported in `logs/launch-*/launcher.log`, and that launch plays offline.
 
 The game builds the same connection override as macOS (`src/player_settings_portable.cpp`, `src/player_server_overlay_portable.cpp`). The private view of the game files lives in `home/player/server/vfs`, inside the installation. It holds real folders and hard links to the original files, plus the one rewritten archive, so it costs no copy and it is rebuilt whenever the server changes. MAG and its game files must be on the same drive, which an installer-built folder always is.
 

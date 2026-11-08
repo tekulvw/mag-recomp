@@ -164,15 +164,93 @@ static DWORD run(HANDLE job, const wchar_t *binary, const wchar_t *elf, const wc
     return code;
 }
 
+/* The player name rule, as the game's settings apply it (src/player_settings_portable.cpp). */
+/* name-rule-begin */
+static int valid_player_name(const wchar_t *name) {
+    size_t length = 0;
+    for (const wchar_t *p = name; *p; ++p, ++length) {
+        wchar_t c = *p;
+        int letter = (c >= L'a' && c <= L'z') || (c >= L'A' && c <= L'Z');
+        int digit = c >= L'0' && c <= L'9';
+        if (length == 0 ? !letter : !(letter || digit || c == L'-' || c == L'_')) return 0;
+        if (length >= 15) return 0;
+    }
+    return length >= 3;
+}
+/* name-rule-end */
+
+/* A small modal window that asks for the player name; user32 only, no resources. */
+typedef struct { HWND edit, error; wchar_t *out; int cap, done, ok; } NamePrompt;
+static LRESULT CALLBACK name_prompt_proc(HWND window, UINT message, WPARAM w, LPARAM l) {
+    NamePrompt *state = (NamePrompt *)GetWindowLongPtrW(window, GWLP_USERDATA);
+    switch (message) {
+    case WM_CREATE: {
+        state = (NamePrompt *)((CREATESTRUCTW *)l)->lpCreateParams;
+        SetWindowLongPtrW(window, GWLP_USERDATA, (LONG_PTR)state);
+        HWND label = CreateWindowExW(0, L"STATIC", L"Choose a player name (3\x2013" L"15 letters, digits, - or _, starting with a letter)",
+                                     WS_CHILD | WS_VISIBLE, 12, 12, 396, 36, window, NULL, NULL, NULL);
+        state->edit = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
+                                      12, 52, 396, 24, window, (HMENU)(INT_PTR)100, NULL, NULL);
+        SendMessageW(state->edit, EM_LIMITTEXT, 15, 0);
+        state->error = CreateWindowExW(0, L"STATIC", L"", WS_CHILD | WS_VISIBLE, 12, 82, 396, 20, window, NULL, NULL, NULL);
+        HWND ok = CreateWindowExW(0, L"BUTTON", L"OK", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
+                                  236, 108, 80, 26, window, (HMENU)(INT_PTR)IDOK, NULL, NULL);
+        HWND cancel = CreateWindowExW(0, L"BUTTON", L"Cancel", WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+                                      328, 108, 80, 26, window, (HMENU)(INT_PTR)IDCANCEL, NULL, NULL);
+        HWND all[] = {label, state->edit, state->error, ok, cancel};
+        for (int i = 0; i < 5; i++) SendMessageW(all[i], WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+        SetFocus(state->edit);
+        return 0; }
+    case WM_COMMAND:
+        if (LOWORD(w) == IDOK) {
+            GetWindowTextW(state->edit, state->out, state->cap);
+            if (valid_player_name(state->out)) { state->ok = 1; DestroyWindow(window); }
+            else SetWindowTextW(state->error, L"That name does not follow the rules above.");
+            return 0;
+        }
+        if (LOWORD(w) == IDCANCEL) { DestroyWindow(window); return 0; }
+        break;
+    case WM_CLOSE: DestroyWindow(window); return 0;
+    case WM_DESTROY:
+        if (state) state->done = 1;
+        /* A sent OK/Cancel (BM_CLICK from an accessibility tool) destroys the window inside
+         * GetMessageW; post a thread message so the modal loop wakes and sees done. */
+        PostMessageW(NULL, WM_NULL, 0, 0);
+        return 0;
+    }
+    return DefWindowProcW(window, message, w, l);
+}
+static int ask_player_name(wchar_t *out, int cap) {
+    NamePrompt state = {0}; state.out = out; state.cap = cap; out[0] = 0;
+    WNDCLASSW type = {0};
+    type.lpfnWndProc = name_prompt_proc; type.hInstance = GetModuleHandleW(NULL);
+    type.hCursor = LoadCursorW(NULL, IDC_ARROW); type.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
+    type.lpszClassName = L"MAGNamePrompt";
+    RegisterClassW(&type);
+    RECT area = {0, 0, 420, 146}; AdjustWindowRect(&area, WS_CAPTION | WS_SYSMENU, FALSE);
+    int width = area.right - area.left, height = area.bottom - area.top;
+    HWND window = CreateWindowExW(WS_EX_DLGMODALFRAME | WS_EX_TOPMOST, L"MAGNamePrompt", L"MAG", WS_CAPTION | WS_SYSMENU | WS_VISIBLE,
+                                  (GetSystemMetrics(SM_CXSCREEN) - width) / 2, (GetSystemMetrics(SM_CYSCREEN) - height) / 2,
+                                  width, height, NULL, NULL, type.hInstance, &state);
+    if (!window) return 0;
+    SetForegroundWindow(window);
+    MSG message;
+    while (!state.done && GetMessageW(&message, NULL, 0, 0) > 0)
+        if (!IsDialogMessageW(window, &message)) { TranslateMessage(&message); DispatchMessageW(&message); }
+    return state.ok;
+}
+
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR arguments, int show) {
     (void)instance; (void)previous; (void)arguments; (void)show;
     /* First-run choices; the game validates and saves them in the player's settings file. */
-    static const wchar_t *usage = L"Usage: MAG.exe [--server <hostname or IPv4>] [--name <player name>]";
+    static const wchar_t *usage = L"Usage: MAG.exe [--server <hostname or IPv4>] [--name <player name>] [--no-prompt]";
     const wchar_t *server = NULL, *player = NULL;
+    int prompt = 1;  /* --no-prompt: never ask (automation); a missing name then stops with its message */
     int argc = 0; LPWSTR *argv = CommandLineToArgvW(GetCommandLineW(), &argc);
     if (!argv) fail(L"Cannot read the command line", NULL);
     for (int i = 1; i < argc; i++) {
         const wchar_t *a = argv[i], **target = NULL; size_t prefix = 0;
+        if (!wcscmp(a, L"--no-prompt")) { prompt = 0; continue; }
         if (!wcsncmp(a, L"--server", 8)) { target = &server; prefix = 8; }
         else if (!wcsncmp(a, L"--name", 6)) { target = &player; prefix = 6; }
         if (!target) fail(usage, a);
@@ -215,7 +293,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR arguments, int
     wchar_t player_root[MAX_PATH], appdata[MAX_PATH], config[MAX_PATH], settings[MAX_PATH];
     join(player_root, home, L"player");
     CreateDirectoryW(player_root, NULL);
-    { wchar_t stale[MAX_PATH]; join(stale, player_root, L"launch-message.txt"); DeleteFileW(stale); }
+    { wchar_t stale[MAX_PATH]; join(stale, player_root, L"launch-message.txt"); DeleteFileW(stale);
+      join(stale, player_root, L"needs-player-name"); DeleteFileW(stale); }
     DWORD length = GetEnvironmentVariableW(L"APPDATA", appdata, MAX_PATH);
     if (!length || length >= MAX_PATH) fail(L"Cannot find your application data folder (APPDATA)", NULL);
     join(config, appdata, L"MAG");
@@ -254,6 +333,20 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR arguments, int
 
     join(log, logs, L"launcher.log");
     DWORD result = run(job, launcher, launcher_elf, logs, log);
+    /* A server needs a player name. When the game reports none, ask for one, then start again:
+     * the launcher validates and saves it as if it came from --name. */
+    wchar_t marker[MAX_PATH]; join(marker, player_root, L"needs-player-name");
+    for (int attempt = 2; result != 90 && prompt && attempt <= 4 && GetFileAttributesW(marker) != INVALID_FILE_ATTRIBUTES; attempt++) {
+        wchar_t chosen[32], again[64];
+        if (!ask_player_name(chosen, 16)) break;  /* Cancel: the launch message below explains */
+        DeleteFileW(marker);
+        { wchar_t note[MAX_PATH]; join(note, player_root, L"launch-message.txt"); DeleteFileW(note); }
+        set_env(L"MAG_PLAYER_SET_NAME", chosen);
+        swprintf(again, 64, L"launcher-%d.log", attempt);
+        join(log, logs, again);
+        result = run(job, launcher, launcher_elf, logs, log);
+    }
+    DeleteFileW(marker);
     if (result != 90) {
         /* A launch the player must correct (such as choosing a name) explains itself. */
         wchar_t note[MAX_PATH]; join(note, player_root, L"launch-message.txt");
@@ -299,7 +392,7 @@ def _c_hex(value):
 def _compile(clang_cl, environment, source_dir, output, token):
     token.check()
     argv = [clang_cl, '/nologo', '/O2', '/MT', '/W3', '/DUNICODE', '/D_UNICODE', str(source_dir / 'supervisor.c'),
-            f'/Fe{output}', f'/Fo{source_dir / "supervisor.obj"}', '/link', '/SUBSYSTEM:WINDOWS', 'bcrypt.lib', 'user32.lib', 'shell32.lib']
+            f'/Fe{output}', f'/Fo{source_dir / "supervisor.obj"}', '/link', '/SUBSYSTEM:WINDOWS', 'bcrypt.lib', 'user32.lib', 'shell32.lib', 'gdi32.lib']
     try:
         result = subprocess.run(argv, cwd=source_dir, env=environment, stdin=subprocess.DEVNULL,
                                 capture_output=True, text=True, timeout=300)
