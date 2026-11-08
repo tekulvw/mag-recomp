@@ -406,6 +406,22 @@ int main(int argc, char** argv)
     timeBeginPeriod(1);
     setvbuf(stdout, NULL, _IONBF, 0);   /* unbuffered: do not lose prints on a kill */
 #endif
+#if defined(_WIN32) && defined(PS3RECOMP_RSX_VULKAN)
+    /* Windows Vulkan builds present through the runtime's Vulkan backend:
+     * open its window and draw with the register-file engine (guest programs
+     * through glslang, batched recording), as the Linux player does. Without
+     * these the backend stays headless on its fixed-function path. An
+     * explicit value, including 0, is kept. */
+    {
+        static const char *const defaults[][2] = {
+            {"PS3RECOMP_VK_WINDOW", "1"},
+            {"PS3RECOMP_VK_GUEST_PROGRAMS", "1"},
+            {"PS3RECOMP_VK_BATCHED_ENGINE", "1"},
+        };
+        for (const auto &d : defaults)
+            if (!getenv(d[0])) _putenv_s(d[0], d[1]);
+    }
+#endif
 
     printf("=== ps3recomp game runner ===\n");
 
