@@ -52,6 +52,11 @@ int mag_player_settings_prepare(void) { @autoreleasepool {
             BOOL snapshotExists=NO;settings=MAGSettingsLoad(snapshot,&snapshotExists,&error);
             if(!settings||!snapshotExists){showError(error.localizedDescription?:@"The launch settings snapshot is missing.");return -1;}
         }
+        if([settings[@"player_name"] length]){
+            // The runtime takes the online ID from this, and the sign-in keyboard opens with it typed in.
+            setenv("PS3_NP_ONLINE_ID",[settings[@"player_name"] UTF8String],1);
+            setenv("PS3RECOMP_OSK_INITIAL_TEXT",[settings[@"player_name"] UTF8String],1);
+        }
         NSString *root=environment("PS3_VFS_ROOT");
         if([settings[@"server_address"] length]){
             NSString *overlay=MAGCreateServerOverlay(root,environment("MAG_PLAYER_OVERLAY_ROOT"),settings,memberSHA256,&error);

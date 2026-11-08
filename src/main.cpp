@@ -41,7 +41,7 @@
 #include "win32_compat.h"
 #include "macos_runloop.h"
 #include "mag_extension.h"
-#ifdef MAG_PLAYER_SETTINGS
+#if defined(MAG_PLAYER_SETTINGS) || defined(MAG_PLAYER_PORTABLE_SETTINGS)
 #include "player_settings_runtime.h"
 #endif
 
@@ -392,7 +392,7 @@ int main(int argc, char** argv)
         return 2;
     }
     if (auto prepare = mag_extension()->prepare) prepare(argv[1]);
-#ifdef MAG_PLAYER_SETTINGS
+#if defined(MAG_PLAYER_SETTINGS) || defined(MAG_PLAYER_PORTABLE_SETTINGS)
     // Setup and recovery run before allocating guest memory or connecting.
     const int settings_result = mag_player_settings_prepare();
     if (settings_result <= 0) return settings_result < 0 ? 1 : 0;
