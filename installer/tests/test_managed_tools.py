@@ -137,4 +137,13 @@ class ManagedToolTests(unittest.TestCase):
         self.assertIn('-DSPIRV-Headers_SOURCE_DIR=C:/owned/spirv-headers',tools);self.assertIn('-DPython3_EXECUTABLE=C:/owned/python.exe',tools)
         self.assertIn('ef96ed763b43b59b33b31b362f09a02b729fa1c9',WINDOWS_LOCK['source-spirv-tools']['url'])
         self.assertIn('496543121ce6419f23d6fa5d7194ba66c36212d2',WINDOWS_LOCK['source-spirv-headers']['url'])
+    def test_windows_movie_decoder_is_a_pinned_lgpl_shared_ffmpeg_9(self):
+        from mag_installer.managed_tools import WINDOWS_LOCK, WINDOWS_FFMPEG_DLLS, WINDOWS_FFMPEG_LIBRARIES
+        record=WINDOWS_LOCK['ffmpeg']
+        self.assertEqual(record['archive'],'zip');self.assertEqual(len(record['sha256']),64);self.assertGreater(record['size'],0)
+        self.assertRegex(record['url'],r'^https://github\.com/BtbN/FFmpeg-Builds/releases/download/autobuild-[0-9-]+/ffmpeg-n9\.0[^/]*-win64-lgpl-shared-9\.0\.zip$')
+        self.assertTrue(record['root'].endswith('-win64-lgpl-shared-9.0'))
+        # libavcodec/libavformat 63 and libavutil 61: the majors the runtime's FFmpeg 9.0 headers expect.
+        self.assertIn('avcodec-63.dll',WINDOWS_FFMPEG_DLLS);self.assertIn('avutil-61.dll',WINDOWS_FFMPEG_DLLS)
+        self.assertEqual(WINDOWS_FFMPEG_LIBRARIES,('avcodec','avformat','avutil','swscale'))
 if __name__=='__main__':unittest.main()

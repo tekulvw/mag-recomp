@@ -125,8 +125,10 @@ LOCK = {'python': {'id': 'python',
 # SPIRV-Headers are glslang 16.6.0's known-good revisions) compiles guest
 # programs, and Vulkan-Headers is header-only; vulkan-1.dll comes from the GPU
 # driver at run time. SDL2 and
-# SPIRV-Cross are not used (XInput/WASAPI and a Win32 window), and FFmpeg stays
-# an optional run-time load.
+# SPIRV-Cross are not used (XInput/WASAPI and a Win32 window). Movies decode
+# through a pinned prebuilt LGPL shared FFmpeg 9.0 (MSVC import libraries and
+# headers; its DLLs are packaged beside the game executables), the same API
+# major the macOS and Linux routes build from source.
 WINDOWS_LOCK = {'python': {'id': 'python-windows',
             'url': 'https://github.com/astral-sh/python-build-standalone/releases/download/20261021/cpython-3.12.15%2B20261021-x86_64-pc-windows-msvc-install_only.tar.gz',
             'size': 46388793,
@@ -258,6 +260,18 @@ WINDOWS_LOCK['source-spirv-tools'] = {'id': 'source-spirv-tools',
                                       'max_expanded_bytes': 536870912,
                                       'max_entries': 50000}
 WINDOWS_DEPENDENCIES = ('source-glslang', 'source-vulkan-headers', 'source-spirv-headers', 'source-spirv-tools')
+# FFmpeg 9.0 (libavcodec 63) LGPL shared win64 build, a month-end FFmpeg-Builds release kept long term.
+WINDOWS_LOCK['ffmpeg'] = {'id': 'ffmpeg-windows',
+                          'url': 'https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-09-30-13-08/ffmpeg-n9.0.2-17-g2a571b6068-win64-lgpl-shared-9.0.zip',
+                          'size': 76972461,
+                          'sha256': '7157177b8a6cb2174c1650ba8c71b363f2c78cba5330f88c4c02cf5b2b880646',
+                          'archive': 'zip',
+                          'root': 'ffmpeg-n9.0.2-17-g2a571b6068-win64-lgpl-shared-9.0',
+                          'max_expanded_bytes': 268435456,
+                          'max_entries': 1000}
+# The libraries the runtime links and the DLLs the packaged game loads (swresample: avcodec's dependency).
+WINDOWS_FFMPEG_LIBRARIES = ('avcodec', 'avformat', 'avutil', 'swscale')
+WINDOWS_FFMPEG_DLLS = ('avcodec-63.dll', 'avformat-63.dll', 'avutil-61.dll', 'swscale-10.dll', 'swresample-7.dll')
 
 LOCKS = {'macos-arm64': LOCK, 'windows-x86_64': WINDOWS_LOCK, 'linux-x86_64': LINUX_LOCK}
 SUPPORTED_HOSTS = tuple(LOCKS)
@@ -849,7 +863,7 @@ def _bootstrap_windows(root, cache, token, events):
     cache = Path(cache) if cache else root / 'cache'
     home = root / 'home'; home.mkdir(exist_ok=True)
     logs = root / 'logs'; logs.mkdir(exist_ok=True)
-    paths = {}; sites = []; python_root = None
+    paths = {}; sites = []; python_root = None; ffmpeg_root = None
     for key, spec in WINDOWS_LOCK.items():
         location = materialize(spec, root / 'artifacts', cache, token, events)
         if key in ('python', 'cmake', 'ninja', 'git'):
@@ -857,6 +871,7 @@ def _bootstrap_windows(root, cache, token, events):
             if key == 'python': python_root = location
         elif key.startswith('wheel-'): sites.append(location)
         elif key.startswith('source-'): paths[key] = location / spec['root']
+        elif key == 'ffmpeg': ffmpeg_root = location / spec['root']
     _install_wheels(python_root, sites, token, WINDOWS_LOCK['python']['site_packages'])
     env = {**os.environ, 'PATH': os.pathsep.join((str(Path(paths['python']).parent), str(_system32()))),
            'PYTHONNOUSERSITE': '1', 'TEMP': str(home), 'TMP': str(home)}
@@ -884,8 +899,14 @@ def _bootstrap_windows(root, cache, token, events):
         if missing: raise InstallerError('Managed Windows dependencies did not produce: ' + ', '.join(missing))
         _write_json(marker, identity)
         _write_json(prefix / 'MANAGED-INVENTORY.json', _inventory(prefix, token))
+    ffmpeg = {'include': str(ffmpeg_root / 'include'),
+              **{name: str(ffmpeg_root / 'lib' / (name + '.lib')) for name in WINDOWS_FFMPEG_LIBRARIES}}
+    missing = [p for p in [ffmpeg['include'], *(ffmpeg[n] for n in WINDOWS_FFMPEG_LIBRARIES),
+                           *(str(ffmpeg_root / 'bin' / d) for d in WINDOWS_FFMPEG_DLLS)] if not Path(p).exists()]
+    if missing: raise InstallerError('The pinned FFmpeg build is missing: ' + ', '.join(missing))
     paths.update(dependencies_ready=True, cmake_args=['-DCMAKE_PREFIX_PATH=' + prefix.as_posix()],
-                 python_site=[str(p) for p in sites], prefix=str(prefix), managed_prefix=str(prefix), logs=str(logs))
+                 python_site=[str(p) for p in sites], prefix=str(prefix), managed_prefix=str(prefix), logs=str(logs),
+                 ffmpeg=ffmpeg)
     return {k: str(v) if isinstance(v, Path) else v for k, v in paths.items()}
 
 

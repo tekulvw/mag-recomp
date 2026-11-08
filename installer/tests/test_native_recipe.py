@@ -101,8 +101,6 @@ class NativeRecipeTests(unittest.TestCase):
             data['msvc'] = {'vcvars': 'vcvars64.bat', 'clang_cl': 'clang-cl.exe', 'version': '17.14'}
             config = self.load(root, data)
             self.assertEqual(config['msvc']['clang_cl'], str((root / 'clang-cl.exe').resolve()))
-            with self.assertRaisesRegex(InstallerError, 'FFmpeg'):
-                self.load(root, dict(data, ffmpeg=self.config(Path(tempfile.mkdtemp()))['ffmpeg']))
             plan = {stage['id']: stage['argv'] for stage in build_plan(config, self.workspace(root))}
             configure = plan['configure-engine']
             self.assertIn('-DCMAKE_C_COMPILER=' + Path(config['msvc']['clang_cl']).as_posix(), configure)
@@ -110,6 +108,15 @@ class NativeRecipeTests(unittest.TestCase):
             self.assertFalse(any('FFMPEG' in argument for argument in configure))
             self.assertTrue(all('\\' not in argument for argument in configure if argument.startswith('-D')))
             self.assertFalse(any('PS3RECOMP_RSX_VULKAN' in argument for argument in configure))
+            ffmpeg_root = root / 'ffmpeg'; (ffmpeg_root / 'include').mkdir(parents=True); (ffmpeg_root / 'lib').mkdir()
+            for name in ('avcodec', 'avformat', 'avutil', 'swscale'): (ffmpeg_root / 'lib' / (name + '.lib')).write_text('fixture')
+            movies = self.load(root, dict(data, ffmpeg={'include': 'ffmpeg/include', **{n: 'ffmpeg/lib/' + n + '.lib' for n in ('avcodec', 'avformat', 'avutil', 'swscale')}}))
+            configure = {stage['id']: stage['argv'] for stage in build_plan(movies, root / 'workspace')}['configure-engine']
+            for flag in ('-DPS3RECOMP_SAIL_FFMPEG=ON', '-DPS3RECOMP_FFMPEG_RUNTIME=ON',
+                         '-DPS3RECOMP_FFMPEG_INCLUDE_DIR=' + (ffmpeg_root / 'include').resolve().as_posix(),
+                         '-DPS3RECOMP_FFMPEG_AVCODEC_LIBRARY=' + (ffmpeg_root / 'lib/avcodec.lib').resolve().as_posix()):
+                self.assertIn(flag, configure)
+            self.assertTrue(all('\\' not in argument for argument in configure if argument.startswith('-D')))
             prefix = root / 'prefix'; prefix.mkdir()
             vulkan = self.load(root, dict(data, managed_prefix='prefix'))
             configure = {stage['id']: stage['argv'] for stage in build_plan(vulkan, root / 'workspace')}['configure-engine']

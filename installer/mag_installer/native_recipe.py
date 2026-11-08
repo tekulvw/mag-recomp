@@ -87,14 +87,12 @@ def load_config(path):
                                 'revision': revision}
     if 'msvc' in raw:
         _object(raw['msvc'], {'vcvars', 'clang_cl'}, {'installation', 'version', 'product'}, 'msvc')
-        if 'ffmpeg' in raw:
-            raise InstallerError('The Windows recipe does not use FFmpeg libraries')
         result['msvc'] = {**raw['msvc'],
                           'vcvars': _path(raw['msvc']['vcvars'], path.parent, 'msvc.vcvars'),
                           'clang_cl': _path(raw['msvc']['clang_cl'], path.parent, 'msvc.clang_cl', executable=True)}
-    else:
-        if 'ffmpeg' not in raw:
-            raise InstallerError('Native build configuration requires ffmpeg on macOS and Linux')
+    elif 'ffmpeg' not in raw:
+        raise InstallerError('Native build configuration requires ffmpeg on macOS and Linux')
+    if 'ffmpeg' in raw:   # optional on Windows: the movie decoder, from the pinned prebuilt
         fields = {'include', 'avcodec', 'avformat', 'avutil', 'swscale'}
         _object(raw['ffmpeg'], fields, set(), 'ffmpeg')
         result['ffmpeg'] = {key: _path(raw['ffmpeg'][key], path.parent, f'ffmpeg.{key}', directory=key == 'include', dependency=True) for key in fields}
@@ -233,6 +231,13 @@ def build_plan(config, workspace):
             # glslang come from the managed prefix (glslang through CMAKE_PREFIX_PATH below).
             common += ['-DPS3RECOMP_RSX_VULKAN=ON',
                        '-DPS3RECOMP_VULKAN_INCLUDE_DIR=' + cmake_path(Path(config['managed_prefix']) / 'include')]
+        if config.get('ffmpeg'):
+            # Movies: the same decoder options as Linux, against the prebuilt's MSVC import libraries.
+            ffmpeg = config['ffmpeg']
+            common += ['-DPS3RECOMP_SAIL_FFMPEG=ON', '-DPS3RECOMP_FFMPEG_RUNTIME=ON',
+                       '-DPS3RECOMP_FFMPEG_INCLUDE_DIR=' + cmake_path(ffmpeg['include'])]
+            for name in ('avcodec', 'avformat', 'avutil', 'swscale'):
+                common.append('-DPS3RECOMP_FFMPEG_' + name.upper() + '_LIBRARY=' + cmake_path(ffmpeg[name]))
     else:
         def cmake_path(value): return str(value)
         ffmpeg = config['ffmpeg']
