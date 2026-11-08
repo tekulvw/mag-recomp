@@ -9,14 +9,13 @@ fn run(command: &mut Command) {
 /// shared libraries' real versioned files (`libSPIRV.so.16.0.0`); the linker
 /// resolves the same stem through the unversioned development link.
 fn library_stem(file: &str) -> Option<&str> {
-    if let Some((stem, version)) = file.split_once(".so.") {
-        if !version.is_empty()
-            && version
-                .split('.')
-                .all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit()))
-        {
-            return Some(stem);
-        }
+    if let Some((stem, version)) = file.split_once(".so.")
+        && !version.is_empty()
+        && version
+            .split('.')
+            .all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit()))
+    {
+        return Some(stem);
     }
     [".dylib", ".so", ".a", ".lib"]
         .iter()
