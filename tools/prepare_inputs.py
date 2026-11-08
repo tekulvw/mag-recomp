@@ -29,6 +29,14 @@ RETAIL = {
     'bin/mage_g.self': ('54b324a39e5453916768d8e83057ea72865cf53b23a1a8f058e25915d401840c',
                         '0089f0d6d17e48533ce7ff8d943dddd03487b925e7b04a1a055bfb907568694c'),
 }
+# The settings archive the player-settings server overlay rewrites: the retail
+# SDATA file as on the disc, or the same archive already decrypted to PSARC. A
+# copy whose settings were changed by any earlier tool is refused before a build.
+RETAIL_SETTINGS_ARCHIVE = 'run/mag/ps3/game.psarc.sdat'
+RETAIL_SETTINGS_ARCHIVE_SHA256 = (
+    'e35e3e40172805422b2a5a21cb1a9b1b38216b2f4f88d1bd505a9c533fd76208',  # SDATA, as on the disc
+    'b49c9435be729832029ad7019874d478080dc9764ebde1809b2851d353bc769f',  # the same, decrypted
+)
 
 
 def sha256_file(path: Path) -> str:

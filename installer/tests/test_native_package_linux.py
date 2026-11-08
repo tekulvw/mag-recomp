@@ -93,7 +93,15 @@ class LinuxPackageTests(unittest.TestCase):
 int main(void) {
  if(strcmp(getenv("PS3RECOMP_VK_WINDOW"),"1")||strcmp(getenv("PS3RECOMP_VK_GUEST_PROGRAMS"),"1"))return 48;
  if(getenv("PS3_DIAGNOSTIC_TEST")||getenv("MAG_DIAGNOSTIC_TEST")||!getenv("DISPLAY"))return 45;
+ if(!getenv("PS3RECOMP_SAIL_TIMED_THX")||strcmp(getenv("PS3RECOMP_SAIL_ATRAC_AUDIO"),"1"))return 52;  /* decoder build defaults */
  const char* request=getenv("MAG_HANDOFF_REQUEST");
+ const char* settings=getenv("MAG_PLAYER_SETTINGS_PATH");const char* owned=getenv("MAG_PLAYER_OVERLAY_ROOT");
+ if(!settings||!strstr(settings,"/config/MAG/settings.json")||!owned||!strstr(owned,"player"))return 49;
+ if(request&&(!getenv("MAG_PLAYER_SETUP")||strcmp(getenv("MAG_PLAYER_SET_SERVER"),"example.org")||getenv("MAG_PLAYER_SET_NAME")))return 50;
+ if(!request&&(getenv("MAG_PLAYER_SETUP")||getenv("MAG_PLAYER_SET_SERVER")))return 51;
+ const char* gamedata=getenv("PS3_GAMEDATA_ROOT");
+ if(!gamedata||!strstr(gamedata,"home") || !strstr(gamedata,"gamedata"))return 53;
+ if(!request){char save[4096];snprintf(save,sizeof save,"%s/save.txt",gamedata);FILE* s=fopen(save,"a");if(!s)return 54;fputs("x\n",s);fclose(s);}
  if(request){FILE* f=fopen(request,"wx");if(!f)return 46;
  fprintf(f,"{\"version\":1,\"token\":\"%s\",\"guest_path\":\"/dev_bdvd/PS3_GAME/USRDIR/bin/mage_g.self\",\"kind\":\"mage_g\"}\n",getenv("MAG_HANDOFF_TOKEN"));fclose(f);puts("launcher fixture");return 90;}
  if(getenv("MAG_ENGINE_ELF")||strcmp(getenv("PS3_BOOT_PATH"),"/dev_bdvd/PS3_GAME/USRDIR/bin/mage_g.self"))return 47;
@@ -105,17 +113,21 @@ int main(void) {
             for folder,image,elfpath in [('build','EBOOT',disc/'EBOOT.elf'),('build-engine','mage_g',disc/'bin/mage_g.elf')]:
                 binary=workspace/folder/'MagRecomp';binary.write_bytes((root/'fixture').read_bytes())
                 digest=lambda p:hashlib.sha256(p.read_bytes()).hexdigest()
-                receipt=binary.with_suffix('.receipt.json');record=json.loads(receipt.read_text());record.update(binary_sha256=digest(binary),elf_sha256=digest(elfpath));receipt.write_text(json.dumps(record));manifest['images'][image]['elf_sha256']=digest(elfpath)
+                receipt=binary.with_suffix('.receipt.json');record=json.loads(receipt.read_text());record.update(binary_sha256=digest(binary),elf_sha256=digest(elfpath),movie_playback=True);receipt.write_text(json.dumps(record));manifest['images'][image]['elf_sha256']=digest(elfpath)
             manifest['images']['mage_g']['source_sha256']=digest(disc/'bin/mage_g.self')
             (workspace/'profiles/retail-v1.0.json').write_text(json.dumps(manifest))
             package({'host':'linux-x86_64'},workspace,install/'MAG')
             moved=root/'relocated installation';install.rename(moved)
-            env=dict(os.environ,DISPLAY=':fixture',PS3_DIAGNOSTIC_TEST='1',MAG_DIAGNOSTIC_TEST='1')
-            run=subprocess.run([str(moved/'MAG/MAG')],env=env,capture_output=True,text=True,timeout=15)
+            env=dict(os.environ,DISPLAY=':fixture',PS3_DIAGNOSTIC_TEST='1',MAG_DIAGNOSTIC_TEST='1',XDG_CONFIG_HOME=str(root/'config'))
+            run=subprocess.run([str(moved/'MAG/MAG'),'--server','example.org'],env=env,capture_output=True,text=True,timeout=15)
             self.assertEqual(run.returncode,23,run.stderr)
+            self.assertEqual((root/'config/MAG').stat().st_mode&0o777,0o700)
+            save=moved/'home/gamedata/save.txt';self.assertEqual(save.read_text(),'x\n')  # saves stay in the installation
+            bad=subprocess.run([str(moved/'MAG/MAG'),'--sever','example.org'],env=env,capture_output=True,text=True,timeout=15)
+            self.assertEqual(bad.returncode,1);self.assertIn('Usage: MAG',bad.stderr)
             logs=list((moved/'logs').glob('launch-*'));self.assertEqual(len(logs),1)
             self.assertEqual((logs[0]/'engine.log').stat().st_mode&0o777,0o600)
             self.assertIn('engine fixture',(logs[0]/'engine.log').read_text())
             (moved/'MAG/bin/MagEngine').write_bytes(b'changed')
-            run=subprocess.run([str(moved/'MAG/MAG')],capture_output=True,text=True,timeout=15)
+            run=subprocess.run([str(moved/'MAG/MAG')],env=env,capture_output=True,text=True,timeout=15)
             self.assertEqual(run.returncode,1);self.assertIn('identity changed',run.stderr)

@@ -118,9 +118,17 @@ LOCK = {'python': {'id': 'python',
 
 
 # Windows x86_64: the same roles, from the same official origins. The Microsoft
-# compiler/SDK is owned by Visual Studio Build Tools (see ensure_windows_build_tools);
-# SDL2, glslang, SPIRV-Cross and FFmpeg are not used by the Windows runtime
-# (XInput/WASAPI/D3D12, and FFmpeg is an optional run-time load).
+# compiler/SDK is owned by Visual Studio Build Tools (see ensure_windows_build_tools).
+# The Windows runtime presents through its Vulkan backend: glslang (built here
+# with clang-cl and the static CRT, with SPIRV-Tools' optimizer, which drops
+# unused bindings the way the frontend's reflection expects; SPIRV-Tools and
+# SPIRV-Headers are glslang 16.6.0's known-good revisions) compiles guest
+# programs, and Vulkan-Headers is header-only; vulkan-1.dll comes from the GPU
+# driver at run time. SDL2 and
+# SPIRV-Cross are not used (XInput/WASAPI and a Win32 window). Movies decode
+# through a pinned prebuilt LGPL shared FFmpeg 9.0 (MSVC import libraries and
+# headers; its DLLs are packaged beside the game executables), the same API
+# major the macOS and Linux routes build from source.
 WINDOWS_LOCK = {'python': {'id': 'python-windows',
             'url': 'https://github.com/astral-sh/python-build-standalone/releases/download/20261021/cpython-3.12.15%2B20261021-x86_64-pc-windows-msvc-install_only.tar.gz',
             'size': 46388793,
@@ -226,6 +234,44 @@ LINUX_LOCK = {'python': {'id': 'python-linux',
                     'version': '5.0.9'}}
 for _key in ('wheel-construct', 'wheel-tabulate', 'wheel-tqdm', 'source-sdl2', 'source-glslang', 'source-spirv-cross', 'source-ffmpeg'):
     LINUX_LOCK[_key] = LOCK[_key]
+WINDOWS_LOCK['source-glslang'] = LOCK['source-glslang']
+WINDOWS_LOCK['source-vulkan-headers'] = {'id': 'source-vulkan-headers',
+                                         'url': 'https://github.com/KhronosGroup/Vulkan-Headers/archive/refs/tags/v1.4.328.tar.gz',
+                                         'size': 2765605,
+                                         'sha256': '3ad56d387179b47dd632432ccf989bbb69773e1d732692b7bbad9c4d36aa1304',
+                                         'archive': 'tar.gz',
+                                         'root': 'Vulkan-Headers-1.4.328',
+                                         'max_expanded_bytes': 268435456,
+                                         'max_entries': 10000}
+WINDOWS_LOCK['source-spirv-headers'] = {'id': 'source-spirv-headers',
+                                        'url': 'https://github.com/KhronosGroup/SPIRV-Headers/archive/496543121ce6419f23d6fa5d7194ba66c36212d2.tar.gz',
+                                        'size': 594379,
+                                        'sha256': 'a9bb9c48713245eacf97cc539b6f1d45405a92d8813f8b82e635f0a085ee9898',
+                                        'archive': 'tar.gz',
+                                        'root': 'SPIRV-Headers-496543121ce6419f23d6fa5d7194ba66c36212d2',
+                                        'max_expanded_bytes': 268435456,
+                                        'max_entries': 10000}
+WINDOWS_LOCK['source-spirv-tools'] = {'id': 'source-spirv-tools',
+                                      'url': 'https://github.com/KhronosGroup/SPIRV-Tools/archive/ef96ed763b43b59b33b31b362f09a02b729fa1c9.tar.gz',
+                                      'size': 3559528,
+                                      'sha256': '82c62146083fd558735a3171cf97cfc47903ca7d368482e87f94bd44883c0f00',
+                                      'archive': 'tar.gz',
+                                      'root': 'SPIRV-Tools-ef96ed763b43b59b33b31b362f09a02b729fa1c9',
+                                      'max_expanded_bytes': 536870912,
+                                      'max_entries': 50000}
+WINDOWS_DEPENDENCIES = ('source-glslang', 'source-vulkan-headers', 'source-spirv-headers', 'source-spirv-tools')
+# FFmpeg 9.0 (libavcodec 63) LGPL shared win64 build, a month-end FFmpeg-Builds release kept long term.
+WINDOWS_LOCK['ffmpeg'] = {'id': 'ffmpeg-windows',
+                          'url': 'https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-09-30-13-08/ffmpeg-n9.0.2-17-g2a571b6068-win64-lgpl-shared-9.0.zip',
+                          'size': 76972461,
+                          'sha256': '7157177b8a6cb2174c1650ba8c71b363f2c78cba5330f88c4c02cf5b2b880646',
+                          'archive': 'zip',
+                          'root': 'ffmpeg-n9.0.2-17-g2a571b6068-win64-lgpl-shared-9.0',
+                          'max_expanded_bytes': 268435456,
+                          'max_entries': 1000}
+# The libraries the runtime links and the DLLs the packaged game loads (swresample: avcodec's dependency).
+WINDOWS_FFMPEG_LIBRARIES = ('avcodec', 'avformat', 'avutil', 'swscale')
+WINDOWS_FFMPEG_DLLS = ('avcodec-63.dll', 'avformat-63.dll', 'avutil-61.dll', 'swscale-10.dll', 'swresample-7.dll')
 
 LOCKS = {'macos-arm64': LOCK, 'windows-x86_64': WINDOWS_LOCK, 'linux-x86_64': LINUX_LOCK}
 SUPPORTED_HOSTS = tuple(LOCKS)
@@ -358,6 +404,27 @@ def _inventory(root, token):
     return records
 
 
+def _bytecode(name):
+    parts=name.split('/')
+    return len(parts)>1 and parts[-2]=='__pycache__' and parts[-1].endswith('.pyc')
+
+
+def _discard_stray_bytecode(root, recorded, token):
+    """Python caches bytecode beside a tool's sources when a build runs it. Those
+    files are derived, so a cache the inventory does not vouch for is deleted (the
+    interpreter rebuilds it from the verified source) instead of failing a retry."""
+    for path in sorted(root.rglob('*.pyc')):
+        token.check(); name=path.relative_to(root).as_posix()
+        if not _bytecode(name) or path.is_symlink() or not path.is_file(): continue
+        expected=recorded.get(name)
+        if expected is not None:
+            with path.open('rb') as stream:
+                digest=hashlib.sha256()
+                while chunk:=stream.read(1024*1024): digest.update(chunk)
+            if expected.get('sha256')==digest.hexdigest() and expected.get('mode')==stat.S_IMODE(path.stat().st_mode): continue
+        path.unlink()
+
+
 def materialize(spec, root, cache, token, events):
     root=Path(root); root.mkdir(parents=True,exist_ok=True)
     if root.is_symlink(): raise InstallerError('Managed root must not be a symlink')
@@ -365,7 +432,12 @@ def materialize(spec, root, cache, token, events):
     if final.exists():
         receipt=final/'MANAGED-INVENTORY.json'
         if final.is_symlink() or receipt.is_symlink() or not receipt.is_file(): raise InstallerError('Managed tool has no verified inventory; choose fresh storage')
-        if json.loads(receipt.read_text()) != _inventory(final,token): raise InstallerError('Managed tool inventory changed; choose fresh storage')
+        recorded=json.loads(receipt.read_text())
+        _discard_stray_bytecode(final,recorded,token)
+        current=_inventory(final,token)
+        # A recorded bytecode file that was rewritten is gone now; nothing else may differ.
+        expected={name:item for name,item in recorded.items() if not _bytecode(name) or name in current}
+        if expected != current: raise InstallerError('Managed tool inventory changed; choose fresh storage')
         return final
     blob=acquire(spec,cache,token,events)
     with tempfile.TemporaryDirectory(prefix='.managed-',dir=root) as scratch:
@@ -377,7 +449,9 @@ def materialize(spec, root, cache, token, events):
 
 def _env(python, cmake, ninja, home, site=None):
     env={'PATH':os.pathsep.join((str(Path(python).parent),str(Path(cmake).parent),str(Path(ninja).parent),'/usr/bin','/bin','/usr/sbin','/sbin')),
-         'HOME':str(home),'TMPDIR':str(home),'PYTHONNOUSERSITE':'1','GIT_OPTIONAL_LOCKS':'0','CMAKE_BUILD_PARALLEL_LEVEL':'2'}
+         'HOME':str(home),'TMPDIR':str(home),'PYTHONNOUSERSITE':'1','GIT_OPTIONAL_LOCKS':'0','CMAKE_BUILD_PARALLEL_LEVEL':'2',
+         # Bytecode caches go to scratch, never into the verified tool trees.
+         'PYTHONPYCACHEPREFIX':str(Path(home)/'pycache')}
     if site: env['PYTHONPATH']=os.pathsep.join(map(str,site))
     return env
 
@@ -671,7 +745,8 @@ def _download_bootstrapper(cache, token, events):
     request = urllib.request.Request(VS_BOOTSTRAPPER_URL, headers={'User-Agent': 'mag-installer'})
     received = 0
     try:
-        with urllib.request.urlopen(request, timeout=60) as response, target.open('xb') as output:
+        from .tools import tls_context
+        with urllib.request.urlopen(request, timeout=60, context=tls_context()) as response, target.open('xb') as output:
             if not response.geturl().startswith('https://'):
                 raise InstallerError('Visual Studio installer download left HTTPS')
             while block := response.read(1024 * 1024):
@@ -777,6 +852,39 @@ class _ElevatedProcess:
         return self.returncode
 
 
+def windows_dependency_plan(paths, prefix, clang_cl):
+    """Vulkan headers, SPIRV-Headers, SPIRV-Tools and glslang (static, clang-cl, static CRT,
+    optimizer on), installed into the owned prefix in dependency order."""
+    cmake = str(paths['cmake']); ninja = str(paths['ninja']); prefix = Path(prefix)
+    def posix(value): return Path(value).as_posix()
+    common = ['-G', 'Ninja', '-DCMAKE_MAKE_PROGRAM=' + posix(ninja), '-DCMAKE_BUILD_TYPE=Release',
+              '-DCMAKE_INSTALL_PREFIX=' + posix(prefix), '-DCMAKE_INSTALL_LIBDIR=lib',
+              '-DCMAKE_C_COMPILER=' + posix(clang_cl), '-DCMAKE_CXX_COMPILER=' + posix(clang_cl),
+              '-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded', '-DCMAKE_POLICY_VERSION_MINIMUM=3.5']
+    stages = []
+    for key, options in (('vulkan-headers', ['-DVULKAN_HEADERS_ENABLE_TESTS=OFF', '-DVULKAN_HEADERS_ENABLE_MODULE=OFF']),
+                         ('spirv-headers', ['-DSPIRV_HEADERS_ENABLE_TESTS=OFF', '-DSPIRV_HEADERS_ENABLE_INSTALL=ON']),
+                         ('spirv-tools', ['-DSPIRV-Headers_SOURCE_DIR=' + posix(paths['source-spirv-headers']),
+                                          '-DSPIRV_SKIP_TESTS=ON', '-DSPIRV_SKIP_EXECUTABLES=ON', '-DSPIRV_WERROR=OFF',
+                                          '-DBUILD_SHARED_LIBS=OFF', '-DPython3_EXECUTABLE=' + posix(paths['python'])]),
+                         ('glslang', ['-DENABLE_OPT=ON', '-DALLOW_EXTERNAL_SPIRV_TOOLS=ON', '-DCMAKE_PREFIX_PATH=' + posix(prefix),
+                                      '-DENABLE_GLSLANG_BINARIES=OFF', '-DGLSLANG_TESTS=OFF', '-DENABLE_PCH=OFF',
+                                      '-DGLSLANG_ENABLE_INSTALL=ON', '-DBUILD_TESTING=OFF', '-DENABLE_CTEST=OFF',
+                                      '-DBUILD_SHARED_LIBS=OFF'])):
+        source = Path(paths['source-' + key]); build = prefix.parent / ('build-' + key)
+        stages.extend([{'id': 'configure-' + key, 'cwd': source,
+                        'argv': [cmake, '-S', str(source), '-B', str(build), *common, *options]},
+                       {'id': 'build-' + key, 'cwd': source, 'argv': [cmake, '--build', str(build), '--parallel', '2']},
+                       {'id': 'install-' + key, 'cwd': source, 'argv': [cmake, '--install', str(build)]}])
+    return stages
+
+
+def _windows_dependency_paths(prefix):
+    prefix = Path(prefix)
+    return [prefix / 'include/vulkan/vulkan.h', prefix / 'lib/cmake/glslang/glslang-config.cmake',
+            prefix / 'lib/SPIRV-Tools-opt.lib']
+
+
 def _bootstrap_windows(root, cache, token, events):
     token = token or Cancellation(); events = events or (lambda event: None)
     root = Path(root).absolute(); root.mkdir(parents=True, exist_ok=True)
@@ -784,13 +892,15 @@ def _bootstrap_windows(root, cache, token, events):
     cache = Path(cache) if cache else root / 'cache'
     home = root / 'home'; home.mkdir(exist_ok=True)
     logs = root / 'logs'; logs.mkdir(exist_ok=True)
-    paths = {}; sites = []; python_root = None
+    paths = {}; sites = []; python_root = None; ffmpeg_root = None
     for key, spec in WINDOWS_LOCK.items():
         location = materialize(spec, root / 'artifacts', cache, token, events)
         if key in ('python', 'cmake', 'ninja', 'git'):
             paths[key] = location / spec['executable']
             if key == 'python': python_root = location
         elif key.startswith('wheel-'): sites.append(location)
+        elif key.startswith('source-'): paths[key] = location / spec['root']
+        elif key == 'ffmpeg': ffmpeg_root = location / spec['root']
     _install_wheels(python_root, sites, token, WINDOWS_LOCK['python']['site_packages'])
     env = {**os.environ, 'PATH': os.pathsep.join((str(Path(paths['python']).parent), str(_system32()))),
            'PYTHONNOUSERSITE': '1', 'TEMP': str(home), 'TMP': str(home)}
@@ -798,18 +908,50 @@ def _bootstrap_windows(root, cache, token, events):
     run_command([str(paths['python']), '-c', 'import Crypto,capstone,construct,tabulate,tqdm'], root,
                 logs / 'python-modules.log', token, env, events, 'python-modules')
     run_command([str(paths['git']), '--version'], root, logs / 'git.log', token, env, events, 'git')
-    paths.update(dependencies_ready=True, cmake_args=[], python_site=[str(p) for p in sites], logs=str(logs))
+    prefix = root / 'prefix'
+    marker = prefix / 'MANAGED-DEPENDENCIES.json'
+    identity = {key: WINDOWS_LOCK[key]['sha256'] for key in WINDOWS_DEPENDENCIES}
+    if marker.exists():
+        inventory = prefix / 'MANAGED-INVENTORY.json'
+        if json.loads(marker.read_text()) != identity or not inventory.is_file() or json.loads(inventory.read_text()) != _inventory(prefix, token):
+            raise InstallerError('Managed Windows dependency identity changed; use fresh managed storage')
+    else:
+        toolchain, detail = windows_toolchain_probe()
+        if not toolchain: raise InstallerError(detail + '. Retry Build MAG to install Visual Studio Build Tools.')
+        build_env = msvc_environment(toolchain['vcvars'])
+        build_env.update(TEMP=str(home), TMP=str(home), CMAKE_BUILD_PARALLEL_LEVEL='2')
+        for stage in windows_dependency_plan(paths, prefix, toolchain['clang_cl']):
+            Path(stage['cwd']).mkdir(parents=True, exist_ok=True)
+            events({'event': 'stage-start', 'stage': stage['id']})
+            run_command(stage['argv'], stage['cwd'], logs / (stage['id'] + '.log'), token, build_env, events, stage['id'])
+        missing = [str(p) for p in _windows_dependency_paths(prefix) if not p.exists()]
+        if missing: raise InstallerError('Managed Windows dependencies did not produce: ' + ', '.join(missing))
+        _write_json(marker, identity)
+        _write_json(prefix / 'MANAGED-INVENTORY.json', _inventory(prefix, token))
+    ffmpeg = {'include': str(ffmpeg_root / 'include'),
+              **{name: str(ffmpeg_root / 'lib' / (name + '.lib')) for name in WINDOWS_FFMPEG_LIBRARIES}}
+    missing = [p for p in [ffmpeg['include'], *(ffmpeg[n] for n in WINDOWS_FFMPEG_LIBRARIES),
+                           *(str(ffmpeg_root / 'bin' / d) for d in WINDOWS_FFMPEG_DLLS)] if not Path(p).exists()]
+    if missing: raise InstallerError('The pinned FFmpeg build is missing: ' + ', '.join(missing))
+    paths.update(dependencies_ready=True, cmake_args=['-DCMAKE_PREFIX_PATH=' + prefix.as_posix()],
+                 python_site=[str(p) for p in sites], prefix=str(prefix), managed_prefix=str(prefix), logs=str(logs),
+                 ffmpeg=ffmpeg)
     return {k: str(v) if isinstance(v, Path) else v for k, v in paths.items()}
 
 
 # Ubuntu owns compiler, C library and desktop headers. All downloaded tools and
 # dependency builds remain private. No sudo shell or password collection.
-LINUX_PACKAGES = ('clang', 'build-essential', 'git', 'pkg-config', 'libssl-dev',
+LINUX_PACKAGES = ('clang', 'lld', 'build-essential', 'git', 'pkg-config', 'ca-certificates', 'libssl-dev',
                   'zlib1g-dev', 'libx11-dev', 'libxext-dev', 'libxrandr-dev',
                   'libxcursor-dev', 'libxi-dev', 'libxfixes-dev', 'libxss-dev',
                   'libxkbcommon-dev', 'libwayland-dev', 'libgl1-mesa-dev',
                   'libasound2-dev', 'libpulse-dev', 'libudev-dev', 'libvulkan-dev',
                   'libvulkan1', 'mesa-vulkan-drivers')
+
+
+def linux_install_command():
+    """The one command that installs every required Ubuntu package."""
+    return 'sudo apt-get update && sudo apt-get install --yes --no-install-recommends ' + ' '.join(LINUX_PACKAGES)
 
 
 def linux_platform_probe():
@@ -861,7 +1003,8 @@ def ensure_linux_build_tools(cache=None, token=None, events=None):
     toolchain, detail = linux_toolchain_probe()
     if toolchain: return toolchain
     if not Path('/usr/bin/pkexec').is_file():
-        raise InstallerError(detail + '. Install them using Ubuntu Software or apt, then retry Build MAG (PolicyKit is unavailable).')
+        raise InstallerError(detail + '. PolicyKit is unavailable, so install them yourself, then retry Build MAG:\n'
+                             + linux_install_command())
     events({'event': 'stage-start', 'stage': 'build-tools', 'message':
             'Ubuntu development packages are required. Approve the system authorization dialog. Packages: ' + ', '.join(LINUX_PACKAGES)})
     cache = Path(cache) if cache else Path(tempfile.gettempdir()) / 'mag-installer'

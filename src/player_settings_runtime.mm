@@ -22,7 +22,16 @@ static NSString *environment(const char *key) {
 }
 static void showError(NSString *message) {
     NSAlert *alert=[NSAlert new];alert.messageText=@"MAG could not apply settings";alert.informativeText=message;
-    [alert addButtonWithTitle:@"OK"];[alert runModal];
+    [alert addButtonWithTitle:@"OK"];[NSApp activateIgnoringOtherApps:YES];[alert runModal];
+}
+// The game's settings archive cannot take the server setting. Changing settings
+// cannot fix that, so offer to play offline for this launch or to quit.
+static BOOL offerOffline(NSString *message) {
+    NSAlert *alert=[NSAlert new];alert.messageText=@"MAG cannot connect to the selected server";
+    alert.informativeText=[message stringByAppendingString:@"\n\nThe game files in this installation are not the unmodified retail copy. "
+        "Rebuild MAG from an unmodified copy of your disc to play online. You can still play offline now."];
+    [alert addButtonWithTitle:@"Play Offline"];[alert addButtonWithTitle:@"Quit"];
+    [NSApp activateIgnoringOtherApps:YES];return [alert runModal]==NSAlertFirstButtonReturn;
 }
 
 int mag_player_settings_prepare(void) { @autoreleasepool {
@@ -41,7 +50,7 @@ int mag_player_settings_prepare(void) { @autoreleasepool {
     BOOL launcherPhase=environment("MAG_PLAYER_SETUP")!=nil;
     BOOL setup=error||environment("MAG_PLAYER_SHOW_SETTINGS")||(!exists&&environment("MAG_PLAYER_SETUP"));
     for(;;){
-        if(setup&&![controller runSetup])return 0;
+        if(setup){[NSApp activateIgnoringOtherApps:YES];if(![controller runSetup])return 0;}
         settings=controller.settings;
         NSString *owned=environment("MAG_PLAYER_OVERLAY_ROOT");
         NSString *snapshot=[owned stringByAppendingPathComponent:@"launch-settings.json"];
@@ -52,17 +61,39 @@ int mag_player_settings_prepare(void) { @autoreleasepool {
             BOOL snapshotExists=NO;settings=MAGSettingsLoad(snapshot,&snapshotExists,&error);
             if(!settings||!snapshotExists){showError(error.localizedDescription?:@"The launch settings snapshot is missing.");return -1;}
         }
+        if(launcherPhase&&[settings[@"server_address"] length]&&![settings[@"player_name"] length]){
+            // The server signs players in by this name; without one the launcher can never connect.
+            showError(@"Enter a player name to play on a server. It is the name you sign in with.");setup=YES;continue;
+        }
+        if([settings[@"player_name"] length]){
+            // The runtime takes the online ID from this, and the sign-in keyboard opens with it typed in.
+            setenv("PS3_NP_ONLINE_ID",[settings[@"player_name"] UTF8String],1);
+            setenv("PS3RECOMP_OSK_INITIAL_TEXT",[settings[@"player_name"] UTF8String],1);
+        }
         NSString *root=environment("PS3_VFS_ROOT");
         if([settings[@"server_address"] length]){
             NSString *overlay=MAGCreateServerOverlay(root,environment("MAG_PLAYER_OVERLAY_ROOT"),settings,memberSHA256,&error);
-            if(!overlay){showError(error.localizedDescription);if(!launcherPhase)return -1;setup=YES;continue;}
-            setenv("PS3_VFS_ROOT",overlay.fileSystemRepresentation,1);
-            setenv("PS3_NET_ONLINE","1",1);
-            // The existing retail compatibility hook honors the configured
-            // no-ticket setting after the launcher's own ticket override.
-            setenv("MAG_LOCAL_NO_TICKET","1",1);
+            if(!overlay&&launcherPhase&&[error.domain isEqual:@"MAGSettings"]&&error.code==MAGServerOverlayArchiveError){
+                // No setting can fix the game's own archive, so never loop back into
+                // setup for it: offer this launch offline, or quit.
+                if(!offerOffline(error.localizedDescription))return 0;
+                NSMutableDictionary *offline=[settings mutableCopy];offline[@"server_address"]=@"";
+                if(!MAGSettingsSave(snapshot,offline,&error)){showError(error.localizedDescription);return -1;}
+                settings=offline;
+            }else if(!overlay){
+                showError(error.localizedDescription);if(!launcherPhase)return -1;setup=YES;continue;
+            }else{
+                setenv("PS3_VFS_ROOT",overlay.fileSystemRepresentation,1);
+                setenv("PS3_NET_ONLINE","1",1);
+                // The existing retail compatibility hook honors the configured
+                // no-ticket setting after the launcher's own ticket override.
+                setenv("MAG_LOCAL_NO_TICKET","1",1);
+            }
         }
         setenv("PS3_AA",[settings[@"anti_aliasing"] UTF8String],1);
+        // In the community no-ticket profile the launcher signs in to the server with this name.
+        if(environment("MAG_LOCAL_NO_TICKET")&&[settings[@"player_name"] length])
+            setenv("MAG_LOCAL_ACCOUNT_NAME",[settings[@"player_name"] UTF8String],1);
         setenv("MAG_PLAYER_RENDER_SCALE",[settings[@"render_scale"] stringValue].UTF8String,1);
         return 1;
     }

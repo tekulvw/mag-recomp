@@ -15,7 +15,7 @@ static id invalid(NSError **error, NSString *message) {
 NSDictionary *MAGSettingsDefaults(void) {
     return @{@"schema_version":@1, @"server_address":@"play.magtest.online", @"tcp_port":@0, @"udp_port":@0,
              @"display_mode":@"windowed", @"output_width":@1280, @"output_height":@720,
-             @"render_scale":@100, @"anti_aliasing":@"off"};
+             @"render_scale":@100, @"anti_aliasing":@"off", @"player_name":@""};
 }
 
 static BOOL integer(id value, NSInteger low, NSInteger high) {
@@ -34,6 +34,8 @@ NSDictionary *MAGSettingsValidate(id value, NSError **error) {
     // Schema 1 predates rendering-resolution selection. Migrate only the new
     // optional field, leaving saved preferences and the on-disk file intact.
     if (!normalized[@"render_scale"]) normalized[@"render_scale"] = @100;
+    // The player name came later still; empty keeps the runtime's default name.
+    if (!normalized[@"player_name"]) normalized[@"player_name"] = @"";
     d = normalized;
     if (d.count != MAGSettingsDefaults().count) return invalid(error, @"Settings contain missing or unsupported fields.");
     if (![d[@"server_address"] isKindOfClass:NSString.class]) return invalid(error, @"Enter a server hostname or IPv4 address.");
@@ -65,7 +67,18 @@ NSDictionary *MAGSettingsValidate(id value, NSError **error) {
         return invalid(error, @"Choose Off or FXAA for anti-aliasing.");
     if (!integer(d[@"render_scale"],100,300) || ![@[@100,@150,@200,@300] containsObject:d[@"render_scale"]])
         return invalid(error, @"Choose a supported rendering resolution.");
+    if (![d[@"player_name"] isKindOfClass:NSString.class]) return invalid(error, @"Enter a player name, or leave it blank.");
+    NSString *name = [d[@"player_name"] stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    if (name.length) {
+        // The online ID rule, within the 15 characters the launcher's sign-in name holds.
+        NSCharacterSet *letters = [NSCharacterSet characterSetWithCharactersInString:@"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"];
+        NSMutableCharacterSet *allowed = letters.mutableCopy; [allowed addCharactersInString:@"0123456789-_"];
+        if (name.length < 3 || name.length > 15 || ![letters characterIsMember:[name characterAtIndex:0]] ||
+            [name rangeOfCharacterFromSet:allowed.invertedSet].location != NSNotFound)
+            return invalid(error, @"A player name has 3 to 15 letters, digits, - or _, and starts with a letter.");
+    }
     normalized[@"server_address"] = host;
+    normalized[@"player_name"] = name;
     return normalized.copy;
 }
 

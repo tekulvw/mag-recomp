@@ -51,7 +51,7 @@ python3 -m venv .venv
 
 | Checkout | Tag | Commit | Role |
 | --- | --- | --- | --- |
-| `local/ps3recomp-runtime` | `mag-recomp/runtime-2026.11.05` | `f0547a6` | Runtime SDK passed to CMake as `PS3RECOMP_DIR` |
+| `local/ps3recomp-runtime` | `mag-recomp/runtime-2026.11.08` | `9bcb7ad` | Runtime SDK passed to CMake as `PS3RECOMP_DIR` |
 | `local/ps3recomp-lifter-5244db9` | `mag-recomp/lifter-spu-2026.10.07` | `5244db9` | Inventory and launcher/engine SPU lifting |
 | `local/ps3recomp-lifter-dfa7073` | `mag-recomp/lifter-ppu-2026.10.12` | `dfa7073` | PPU and firmware lifting |
 | `local/ps3recomp-spu-programs` | `mag-recomp/spu-programs-2026.10.21` | `4c5c05f` | Lifting every embedded engine SPU program |
@@ -184,7 +184,9 @@ mismatches.
 The launcher starts, hands off to the engine and runs offline. `boot.py` clears inherited runtime
 diagnostic variables and caps a run at 120 seconds. When the engine was built with FFmpeg (its
 receipt records `movie_playback`), `boot.py` also turns on the runtime's movie playback switches
-(`PS3RECOMP_SAIL_TIMED_THX`, `PS3RECOMP_SAIL_ATRAC_AUDIO` and `PS3RECOMP_GCM_CHECKED_REF`).
+(`PS3RECOMP_SAIL_TIMED_THX`, `PS3RECOMP_SAIL_ATRAC_AUDIO` and `PS3RECOMP_GCM_CHECKED_REF`). The installer's packaged
+MAG app sets the same switches whenever its build has the decoder: without them, the game opens
+and closes each movie at once and then waits forever after the legal screen.
 
 | Keys | PS3 control |
 | --- | --- |
