@@ -38,17 +38,48 @@ inline std::size_t mag_thread_stack_overhead()
 #endif
 }
 
-// Apply before SDK initialization. The pinned runtime leaves these caches and
-// SPU rounding mode off unless selected explicitly. Preserve deliberate caller
-// overrides (including dispatch-cache shadow mode) for diagnostics.
+// Apply before SDK initialization. The pinned runtime leaves these switches off
+// unless selected explicitly. Every host gets them, and any variable already set
+// (an explicit 0 included) wins, so each can be turned off for comparison.
+//
+// The RSX, PPU and SPU switches below are the set every accepted hosted run used.
+// On Linux they took an installer build from 4.6 to 21.5 guest fps.
 inline int mag_apply_runtime_defaults()
 {
     struct Setting { const char* name; const char* value; };
     for (const auto& setting : {
+             // SPU caches and rounding mode.
              Setting{"SPU_DISPATCH_CACHE", "1"},
              Setting{"SPU_MFC_LOOKUP_CACHE", "1"},
              Setting{"SPU_FLOAT_RZ", "1"},
-             Setting{"PS3_VERBOSE", "0"}}) {
+             Setting{"PS3_VERBOSE", "0"},
+             // MAG patches fragment-program constants through NV308A inline data about
+             // 1,100 times per menu frame. Draining the GPU before each one held the
+             // menu near 10 fps; report ordering is kept without it.
+             Setting{"PS3RECOMP_GCM_INLINE_NO_GPU_WAIT", "1"},
+             // Wake the FIFO drain when the guest moves the put pointer instead of
+             // polling it every 4 ms: SPU jobs that wait on RSX labels otherwise sit
+             // out the rest of the poll (training ~99 -> ~93 ms per update).
+             Setting{"MAG_NATIVE_CONSUMER", "1"},
+             // RSX reports and labels: deferred reports (which early release needs),
+             // early label release with early FIFO sync, and the GPU depth view.
+             Setting{"PS3RECOMP_RSX_DEFERRED_REPORTS", "1"},
+             Setting{"PS3RECOMP_RSX_DEFERRED_REPORT_CAPACITY", "4096"},
+             Setting{"PS3RECOMP_RSX_EARLY_LABEL_RELEASE", "1"},
+             Setting{"PS3RECOMP_RSX_EARLY_FIFO_SYNC", "1"},
+             Setting{"PS3RECOMP_RSX_GPU_DEPTH_VIEW", "1"},
+             // PPU/SPU: plain stores to PPU-only lines skip coherence; framed SPU
+             // regions; the interpreter's rejoin prefilter; the SPURS workload
+             // attribute's ninth argument read from the stack.
+             Setting{"PS3RECOMP_PPU_STORE_FASTPATH", "1"},
+             Setting{"SPU_REGION_FRAMED", "1"},
+             Setting{"SPU_INTERP_REJOIN_PREFILTER", "1"},
+             Setting{"PS3RECOMP_SPURS_WORKLOAD_STACK_ARG9", "1"},
+#if defined(__linux__)
+             // Linux renders with the SDK's Vulkan backend: batch its engine work.
+             Setting{"PS3RECOMP_VK_BATCHED_ENGINE", "1"},
+#endif
+         }) {
         if (std::getenv(setting.name)) continue;
 #ifdef _WIN32
         if (_putenv_s(setting.name, setting.value)) return -1;
