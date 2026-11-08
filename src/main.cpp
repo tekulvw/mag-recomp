@@ -41,6 +41,7 @@
 #include "win32_compat.h"
 #include "macos_runloop.h"
 #include "mag_extension.h"
+#include "mag_frame_clock.h"
 #if defined(MAG_PLAYER_SETTINGS) || defined(MAG_PLAYER_PORTABLE_SETTINGS)
 #include "player_settings_runtime.h"
 #endif
@@ -174,7 +175,9 @@ extern "C" int  rsx_null_backend_pump_messages(void);
  *
  * The ticks are driven off real elapsed time rather than off how long present()
  * took. A hidden or occluded window makes present block hard, and pacing the
- * ticks behind it paces the whole game behind it. */
+ * ticks behind it paces the whole game behind it. Elapsed time is read from
+ * mag_frame_clock_ms (src/mag_frame_clock.h): Windows' GetTickCount64 moves in
+ * 15-16 ms steps, which released the ticks in bursts on that grid. */
 static volatile LONG g_frames_presented = 0;
 /* Initialized before the frame clock or guest workers start. The SDK owns the
  * process-lifetime auto-reset event; this thread only waits without holding
@@ -235,7 +238,7 @@ static DWORD WINAPI frame_clock(LPVOID)
             rsx_ok ? "OK -- window open" : "FAILED");
 
     MagFramePresentState present_state;
-    ULONGLONG next_tick = GetTickCount64();
+    ULONGLONG next_tick = mag_frame_clock_ms();
     ULONGLONG next_snapshot = next_tick + 1000;
     ULONGLONG next_fallback_present = next_tick + 4;
 
@@ -243,7 +246,7 @@ static DWORD WINAPI frame_clock(LPVOID)
         if (g_native_consumer) cellGcm_fifo_kick_wait(4);
         else Sleep(4);
         if (auto poll = mag_extension()->frame_poll) poll();
-        ULONGLONG now = GetTickCount64();
+        ULONGLONG now = mag_frame_clock_ms();
         if (now >= next_snapshot) { mag_queue_snapshot(); mag_job_marker_snapshot(); next_snapshot = now + 1000; }
 
         CellGcmFlipReceipt receipt = {};
@@ -299,12 +302,12 @@ static DWORD WINAPI frame_clock(LPVOID)
                 present_guest_frame(receipt);
                 present_state.presented(receipt.flip_count);
             } else if (receipt.flip_count == 0 &&
-                       (!g_native_consumer || GetTickCount64() >= next_fallback_present)) {
+                       (!g_native_consumer || mag_frame_clock_ms() >= next_fallback_present)) {
                 MagRsxConsumerLease consumer_lease;
                 rsx_backend_present();
                 /* Start from completion of this host call, as Sleep(4) did;
                  * never catch up missed fallback presents after a long drain. */
-                if (g_native_consumer) next_fallback_present = GetTickCount64() + 4;
+                if (g_native_consumer) next_fallback_present = mag_frame_clock_ms() + 4;
             }
         }
     }
