@@ -44,6 +44,47 @@ New macOS builds also include a [native settings panel](docs/player-settings.md)
 display mode, output resolution and FXAA. Open **MAG → Settings…** while playing, or hold **Option**
 when launching to open setup first. Settings survive updates and rebuilds.
 
+## For players
+
+You build MAG on your own computer from your own copy; nothing game-derived is ever downloaded.
+
+1. **Get the installer** for your system (macOS on Apple Silicon, Windows 10/11 x86_64, or Ubuntu
+   24.04+ x86_64) from a release, or from the build you were given.
+2. **Prepare your game folder** as described in the [installer guide](installer/README.md#using-it).
+   Use the files from your disc dump exactly as they are. In particular,
+   `PS3_GAME/USRDIR/run/mag/ps3/game.psarc.sdat` must be the unmodified disc file: copies that were
+   modded, patched for a server, or taken from an emulator's installed game are refused, because
+   MAG itself applies your server choice to it.
+3. **Click Build MAG.** It takes a while (most of an hour or more) and needs about 20 GB of free space. If it stops, **Retry build**
+   continues where it left off.
+4. **First launch.** The installer's output is not signed, so the system asks once:
+   - **macOS:** if MAG "cannot be opened", Control-click (or right-click) `MAG.app`, choose
+     **Open**, then **Open** again. Do the same for the installer itself.
+   - **Windows:** if SmartScreen says "Windows protected your PC", click **More info**, then
+     **Run anyway**.
+   - **Linux:** if the installer has no PolicyKit dialog (for example over SSH), install the
+     build packages first:
+
+     ```sh
+     sudo apt-get update && sudo apt-get install --yes --no-install-recommends clang lld build-essential git pkg-config ca-certificates libssl-dev zlib1g-dev libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxfixes-dev libxss-dev libxkbcommon-dev libwayland-dev libgl1-mesa-dev libasound2-dev libpulse-dev libudev-dev libvulkan-dev libvulkan1 mesa-vulkan-drivers
+     ```
+5. **Choose the server and your player name.**
+   - **macOS:** the setup window opens on first launch. Enter the **Game server** and an optional
+     **Player name**, then click **Play MAG**.
+   - **Windows and Linux:** start MAG once with them; later launches remember them:
+
+     ```sh
+     MAG --server <server address> --name <your name>          # Linux, in the MAG folder
+     MAG.exe --server <server address> --name <your name>      # Windows
+     ```
+
+   When the game asks for your name at sign-in, it is already typed in: just confirm it.
+   [Player settings](docs/player-settings.md) has the details.
+6. **Use a controller.** A standard USB or Bluetooth gamepad works on every system and is the
+   recommended way to play. Keyboard support is limited.
+
+If something goes wrong, each launch writes its logs under the installation's `logs/` folder.
+
 ## Releases
 
 Versions follow [Semantic Versioning](https://semver.org/) and are managed by
