@@ -101,6 +101,9 @@ at a folder of previously downloaded tools with `build --cache <folder>`, or at 
 `MAG_INSTALLER_MIRRORS`; see [Downloads](installer/README.md#downloads). Every tool is checked
 against its pinned hash, so a mirror cannot change what you install.
 
+**Your saves** are in the installation folder's `home/gamedata`. Keep that folder (and back it up)
+when you move or rebuild MAG.
+
 **If something goes wrong,** each launch writes its logs in the installation folder, under
 `logs/launch-*/` (`launcher.log`, then `engine.log`). On Windows and Linux, a launch that needs
 something from you, such as a player name, also leaves its message in `home/player/launch-message.txt`.
