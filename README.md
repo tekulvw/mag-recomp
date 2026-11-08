@@ -68,6 +68,9 @@ You build MAG on your own computer from your own copy; nothing game-derived is e
      ```sh
      sudo apt-get update && sudo apt-get install --yes --no-install-recommends clang lld build-essential git pkg-config ca-certificates libssl-dev zlib1g-dev libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxfixes-dev libxss-dev libxkbcommon-dev libwayland-dev libgl1-mesa-dev libasound2-dev libpulse-dev libudev-dev libvulkan-dev libvulkan1 mesa-vulkan-drivers
      ```
+   - **Windows, once the game starts:** Windows Security asks whether to allow public and private
+     networks to access the app. Choose **Allow** for both (this may need an administrator) so you
+     can play online.
    - **macOS, once MAG starts:** macOS may show a permission prompt. *(What it asks and what to
      choose will be added here.)* <!-- placeholder: the first-launch system prompt -->
 5. **Choose your player name.** You need one to play online. The server is already set
