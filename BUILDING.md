@@ -15,11 +15,12 @@ substitutes for those sources. Reconcile with main before publishing and after r
 
 Generated PPU code now defaults to optimization level `1`; use `-DMAG_GENERATED_PPU_OPT=0` for an
 explicit diagnostic build. Use a fresh build directory when switching baselines, because an
-existing CMake cache retains its previous value. The executable supplies `SPU_DISPATCH_CACHE=1`,
-`SPU_MFC_LOOKUP_CACHE=1`, `SPU_FLOAT_RZ=1` and `PS3_VERBOSE=0` before SDK initialization. Explicit
-caller values are preserved, including dispatch-cache `shadow` mode. These settings match the
-retained rendering configuration; they are not a frame-rate guarantee. Experimental renderer
-replacement and capture features remain opt-in.
+existing CMake cache retains its previous value. The executable supplies its runtime defaults (SPU
+caches, RSX deferred reports and early release, the PPU store fast path and others) before SDK
+initialization. Explicit caller values are preserved, including dispatch-cache `shadow` mode.
+[docs/ps3recomp-flags.md](docs/ps3recomp-flags.md) lists every runtime switch mag-recomp sets, why,
+and how to turn each off. These settings match the accepted hosted runs; they are not a frame-rate
+guarantee. Experimental renderer replacement and capture features remain opt-in.
 
 ## 1. Host dependencies
 
