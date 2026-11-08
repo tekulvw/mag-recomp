@@ -70,12 +70,12 @@ NSDictionary *MAGSettingsValidate(id value, NSError **error) {
     if (![d[@"player_name"] isKindOfClass:NSString.class]) return invalid(error, @"Enter a player name, or leave it blank.");
     NSString *name = [d[@"player_name"] stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
     if (name.length) {
-        // The runtime's online ID rule: 3 to 16 letters, digits, - or _, starting with a letter.
+        // The online ID rule, within the 15 characters the launcher's sign-in name holds.
         NSCharacterSet *letters = [NSCharacterSet characterSetWithCharactersInString:@"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"];
         NSMutableCharacterSet *allowed = letters.mutableCopy; [allowed addCharactersInString:@"0123456789-_"];
-        if (name.length < 3 || name.length > 16 || ![letters characterIsMember:[name characterAtIndex:0]] ||
+        if (name.length < 3 || name.length > 15 || ![letters characterIsMember:[name characterAtIndex:0]] ||
             [name rangeOfCharacterFromSet:allowed.invertedSet].location != NSNotFound)
-            return invalid(error, @"A player name has 3 to 16 letters, digits, - or _, and starts with a letter.");
+            return invalid(error, @"A player name has 3 to 15 letters, digits, - or _, and starts with a letter.");
     }
     normalized[@"server_address"] = host;
     normalized[@"player_name"] = name;

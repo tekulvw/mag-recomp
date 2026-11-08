@@ -51,11 +51,11 @@ int main(int argc, char **argv) { @autoreleasepool {
         assert(!MAGSettingsSave(path, s, &error));
         assert([[NSData dataWithContentsOfFile:path] isEqual:before]);
     }
-    for (id good in @[@"Rook_7", @"abc", @" Pilot-1 "]) {
+    for (id good in @[@"Rook_7", @"abc", @" Pilot-1 ", @"fifteen-chars-x"]) {
         NSMutableDictionary *s = defaults.mutableCopy; s[@"player_name"] = good;
         assert([MAGSettingsValidate(s, &error)[@"player_name"] isEqual:[good stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet]]);
     }
-    for (id bad in @[@"ab", @"7up", @"seventeen-chars-x", @"bad name", @"näme", @7]) {
+    for (id bad in @[@"ab", @"7up", @"seventeen-chars-x", @"sixteen-chars-xx", @"bad name", @"näme", @7]) {
         NSMutableDictionary *s = defaults.mutableCopy; s[@"player_name"] = bad;
         assert(!MAGSettingsValidate(s, &error));
     }

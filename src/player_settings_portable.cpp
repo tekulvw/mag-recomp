@@ -169,9 +169,9 @@ bool mag::check_server_address(std::string &host, std::string &error) {
 
 bool mag::check_player_name(const std::string &name, std::string &error) {
     if (name.empty()) return true;
-    bool ok = name.size() >= 3 && name.size() <= 16 && std::isalpha((unsigned char)name[0]);
+    bool ok = name.size() >= 3 && name.size() <= 15 && std::isalpha((unsigned char)name[0]);
     for (char c : name) ok = ok && (std::isalnum((unsigned char)c) || c == '-' || c == '_');
-    if (!ok) error = "A player name has 3 to 16 letters, digits, - or _, and starts with a letter.";
+    if (!ok) error = "A player name has 3 to 15 letters, digits, - or _, and starts with a letter.";
     return ok;
 }
 
@@ -235,6 +235,11 @@ extern "C" int mag_player_settings_prepare(void) {
             }
             if (changed && !write_file(file, mag::format_portable_settings(settings), error)) { say(error); return -1; }
         }
+        if (!settings.server_address.empty() && settings.player_name.empty()) {
+            // The server signs players in by this name; without one the launcher can never connect.
+            say("Choose your player name to play on " + settings.server_address + ": start MAG once with --name <name>.");
+            return -1;
+        }
         if (!write_file(snapshot, mag::format_portable_settings(settings), error)) { say(error); return -1; }
     } else {
         if (!read_file(snapshot, text, exists, error) || !exists || !mag::parse_portable_settings(text, settings, error)) {
@@ -261,6 +266,8 @@ extern "C" int mag_player_settings_prepare(void) {
 #endif
             export_variable("PS3_NET_ONLINE", "1");
             export_variable("MAG_LOCAL_NO_TICKET", "1");
+            // In this no-ticket profile the launcher signs in to the server with the player's name.
+            export_variable("MAG_LOCAL_ACCOUNT_NAME", settings.player_name);
         } else {
             // Visible, and never a hang: the game starts offline instead.
             say("Cannot use server " + settings.server_address + ": " + result.message + " Playing offline.");

@@ -247,7 +247,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR arguments, int
     join(log, logs, L"launcher.log");
     DWORD result = run(job, launcher, launcher_elf, logs, log);
     if (result != 90) {
-        if (result) fail(L"The game stopped before it started. Details are in", log);
+        if (result) fail(L"The game stopped before it started. If you have not chosen a player name yet, start MAG.exe with --name <name>. Details are in", log);
         return 0;
     }
 

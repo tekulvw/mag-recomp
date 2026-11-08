@@ -100,7 +100,7 @@ int main(int argc,char** argv) {
  for(auto name:{"DISPLAY","WAYLAND_DISPLAY","XDG_RUNTIME_DIR","DBUS_SESSION_BUS_ADDRESS","XAUTHORITY","PULSE_SERVER","PIPEWIRE_REMOTE"})if(auto value=getenv(name))env[name]=value;
  signal(SIGINT,interrupted);signal(SIGTERM,interrupted);signal(SIGHUP,interrupted);
  int result=run(launcher,le,logs,env,"launcher.log");
- if(result!=90){if(result)fail("The game stopped before it started (exit "+std::to_string(result)+"). Details: "+(logs/"launcher.log").string());return 0;}
+ if(result!=90){if(result)fail("The game stopped before it started (exit "+std::to_string(result)+"). If you have not chosen a player name yet, start MAG with --name <name>. Details: "+(logs/"launcher.log").string());return 0;}
  auto expected="{\"version\":1,\"token\":\""+token+"\",\"guest_path\":\"/dev_bdvd/PS3_GAME/USRDIR/bin/mage_g.self\",\"kind\":\"mage_g\"}\n";
  if(read_file(request,4096)!=expected)fail("Engine handoff request identity mismatch");
  check(engine,MAG_ENGINE_SHA256);check(ee,MAG_ENGINE_ELF_SHA256);check(es,MAG_ENGINE_SELF_SHA256);
