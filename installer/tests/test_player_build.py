@@ -160,6 +160,8 @@ class PlayerBuildTests(unittest.TestCase):
                 def native(config, work, **kwargs):
                     (work / 'logs').mkdir(parents=True)
                     (work / 'logs/failure.log').write_text('retained error evidence')
+                    (work / 'workspace').mkdir()
+                    (work / 'workspace/lifted.txt').write_text('expensive attempt output')
                 stack.enter_context(patch('mag_installer.native_build.install', side_effect=native))
                 package = stack.enter_context(patch('mag_installer.native_package.package', side_effect=failure))
                 with self.assertRaises(type(failure)):
@@ -190,16 +192,24 @@ class PlayerBuildTests(unittest.TestCase):
                     with self.assertRaisesRegex(InstallerError, 'Another installer holds'):
                         player_build.install(root, source, output, cache, retry=True)
                 # Cleanup failures retain a retryable journal and original
-                # diagnostics, without accumulating a second workspace copy.
-                with patch('mag_installer.player_build.shutil.rmtree', side_effect=OSError('cleanup interrupted')):
+                # diagnostics, and lose no attempt output.
+                with patch('pathlib.Path.rename', side_effect=OSError('cleanup interrupted')):
                     with self.assertRaisesRegex(OSError, 'cleanup interrupted'):
                         player_build.install(root, source, output, cache, retry=True)
                 self.assertEqual(json.loads((output / 'build.json').read_text())['state'], 'incomplete')
+                self.assertEqual((output / 'build-work/workspace/lifted.txt').read_text(), 'expensive attempt output')
+                # A retry that fails again keeps the newest failed attempt's output.
+                with self.assertRaises(type(failure)):
+                    player_build.install(root, source, output, cache, retry=True)
+                self.assertEqual((output / 'logs/attempts/1/build-work/workspace/lifted.txt').read_text(), 'expensive attempt output')
+                self.assertEqual((output / 'logs/attempts/1/build-work/logs/failure.log').read_text(), 'retained error evidence')
                 package.side_effect = lambda config, workspace, destination, **kwargs: destination
                 player_build.install(root, source, output, cache, retry=True)
-                self.assertEqual(verify.call_count, 2)
+                self.assertEqual(verify.call_count, 3)
+                # Older attempts keep logs and journal only: at most one extra output copy.
                 self.assertFalse((output / 'logs/attempts/1/build-work/workspace').exists())
                 self.assertEqual((output / 'logs/attempts/1/build-work/logs/failure.log').read_text(), 'retained error evidence')
+                self.assertEqual((output / 'logs/attempts/2/build-work/workspace/lifted.txt').read_text(), 'expensive attempt output')
                 self.assertEqual(json.loads((output / 'logs/attempts/1/build.json').read_text())['error'], original['error'])
                 with self.assertRaisesRegex(InstallerError, 'matching incomplete'):
                     player_build.install(root, source, output, cache, retry=True)

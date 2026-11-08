@@ -105,6 +105,7 @@ def _windows_environment(config, home):
     tools.append(str(Path(config['msvc']['clang_cl']).parent))
     environment.update({'PATH': os.pathsep.join([*dict.fromkeys(tools), system_path]),
                         'TEMP': str(home), 'TMP': str(home), 'PYTHONNOUSERSITE': '1', 'PYTHONUTF8': '1',
+                        'PYTHONPYCACHEPREFIX': str(Path(home) / 'pycache'),
                         'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_GLOBAL': os.devnull,
                         'GIT_OPTIONAL_LOCKS': '0', 'GIT_TERMINAL_PROMPT': '0',
                         'CMAKE_BUILD_PARALLEL_LEVEL': str(config.get('jobs', 2))})
@@ -119,6 +120,8 @@ def _environment(config, home):
         tool_dirs.add(str(Path(config['managed_prefix']) / 'bin'))
     return {'PATH': os.pathsep.join(sorted(tool_dirs)) + os.pathsep + '/usr/bin:/bin:/usr/sbin:/sbin',
             'HOME': str(home), 'TMPDIR': str(home), 'PYTHONNOUSERSITE': '1',
+            # Bytecode caches go to scratch, never into the verified managed tools.
+            'PYTHONPYCACHEPREFIX': str(Path(home) / 'pycache'),
             'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_GLOBAL': os.devnull,
             'GIT_OPTIONAL_LOCKS': '0', 'GIT_TERMINAL_PROMPT': '0', 'CMAKE_BUILD_PARALLEL_LEVEL': str(config.get('jobs', 2))}
 
