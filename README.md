@@ -27,7 +27,7 @@ Only the v1.0 retail release is supported; any other release or modified file is
 
 Installer-built MAG has been tested on three systems:
 
-- **macOS** (Apple Silicon, Metal): signs in to a community server's menus.
+- **macOS** (Apple Silicon, Metal): signs in and has joined online matches on a community server.
 - **Windows** (x86_64, Vulkan): signs in, plays the Training mission and has joined online matches
   on a community server. Movies play through an FFmpeg the installer downloads.
 - **Linux** (x86_64, Vulkan; tested on Ubuntu 24.04): signs in, plays the Training mission and has
@@ -78,8 +78,7 @@ You build MAG on your own computer from your own copy; nothing game-derived is e
    - **Windows, once the game starts:** Windows Security asks whether to allow public and private
      networks to access the app. Choose **Allow** for both (this may need an administrator) so you
      can play online.
-   - **macOS, once MAG starts:** macOS may show a permission prompt. *(What it asks and what to
-     choose will be added here.)* <!-- placeholder: the first-launch system prompt -->
+   - **macOS, once MAG starts:** if macOS asks for a permission for MAG, choose **Allow**.
 5. **Choose your player name.** You need one to play online. The server is already set
    (`play.magtest.online`); change it only if you were given another.
    - **macOS:** the setup window opens on first launch. Fill in **Player name** (and **Game server**
