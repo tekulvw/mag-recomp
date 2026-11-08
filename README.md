@@ -2,7 +2,7 @@
 
 A native static recompilation of *MAG* (BCUS98110, retail v1.0) for the PlayStation 3, built on the
 [ps3recomp](https://github.com/sp00nznet/ps3recomp) SDK. macOS on Apple Silicon (Metal) is the primary
-target; Windows x86_64 (Direct3D 12) builds are in preview.
+target; Windows x86_64 and Linux x86_64 builds use Vulkan.
 
 > **Unofficial fan project — bring your own copy.** Not affiliated with or endorsed by Sony Interactive
 > Entertainment or Zipper Interactive. This repository contains **no game code, assets, keys or
@@ -25,10 +25,16 @@ Only the v1.0 retail release is supported; any other release or modified file is
 
 ## Status
 
-The recompiled game boots to its menus and reaches interactive training on Apple Silicon. It is not
-complete: rendering has known gaps, audio stutters, and performance work is ongoing. The Windows build
-compiles but has not yet been run with real game data. Online play needs separate replacement
-services that are not part of this repository.
+Installer-built MAG has been tested on three systems:
+
+- **macOS** (Apple Silicon, Metal): boots to the menus and signs in to a community server.
+- **Windows** (x86_64, Vulkan): boots, signs in and plays the Training mission. Movies play through
+  an FFmpeg the installer downloads.
+- **Linux** (x86_64, Vulkan; tested on Ubuntu 24.04): boots and plays the Training mission.
+
+Online play needs a compatible community server, which is not part of this repository. MAG connects
+to `play.magtest.online` by default. The game is not complete: rendering has known gaps, audio
+stutters, performance work is ongoing, and frame rates vary by system.
 
 ## Building
 
