@@ -637,12 +637,13 @@ capture as described above. Host support:
 | --- | --- | --- |
 | macOS | `player_input_desktop_macos.mm` (with the player settings module) | AppKit window, GameController keyboard and mice. |
 | Linux and other non-Apple, non-Windows hosts | `player_input_desktop_sdl.cpp` on the portable core | The SDK's SDL2 game window; needs `PS3RECOMP_PAD_SDL_KEYBOARD=ON` (the default). |
-| Windows | `mag_game_controls_desktop_none.cpp` | Refuses visibly (one line per state change) and leaves the SDK's own keyboard and pad input working. |
+| Windows | `player_input_desktop_win32.cpp` on the portable core | The SDK's Win32 game window (Vulkan or D3D12 backend); needs `PS3RECOMP_NATIVE_OSK_WINDOWS=ON` (the default). Keyboard and mouse beside any XInput controller. |
+| A host without a backend (`MAG_GAME_CONTROLS_DESKTOP=none`) | `mag_game_controls_desktop_none.cpp` | Refuses visibly (one line per state change) and leaves the SDK's own keyboard and pad input working. |
 
 The portable core (`player_desktop_capture_core.{h,cpp}`) holds these rules; a backend supplies
 the window system through a small platform interface (window attached and focused, input owned by
-a dialog, relative mode, the keys and buttons held now). The SDL backend is built on it. The macOS
-backend predates it and applies the same rules directly, except that it also suspends capture
+a dialog, relative mode, the keys and buttons held now). The SDL and Win32 backends are built on it.
+The macOS backend predates it and applies the same rules directly, except that it also suspends capture
 while Command is held and leaves the engine's window fields unfocused when capture is removed.
 
 - Capture exists only while the adapter requests it. Installing it releases the engine's keyboard
@@ -677,9 +678,58 @@ motion is SDL relative mode, reported up-positive. Installing the filter is SDL'
 `SDL_SetEventFilter`, which discards events still queued at that moment; the backend installs it
 on the pump right after the SDK has drained the queue.
 
+The Win32 backend runs on the game window's thread. The SDK's Vulkan and D3D12 backends create the
+window and pump its messages on that thread, and share the pump with the native on-screen keyboard
+through three calls: attaching or detaching the window, one call per pump before the messages are
+read, and one call per message before it is translated and dispatched. Compile definitions on
+`libs/video/rsx_vulkan_backend.c` and `libs/video/rsx_d3d12_backend.c` rename those three calls,
+and `player_input_win32_window.c` takes their place: attaching or detaching tells the backend
+first (it lets the cursor go before the window is destroyed), then the keyboard; the per-pump call
+runs the keyboard's pump, then the backend with the keyboard's dialog flag; the per-message call
+lets the backend observe the message, then hands it to the keyboard's dialog and the window as
+before. These seams need no change to the SDK, see every message the window thread reads before
+anything else does, give the backend a per-pump call on the window thread to apply requests from,
+and come with the dialog flag it needs. Subclassing the window once its handle is known would
+replace the SDK's window procedure and still leave no per-pump call. The price is that the build
+requires the native on-screen keyboard host (`PS3RECOMP_NATIVE_OSK_WINDOWS=ON`, the default);
+CMake refuses to configure without it.
+
+While capture is requested the window registers for Raw Input from keyboards and mice, with no
+flags (legacy key and mouse messages still flow, and input arrives only while the application is
+in the foreground); the registration is removed when capture stops or the window changes. The
+backend reads `WM_INPUT` for the game window and never consumes it. It withholds exactly one
+message: a key press of Escape on the focused game window while the adapter owns the keyboard and
+requests capture and no dialog owns the keyboard, which the window procedure would treat as quit
+(the Linux rule; closing the window still quits). Keys are scan codes with their E0 prefix,
+translated by an explicit table (`player_input_win32_map.c`) to HID usages; E1 sequences (Pause),
+escape-sequence fragments, the fake shifts Windows adds around navigation keys, Break, system and
+media keys and the GUI keys are not captured. Raw Input repeats held keys, so the backend tracks
+each key's physical state and reports only changes; the activation snapshot (`GetAsyncKeyState`
+through each scan code's virtual key, plus the Num Lock keypad keys) also restarts that tracking.
+Mouse buttons are physical (left 0, right 1, middle 2, X1 3, X2 4, one logical mouse); motion is
+the raw relative delta, reported up-positive, and absolute-position devices (tablets, remote
+desktop) do not drive look. Ready requires the game window to be the foreground and active window
+and not minimized. Relative mode hides the cursor and confines it to the client area; it is
+re-applied after a click in the window, when focus returns and when the confinement no longer
+matches the window (moved, resized or replaced), and released when readiness ends.
+
 Controllers on macOS and Linux reach the capture layer through `player_input_sdl_pad.c`: compile
 definitions on `libs/input/cellPad.c` route its SDL GameController calls through wrappers that
 report every raw reading before the settings panel's input block masks what the SDK sees.
+
+On Windows cellPad reads controllers through XInput, and compile definitions on
+`libs/input/cellPad.c` route its `XInputGetState` and `GetAsyncKeyState` calls through
+`player_input_win32_pad.c`. Every XInput reading reaches the capture layer: port 0 starts a capture
+refresh (cellPad sweeps ports 0 to 3 in order), each port keeps one identity, buttons take the SDL
+GameController numbers (A 0, B 1, X 2, Y 3, Back 4, Guide 5, Start 6, stick buttons 7 and 8,
+shoulders 9 and 10, D-pad up, down, left, right 11 to 14), sticks are right/down-positive and
+triggers 0..32767. cellPad's own keyboard fallback reads keys only when XInput reports nothing on
+port 0; while the adapter owns the keyboard it reads none at all, so bound keys do not double as pad
+buttons. Keyboard and mouse capture is merged with XInput, never gated on it: a controller (real,
+or a virtual one from Steam Input, a driver or a streaming client) keeps working beside the
+keyboard and mouse, and its presence does not turn keyboard and mouse capture off. (cellPad's
+`GetAsyncKeyState` is declared as a DLL import; the seam also defines the import pointer such a
+call goes through, so the renamed call links on MinGW and without a linker warning on MSVC.)
 
 ### 8.2 Keyboard ownership
 
@@ -739,4 +789,8 @@ writes and engine calls. No test uses game files or lifted code.
 The desktop capture core runs against a fake window system and a fake engine
 (`tests/test_player_desktop_capture_core.py`). The SDL backend runs against a real SDL event queue
 with the dummy video driver where SDL2 development files are installed, and its SDK seam against a
-synthetic SDK header (`tests/test_player_input_desktop_sdl.py`).
+synthetic SDK header (`tests/test_player_input_desktop_sdl.py`). The Win32 backend's translations (scan
+codes, auto-repeat tracking, raw mouse reports, XInput readings, the keyboard fallback) and its SDK
+seams (against synthetic system and SDK headers) run on any host; where a MinGW-w64 cross compiler
+is installed the Win32 code itself is compiled too (`tests/test_player_input_desktop_win32.py`).
+Behaviour inside a real Win32 window is verified on Windows, outside these tests.
