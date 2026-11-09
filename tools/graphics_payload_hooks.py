@@ -25,5 +25,6 @@ def apply_hooks(directory):
  if new==old and record.get('graphics_payload_hooks'):return record
  record['graphics_payload_hooks']={'policy_sha256':POLICY_SHA,'original_function_sha256':FUNCTION_SHA,'tool_sha256':sha256_file(Path(__file__)),'original_source_sha256':sha256_file(path),'call_pc':'0x325C','continuation':'0x3260','scope':'Observe original requested call, actual original drain return; preserve all original guest instructions and runtime calls'}
  t=path.with_suffix('.payload-tmp');t.write_text(new);os.replace(t,path)
- record['outputs']['mag_wws_policy/spu_recomp.c']=sha256_file(path)
+ key=next((k for k in record['outputs'] if k.replace('\\','/')=='mag_wws_policy/spu_recomp.c'),'mag_wws_policy/spu_recomp.c')
+ record['outputs'][key]=sha256_file(path)
  t=directory/'provenance.payload-tmp.json';t.write_text(json.dumps(record,indent=2)+'\n');os.replace(t,directory/'provenance.json');return record

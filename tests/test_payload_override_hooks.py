@@ -54,6 +54,21 @@ class PayloadOverrideHooks(unittest.TestCase):
                 self.assertEqual(hooks.apply_hooks(directory), first)
                 self.assertEqual(path.read_text(), text)
 
+    def test_apply_keeps_a_windows_receipt_key(self):
+        # Lifts on Windows record outputs with backslashes; the hash must replace that entry.
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp); (directory / 'mag_wws_policy').mkdir()
+            path = directory / 'mag_wws_policy/spu_recomp.c'; path.write_text(ORIGINAL)
+            key = 'mag_wws_policy\\spu_recomp.c'
+            record = dict(status='complete', policy_sha256=hooks.POLICY_SHA,
+                          outputs={key: hashlib.sha256(path.read_bytes()).hexdigest()})
+            (directory / 'provenance.json').write_text(json.dumps(record))
+            with mock.patch.object(hooks, 'FUNCTION_SHA', PIN), \
+                    mock.patch.object(hooks, 'verify_hash', lambda p, d: None):
+                result = hooks.apply_hooks(directory)
+            self.assertEqual(list(result['outputs']), [key])
+            self.assertEqual(result['outputs'][key], hashlib.sha256(path.read_bytes()).hexdigest())
+
     @unittest.skipUnless(shutil.which('clang++') and shutil.which('clang'), 'clang required')
     def test_seam_runs_or_skips_the_lifted_job(self):
         stub = ('typedef struct spu_context { unsigned pc; int host_depth; } spu_context;\n'
