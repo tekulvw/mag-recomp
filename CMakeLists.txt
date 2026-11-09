@@ -443,7 +443,7 @@ endif()
 #   - warnings off. They are about generated code and nobody will act on them,
 #     and at this volume they bury the diagnostics that matter.
 #   - no floating-point contraction. arm64 fuses a multiply and an add by
-#     default, and so does x86-64 once MAG_X86_LEVEL selects x86-64-v3 (which
+#     default, and so does x86-64 once MAG_X86_LEVEL selects x86-64-v3 or v4 (which
 #     then turns contraction off for every unit); a PPC fmadd is spelt as one
 #     where the lifter means one.
 #   - /bigobj on MSVC. A single lifted file routinely passes the 65,536-section

@@ -216,19 +216,22 @@ the build CPU offers. `MAG_X86_LEVEL` (`cmake/MagX86Level.cmake`) chooses:
 
 | Value | Code generation |
 | --- | --- |
-| `auto` (default) | x86-64-v3 when the build CPU and operating system support AVX2, FMA, BMI1/2, F16C, LZCNT, MOVBE and the x86-64-v2 set (checked by a small probe while configuring); otherwise baseline. Cross builds and compilers without the switch stay at baseline |
+| `auto` (default) | x86-64-v4 when the build CPU and operating system also support AVX-512 F/BW/CD/DQ/VL; else x86-64-v3 when they support AVX2, FMA, BMI1/2, F16C, LZCNT, MOVBE and the x86-64-v2 set (checked by a small probe while configuring); otherwise baseline. Cross builds and compilers without the switch stay at baseline |
+| `v4` | x86-64-v4 without checking the CPU (`-march=x86-64-v4`; clang-cl: `/clang:-march=x86-64-v4`) |
 | `v3` | x86-64-v3 without checking the CPU (`-march=x86-64-v3`; clang-cl: `/clang:-march=x86-64-v3`) |
 | `baseline` | the previous flags, unchanged (SSE4.1, as the runtime requires) |
 
-x86-64-v3 brings fused multiply-add instructions, which compilers otherwise use on their own for
-any multiply followed by an add. The PS3 rounds those separately unless the guest asked for a
-fused one, so v3 always adds `-ffp-contract=off` (clang-cl: `/clang:-ffp-contract=off`) as well.
+x86-64-v4 doubles the vector registers to 32, which the lifted SPU code uses to keep more SPU
+registers out of memory. x86-64-v3 brings fused multiply-add instructions, which compilers
+otherwise use on their own for any multiply followed by an add. The PS3 rounds those separately
+unless the guest asked for a fused one, so v3 and v4 always add `-ffp-contract=off` (clang-cl:
+`/clang:-ffp-contract=off`) as well.
 Both options reach every C and C++ unit: MAG's sources, the lifted PPU and SPU units and the
 ps3recomp runtime. Configuring prints the chosen level (`x86-64 level: v3 (...)`), and each
 binary's `.receipt.json` records it as `x86_level`. macOS and arm64 builds are unaffected.
 
 The installer passes nothing, so `auto` applies. If MAG crashes at start on an older CPU (an
-illegal instruction), rebuild with `MAG_X86_LEVEL=baseline`: for a manual build add
+illegal instruction), rebuild with `MAG_X86_LEVEL=baseline` (or `v3`, to rule out only v4): for a manual build add
 `-DMAG_X86_LEVEL=baseline` to both configure commands in a fresh build directory; for the
 installer, set the environment variable `MAG_X86_LEVEL=baseline` before starting it and build
 into a new installation folder.

@@ -1,10 +1,10 @@
-"""MAG_X86_LEVEL (cmake/MagX86Level.cmake): x86-64-v3 code generation for Linux and Windows builds.
+"""MAG_X86_LEVEL (cmake/MagX86Level.cmake): x86-64-v3/v4 code generation for Linux and Windows builds.
 
 A fixture project (tests/fixtures/x86_level) holds one unit of every class the real build compiles,
 with the same per-class options. Its compile_commands.json shows what each level adds:
 
   * baseline gives exactly the commands of a build without the module;
-  * v3 adds -march=x86-64-v3 and -ffp-contract=off to every unit, and nothing else;
+  * v3 (v4) adds -march=x86-64-v3 (-v4) and -ffp-contract=off to every unit, and nothing else;
   * a floating-point program built with the v3 options rounds a*b + c twice, never fused.
 
 Synthetic: no game files. The x86 checks run on x86-64 Linux and Windows hosts and skip elsewhere,
@@ -28,11 +28,11 @@ X86_HOST = sys.platform in ('linux', 'win32') and platform.machine().lower() in 
 TOOLS = shutil.which('cmake') and shutil.which('ninja')
 
 
-def v3_flags(entry_tokens):
-    """The two options v3 adds, in this compiler's spelling."""
+def v3_flags(entry_tokens, level='v3'):
+    """The two options v3 (or v4) adds, in this compiler's spelling."""
     if any(token.startswith('/clang:') for token in entry_tokens) or any(token == '/nologo' for token in entry_tokens):
-        return ('/clang:-march=x86-64-v3', '/clang:-ffp-contract=off')
-    return ('-march=x86-64-v3', '-ffp-contract=off')
+        return ('/clang:-march=x86-64-' + level, '/clang:-ffp-contract=off')
+    return ('-march=x86-64-' + level, '-ffp-contract=off')
 
 
 @unittest.skipUnless(TOOLS, 'cmake and ninja are required')
@@ -65,8 +65,8 @@ class X86LevelTests(unittest.TestCase):
         return (build / 'x86-level.txt').read_text()
 
     def test_unknown_level_is_rejected(self):
-        result = self.configure('bad', '-DMAG_X86_LEVEL=v4', expect_failure=True)
-        self.assertIn('MAG_X86_LEVEL must be auto, v3 or baseline', result.stderr)
+        result = self.configure('bad', '-DMAG_X86_LEVEL=v5', expect_failure=True)
+        self.assertIn('MAG_X86_LEVEL must be auto, v4, v3 or baseline', result.stderr)
 
     @unittest.skipIf(X86_HOST, 'checks hosts where the option does not apply')
     def test_other_hosts_are_unchanged(self):
@@ -75,8 +75,9 @@ class X86LevelTests(unittest.TestCase):
             build = self.configure(level, f'-DMAG_X86_LEVEL={level}')
             self.assertEqual(self.commands(build), old)
             self.assertEqual(self.level(build), '')
-        result = self.configure('v3', '-DMAG_X86_LEVEL=v3', expect_failure=True)
-        self.assertIn('applies only to x86-64 Linux and Windows builds', result.stderr)
+        for level in ('v3', 'v4'):
+            result = self.configure(level, f'-DMAG_X86_LEVEL={level}', expect_failure=True)
+            self.assertIn('applies only to x86-64 Linux and Windows builds', result.stderr)
 
     @unittest.skipUnless(X86_HOST, 'x86-64 Linux or Windows host required')
     def test_baseline_keeps_the_old_flags(self):
@@ -87,47 +88,50 @@ class X86LevelTests(unittest.TestCase):
         self.assertEqual(set(old), {'runtime.c', 'mag_source.cpp', 'lifted_ppu.cpp', 'lifted_spu.c', 'fp_contract.c'})
 
     @unittest.skipUnless(X86_HOST, 'x86-64 Linux or Windows host required')
-    def test_v3_adds_both_flags_to_every_target_class(self):
+    def test_v3_and_v4_add_both_flags_to_every_target_class(self):
         old = self.commands(self.configure('baseline', '-DMAG_X86_LEVEL=baseline'))
-        build = self.configure('v3', '-DMAG_X86_LEVEL=v3')
-        self.assertEqual(self.level(build), 'v3')
-        new = self.commands(build)
-        self.assertEqual(set(new), set(old))
-        for name, argv in new.items():
-            flags = v3_flags(argv)
-            for flag in flags:
-                self.assertIn(flag, argv, f'{name}: {flag} missing')
-            # Apart from the two options, every command is the baseline one.
-            self.assertEqual([t for t in argv if t not in flags], [t for t in old[name] if t not in flags], name)
-        # The level comes before the per-source options, so a lifted unit's own -O level still wins.
-        for name in ('lifted_ppu.cpp', 'lifted_spu.c'):
-            argv = new[name]
-            last_opt = max(i for i, t in enumerate(argv) if t[:2] in ('-O', '/O'))
-            self.assertLess(argv.index(v3_flags(argv)[0]), last_opt, name)
+        for level in ('v3', 'v4'):
+            build = self.configure(level, f'-DMAG_X86_LEVEL={level}')
+            self.assertEqual(self.level(build), level)
+            new = self.commands(build)
+            self.assertEqual(set(new), set(old))
+            for name, argv in new.items():
+                flags = v3_flags(argv, level)
+                for flag in flags:
+                    self.assertIn(flag, argv, f'{level} {name}: {flag} missing')
+                # Apart from the two options, every command is the baseline one.
+                self.assertEqual([t for t in argv if t not in flags], [t for t in old[name] if t not in flags], name)
+            # The level comes before the per-source options, so a lifted unit's own -O level still wins.
+            for name in ('lifted_ppu.cpp', 'lifted_spu.c'):
+                argv = new[name]
+                last_opt = max(i for i, t in enumerate(argv) if t[:2] in ('-O', '/O'))
+                self.assertLess(argv.index(v3_flags(argv, level)[0]), last_opt, name)
 
     @unittest.skipUnless(X86_HOST, 'x86-64 Linux or Windows host required')
     def test_auto_follows_the_build_cpu(self):
         build = self.configure('auto')
         level = self.level(build)
-        self.assertIn(level, ('v3', 'baseline'))
+        self.assertIn(level, ('v4', 'v3', 'baseline'))
         expected = self.commands(self.configure('explicit', f'-DMAG_X86_LEVEL={level}'))
         self.assertEqual(self.commands(build), expected)
 
     @unittest.skipUnless(X86_HOST, 'x86-64 Linux or Windows host required')
-    def test_v3_never_fuses_a_multiply_and_add(self):
-        if self.level(self.configure('probe')) != 'v3':
+    def test_v3_and_v4_never_fuse_a_multiply_and_add(self):
+        auto = self.level(self.configure('probe'))
+        if auto not in ('v3', 'v4'):
             self.skipTest('the build CPU lacks x86-64-v3, so v3 code cannot run here')
         program = 'fp_contract.exe' if os.name == 'nt' else 'fp_contract'
 
-        def run(name, *options):
-            build = self.configure(name, '-DMAG_X86_LEVEL=v3', *options)
+        def run(name, *options, level='v3'):
+            build = self.configure(name, f'-DMAG_X86_LEVEL={level}', *options)
             subprocess.run(['cmake', '--build', str(build), '--target', 'fp_contract'],
                            check=True, capture_output=True, text=True, timeout=300)
             return subprocess.run([str(build / program)], capture_output=True, text=True, timeout=30)
 
-        result = run('v3')
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertNotIn('fused', result.stdout)
+        for level in ('v3', 'v4') if auto == 'v4' else ('v3',):
+            result = run(level, level=level)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertNotIn('fused', result.stdout)
         # The control proves the program can see a fused result: the same build with contraction
         # forced on fuses at least the single expression.
         control = run('control', '-DMAG_FIXTURE_CONTRACT_CONTROL=ON')
