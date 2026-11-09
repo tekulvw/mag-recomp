@@ -136,6 +136,8 @@ class X86LevelTests(unittest.TestCase):
     @unittest.skipUnless(X86_HOST and os.environ.get('MAG_TEST_SDK'), 'x86-64 host and MAG_TEST_SDK required')
     def test_v3_reaches_every_real_runtime_unit(self):
         sdk = Path(os.environ['MAG_TEST_SDK']).resolve()
+        if os.name != 'nt' and not self.runtime_finds_sdl2():
+            self.skipTest('SDL2 development files not found: the runtime requires them to configure off Windows')
         build = self.configure('sdk', '-DMAG_X86_LEVEL=v3', f'-DMAG_FIXTURE_SDK={sdk.as_posix()}')
         runtime = 0
         for entry in json.loads((build / 'compile_commands.json').read_text()):
@@ -146,6 +148,21 @@ class X86LevelTests(unittest.TestCase):
             for flag in v3_flags(argv):
                 self.assertIn(flag, argv, entry['file'])
         self.assertGreater(runtime, 50)
+
+
+    def runtime_finds_sdl2(self):
+        """The runtime's own SDL2 lookup (find_package(SDL2 QUIET)), alone, so a missing host
+        dependency skips the real-runtime check instead of failing it; any other configure
+        failure still fails."""
+        probe = self.tmp / 'sdl2-probe'
+        probe.mkdir()
+        (probe / 'CMakeLists.txt').write_text(
+            'cmake_minimum_required(VERSION 3.20)\nproject(sdl2_probe C)\nfind_package(SDL2 QUIET)\n'
+            'file(WRITE "${CMAKE_BINARY_DIR}/sdl2-found.txt" "${SDL2_FOUND}")\n')
+        result = subprocess.run(['cmake', '-S', str(probe), '-B', str(probe / 'build'), '-G', 'Ninja'],
+                                capture_output=True, text=True, timeout=300)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        return (probe / 'build/sdl2-found.txt').read_text().upper() in ('1', 'ON', 'TRUE', 'YES')
 
 
 class X86LevelWiringTests(unittest.TestCase):
