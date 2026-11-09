@@ -81,7 +81,23 @@ class NativeKitTests(unittest.TestCase):
             # Roles without a splice commit stay single-commit.
             with self.assertRaises(subprocess.CalledProcessError):
                 self.git('-C',str(extracted/'sdks/runtime'),'rev-parse','--verify','refs/tags/mag-recomp/lifter-fixture')
+            # A list packs every tagged commit.
+            (sdk/'runtime.txt').write_text('second fix\n')
+            self.git('-C',str(sdk),*identity,'commit','-qam','second fix')
+            second=self.git('-C',str(sdk),'rev-parse','HEAD').strip()
+            self.git('-C',str(sdk),*identity,'tag','-a','-m','second fix','mag-recomp/lifter-fixture-2',second)
+            pins['lifter-ppu']['splice_after']=[{'tag':'mag-recomp/lifter-fixture','commit':fixed},
+                                                {'tag':'mag-recomp/lifter-fixture-2','commit':second}]
+            with patch('mag_installer.native_kit.validate_source_tree',return_value=pins):
+                native_kit.prepare(source,sdks,root/'kit-list.tar.gz')
+            listed=root/'extracted-list';listed.mkdir()
+            with tarfile.open(root/'kit-list.tar.gz') as archive:
+                archive.extractall(listed,filter='data')
+            for tag,commit,text in (('mag-recomp/lifter-fixture',fixed,'fixed\n'),('mag-recomp/lifter-fixture-2',second,'second fix\n')):
+                self.assertEqual(self.git('-C',str(listed/'sdks/lifter-ppu'),'rev-parse','refs/tags/'+tag+'^{commit}').strip(),commit)
+                self.assertEqual(self.git('-C',str(listed/'sdks/lifter-ppu'),'show',commit+':runtime.txt'),text)
             # A tag that names another commit is refused.
+            pins['lifter-ppu']['splice_after']={'tag':'mag-recomp/lifter-fixture','commit':fixed}
             pins['lifter-ppu']['splice_after']['commit']=sdks['lifter-ppu']['revision']
             with patch('mag_installer.native_kit.validate_source_tree',return_value=pins):
                 with self.assertRaisesRegex(InstallerError,'does not name its pinned splice commit'):

@@ -1,6 +1,6 @@
 """Prepare a copy of a lifted engine with the render adapter's observer hooks.
 
-    python3 tools/render_hooks/prepare.py --base generated/retail-v1.0/mage_g-dispatcher \\
+    python3 tools/render_hooks/prepare.py --base generated/retail-v1.0/mage_g-ctr64 \\
         --output generated/retail-v1.0/mage_g-render --stage configuration --stage cohort
 
 The base lift is left untouched and must be complete, unprepared and produced by

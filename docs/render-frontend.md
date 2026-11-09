@@ -71,7 +71,7 @@ lift to a new directory and adds the hooks of the chosen stages:
 | `ui-handoff` | the UI packet writers at the pre-UI boundary (needs `cohort`) | `MAG_RENDER_ADAPTER_UI_HANDOFF` |
 
 ```sh
-python3 tools/render_hooks/prepare.py --base generated/retail-v1.0/mage_g-dispatcher \
+python3 tools/render_hooks/prepare.py --base generated/retail-v1.0/mage_g-ctr64 \
   --output generated/retail-v1.0/mage_g-render --stage configuration --stage update-loop --stage cohort
 ```
 
