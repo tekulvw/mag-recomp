@@ -463,10 +463,11 @@ What other agents can observe, and when:
    - at start, *get buffer* (slot `+0x34`) for buffer 1 (inputs) and buffer 3 (output and scratch);
    - at the end, *release buffer* (slot `+0x48`) for buffer 3, then *finish* (slot `+0x44`).
 
-   Then return to the dispatcher with `r1` and `r80`–`r127` as at entry, and `r3` as the finish
-   service left it. The job manager's own effects (the queue line update and the prefetch of the
-   next descriptor) follow from those calls. They are compared by the oracle (Integration
-   contract), not re-specified here.
+   Then return to the dispatcher with `r1` and `r80`–`r127` as at entry. No return value is
+   defined ("Return value" under Integration contract). *Finish* is a scheduling point and is the
+   invocation's last act ("Finish" under Integration contract). The job manager's own effects
+   (the queue line update and the prefetch of the next descriptor) follow from those calls. The
+   oracle compares them (Integration contract); they are not re-specified here.
 
 No other guest memory is written. In particular the invocation writes nothing back to the
 descriptor or the input streams *(observed)*.
@@ -586,7 +587,7 @@ every recording). Context fields used here:
 | --- | --- | --- | --- |
 | get buffer | `r3 = 0`; `r4` = buffer number; `r5 = 0`; `r6` = 1 for buffer 1, 0 for buffer 3 | `r3` = 16-byte buffer descriptor | buffer 1 call: writes two quadwords of job-manager bookkeeping; buffer 3 call: none |
 | release buffer | `r3 = 0`; `r4 = 3`; `r5 = 0` | not used | no guest-memory transfer |
-| finish | `r3` and `r4` are not read | `r3`; the job returns its low 16 bits (values 6–14 observed) | job-manager queue update and next-descriptor prefetch |
+| finish | `r3` and `r4` are not read | `r3`; not used by the job afterwards | completion published to the job queue, next-descriptor prefetch, and possibly a pass through the SPURS kernel's workload selection (below) |
 
 **Buffer descriptor.** 16 bytes:
 
@@ -617,7 +618,7 @@ writes job-manager bookkeeping that depends only on the current job. The support
 1. Call *get buffer* for buffers 1 and 3 once, as the job does.
 2. Run admission on the buffers.
 3. On success, run natively, then call *release buffer* (3) and *finish*. Return to the dispatcher
-   continuation with `r1` and `r80`–`r127` as at entry and `r3` = the finish result's low 16 bits.
+   continuation with `r1` and `r80`–`r127` as at entry. `r3` is not defined.
 4. On refusal, run the lifted job from its entry. It repeats the *get buffer* calls.
 
 The oracle must replay a refusal-after-acquisition case for every recorded kind. It must show the
@@ -637,6 +638,57 @@ layout rule. That would be a separate specification.
 If the region is resident but not yet verified when the payload call is reached (the first
 dispatch after a load), either run the runtime's own one-time comparison or refuse. The lifted
 dispatch then verifies it.
+
+**Return value.** The dispatcher does not consume any value the job returns:
+
+- After the payload call returns, the policy saves `r0`, `r3` and `r4` into three job-manager
+  local-store save slots (`0x1630`, `0x1640`, `0x1650`), runs a bookkeeping helper, and restores
+  them.
+- On both paths it can then take, each register is overwritten before any read.
+
+So the value left in `r3` (and `r0`, `r4` and the other volatile registers `r2`–`r79`) at
+hand-back has no guest-visible effect. It survives only as the content of those three save slots
+until the next payload overwrites them.
+
+- The original job leaves an incidental value: neither the *finish* result nor its low half.
+  Recordings and replays disagree about it because the recorder snapshots registers at a
+  different moment.
+- A native path may leave any value. Returning the *finish* result unchanged is a reasonable
+  choice.
+- Oracle comparisons must exclude `r0`, `r2`–`r79` and those three save slots.
+
+**Finish.** *Finish* ends the invocation from the job manager's point of view:
+
+- It publishes the job's completion to the job queue with an atomic update. From that moment the
+  parent and, through it, the PPU may treat the child as done.
+- It may prefetch the next job's descriptor into the job manager's local store.
+- It may pass through the SPURS kernel's workload-selection service. In the runtime's HLE that
+  service lives at local store `0x9D0`; the replay harness stops at `0x9D4` because it does not
+  model the kernel. Control may then run other job-manager or workload code, on its own stack,
+  before or instead of coming back to the caller in the same host call.
+
+"*Finish* may not return to its caller promptly, or at all within the current host frame" is
+therefore expected behaviour of the contract, not an error. In game, every recorded invocation
+eventually reached the dispatcher continuation `0x3260`.
+
+Before calling *finish*, a native implementation must guarantee:
+
+1. **Outputs visible.** Every guest-visible effect of the invocation is complete and visible to
+   the RSX and to other agents: ring record, index and vertex data, the whole hole (ordering rules
+   1–5 of section 9).
+2. **Transfers drained.** Any MFC command it issued has completed (tag 31 drained).
+3. **Buffers given back.** *Release buffer* (3) has already been called. Buffers 1 and 3, the
+   staging data in them and the job's stack area may be reused by the next job as soon as *finish*
+   runs.
+4. **Bookkeeping closed.** The invocation is counted as handled (and any per-kind statistics
+   updated) before the call. No host lock is held across it, and no host object needs the call
+   to return in order to be released.
+5. **Bracketed call.** The call goes through the runtime's ordinary lifted-call mechanism (link
+   register set, the call driven until control comes back to the link). The runtime can then
+   carry the SPU through the kernel service and any other code that runs in between.
+6. **Nothing read afterwards.** If and when the call returns, the native code reads nothing from
+   local store or volatile registers that belonged to the invocation. It restores `r1` and
+   `r80`–`r127` from values it saved itself, then continues at the dispatcher continuation.
 
 **MFC tags.** The original job issues all of its own transfers on tag 31: data, read-back,
 hole, ring line and label read. The job manager's transfers in the recordings use tag 0. A native
@@ -676,8 +728,12 @@ and compares every PUT.
    - produced vertices: within Tolerance;
    - the culled list: exact, or differing only by triangles the oracle confirms are borderline
      (recompute rules 2 and 3 for each differing triangle and check the boundary distance);
-   - exit `r1`, `r3` and `r80`–`r127`, and the job manager's local-store state after the finish
-     call: exact.
+   - exit `r1` and `r80`–`r127`, and the job manager's local-store state after the finish call,
+     excluding the three save slots named under "Return value": exact. `r0` and `r2`–`r79` are not
+     compared.
+   - Replays that reach the kernel's workload-selection service end there (the harness has no
+     kernel). Compare them up to that point: every transfer before it, and the job manager's local
+     store at that point.
 5. Synthetic inputs (this document's vectors and generated ones) run in the public repository
    without game data.
 
