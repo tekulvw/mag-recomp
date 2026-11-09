@@ -304,8 +304,8 @@ int message(Backend& b, const MSG* msg, bool dialog) {
             raw_input(b, reinterpret_cast<HRAWINPUT>(msg->lParam));
         return 0;
     case WM_LBUTTONDOWN: case WM_RBUTTONDOWN: case WM_MBUTTONDOWN: case WM_XBUTTONDOWN:
-        // A click in the game window takes the cursor back (click-to-recapture).
-        b.core.request_recapture();
+        // A click in the game window takes the cursor back (click-to-recapture) when it is free.
+        b.core.recapture_after_click(!b.platform.clip_lost());
         return 0;
     case WM_KEYDOWN: {
         if (msg->wParam != VK_ESCAPE) return 0;

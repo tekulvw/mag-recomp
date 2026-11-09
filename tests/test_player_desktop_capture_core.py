@@ -54,6 +54,9 @@ class DesktopCaptureCoreTests(unittest.TestCase):
     def test_relocking_discards_motion_from_the_centring_warp(self):
         self.run_case('reacquire')
 
+    def test_clicks_do_not_reacquire_a_held_lock(self):
+        self.run_case('click')
+
 
 if __name__ == '__main__':
     unittest.main()

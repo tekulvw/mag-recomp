@@ -236,7 +236,7 @@ void deliver(Backend& b, const Observed& item) {
     case SDL_MOUSEBUTTONDOWN: case SDL_MOUSEBUTTONUP:
         if (e.button.which == SDL_TOUCH_MOUSEID) break;
         // A click in the game window takes the cursor back (click-to-recapture).
-        if (e.type == SDL_MOUSEBUTTONDOWN && e.button.windowID == id) b.core.request_recapture();
+        if (e.type == SDL_MOUSEBUTTONDOWN && e.button.windowID == id) b.core.recapture_after_click(b.platform.lock_held());
         b.core.mouse_button(sdl_desktop_mouse_index(e.button.button), kMouseDevice, e.type == SDL_MOUSEBUTTONDOWN,
                             item.time_ns, item.stamp);
         break;

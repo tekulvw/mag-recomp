@@ -104,6 +104,12 @@ public:
     uint32_t motion_epoch() const { return motion_epoch(gate_.stamp()); }
     // Re-apply relative mode at the next refresh (a click in the window, focus returning).
     void request_recapture() { needs_recapture_ = true; }
+    // A click in the game window: take the cursor back only when the lock is not already held
+    // (relative mode off, or the backend found the lock gone). Re-acquiring a held lock on every
+    // click would move the pointer and discard look motion around each shot.
+    void recapture_after_click(bool lock_held) {
+        if (!relative_ || !lock_held) needs_recapture_ = true;
+    }
     // The attached window changed or went away: drop relative mode, release everything and
     // require a fresh activation.
     void window_changed();

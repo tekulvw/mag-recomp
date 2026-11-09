@@ -662,8 +662,10 @@ while Command is held and leaves the engine's window fields unfocused when captu
 - Regaining readiness is a fresh activation: keys and buttons still held are reported as held
   while the engine still sees the window unfocused, so each needs a release and a new press.
   Presses observed before readiness was published are ignored.
-- Relative mouse mode is requested while ready, available and the adapter wants mouse look; a
-  click in the game window or focus returning re-applies it. Motion counts only if it was
+- Relative mouse mode is requested while ready, available and the adapter wants mouse look;
+  focus returning re-applies it, and so does a click in the game window while the lock is not
+  held (relative mode off, or the backend found the lock gone). A click while the lock holds,
+  such as firing or aiming, leaves it alone, so look motion around the click is kept. Motion counts only if it was
   observed while ready and relative under the current mode. An intentional mouse-mode change
   (menu versus gameplay) changes relative motion only and keeps held keys and buttons.
 - The left and right GUI keys are never captured.

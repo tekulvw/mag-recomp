@@ -328,6 +328,34 @@ void reacquire_discards_warp_motion() {
     f.core.mouse_button(Left.code, 7, false, f.platform.now_ns(), stale);
     require(!f.engine.active.contains(Left), "its release still ends it");
 }
+
+// Clicks while the lock is held (firing, aiming) do not re-acquire it, so look motion around a
+// shot is kept; a click while the cursor is free, or after the lock was lost, takes it back.
+void click_recapture() {
+    Fixture f;
+    require(f.platform.acquisitions == 1, "capture engages the lock once");
+    for (int shot = 0; shot < 5; ++shot) {
+        const auto before = f.core.stamp();
+        f.core.recapture_after_click(true);
+        f.core.refresh();
+        f.core.mouse_motion(3, 1, before);
+    }
+    require(f.platform.acquisitions == 1, "a click re-acquired a held lock");
+    require(f.engine.dx == 15 && f.engine.dy == 5, "look motion around clicks was discarded");
+    f.core.recapture_after_click(false);  // the backend found the lock gone
+    f.core.refresh();
+    require(f.platform.acquisitions == 2, "a click after the lock was lost did not take it back");
+    f.core.request_mouse(false);  // a menu: the cursor is free
+    f.core.refresh();
+    f.core.request_mouse(true);
+    f.platform.relative_ok = false;
+    f.core.refresh();
+    require(!f.core.relative(), "the lock was refused");
+    f.platform.relative_ok = true;
+    f.core.recapture_after_click(true);
+    f.core.refresh();
+    require(f.core.relative(), "a click while the cursor is free takes it back");
+}
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -344,6 +372,7 @@ int main(int argc, char** argv) {
         else if (which == "quit-key") quit_key_rule();
         else if (which == "mouse-lock") mouse_lock();
         else if (which == "reacquire") reacquire_discards_warp_motion();
+        else if (which == "click") click_recapture();
         else return 2;
         return 0;
     } catch (const std::exception& error) {
