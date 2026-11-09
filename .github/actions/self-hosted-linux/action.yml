@@ -21,11 +21,25 @@ runs:
       env:
         EXTRA_PACKAGES: ${{ inputs.packages }}
       run: |
-        sudo apt-get update -q
-        # shellcheck disable=SC2086 # EXTRA_PACKAGES is a word list
-        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends \
-          build-essential clang lld cmake ninja-build pkg-config file xz-utils zstd zip \
-          python3-dev python3-pip python3-venv libssl-dev ca-certificates gh $EXTRA_PACKAGES
+        install_tools() {
+          sudo apt-get -o Acquire::Retries=3 update -q &&
+          # shellcheck disable=SC2086 # EXTRA_PACKAGES is a word list
+          sudo DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=3 install -y -q \
+            --no-install-recommends \
+            build-essential clang lld cmake ninja-build pkg-config file xz-utils zstd zip \
+            python3-dev python3-pip python3-venv libssl-dev ca-certificates gh $EXTRA_PACKAGES
+        }
+        if ! install_tools; then
+          # archive.ubuntu.com can be unreachable while its mirrors still answer
+          # (2026-11-09). Retry once through a mirror of the same archive.
+          echo "::warning::apt failed through archive.ubuntu.com; retrying through mirrors.edge.kernel.org"
+          for f in /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do
+            if [ -f "$f" ]; then
+              sudo sed -i 's#http://archive\.ubuntu\.com/ubuntu#http://mirrors.edge.kernel.org/ubuntu#g' "$f"
+            fi
+          done
+          install_tools
+        fi
     - name: Install rustup
       if: runner.environment == 'self-hosted' && runner.os == 'Linux' && inputs.rust == 'true'
       shell: bash
