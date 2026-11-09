@@ -217,6 +217,7 @@ struct MagGameControlsAdapter::State {
     uint64_t session;
     void (*capture)(bool);
     void (*mouse_capture)(bool);
+    bool look_held_by_menu = false;
     ControlsProfile profile;
     std::mutex pending_mutex;
     std::optional<ControlsProfile> pending;
@@ -741,7 +742,15 @@ struct MagGameControlsAdapter::State {
         if (gameplay_eligible) handler_owner = current;
         const auto consumed = guest.reads().u32(uint64_t(pad) + PadConsumed);
         if (!consumed) throw std::runtime_error("pad record unreadable");
-        mouse_eligible = gameplay_eligible && current->mouse_supported && contract && !(*consumed & contract->look_mask);
+        // A menu or other UI that takes the look channels before the player's handler holds the
+        // mouse: release the lock (the cursor is free) until look comes back.
+        const bool look_held = contract && (*consumed & contract->look_mask);
+        mouse_eligible = gameplay_eligible && current->mouse_supported && contract && !look_held;
+        if (mouse_capture) mouse_capture(gameplay_eligible && !look_held && profile.mode != InputMode::Controller);
+        if (gameplay_eligible && look_held != look_held_by_menu) {
+            look_held_by_menu = look_held;
+            status = look_held ? "on-foot input attached; a menu holds look" : "on-foot Rust input attached";
+        }
         if (mouse_eligible && mouse_motion()) mag_controls_accept_mouse(*sample_key);
         frame->policy = mag_controls_current_policy();
     }

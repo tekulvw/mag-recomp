@@ -122,7 +122,14 @@ void DesktopCaptureCore::refresh() {
     mouse_mode_ = mouse;
     const bool raw = installed_ && platform_.raw_mouse_available();
     raw_.store(raw, std::memory_order_release);
+    const bool reacquire = relative_ && needs_recapture_;
     apply_relative(ready && raw && mouse);
+    if (reacquire && relative_) {
+        // Re-acquiring moves the pointer (a centring warp); motion observed before or during it
+        // is not the player's hand. Advance only the motion epoch: held keys and buttons stay.
+        gate_.publish(ready, false, true);
+        gate_.publish(ready, true, true);
+    }
     gate_.publish(ready, relative_, intentional);
     if (installed_) publish_capture(ready, relative_);
 }

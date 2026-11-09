@@ -83,10 +83,18 @@ public:
         std::fprintf(stderr, "[game-controls] SDL relative mouse mode unavailable: %s\n", SDL_GetError());
         return false;
     }
+    // Motion SDL reports for this warp is the pointer jumping to the centre, not the player's
+    // hand: the event filter drops motion while this is set (SDL delivers it synchronously on this
+    // thread). Later X motion for the warp arrives after relative mode is back on and SDL ignores
+    // it there.
+    std::atomic<bool> warping{false};
     void center_pointer() {
         int w = 0, h = 0;
         SDL_GetWindowSize(window, &w, &h);
-        if (w > 0 && h > 0) SDL_WarpMouseInWindow(window, w / 2, h / 2);
+        if (w <= 0 || h <= 0) return;
+        warping.store(true, std::memory_order_release);
+        SDL_WarpMouseInWindow(window, w / 2, h / 2);
+        warping.store(false, std::memory_order_release);
     }
     // While captured: is the lock still in place, with the pointer inside the window?
     bool lock_held() {
@@ -163,7 +171,8 @@ int SDLCALL filter(void* data, SDL_Event* event) {
             keep = !desktop_capture_withholds_quit_key(context);
         }
         const bool repeat = (event->type == SDL_KEYDOWN || event->type == SDL_KEYUP) && event->key.repeat;
-        if (!repeat) {
+        const bool warp = event->type == SDL_MOUSEMOTION && b.platform.warping.load(std::memory_order_acquire);
+        if (!repeat && !warp) {
             const auto stamp = b.core.stamp();
             const uint64_t time = steady_ns();
             std::lock_guard lock(b.queue_mutex);

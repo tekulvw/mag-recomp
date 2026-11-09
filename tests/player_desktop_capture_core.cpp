@@ -3,6 +3,7 @@
 // released). Synthetic input only.
 #include "player_desktop_capture_core.h"
 #include <cstdio>
+#include <functional>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -22,7 +23,11 @@ struct FakePlatform final : DesktopCapturePlatform {
     bool window_focused() override { return focused; }
     bool input_blocked() override { return blocked; }
     bool raw_mouse_available() override { return raw; }
+    // Runs inside set_relative(true): a backend may observe input while it acquires (the
+    // pointer warping to the centre).
+    std::function<void()> during_acquire;
     bool set_relative(bool on) override {
+        if (on && during_acquire) during_acquire();
         if (!on) {
             ++releases;
             relative = false;
@@ -303,6 +308,26 @@ void mouse_lock() {
     line = step([] {});
     require(!line && f.platform.acquisitions == 4, "a held lock is not re-applied every refresh");
 }
+
+// Re-applying a lost lock warps the pointer; motion observed before or during the re-acquisition
+// is discarded, motion after it counts, and held buttons survive.
+void reacquire_discards_warp_motion() {
+    Fixture f;
+    f.button(Left, true);
+    DesktopCaptureGate::Stamp stale = f.core.stamp(), during{};
+    f.platform.during_acquire = [&] { during = f.core.stamp(); };
+    f.core.request_recapture();
+    f.core.refresh();
+    require(f.platform.acquisitions == 2 && f.core.relative(), "the lock is re-applied");
+    f.core.mouse_motion(300, -40, during);
+    f.core.mouse_motion(7, 7, stale);
+    require(f.engine.dx == 0 && f.engine.dy == 0, "motion from the re-lock's warp became look input");
+    f.core.mouse_motion(2, 1, f.core.stamp());
+    require(f.engine.dx == 2 && f.engine.dy == 1, "motion after the re-lock reaches the engine");
+    require(f.engine.active.contains(Left), "a held button survives the re-lock");
+    f.core.mouse_button(Left.code, 7, false, f.platform.now_ns(), stale);
+    require(!f.engine.active.contains(Left), "its release still ends it");
+}
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -318,6 +343,7 @@ int main(int argc, char** argv) {
         else if (which == "recapture") recapture();
         else if (which == "quit-key") quit_key_rule();
         else if (which == "mouse-lock") mouse_lock();
+        else if (which == "reacquire") reacquire_discards_warp_motion();
         else return 2;
         return 0;
     } catch (const std::exception& error) {

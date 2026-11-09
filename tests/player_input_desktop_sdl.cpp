@@ -153,6 +153,19 @@ void run() {
     pump();
     require(SDL_GetRelativeMouseMode() && capture.mouse, "gameplay takes relative mode again");
 
+    // Something takes the lock (here: relative mode turned off behind the backend's back). The
+    // next pump re-applies it, centring the pointer; that warp is not look input.
+    const double before_x = motion_x, before_y = motion_y;
+    SDL_SetRelativeMouseMode(SDL_FALSE);
+    SDL_WarpMouseInWindow(window, 1, 1);  // the pointer has drifted to a corner
+    pump();
+    pump();
+    require(SDL_GetRelativeMouseMode() && SDL_GetWindowGrab(window), "a lost lock is re-applied with the grab");
+    require(motion_x == before_x && motion_y == before_y, "the re-lock's centring warp became look input");
+    motion(2, -1);
+    pump();
+    require(motion_x == before_x + 2 && motion_y == before_y + 1, "real motion still reaches the controls after a re-lock");
+
     mag_input_desktop_set_enabled(0);
     pump();
     require(!filter_installed() && !SDL_GetRelativeMouseMode(), "uninstall removes the filter and relative mode");

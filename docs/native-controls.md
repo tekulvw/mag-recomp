@@ -498,7 +498,10 @@ since last seen, reset system and host caches, clear receipts and cancel the mou
    handler. When it is the owner's handler: re-resolve it (not the same owner cancels "native input
    owner changed"); adopt it (also as the handler-scope owner when gameplay is eligible); read the
    pad record's consumed mask (unreadable cancels); mouse is eligible when gameplay is eligible,
-   the state supports mouse look and no look channel is consumed; with mouse eligibility and mouse
+   the state supports mouse look and no look channel is consumed; relative mouse capture is
+   requested only while gameplay is eligible and no look channel is consumed (outside Controller
+   mode), so a menu that takes the look channels releases the mouse lock until look returns
+   (status "on-foot input attached; a menu holds look" while it does); with mouse eligibility and mouse
    motion in the frame, accept the mouse (`mag_controls_accept_mouse`); refresh the frame's policy
    from the engine.
 
@@ -678,7 +681,9 @@ holds an explicit window grab (`SDL_SetWindowGrab`), so the pointer stays confin
 window even where relative mode alone does not lock it; it acquires in the order leave relative
 mode, grab, centre the pointer, enter relative mode. Each pump checks the lock: when relative mode
 or the grab is gone or the pointer is outside the window, it re-applies the lock (logged once per
-loss as "mouse lock lost; re-applying"). Focus loss, a window change and a menu release the lock
+loss as "mouse lock lost; re-applying"). Re-applying moves the pointer to the centre, so the core
+discards motion observed before or during a re-acquisition (only the motion epoch advances; held
+keys and buttons stay), and the event filter also drops motion SDL reports for the centring warp. Focus loss, a window change and a menu release the lock
 and the grab. Every change of capture state is logged once (`desktop_capture_transition`):
 capture engaged or released, and the mouse locked or released. Installing the filter is SDL's
 `SDL_SetEventFilter`, which discards events still queued at that moment; the backend installs it

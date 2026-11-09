@@ -74,6 +74,9 @@ class GameControlsAdapterTests(unittest.TestCase):
     def test_foreign_threads_and_events_outside_a_tick_are_ignored_and_errors_cancel(self):
         self.run_scenario('threads')
 
+    def test_a_menu_holding_look_releases_the_mouse_lock_until_look_returns(self):
+        self.run_scenario('menu')
+
 
 if __name__ == '__main__':
     unittest.main()
