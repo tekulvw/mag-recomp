@@ -51,6 +51,22 @@ static void near_plane() {
     CHECK(run(c, p) == kHandled && p.surviving == 0);
 }
 
+/* Eye plane (Training recordings with camera movement): plain clip comparisons do not reproduce
+ * the original's decisions for a triangle that crosses w = 0, and the original draws some that
+ * they would remove, so such a triangle is kept for the GPU to clip. One with every vertex at
+ * w <= 0 is removed. */
+static void eye_plane() {
+    Case c; c.counts(3, 3); c.indices({0, 1, 2});
+    for (int r = 0; r < 4; ++r) for (int k = 0; k < 4; ++k) putf(c.slot[17], 0x10 + 16 * r + 4 * k, 0.0f);
+    putf(c.slot[17], 0x10, 1.0f); putf(c.slot[17], 0x24, 1.0f); putf(c.slot[17], 0x38, 1.0f);
+    putf(c.slot[17], 0x48, -1.0f);                         /* w = -z */
+    c.positions({at(5, 0, -1), at(5, 0.1f, 1), at(6, 0, -1)});   /* every c.x > c.w; one w < 0 */
+    Prepared p;
+    CHECK(run(c, p) == kHandled && p.surviving == 3);
+    c.positions({at(5, 0, 1), at(5, 0.1f, 1), at(6, 0, 1)});     /* all w < 0 */
+    CHECK(run(c, p) == kHandled && p.surviving == 0);
+}
+
 static void et3_small_primitive() {
     Case c; c.positions({at(0, 0, 0), at(0.0003f, -0.1f, 0), at(0.0001f, 0.1f, 0)}); c.counts(3, 3); c.indices({0, 1, 2});
     Prepared p;
@@ -345,7 +361,7 @@ static void codecs() {
 
 int main() {
     codecs();
-    et1_facing(); et2_frustum(); et3_small_primitive(); near_plane(); group3_mode8_wind(); et4_zero_area(); et5_ring();
+    et1_facing(); et2_frustum(); et3_small_primitive(); near_plane(); eye_plane(); group3_mode8_wind(); et4_zero_area(); et5_ring();
     et6_et7_et8_holes(); et9_instances();
     gz1_placement(); gz3_wind(); ni1_wind(); sk_skinning();
     refusals();

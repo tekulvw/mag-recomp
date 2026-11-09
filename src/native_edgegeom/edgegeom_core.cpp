@@ -317,7 +317,7 @@ Reason Engine::project_and_cull(const Inputs& in, uint32_t vertices, uint32_t in
         const float FX = std::floor(4.0f * X), FY = std::floor(4.0f * Y);
         /* Screen values outside int32 or undefined (w <= 0) bypass rules 2 and 3. */
         const int undefined = int(!(cw > 0.0f)) | int(!(std::fabs(FX) < 1.0e9f)) | int(!(std::fabs(FY) < 1.0e9f));
-        code[i] = uint8_t((cx > cw) | (cx < -cw) << 1 | (cy > cw) << 2 | (cy < -cw) << 3 | undefined << 4 | (cz < -cw) << 5);
+        code[i] = uint8_t((cx > cw) | (cx < -cw) << 1 | (cy > cw) << 2 | (cy < -cw) << 3 | undefined << 4 | (cz < -cw) << 5 | int(!(cw > 0.0f)) << 6);
         sx[i] = X; sy[i] = Y;
         fx[i] = int32_t(undefined ? 0.0f : FX);
         fy[i] = int32_t(undefined ? 0.0f : FY);
@@ -333,9 +333,14 @@ Reason Engine::project_and_cull(const Inputs& in, uint32_t vertices, uint32_t in
             const uint32_t a = base + ix[3 * tri], b = base + ix[3 * tri + 1], c = base + ix[3 * tri + 2];
             const uint8_t ca = code[a], cb = code[b], cc = code[c];
             bool keep;
-            /* Rule 1 for x, y and the near plane; a triangle that only reaches past the near
-             * plane, or has a vertex with w <= 0, is kept for the GPU to clip. */
-            if (ca & cb & cc & 0x2F) keep = false;
+            /* A triangle with every vertex at w <= 0 lies behind the eye and is removed. One with
+             * only some there crosses the eye plane: rule 1's plain comparisons do not reproduce
+             * the original's decisions for it (recordings with camera movement), so it is kept
+             * for the GPU to clip, which can never hide geometry. Otherwise rule 1 for x, y and
+             * the near plane, and a triangle that only reaches past the near plane is kept. */
+            if (ca & cb & cc & 0x40) keep = false;
+            else if ((ca | cb | cc) & 0x40) keep = true;
+            else if (ca & cb & cc & 0x2F) keep = false;
             else if ((ca | cb | cc) & 0x30) keep = true;
             else {
                 const float area = (sx[b] - sx[a]) * (sy[c] - sy[a]) - (sx[c] - sx[a]) * (sy[b] - sy[a]);
