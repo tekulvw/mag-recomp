@@ -27,6 +27,14 @@ DECLARATION = 'extern int mag_payload_override(void* spu_ctx, unsigned int targe
 FUNCTION = r'void mag_wws_policy_spu_func_00003190\(spu_context\* ctx\) \{.*?^}'
 
 
+def output_key(outputs, name):
+    """The receipt's own key for `name`: lifts on Windows record outputs with backslashes."""
+    for key in outputs:
+        if key.replace('\\', '/') == name:
+            return key
+    return name
+
+
 def original_body(body):
     """The pinned original function text: without this guard and without the trace hooks."""
     return (body.replace(GUARD_OPEN + CALL + GUARD_CLOSE, CALL, 1)
@@ -70,7 +78,7 @@ def apply_hooks(directory):
     temporary = path.with_suffix('.override-tmp')
     temporary.write_text(new)
     os.replace(temporary, path)
-    record['outputs']['mag_wws_policy/spu_recomp.c'] = sha256_file(path)
+    record['outputs'][output_key(record['outputs'], 'mag_wws_policy/spu_recomp.c')] = sha256_file(path)
     temporary = directory / 'provenance.override-tmp.json'
     temporary.write_text(json.dumps(record, indent=2) + '\n')
     os.replace(temporary, directory / 'provenance.json')
