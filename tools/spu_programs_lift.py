@@ -11,11 +11,11 @@ report complete coverage, so a new or changed SPU program cannot go
 unregistered silently.
 
   generate: tools/spu_programs_lift.py --sdk <sdk> --sdk-revision <rev> --output local/<dir>
-  check:    tools/spu_programs_lift.py --check local/<dir>      (the build runs this)
+  check:    tools/spu_programs_lift.py --check local/<dir> [--sources-out <file>]   (the build runs this)
 
 Generated code and original bytes stay in the (ignored) output directory.
 """
-import argparse, hashlib, json, pathlib, subprocess, sys
+import argparse, hashlib, json, pathlib, re, subprocess, sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -26,6 +26,8 @@ COVERAGE = ROOT / 'profiles/retail-v1.0-spu-coverage.json'
 RECEIPT = 'mag-spu-programs.json'
 REGISTRY = 'spu_programs.c'
 REGISTER_FN = 'mag_spu_programs_register'
+SOURCES = 'sources.cmake'
+SOURCE_PART = re.compile(r'[A-Za-z0-9._-]+')
 
 
 def digest(path):
@@ -78,8 +80,41 @@ def check(output):
         raise ValueError('SPU program manifest or coverage inventory changed since generation; regenerate')
     if receipt['inventory_sha256'] != digest(output / 'inventory.json'):
         raise ValueError('inventory.json changed since generation')
-    verify_inventory(output, json.loads(MANIFEST.read_text()))
-    return receipt
+    inv = verify_inventory(output, json.loads(MANIFEST.read_text()))
+    return receipt, checked_sources(output, inv)
+
+
+def checked_sources(output, inv):
+    """The generated sources, located inside the checked directory itself.
+
+    sources.cmake records absolute paths where the lift ran. A directory copied
+    to another workspace or host must compile its own verified files, so each
+    recorded entry is matched to exactly one inventory source by its path
+    within the directory, keeping the recorded order."""
+    names = [p['name'] for p in inv['programs'] if p['status'] == 'registered']
+    expected = [name + '/spu_recomp.c' for name in names] + [REGISTRY]
+    for path in expected:
+        if not all(SOURCE_PART.fullmatch(part) and part not in ('.', '..') for part in path.split('/')):
+            raise ValueError('unexpected generated source name: ' + path)
+    recorded = re.findall(r'\[==\[(.*?)\]==\]', (output / SOURCES).read_text())
+    ordered = []
+    for old in recorded:
+        parts = pathlib.PurePosixPath(old).parts
+        match = [new for new in expected if parts[-len(new.split('/')):] == tuple(new.split('/'))]
+        if len(match) != 1:
+            raise ValueError(SOURCES + ' does not list the inventory sources: ' + old)
+        ordered.append(match[0])
+    if sorted(ordered) != sorted(expected):
+        raise ValueError(SOURCES + ' does not list the inventory sources')
+    for path in ordered:
+        if not (output / path).is_file():
+            raise ValueError('generated source missing: ' + path)
+    return [output / path for path in ordered]
+
+
+def write_sources(path, sources):
+    # Bracket arguments preserve spaces and avoid expansion of $ in paths.
+    path.write_text('set(SPU_GENERATED_SOURCES\n' + ''.join(f'  [==[{p.as_posix()}]==]\n' for p in sources) + ')\n')
 
 
 def generate(sdk, revision, output):
@@ -125,13 +160,17 @@ def generate(sdk, revision, output):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--check', type=pathlib.Path)
+    ap.add_argument('--sources-out', type=pathlib.Path,
+                    help='with --check: write the checked directory\'s source list as CMake')
     ap.add_argument('--sdk', type=pathlib.Path)
     ap.add_argument('--sdk-revision')
     ap.add_argument('--output', type=pathlib.Path)
     a = ap.parse_args()
     try:
         if a.check:
-            receipt = check(a.check)
+            receipt, sources = check(a.check)
+            if a.sources_out:
+                write_sources(a.sources_out, sources)
             print(f"SPU program coverage complete: {sum(p['status'] == 'registered' for p in receipt['programs'])} "
                   f"registered, {sum(p['status'] == 'handled' for p in receipt['programs'])} handled")
         else:

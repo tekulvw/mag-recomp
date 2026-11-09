@@ -14,6 +14,9 @@ static NSString *sha(NSData *data) {
     NSMutableString *text=[NSMutableString string];for(unsigned char value:digest)[text appendFormat:@"%02x",value];return text;
 }
 static void require(BOOL ok,NSString *message){if(!ok)throw std::runtime_error(message.UTF8String);}
+// A problem with the game's own settings archive, which no setting can fix.
+struct ArchiveError:std::runtime_error{using std::runtime_error::runtime_error;};
+static void requireArchive(BOOL ok,NSString *message){if(!ok)throw ArchiveError(message.UTF8String);}
 static NSString *ipv4(NSString *host) {
     struct in_addr address;
     if(inet_pton(AF_INET,host.UTF8String,&address)==1)return host;
@@ -53,22 +56,24 @@ NSString *MAGCreateServerOverlay(NSString *sourceRoot,NSString *ownedRoot,NSDict
             return destination;
         }
         NSString *source=[sourceRoot stringByAppendingPathComponent:archivePath];
-        require(ordinary(source),@"The supported game settings archive is missing.");
+        requireArchive(ordinary(source),@"The supported game settings archive is missing.");
         NSDictionary *attributes=[fm attributesOfItemAtPath:source error:NULL];
-        require([attributes[NSFileSize] unsignedLongLongValue]<=512ull*1024*1024,@"The game settings archive exceeds its supported size.");
+        requireArchive([attributes[NSFileSize] unsignedLongLongValue]<=512ull*1024*1024,@"The game settings archive exceeds its supported size.");
         NSData *raw=[NSData dataWithContentsOfFile:source options:0 error:error];
-        require(raw!=nil,@"The game settings archive could not be read.");
+        requireArchive(raw!=nil,@"The game settings archive could not be read.");
         std::vector<uint8_t> archive;
         if(raw.length>=4&&!memcmp(raw.bytes,"NPD\0",4)){
             size_t length=0;uint8_t *plain=sdata_decrypt((const uint8_t*)raw.bytes,raw.length,&length);
-            require(plain&&length<=512ull*1024*1024,@"The supported SDATA settings archive could not be decoded.");
+            requireArchive(plain&&length<=512ull*1024*1024,@"The supported SDATA settings archive could not be decoded.");
             archive.assign(plain,plain+length);free(plain);
         }else{
             const auto *begin=(const uint8_t*)raw.bytes;archive.assign(begin,begin+raw.length);
         }
-        auto original=mag::read_psarc_member(archive,settingsMember);
+        std::vector<uint8_t> original;
+        try{original=mag::read_psarc_member(archive,settingsMember);}
+        catch(const std::exception& failure){throw ArchiveError(failure.what());}
         NSData *originalData=[NSData dataWithBytes:original.data() length:original.size()];
-        require([sha(originalData) isEqual:expectedMemberSHA256],@"The settings archive does not match the supported retail version. The original was kept.");
+        requireArchive([sha(originalData) isEqual:expectedMemberSHA256],@"The settings archive does not match the supported retail version. The original was kept.");
         NSString *host=ipv4(settings[@"server_address"]);
         NSMutableString *overrides=[NSMutableString stringWithFormat:@"\n-- MAG player connection override\nMAGClientNetConfig = MAGClientNetConfig or {}\nMAGClientNetConfig.EnableNetwork = true\nMAGClientNetConfig.MAPSServerAddr = \"%@\"\n",host];
         [overrides appendString:@"MAGClientNetConfig.EnableServerOnClient = false\nMAGClientNetConfig.UseTestClient = false\nMAGClientNetConfig.UseNPTicket = false\n"];
@@ -104,6 +109,8 @@ NSString *MAGCreateServerOverlay(NSString *sourceRoot,NSString *ownedRoot,NSDict
         require(markerData&&[markerData writeToFile:markerPath options:NSDataWritingAtomic error:error],@"The private server overlay marker could not be saved.");
         require([fm moveItemAtPath:stage toPath:destination error:error],@"The private server overlay could not be completed.");
         stage=nil;return destination;
+    }catch(const ArchiveError& failure){
+        if(error)*error=[NSError errorWithDomain:@"MAGSettings" code:MAGServerOverlayArchiveError userInfo:@{NSLocalizedDescriptionKey:[NSString stringWithUTF8String:failure.what()]}];
     }catch(const std::exception& failure){
         if(error)*error=[NSError errorWithDomain:@"MAGSettings" code:2 userInfo:@{NSLocalizedDescriptionKey:[NSString stringWithUTF8String:failure.what()]}];
     }}@catch(NSException *exception){

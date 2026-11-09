@@ -58,6 +58,12 @@ class CliDistributionTests(unittest.TestCase):
         self.assertFalse(status['release_ready'])
         self.assertEqual(len(status['platforms']), 6)
         self.assertTrue(all(item['status'] == 'blocked' for item in status['platforms'].values()))
+        # The readable form leads with Build MAG and labels the legacy routes as such.
+        human = self.cli('--human', 'status')
+        first, second = human.stdout.splitlines()[:2]
+        self.assertTrue(first.startswith('Build MAG: '))
+        self.assertEqual(first.startswith('Build MAG: ready'), status['player_build']['ready'])
+        self.assertIn('not used by Build MAG', second)
 
     def test_production_install_fails_before_tool_acquisition(self):
         with tempfile.TemporaryDirectory() as temp:

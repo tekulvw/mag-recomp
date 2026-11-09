@@ -56,7 +56,7 @@ static NSStackView *row(NSString *title,NSString *hint,NSView *control) {
     NSSegmentedControl *_section;
     NSView *_controlsHost;
     id<MAGControlsSettingsPane> _controlsPane;
-    NSTextField *_server,*_tcp,*_udp,*_errorLabel,*_status,*_countdown;
+    NSTextField *_server,*_name,*_tcp,*_udp,*_errorLabel,*_status,*_countdown;
     NSPopUpButton *_mode,*_resolution,*_rendering,*_aa;
     NSButton *_applyButton,*_cancelButton,*_playButton,*_advancedButton;
     NSArray<NSControl*> *_fields;
@@ -99,6 +99,8 @@ static NSStackView *row(NSString *title,NSString *hint,NSView *control) {
     _server=[NSTextField textFieldWithString:@""];_server.placeholderString=@"Use game default";_server.identifier=@"server_address";_server.delegate=self;
     NSStackView *connection=stack(NSUserInterfaceLayoutOrientationVertical,5);
     add(connection,row(@"Game server",@"Hostname or IPv4 address",_server));add(connection,separator());
+    _name=[NSTextField textFieldWithString:@""];_name.placeholderString=@"Default";_name.identifier=@"player_name";_name.delegate=self;
+    add(connection,row(@"Player name",@"Your name on the server, typed in for you at sign-in",_name));add(connection,separator());
     _advancedButton=[NSButton buttonWithTitle:@"▸ Advanced connection settings" target:self action:@selector(toggleAdvanced:)];
     _advancedButton.bordered=NO;_advancedButton.alignment=NSTextAlignmentLeft;_advancedButton.font=[NSFont systemFontOfSize:11];
     add(connection,_advancedButton);
@@ -143,7 +145,7 @@ static NSStackView *row(NSString *title,NSString *hint,NSView *control) {
     _applyButton.keyEquivalent=@"\r";
     _playButton=[NSButton buttonWithTitle:@"Play MAG" target:self action:@selector(play:)];_playButton.keyEquivalent=@"\r";_playButton.hidden=YES;_playButton.enabled=!_recovery;_playButton.identifier=@"play";
     for(NSButton *button in @[_cancelButton,_applyButton,_playButton])[footer addArrangedSubview:button];
-    add(_root,footer);_fields=@[_server,_tcp,_udp,_mode,_resolution,_rendering,_aa,_section];
+    add(_root,footer);_fields=@[_server,_name,_tcp,_udp,_mode,_resolution,_rendering,_aa,_section];
     [self fill:settings];[self changed:nil];
     if(error)[self showError:error.localizedDescription];
     [self fit];[window center];return self;
@@ -163,7 +165,7 @@ static NSStackView *row(NSString *title,NSString *hint,NSView *control) {
 - (void)fit { [self.window.contentView layoutSubtreeIfNeeded];[self.window setContentSize:NSMakeSize(620,_root.fittingSize.height+44)]; }
 - (void)showError:(NSString *)message { _errorLabel.stringValue=message;_errorLabel.hidden=NO;[self fit]; }
 - (void)fill:(NSDictionary *)settings {
-    _server.stringValue=settings[@"server_address"];
+    _server.stringValue=settings[@"server_address"];_name.stringValue=settings[@"player_name"]?:@"";
     _tcp.stringValue=[settings[@"tcp_port"] intValue]?[settings[@"tcp_port"] stringValue]:@"";
     _udp.stringValue=[settings[@"udp_port"] intValue]?[settings[@"udp_port"] stringValue]:@"";
     [_mode selectItemAtIndex:[settings[@"display_mode"] isEqual:@"borderless"]?1:0];
@@ -174,7 +176,7 @@ static NSStackView *row(NSString *title,NSString *hint,NSView *control) {
     [_aa selectItemAtIndex:[settings[@"anti_aliasing"] isEqual:@"fxaa"]?1:0];
 }
 - (NSDictionary *)draft:(NSError **)error {
-    NSMutableDictionary *draft=MAGSettingsDefaults().mutableCopy;draft[@"server_address"]=_server.stringValue;
+    NSMutableDictionary *draft=MAGSettingsDefaults().mutableCopy;draft[@"server_address"]=_server.stringValue;draft[@"player_name"]=_name.stringValue;
     for(NSArray *pair in @[@[@"tcp_port",_tcp],@[@"udp_port",_udp]]) {
         NSString *text=[((NSTextField*)pair[1]).stringValue stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet];
         if(text.length&&[text rangeOfCharacterFromSet:[NSCharacterSet characterSetWithCharactersInString:@"0123456789"].invertedSet].location!=NSNotFound){

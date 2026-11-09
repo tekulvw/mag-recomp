@@ -33,7 +33,7 @@ def _object(value, required, optional, label):
         raise InstallerError(f'{label} requires {", ".join(sorted(required))}; unknown fields are unsupported')
 
 
-def _path(value, base, label, directory=False, executable=False, dependency=False):
+def _path(value, base, label, directory=False, executable=False, dependency=False, keep_name=False):
     if not isinstance(value, str) or not value or '\x00' in value:
         raise InstallerError(f'{label} must name an existing local path')
     path = Path(value).expanduser()
@@ -43,7 +43,10 @@ def _path(value, base, label, directory=False, executable=False, dependency=Fals
         raise InstallerError(f'{label} must name an existing ordinary {"directory" if directory else "file"}: {path}')
     if executable and not os.access(path, os.X_OK):
         raise InstallerError(f'{label} must be executable: {path}')
-    return str(path.resolve())
+    # A compiler driver picks its language from the name it is run as: Ubuntu's
+    # /usr/bin/clang++ resolves to llvm-18/bin/clang, a C driver that links without
+    # the C++ runtime defaults (libstdc++, libm). Keep such paths unresolved.
+    return str(path) if keep_name else str(path.resolve())
 
 
 def load_config(path):
@@ -66,7 +69,7 @@ def load_config(path):
         if 'msvc' in raw or 'linux_toolchain' not in raw:
             raise InstallerError('Linux configuration requires linux_toolchain')
         _object(raw['linux_toolchain'], {'cc', 'cxx'}, set(), 'linux_toolchain')
-        result['linux_toolchain'] = {key: _path(raw['linux_toolchain'][key], path.parent, 'linux_toolchain.' + key, executable=True) for key in ('cc', 'cxx')}
+        result['linux_toolchain'] = {key: _path(raw['linux_toolchain'][key], path.parent, 'linux_toolchain.' + key, executable=True, keep_name=True) for key in ('cc', 'cxx')}
     elif 'linux_toolchain' in raw:
         raise InstallerError('linux_toolchain requires host=linux-x86_64')
     for key in ('source_tree', 'disc_root'):
@@ -87,14 +90,12 @@ def load_config(path):
                                 'revision': revision}
     if 'msvc' in raw:
         _object(raw['msvc'], {'vcvars', 'clang_cl'}, {'installation', 'version', 'product'}, 'msvc')
-        if 'ffmpeg' in raw:
-            raise InstallerError('The Windows recipe does not use FFmpeg libraries')
         result['msvc'] = {**raw['msvc'],
                           'vcvars': _path(raw['msvc']['vcvars'], path.parent, 'msvc.vcvars'),
                           'clang_cl': _path(raw['msvc']['clang_cl'], path.parent, 'msvc.clang_cl', executable=True)}
-    else:
-        if 'ffmpeg' not in raw:
-            raise InstallerError('Native build configuration requires ffmpeg on macOS and Linux')
+    elif 'ffmpeg' not in raw:
+        raise InstallerError('Native build configuration requires ffmpeg on macOS and Linux')
+    if 'ffmpeg' in raw:   # optional on Windows: the movie decoder, from the pinned prebuilt
         fields = {'include', 'avcodec', 'avformat', 'avutil', 'swscale'}
         _object(raw['ffmpeg'], fields, set(), 'ffmpeg')
         result['ffmpeg'] = {key: _path(raw['ffmpeg'][key], path.parent, f'ffmpeg.{key}', directory=key == 'include', dependency=True) for key in fields}
@@ -126,6 +127,11 @@ def framework_pins(workspace):
         for role, pin in table.items():
             if (re.fullmatch('[0-9a-f]{40}', str(pin.get('commit', ''))) is None
                     or not isinstance(pin.get('tag'), str) or not isinstance(pin.get('path'), str)):
+                raise ValueError(role)
+            extra = pin.get('splice_after')
+            if extra is not None and (not isinstance(extra, dict) or set(extra) != {'tag', 'commit'}
+                                      or re.fullmatch('[0-9a-f]{40}', str(extra.get('commit', ''))) is None
+                                      or not str(extra.get('tag', '')).startswith('mag-recomp/')):
                 raise ValueError(role)
             contained(Path(workspace), pin['path'])
         return table
@@ -228,6 +234,18 @@ def build_plan(config, workspace):
                   '-DCMAKE_C_COMPILER=' + clang_cl, '-DCMAKE_CXX_COMPILER=' + clang_cl,
                   # Static CRT: the packaged executables need no VC++ redistributable.
                   '-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded']
+        if config.get('managed_prefix'):
+            # The player presents through the runtime's Vulkan backend: Vulkan-Headers and
+            # glslang come from the managed prefix (glslang through CMAKE_PREFIX_PATH below).
+            common += ['-DPS3RECOMP_RSX_VULKAN=ON',
+                       '-DPS3RECOMP_VULKAN_INCLUDE_DIR=' + cmake_path(Path(config['managed_prefix']) / 'include')]
+        if config.get('ffmpeg'):
+            # Movies: the same decoder options as Linux, against the prebuilt's MSVC import libraries.
+            ffmpeg = config['ffmpeg']
+            common += ['-DPS3RECOMP_SAIL_FFMPEG=ON', '-DPS3RECOMP_FFMPEG_RUNTIME=ON',
+                       '-DPS3RECOMP_FFMPEG_INCLUDE_DIR=' + cmake_path(ffmpeg['include'])]
+            for name in ('avcodec', 'avformat', 'avutil', 'swscale'):
+                common.append('-DPS3RECOMP_FFMPEG_' + name.upper() + '_LIBRARY=' + cmake_path(ffmpeg[name]))
     else:
         def cmake_path(value): return str(value)
         ffmpeg = config['ffmpeg']
@@ -243,7 +261,7 @@ def build_plan(config, workspace):
                '-DCMAKE_MAKE_PROGRAM=' + cmake_path(config['ninja']), '-DMAG_FIRMWARE_DIR=' + cmake_path(paths['firmware'])]
     common += config.get('cmake_args', [])
     if config.get('managed_prefix'):
-        common.append('-DCMAKE_PREFIX_PATH=' + config['managed_prefix'])
+        common.append('-DCMAKE_PREFIX_PATH=' + cmake_path(config['managed_prefix']))
     for name, image, spu, build in [('launcher', 'EBOOT', 'worker-spu', 'build'),
                                     ('engine', 'mage_g', 'engine-spu', 'build-engine')]:
         extra = ['-DMAG_SPU_PROGRAMS_DIR=' + cmake_path(paths['spu-programs'])] if name == 'engine' else []

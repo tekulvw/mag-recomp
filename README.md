@@ -2,7 +2,7 @@
 
 A native static recompilation of *MAG* (BCUS98110, retail v1.0) for the PlayStation 3, built on the
 [ps3recomp](https://github.com/sp00nznet/ps3recomp) SDK. macOS on Apple Silicon (Metal) is the primary
-target; Windows x86_64 (Direct3D 12) builds are in preview.
+target; Windows x86_64 and Linux x86_64 builds use Vulkan.
 
 > **Unofficial fan project — bring your own copy.** Not affiliated with or endorsed by Sony Interactive
 > Entertainment or Zipper Interactive. This repository contains **no game code, assets, keys or
@@ -25,10 +25,17 @@ Only the v1.0 retail release is supported; any other release or modified file is
 
 ## Status
 
-The recompiled game boots to its menus and reaches interactive training on Apple Silicon. It is not
-complete: rendering has known gaps, audio stutters, and performance work is ongoing. The Windows build
-compiles but has not yet been run with real game data. Online play needs separate replacement
-services that are not part of this repository.
+Installer-built MAG has been tested on three systems:
+
+- **macOS** (Apple Silicon, Metal): signs in and has joined online matches on a community server.
+- **Windows** (x86_64, Vulkan): signs in, plays the Training mission and has joined online matches
+  on a community server. Movies play through an FFmpeg the installer downloads.
+- **Linux** (x86_64, Vulkan; tested on Ubuntu 24.04): signs in, plays the Training mission and has
+  joined online matches on a community server.
+
+Online play needs a compatible community server, which is not part of this repository. MAG connects
+to `play.magtest.online` by default. The game is not complete: rendering has known gaps, audio
+stutters, performance work is ongoing, and frame rates vary by system.
 
 ## Building
 
@@ -43,6 +50,74 @@ your computer and packages the result. Download it from a release.
 New macOS builds also include a [native settings panel](docs/player-settings.md) for the game server,
 display mode, output resolution and FXAA. Open **MAG → Settings…** while playing, or hold **Option**
 when launching to open setup first. Settings survive updates and rebuilds.
+
+## For players
+
+You build MAG on your own computer from your own copy; nothing game-derived is ever downloaded.
+
+1. **Get the installer** for your system (macOS on Apple Silicon, Windows 10/11 x86_64, or Ubuntu
+   24.04+ x86_64) from a release, or from the build you were given.
+2. **Prepare your game folder** as described in the [installer guide](installer/README.md#using-it).
+   Use the files from your disc dump exactly as they are. In particular,
+   `PS3_GAME/USRDIR/run/mag/ps3/game.psarc.sdat` must be the unmodified disc file: copies that were
+   modded, patched for a server, or taken from an emulator's installed game are refused, because
+   MAG itself applies your server choice to it.
+3. **Click Build MAG.** It takes a while (most of an hour or more) and needs about 20 GB of free space. If it stops, **Retry build**
+   continues where it left off.
+4. **First launch.** The installer's output is not signed, so the system asks once:
+   - **macOS:** if MAG "cannot be opened", Control-click (or right-click) `MAG.app`, choose
+     **Open**, then **Open** again. Do the same for the installer itself.
+   - **Windows:** if SmartScreen says "Windows protected your PC", click **More info**, then
+     **Run anyway**.
+   - **Linux:** if the installer has no PolicyKit dialog (for example over SSH), install the
+     build packages first:
+
+     ```sh
+     sudo apt-get update && sudo apt-get install --yes --no-install-recommends clang lld build-essential git pkg-config ca-certificates libssl-dev zlib1g-dev libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxfixes-dev libxss-dev libxkbcommon-dev libwayland-dev libgl1-mesa-dev libasound2-dev libpulse-dev libudev-dev libvulkan-dev libvulkan1 mesa-vulkan-drivers
+     ```
+   - **Windows, once the game starts:** Windows Security asks whether to allow public and private
+     networks to access the app. Choose **Allow** for both (this may need an administrator) so you
+     can play online.
+   - **macOS, once MAG starts:** if macOS asks for a permission for MAG, choose **Allow**.
+5. **Choose your player name.** You need one to play online. The server is already set
+   (`play.magtest.online`); change it only if you were given another.
+   - **macOS:** the setup window opens on first launch. Fill in **Player name** (and **Game server**
+     if needed), then click **Play MAG**.
+   - **Windows:** double-click `MAG.exe`. The first time, a small window asks for your name.
+   - **Linux:** run it once from the MAG folder with your name: `./MAG --name YourName`
+     (add `--server <address>` for another server).
+
+   A name has 3 to 15 letters, digits, `-` or `_`, and starts with a letter. MAG remembers it, and
+   types it in for you when the game asks you to sign in: just confirm it. On Linux that sign-in box
+   is a small text window. [Player settings](docs/player-settings.md) has the details.
+6. **Use a controller.** A standard USB or Bluetooth gamepad works on every system and is the
+   recommended way to play. On Linux the keyboard also works as a controller while the game window
+   has focus, until a controller is connected (set `PAD_NO_KEYBOARD=1` to turn it off):
+
+   | Keys | Controller |
+   | --- | --- |
+   | X / Z / C / V | Cross / Square / Circle / Triangle |
+   | Return / Space | Start / Select |
+   | Q / E, R / T, F / G | L1 / R1, L2 / R2, L3 / R3 |
+   | Arrow keys | D-pad |
+   | WASD / IJKL | Left / right stick |
+
+   On Windows, a controller is needed to play matches. The keyboard only covers menus (arrow keys,
+   Z / X / A / S for the face buttons, Return for Start), has no camera or aim, and is ignored
+   whenever any controller is present, including virtual gamepads created by Steam Input or
+   remote-desktop and streaming software. Mouse aim is not available on any system yet.
+
+**If a download fails** (for example during a GitHub outage), retry later. Or point the installer
+at a folder of previously downloaded tools with `build --cache <folder>`, or at a mirror with
+`MAG_INSTALLER_MIRRORS`; see [Downloads](installer/README.md#downloads). Every tool is checked
+against its pinned hash, so a mirror cannot change what you install.
+
+**Your saves** are in the installation folder's `home/gamedata`. Keep that folder (and back it up)
+when you move or rebuild MAG.
+
+**If something goes wrong,** each launch writes its logs in the installation folder, under
+`logs/launch-*/` (`launcher.log`, then `engine.log`). On Windows and Linux, a launch that needs
+something from you, such as a player name, also leaves its message in `home/player/launch-message.txt`.
 
 ## Releases
 

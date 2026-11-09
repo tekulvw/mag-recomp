@@ -117,4 +117,68 @@ class ManagedToolTests(unittest.TestCase):
         self.assertEqual(plan[-2]['argv'],['/usr/bin/make','-j2'])
         self.assertIn('-DENABLE_OPT=OFF',next(s for s in plan if s['id']=='configure-glslang')['argv'])
         self.assertIn('--disable-autodetect',next(s for s in plan if s['id']=='configure-ffmpeg')['argv'])
+    def test_windows_vulkan_dependencies_are_pinned_and_built_with_the_static_crt(self):
+        from mag_installer.managed_tools import WINDOWS_LOCK, WINDOWS_DEPENDENCIES, windows_dependency_plan
+        for key in WINDOWS_DEPENDENCIES:
+            record=WINDOWS_LOCK[key]
+            self.assertTrue(record['url'].startswith('https://github.com/KhronosGroup/'));self.assertEqual(len(record['sha256']),64);self.assertGreater(record['size'],0)
+        self.assertNotIn('source-ffmpeg',WINDOWS_LOCK);self.assertNotIn('source-sdl2',WINDOWS_LOCK)
+        paths={'cmake':'C:/owned/cmake.exe','ninja':'C:/owned/ninja.exe','python':'C:/owned/python.exe',
+               **{'source-'+k:'C:/owned/'+k for k in ('glslang','vulkan-headers','spirv-headers','spirv-tools')}}
+        plan=windows_dependency_plan(paths,Path('C:/owned/prefix'),'C:/VS/clang-cl.exe')
+        self.assertEqual([s['id'] for s in plan],[f'{step}-{key}' for key in ('vulkan-headers','spirv-headers','spirv-tools','glslang')
+                                                  for step in ('configure','build','install')])
+        glslang=next(s for s in plan if s['id']=='configure-glslang')['argv']
+        # The optimizer drops unused bindings; reflection depends on it (never ENABLE_OPT=OFF).
+        for flag in ('-DENABLE_OPT=ON','-DALLOW_EXTERNAL_SPIRV_TOOLS=ON','-DCMAKE_PREFIX_PATH=C:/owned/prefix','-DBUILD_SHARED_LIBS=OFF',
+                     '-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded','-DCMAKE_CXX_COMPILER=C:/VS/clang-cl.exe'):
+            self.assertIn(flag,glslang)
+        tools=next(s for s in plan if s['id']=='configure-spirv-tools')['argv']
+        self.assertIn('-DSPIRV-Headers_SOURCE_DIR=C:/owned/spirv-headers',tools);self.assertIn('-DPython3_EXECUTABLE=C:/owned/python.exe',tools)
+        self.assertIn('ef96ed763b43b59b33b31b362f09a02b729fa1c9',WINDOWS_LOCK['source-spirv-tools']['url'])
+        self.assertIn('496543121ce6419f23d6fa5d7194ba66c36212d2',WINDOWS_LOCK['source-spirv-headers']['url'])
+    def test_windows_movie_decoder_is_a_pinned_lgpl_shared_ffmpeg_9(self):
+        from mag_installer.managed_tools import WINDOWS_LOCK, WINDOWS_FFMPEG_DLLS, WINDOWS_FFMPEG_LIBRARIES
+        record=WINDOWS_LOCK['ffmpeg']
+        self.assertEqual(record['archive'],'zip');self.assertEqual(len(record['sha256']),64);self.assertGreater(record['size'],0)
+        self.assertRegex(record['url'],r'^https://github\.com/BtbN/FFmpeg-Builds/releases/download/autobuild-[0-9-]+/ffmpeg-n9\.0[^/]*-win64-lgpl-shared-9\.0\.zip$')
+        self.assertTrue(record['root'].endswith('-win64-lgpl-shared-9.0'))
+        # libavcodec/libavformat 63 and libavutil 61: the majors the runtime's FFmpeg 9.0 headers expect.
+        self.assertIn('avcodec-63.dll',WINDOWS_FFMPEG_DLLS);self.assertIn('avutil-61.dll',WINDOWS_FFMPEG_DLLS)
+        self.assertEqual(WINDOWS_FFMPEG_LIBRARIES,('avcodec','avformat','avutil','swscale'))
 if __name__=='__main__':unittest.main()
+
+class ManagedBytecodeTests(unittest.TestCase):
+    """Running a managed Python writes bytecode caches into its tree; a retry
+    must not refuse the verified tool for that, and nothing else may change."""
+    def test_stray_or_rewritten_bytecode_is_discarded_and_other_changes_refused(self):
+        import json as _json
+        from mag_installer import managed_tools
+        from mag_installer.safety import Cancellation
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp); spec = {'id': 'python', 'sha256': 'a' * 64}
+            final = root / ('python-' + 'a' * 16)
+            (final / 'lib/__pycache__').mkdir(parents=True)
+            (final / 'lib/module.py').write_text('x = 1\n')
+            (final / 'lib/__pycache__/shipped.cpython-312.pyc').write_bytes(b'shipped')
+            receipt = final / 'MANAGED-INVENTORY.json'
+            receipt.write_text(_json.dumps(managed_tools._inventory(final, Cancellation())))
+            # What a build leaves behind: a new cache and a rewritten shipped one.
+            (final / 'lib/__pycache__/module.cpython-312.pyc').write_bytes(b'new')
+            (final / 'lib/__pycache__/shipped.cpython-312.pyc').write_bytes(b'rewritten')
+            self.assertEqual(managed_tools.materialize(spec, root, root / 'cache', Cancellation(), lambda e: None), final)
+            self.assertEqual(sorted(p.name for p in (final / 'lib/__pycache__').iterdir()), [])
+            # The verified source itself changing is still refused.
+            (final / 'lib/module.py').write_text('x = 2\n')
+            with self.assertRaisesRegex(InstallerError, 'inventory changed'):
+                managed_tools.materialize(spec, root, root / 'cache', Cancellation(), lambda e: None)
+
+    def test_build_commands_cache_bytecode_outside_the_tools(self):
+        from mag_installer import managed_tools, native_build
+        home = Path('/scratch/home')
+        prefix = Path(managed_tools._env('p/python', 'c/cmake', 'n/ninja', home)['PYTHONPYCACHEPREFIX'])
+        self.assertEqual(prefix, home / 'pycache')
+        if os.name != 'nt':  # The Windows environment comes from the MSVC toolchain.
+            env = native_build._environment({'python': '/t/python', 'cmake': '/t/cmake', 'ninja': '/t/ninja', 'git': '/t/git'}, home)
+            self.assertEqual(Path(env['PYTHONPYCACHEPREFIX']), home / 'pycache')
+

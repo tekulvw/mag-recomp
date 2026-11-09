@@ -47,7 +47,16 @@ class NativePackageTests(unittest.TestCase):
             self.assertEqual((app/'Contents/Resources/source-receipts/launcher.json').read_bytes(),original)
             self.assertEqual((workspace/'build/MagRecomp.receipt.json').read_bytes(),original)
             self.assertEqual(manifest['workspace'],'../workspace')
+            self.assertEqual(manifest['environment'],{})  # no movie decoder in this build
             self.assertEqual(events[-1]['event'],'app-packaged')
+    def test_playback_defaults_match_the_boot_tool(self):
+        import ast
+        from mag_installer.native_package import MOVIE_PLAYBACK_ENV, playback_environment
+        boot=ast.parse((Path(__file__).resolve().parents[2]/'tools/boot.py').read_text())
+        value=next(ast.literal_eval(n.value) for n in boot.body if isinstance(n,ast.Assign) and any(getattr(t,'id',None)=='MOVIE_PLAYBACK_ENV' for t in n.targets))
+        self.assertEqual(MOVIE_PLAYBACK_ENV,value)
+        self.assertEqual(playback_environment({'launcher':{},'engine':{'movie_playback':True}}),value)
+        self.assertEqual(playback_environment({'launcher':{'movie_playback':False},'engine':{}}),{})
 
     def test_nested_owned_workspace_is_relative_and_external_workspace_refused(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -129,8 +138,15 @@ int main(int argc,char**argv) {
  if(!path||!overlay)return 61;
  FILE *f=fopen(launcher?"launcher-env.json":"engine-env.json","w");
  if(!f)return 62;
- fprintf(f,"{\"settings_path\":\"%s\",\"overlay_root\":\"%s\",\"setup\":%s,\"show\":%s}",
-  path,overlay,getenv("MAG_PLAYER_SETUP")?"true":"false",getenv("MAG_PLAYER_SHOW_SETTINGS")?"true":"false");fclose(f);
+ const char *movie=getenv("PS3RECOMP_SAIL_TIMED_THX"),*gamedata=getenv("PS3_GAMEDATA_ROOT");
+ if(!gamedata)return 64;
+ /* Each engine stage adds one line to a save file: a later launch must see the earlier ones. */
+ int saves=0;
+ if(!launcher){char save[4096];snprintf(save,sizeof save,"%s/save.txt",gamedata);
+  FILE *s=fopen(save,"a");if(!s)return 65;fputs("x\n",s);fclose(s);
+  s=fopen(save,"r");for(int c;(c=fgetc(s))!=EOF;)saves+=c=='\n';fclose(s);}
+ fprintf(f,"{\"settings_path\":\"%s\",\"overlay_root\":\"%s\",\"setup\":%s,\"show\":%s,\"movie\":\"%s\",\"gamedata\":\"%s\",\"saves\":%d}",
+  path,overlay,getenv("MAG_PLAYER_SETUP")?"true":"false",getenv("MAG_PLAYER_SHOW_SETTINGS")?"true":"false",movie?movie:"",gamedata,saves);fclose(f);
  if(!launcher)return 17;
  f=fopen(getenv("MAG_HANDOFF_REQUEST"),"w");if(!f)return 63;
  fprintf(f,"{\"version\":1,\"token\":\"%s\",\"guest_path\":\"/dev_bdvd/PS3_GAME/USRDIR/bin/mage_g.self\",\"kind\":\"mage_g\"}",getenv("MAG_HANDOFF_TOKEN"));fclose(f);
@@ -156,7 +172,7 @@ int main(int argc,char**argv) {
             for folder,image in [('build','EBOOT'),('build-engine','mage_g')]:
                 target=workspace/folder/'MagRecomp';shutil.copyfile(binary,target)
                 receipt=target.with_suffix('.receipt.json');record=json.loads(receipt.read_text())
-                record.update(binary_sha256=digest(target),elf_sha256=manifest['images'][image]['elf_sha256'])
+                record.update(binary_sha256=digest(target),elf_sha256=manifest['images'][image]['elf_sha256'],movie_playback=True)
                 receipt.write_text(json.dumps(record))
             app=package({},workspace,root/'MAG.app')
             result=subprocess.run([str(app/'Contents/MacOS/MAG'),'--settings'],capture_output=True,text=True,timeout=15)
@@ -166,6 +182,16 @@ int main(int argc,char**argv) {
             after=json.loads((launch/'engine-env.json').read_text())
             self.assertTrue(before['setup']);self.assertTrue(before['show'])
             self.assertFalse(after['setup']);self.assertFalse(after['show'])
+            self.assertEqual((before['movie'],after['movie']),('1','1'))  # decoder build: playback switches ship
+            # Saves live in the installation's home/gamedata for both stages, not in the launch folder.
+            self.assertEqual(Path(before['gamedata']).resolve(),(root/'home/gamedata').resolve())
+            self.assertEqual(before['gamedata'],after['gamedata']);self.assertEqual(after['saves'],1)
+            # A second launch gets a new log folder but the same saves.
+            again=subprocess.run([str(app/'Contents/MacOS/MAG')],capture_output=True,text=True,timeout=15)
+            self.assertEqual(again.returncode,17,again.stderr)
+            second=next(p for p in (root/'logs').glob('launch-*') if p!=launch)
+            later=json.loads((second/'engine-env.json').read_text())
+            self.assertEqual(later['gamedata'],after['gamedata']);self.assertEqual(later['saves'],2)
             self.assertEqual(before['settings_path'],after['settings_path'])
             self.assertTrue(before['settings_path'].endswith('/Library/Application Support/MAG/settings.json'))
             self.assertEqual(before['overlay_root'],after['overlay_root'])

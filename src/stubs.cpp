@@ -354,8 +354,8 @@ static void ticket_settings_trace(ppu_context* ctx) {
 static void supply_local_account(ppu_context* ctx, unsigned cfg) {
     const char* selected=getenv("MAG_LOCAL_ACCOUNT_NAME");
     if (!selected) return;
-    if (!cfg || (std::strcmp(selected,"Player") && std::strcmp(selected,"PlayerRetail"))) {
-        fprintf(stderr,"[mag-net] unsupported local account profile\n"); exit(89);
+    if (!cfg || !mag_local_account_name_valid(selected)) {
+        fprintf(stderr,"[mag-net] unsupported local account name (3 to 15 letters, digits, - or _, starting with a letter)\n"); exit(89);
     }
     const unsigned selected_length=(unsigned)std::strlen(selected);
     unsigned name=cfg+0x4C;
@@ -363,7 +363,7 @@ static void supply_local_account(ppu_context* ctx, unsigned cfg) {
     for(unsigned i=0;i<=selected_length;i++) matches &= vm_read8(name+8+i)==(unsigned char)selected[i];
     int change=mag_local_account_policy(true,vm_read32(0x867F4),vm_read8(cfg+0xD5),
                                        vm_read8(cfg+0xDD),vm_read32(name+0x18),
-                                       vm_read32(name+0x1C),matches);
+                                       vm_read32(name+0x1C),selected_length,matches);
     if(change<0) { fprintf(stderr,"[mag-net] local account profile rejected: code/config/name mismatch\n"); exit(89); }
     if(!change) return;
     // A private guest call frame carries a short string with the same allocator

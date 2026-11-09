@@ -14,6 +14,7 @@ import subprocess
 
 from .model import InstallerError
 from .safety import Cancellation, contained, file_digest
+from .native_package import playback_environment
 
 
 # Mirrors the macOS supervisor and the src/retail_handoff.cpp contract: verify the
@@ -25,11 +26,15 @@ _SUPERVISOR = r'''
 #define _UNICODE
 #include <windows.h>
 #include <bcrypt.h>
+#include <shellapi.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <wchar.h>
 #include "supervisor_config.h"
+#ifndef MAG_RUNTIME_DEFAULTS  /* a config written before packaged defaults existed: none */
+#define MAG_RUNTIME_DEFAULTS {{NULL, NULL}}
+#endif
 
 static wchar_t g_root[MAX_PATH] = L".";
 
@@ -159,8 +164,100 @@ static DWORD run(HANDLE job, const wchar_t *binary, const wchar_t *elf, const wc
     return code;
 }
 
+/* The player name rule, as the game's settings apply it (src/player_settings_portable.cpp). */
+/* name-rule-begin */
+static int valid_player_name(const wchar_t *name) {
+    size_t length = 0;
+    for (const wchar_t *p = name; *p; ++p, ++length) {
+        wchar_t c = *p;
+        int letter = (c >= L'a' && c <= L'z') || (c >= L'A' && c <= L'Z');
+        int digit = c >= L'0' && c <= L'9';
+        if (length == 0 ? !letter : !(letter || digit || c == L'-' || c == L'_')) return 0;
+        if (length >= 15) return 0;
+    }
+    return length >= 3;
+}
+/* name-rule-end */
+
+/* A small modal window that asks for the player name; user32 only, no resources. */
+typedef struct { HWND edit, error; wchar_t *out; int cap, done, ok; } NamePrompt;
+static LRESULT CALLBACK name_prompt_proc(HWND window, UINT message, WPARAM w, LPARAM l) {
+    NamePrompt *state = (NamePrompt *)GetWindowLongPtrW(window, GWLP_USERDATA);
+    switch (message) {
+    case WM_CREATE: {
+        state = (NamePrompt *)((CREATESTRUCTW *)l)->lpCreateParams;
+        SetWindowLongPtrW(window, GWLP_USERDATA, (LONG_PTR)state);
+        HWND label = CreateWindowExW(0, L"STATIC", L"Choose a player name (3\x2013" L"15 letters, digits, - or _, starting with a letter)",
+                                     WS_CHILD | WS_VISIBLE, 12, 12, 396, 36, window, NULL, NULL, NULL);
+        state->edit = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
+                                      12, 52, 396, 24, window, (HMENU)(INT_PTR)100, NULL, NULL);
+        SendMessageW(state->edit, EM_LIMITTEXT, 15, 0);
+        state->error = CreateWindowExW(0, L"STATIC", L"", WS_CHILD | WS_VISIBLE, 12, 82, 396, 20, window, NULL, NULL, NULL);
+        HWND ok = CreateWindowExW(0, L"BUTTON", L"OK", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
+                                  236, 108, 80, 26, window, (HMENU)(INT_PTR)IDOK, NULL, NULL);
+        HWND cancel = CreateWindowExW(0, L"BUTTON", L"Cancel", WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+                                      328, 108, 80, 26, window, (HMENU)(INT_PTR)IDCANCEL, NULL, NULL);
+        HWND all[] = {label, state->edit, state->error, ok, cancel};
+        for (int i = 0; i < 5; i++) SendMessageW(all[i], WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+        SetFocus(state->edit);
+        return 0; }
+    case WM_COMMAND:
+        if (LOWORD(w) == IDOK) {
+            GetWindowTextW(state->edit, state->out, state->cap);
+            if (valid_player_name(state->out)) { state->ok = 1; DestroyWindow(window); }
+            else SetWindowTextW(state->error, L"That name does not follow the rules above.");
+            return 0;
+        }
+        if (LOWORD(w) == IDCANCEL) { DestroyWindow(window); return 0; }
+        break;
+    case WM_CLOSE: DestroyWindow(window); return 0;
+    case WM_DESTROY:
+        if (state) state->done = 1;
+        /* A sent OK/Cancel (BM_CLICK from an accessibility tool) destroys the window inside
+         * GetMessageW; post a thread message so the modal loop wakes and sees done. */
+        PostMessageW(NULL, WM_NULL, 0, 0);
+        return 0;
+    }
+    return DefWindowProcW(window, message, w, l);
+}
+static int ask_player_name(wchar_t *out, int cap) {
+    NamePrompt state = {0}; state.out = out; state.cap = cap; out[0] = 0;
+    WNDCLASSW type = {0};
+    type.lpfnWndProc = name_prompt_proc; type.hInstance = GetModuleHandleW(NULL);
+    type.hCursor = LoadCursorW(NULL, IDC_ARROW); type.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
+    type.lpszClassName = L"MAGNamePrompt";
+    RegisterClassW(&type);
+    RECT area = {0, 0, 420, 146}; AdjustWindowRect(&area, WS_CAPTION | WS_SYSMENU, FALSE);
+    int width = area.right - area.left, height = area.bottom - area.top;
+    HWND window = CreateWindowExW(WS_EX_DLGMODALFRAME | WS_EX_TOPMOST, L"MAGNamePrompt", L"MAG", WS_CAPTION | WS_SYSMENU | WS_VISIBLE,
+                                  (GetSystemMetrics(SM_CXSCREEN) - width) / 2, (GetSystemMetrics(SM_CYSCREEN) - height) / 2,
+                                  width, height, NULL, NULL, type.hInstance, &state);
+    if (!window) return 0;
+    SetForegroundWindow(window);
+    MSG message;
+    while (!state.done && GetMessageW(&message, NULL, 0, 0) > 0)
+        if (!IsDialogMessageW(window, &message)) { TranslateMessage(&message); DispatchMessageW(&message); }
+    return state.ok;
+}
+
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR arguments, int show) {
     (void)instance; (void)previous; (void)arguments; (void)show;
+    /* First-run choices; the game validates and saves them in the player's settings file. */
+    static const wchar_t *usage = L"Usage: MAG.exe [--server <hostname or IPv4>] [--name <player name>] [--no-prompt]";
+    const wchar_t *server = NULL, *player = NULL;
+    int prompt = 1;  /* --no-prompt: never ask (automation); a missing name then stops with its message */
+    int argc = 0; LPWSTR *argv = CommandLineToArgvW(GetCommandLineW(), &argc);
+    if (!argv) fail(L"Cannot read the command line", NULL);
+    for (int i = 1; i < argc; i++) {
+        const wchar_t *a = argv[i], **target = NULL; size_t prefix = 0;
+        if (!wcscmp(a, L"--no-prompt")) { prompt = 0; continue; }
+        if (!wcsncmp(a, L"--server", 8)) { target = &server; prefix = 8; }
+        else if (!wcsncmp(a, L"--name", 6)) { target = &player; prefix = 6; }
+        if (!target) fail(usage, a);
+        if (a[prefix] == L'=') *target = a + prefix + 1;
+        else if (!a[prefix] && i + 1 < argc) *target = argv[++i];
+        else fail(usage, a);
+    }
     wchar_t self[MAX_PATH], app[MAX_PATH];
     DWORD n = GetModuleFileNameW(NULL, self, MAX_PATH);
     if (!n || n >= MAX_PATH) fail(L"Cannot locate MAG.exe", NULL);
@@ -193,13 +290,32 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR arguments, int
     join(request, logs, L"handoff-request.json");
     join(home, g_root, L"home");
     CreateDirectoryW(home, NULL);
+    /* Saves and trophies live in the installation, not in this launch's log folder (the
+     * runtime's default is the working directory), so progress survives every launch. */
+    wchar_t gamedata[MAX_PATH];
+    join(gamedata, home, L"gamedata");
+    if (!CreateDirectoryW(gamedata, NULL) && GetLastError() != ERROR_ALREADY_EXISTS) fail(L"Cannot create the save data folder", gamedata);
+    wchar_t player_root[MAX_PATH], appdata[MAX_PATH], config[MAX_PATH], settings[MAX_PATH];
+    join(player_root, home, L"player");
+    CreateDirectoryW(player_root, NULL);
+    { wchar_t stale[MAX_PATH]; join(stale, player_root, L"launch-message.txt"); DeleteFileW(stale);
+      join(stale, player_root, L"needs-player-name"); DeleteFileW(stale); }
+    DWORD length = GetEnvironmentVariableW(L"APPDATA", appdata, MAX_PATH);
+    if (!length || length >= MAX_PATH) fail(L"Cannot find your application data folder (APPDATA)", NULL);
+    join(config, appdata, L"MAG");
+    if (!CreateDirectoryW(config, NULL) && GetLastError() != ERROR_ALREADY_EXISTS) fail(L"Cannot create the settings folder", config);
+    join(settings, config, L"settings.json");
 
     clear_inherited();
     set_env(L"HOME", home);
+    set_env(L"PS3_GAMEDATA_ROOT", gamedata);
     set_env(L"PS3_VFS_ROOT", vfs);
     set_env(L"PS3_BOOT_PATH", L"/dev_bdvd/PS3_GAME/USRDIR/EBOOT.BIN");
     set_env(L"PS3_HLE_UNRESOLVED", L"halt");
     set_env(L"PS3_SYSCALL_UNRESOLVED", L"halt");
+    /* Required runtime defaults recorded at packaging (movie playback for decoder builds). */
+    static const wchar_t *defaults[][2] = MAG_RUNTIME_DEFAULTS;
+    for (size_t i = 0; defaults[i][0]; i++) set_env(defaults[i][0], defaults[i][1]);
     set_env(L"MAG_HANDOFF_REQUEST", request);
     set_env(L"MAG_HANDOFF_TOKEN", wtoken);
     set_env(L"MAG_ENGINE_BINARY", engine);
@@ -209,6 +325,11 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR arguments, int
     set_env_utf8(L"MAG_ENGINE_ELF_SHA256", MAG_ENGINE_ELF_SHA256);
     set_env_utf8(L"MAG_ENGINE_SELF_SHA256", MAG_ENGINE_SELF_SHA256);
     set_env_utf8(L"MAG_ENGINE_KEY_SHA256", key);
+    set_env(L"MAG_PLAYER_SETTINGS_PATH", settings);
+    set_env(L"MAG_PLAYER_OVERLAY_ROOT", player_root);
+    set_env(L"MAG_PLAYER_SETUP", L"1");
+    if (server) set_env(L"MAG_PLAYER_SET_SERVER", server);
+    if (player) set_env(L"MAG_PLAYER_SET_NAME", player);
 
     /* Closing the supervisor (or its crash) also ends the game processes. */
     HANDLE job = CreateJobObjectW(NULL, NULL);
@@ -218,7 +339,31 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR arguments, int
 
     join(log, logs, L"launcher.log");
     DWORD result = run(job, launcher, launcher_elf, logs, log);
-    if (result != 90) return (int)result;
+    /* A server needs a player name. When the game reports none, ask for one, then start again:
+     * the launcher validates and saves it as if it came from --name. */
+    wchar_t marker[MAX_PATH]; join(marker, player_root, L"needs-player-name");
+    for (int attempt = 2; result != 90 && prompt && attempt <= 4 && GetFileAttributesW(marker) != INVALID_FILE_ATTRIBUTES; attempt++) {
+        wchar_t chosen[32], again[64];
+        if (!ask_player_name(chosen, 16)) break;  /* Cancel: the launch message below explains */
+        DeleteFileW(marker);
+        { wchar_t note[MAX_PATH]; join(note, player_root, L"launch-message.txt"); DeleteFileW(note); }
+        set_env(L"MAG_PLAYER_SET_NAME", chosen);
+        swprintf(again, 64, L"launcher-%d.log", attempt);
+        join(log, logs, again);
+        result = run(job, launcher, launcher_elf, logs, log);
+    }
+    DeleteFileW(marker);
+    if (result != 90) {
+        /* A launch the player must correct (such as choosing a name) explains itself. */
+        wchar_t note[MAX_PATH]; join(note, player_root, L"launch-message.txt");
+        if (GetFileAttributesW(note) != INVALID_FILE_ATTRIBUTES) {
+            DWORD size; unsigned char *text = read_file(note, &size); wchar_t message[2048];
+            int n = MultiByteToWideChar(CP_UTF8, 0, (const char *)text, (int)(size < 4000 ? size : 4000), message, 2047);
+            message[n > 0 ? n : 0] = 0; free(text); DeleteFileW(note); fail(message, NULL);
+        }
+        if (result) fail(L"The game stopped before it started. Details are in", log);
+        return 0;
+    }
 
     char expected[256];
     snprintf(expected, sizeof expected, "{\"version\":1,\"token\":\"%s\",\"guest_path\":\"/dev_bdvd/PS3_GAME/USRDIR/bin/mage_g.self\",\"kind\":\"mage_g\"}\n", token);
@@ -227,7 +372,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR arguments, int
     free(body);
     check(engine, MAG_ENGINE_SHA256); check(engine_elf, MAG_ENGINE_ELF_SHA256); check(engine_self, MAG_ENGINE_SELF_SHA256);
     const wchar_t *cleared[] = {L"MAG_HANDOFF_REQUEST", L"MAG_HANDOFF_TOKEN", L"MAG_ENGINE_BINARY", L"MAG_ENGINE_ELF",
-        L"MAG_ENGINE_SELF", L"MAG_ENGINE_BINARY_SHA256", L"MAG_ENGINE_ELF_SHA256", L"MAG_ENGINE_SELF_SHA256", L"MAG_ENGINE_KEY_SHA256"};
+        L"MAG_ENGINE_SELF", L"MAG_ENGINE_BINARY_SHA256", L"MAG_ENGINE_ELF_SHA256", L"MAG_ENGINE_SELF_SHA256", L"MAG_ENGINE_KEY_SHA256",
+        L"MAG_PLAYER_SETUP", L"MAG_PLAYER_SET_SERVER", L"MAG_PLAYER_SET_NAME"};
     for (size_t i = 0; i < sizeof cleared / sizeof cleared[0]; i++) SetEnvironmentVariableW(cleared[i], NULL);
     set_env(L"PS3_BOOT_PATH", L"/dev_bdvd/PS3_GAME/USRDIR/bin/mage_g.self");
     join(log, logs, L"engine.log");
@@ -252,7 +398,7 @@ def _c_hex(value):
 def _compile(clang_cl, environment, source_dir, output, token):
     token.check()
     argv = [clang_cl, '/nologo', '/O2', '/MT', '/W3', '/DUNICODE', '/D_UNICODE', str(source_dir / 'supervisor.c'),
-            f'/Fe{output}', f'/Fo{source_dir / "supervisor.obj"}', '/link', '/SUBSYSTEM:WINDOWS', 'bcrypt.lib', 'user32.lib']
+            f'/Fe{output}', f'/Fo{source_dir / "supervisor.obj"}', '/link', '/SUBSYSTEM:WINDOWS', 'bcrypt.lib', 'user32.lib', 'shell32.lib', 'gdi32.lib']
     try:
         result = subprocess.run(argv, cwd=source_dir, env=environment, stdin=subprocess.DEVNULL,
                                 capture_output=True, text=True, timeout=300)
@@ -306,6 +452,14 @@ def package(config, workspace, destination, token=None, events=None, environment
                           source_receipt_sha256=_digest(receipts / (role + '.json'), token),
                           original_binary_sha256=records[role]['binary_sha256'])
             (package_receipts / (role + '.json')).write_text(json.dumps(record, indent=2) + '\n', encoding='utf-8')
+        if config.get('ffmpeg'):
+            # The movie decoder the executables link: its DLLs beside them, and its LGPL notice.
+            from .managed_tools import WINDOWS_FFMPEG_DLLS
+            ffmpeg_root = Path(config['ffmpeg']['include']).parent
+            for name in WINDOWS_FFMPEG_DLLS:
+                shutil.copyfile(_ordinary(ffmpeg_root / 'bin' / name), bin_dir / name)
+            licenses = resources / 'licenses'; licenses.mkdir()
+            shutil.copyfile(_ordinary(ffmpeg_root / 'LICENSE.txt'), licenses / 'FFmpeg-LICENSE.txt')
         workspace_relative = os.path.relpath(workspace, destination)
         engine_self = manifest['images']['mage_g']['source_sha256']
         runtime = {'schema_version': 1, 'workspace': Path(workspace_relative).as_posix(),
@@ -319,7 +473,10 @@ def package(config, workspace, destination, token=None, events=None, environment
             '#define MAG_ENGINE_SHA256 ' + _c_hex(_digest(bin_dir / 'MagEngine.exe', token)) + '\n'
             '#define MAG_LAUNCHER_ELF_SHA256 ' + _c_hex(records['launcher']['elf_sha256']) + '\n'
             '#define MAG_ENGINE_ELF_SHA256 ' + _c_hex(records['engine']['elf_sha256']) + '\n'
-            '#define MAG_ENGINE_SELF_SHA256 ' + _c_hex(engine_self) + '\n', encoding='utf-8')
+            '#define MAG_ENGINE_SELF_SHA256 ' + _c_hex(engine_self) + '\n'
+            '#define MAG_RUNTIME_DEFAULTS {' + ''.join('{' + _c_wide(key) + ', ' + _c_wide(value) + '}, '
+                                                      for key, value in sorted(playback_environment(records).items()))
+            + '{NULL, NULL}}\n', encoding='utf-8')
         (scratch / 'supervisor.c').write_text(_SUPERVISOR, encoding='utf-8')
         _compile(config['msvc']['clang_cl'], environment, scratch, destination / 'MAG.exe', token)
         shutil.rmtree(scratch)

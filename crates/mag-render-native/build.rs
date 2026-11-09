@@ -47,6 +47,13 @@ fn main() {
     let backend = match os.as_str() {
         "macos" if env::var_os("CARGO_FEATURE_METAL").is_some() => "metal",
         "linux" if env::var_os("CARGO_FEATURE_VULKAN").is_some() => "vulkan",
+        // Vulkan on Windows is opt-in and needs an explicit header directory.
+        "windows"
+            if env::var_os("CARGO_FEATURE_VULKAN").is_some()
+                && env::var_os("CARGO_FEATURE_D3D12").is_none() =>
+        {
+            "vulkan"
+        }
         "windows" if env::var_os("CARGO_FEATURE_D3D12").is_some() => "d3d12",
         _ => "none",
     };
@@ -87,6 +94,15 @@ fn main() {
             PathBuf::from(include).display()
         ));
     }
+    if backend == "vulkan"
+        && os == "windows"
+        && let Some(include) = env::var_os("MAG_RENDER_VULKAN_INCLUDE_DIR")
+    {
+        configure.arg(format!(
+            "-DMAG_RENDER_VULKAN_INCLUDE_DIR={}",
+            PathBuf::from(include).display()
+        ));
+    }
     run(&mut configure);
     run(Command::new("cmake").arg("--build").arg(&build).args([
         "--config",
@@ -109,6 +125,7 @@ fn main() {
         println!("cargo:rustc-link-lib=stdc++");
     }
     println!("cargo:rerun-if-env-changed=MAG_RENDER_DXC_INCLUDE_DIR");
+    println!("cargo:rerun-if-env-changed=MAG_RENDER_VULKAN_INCLUDE_DIR");
     println!("cargo:rerun-if-changed=native");
     println!("cargo:rerun-if-changed=../../src/mag_render_client.h");
     println!("cargo:rerun-if-changed=../../src/mag_render_scene_packet.h");

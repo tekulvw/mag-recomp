@@ -50,6 +50,22 @@ def verify_result(output, profile):
     return record
 
 
+def check_lifters(profile, before_sdk, after_sdk):
+    """The pinned decoder, parser and both lifters, read from their checkouts by
+    revision. Raises unless the after tag names the pinned after revision and every
+    blob has its reviewed hash. Needs no game input, so a source kit can be checked."""
+    before_sdk, after_sdk = Path(before_sdk), Path(after_sdk)
+    after_tag = profile['after']['tag']
+    if not after_tag.startswith('mag-recomp/') or tag_commit(after_sdk, after_tag) != profile['after']['revision']:
+        raise ValueError('Splice after lifter tag ' + after_tag + ' does not name the pinned after revision; '
+                         'fetch the pinned lifter checkout again')
+    decoder = pinned_blob(before_sdk, profile['before']['revision'], 'tools/ppu_disasm.py', profile['decoder_sha256'])
+    parser = pinned_blob(before_sdk, profile['before']['revision'], 'tools/elf_parser.py', profile['parser_sha256'])
+    lifters = {name: pinned_blob(sdk, profile[name]['revision'], 'tools/ppu_lifter.py', profile[name]['lifter_sha256'])
+               for name, sdk in (('before', before_sdk), ('after', after_sdk))}
+    return decoder, parser, lifters
+
+
 def prepare(base, output, work, elf, inventory, nonlocal_profile, before_sdk, after_sdk, profile):
     """Fresh generated output; all game-derived intermediates stay in private work."""
     base, output, work, elf, inventory, nonlocal_profile, before_sdk, after_sdk = map(
@@ -77,14 +93,7 @@ def prepare(base, output, work, elf, inventory, nonlocal_profile, before_sdk, af
                           ('sdk_revision', profile['before']['revision'])):
         if provenance.get(key) != expected:
             raise ValueError('Splice base provenance differs from reviewed generation inputs: ' + key)
-    after_tag = profile['after']['tag']
-    if not after_tag.startswith('mag-recomp/') or tag_commit(after_sdk, after_tag) != profile['after']['revision']:
-        raise ValueError('Splice after lifter tag ' + after_tag + ' does not name the pinned after revision; '
-                         'fetch the pinned lifter checkout again')
-    decoder = pinned_blob(before_sdk, profile['before']['revision'], 'tools/ppu_disasm.py', profile['decoder_sha256'])
-    parser = pinned_blob(before_sdk, profile['before']['revision'], 'tools/elf_parser.py', profile['parser_sha256'])
-    lifters = {name: pinned_blob(sdk, profile[name]['revision'], 'tools/ppu_lifter.py', profile[name]['lifter_sha256'])
-               for name, sdk in (('before', before_sdk), ('after', after_sdk))}
+    decoder, parser, lifters = check_lifters(profile, before_sdk, after_sdk)
     work.mkdir(parents=True)
     commands = {}
     with tempfile.TemporaryDirectory(prefix='dispatcher-relift-', dir=output.parent) as temporary:
@@ -114,10 +123,22 @@ def prepare(base, output, work, elf, inventory, nonlocal_profile, before_sdk, af
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--check-lifters', action='store_true',
+                        help='only check that the SDK checkouts hold the pinned decoder, parser and both '
+                             'lifters (no game input; needs --before-sdk, --after-sdk and --profile)')
     for key in ('base', 'output', 'work', 'elf', 'inventory', 'nonlocal-profile', 'before-sdk', 'after-sdk', 'profile'):
-        parser.add_argument('--' + key, type=Path, required=True)
+        parser.add_argument('--' + key, type=Path)
     args = vars(parser.parse_args())
+    check_only = args.pop('check_lifters')
+    required = ('before_sdk', 'after_sdk', 'profile') if check_only else tuple(args)
+    missing = [key for key in required if args[key] is None]
+    if missing:
+        parser.error('missing ' + ', '.join('--' + key.replace('_', '-') for key in missing))
     args['profile'] = json.loads(args['profile'].read_text())
+    if check_only:
+        check_lifters(args['profile'], args['before_sdk'], args['after_sdk'])
+        print('dispatcher splice lifters present: ' + args['profile']['after']['tag'])
+        return
     prepare(**args)
 
 

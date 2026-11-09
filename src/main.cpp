@@ -32,6 +32,7 @@
 /* The lifter's generated header, which declares ppu_context and the function
  * table. It comes first: everything below is written against that struct. */
 #include "ppu_recomp.h"
+#include "mag_guest_arena.h"
 
 /* The Win32 names -- Sleep, GetTickCount64, CreateThread, InterlockedIncrement,
  * VirtualAlloc, the scalar typedefs -- from one place. On Windows this is a
@@ -40,7 +41,8 @@
 #include "win32_compat.h"
 #include "macos_runloop.h"
 #include "mag_extension.h"
-#ifdef MAG_PLAYER_SETTINGS
+#include "mag_frame_clock.h"
+#if defined(MAG_PLAYER_SETTINGS) || defined(MAG_PLAYER_PORTABLE_SETTINGS)
 #include "player_settings_runtime.h"
 #endif
 
@@ -113,9 +115,10 @@ unsigned cellGcm_flip_request_count(void);
 /* ---------------------------------------------------------------------------
  * RSX present backend
  * -----------------------------------------------------------------------*/
-/* Match the toolkit's backend selection: D3D12, Metal, Linux Vulkan,
+/* Match the toolkit's backend selection: D3D12, Metal, Vulkan (Linux, or
+ * Windows when the runtime is built with its opt-in PS3RECOMP_RSX_VULKAN),
  * or the headless fallback. All expose the same frame-clock entry points. */
-#if defined(_WIN32)
+#if defined(_WIN32) && !defined(PS3RECOMP_RSX_VULKAN)
 extern "C" int  rsx_d3d12_backend_init(uint32_t w, uint32_t h, const char* title);
 extern "C" void rsx_d3d12_backend_present(void);
 extern "C" int  rsx_d3d12_backend_pump_messages(void);
@@ -132,7 +135,7 @@ extern "C" int  rsx_metal_backend_pump_messages(void);
 #  define rsx_backend_present rsx_metal_backend_present
 #  define rsx_backend_pump    rsx_metal_backend_pump_messages
 #  define RSX_BACKEND_NAME    "Metal"
-#elif defined(__linux__) && defined(PS3RECOMP_RSX_VULKAN)
+#elif (defined(__linux__) || defined(_WIN32)) && defined(PS3RECOMP_RSX_VULKAN)
 extern "C" int  rsx_vulkan_backend_init(uint32_t w, uint32_t h, const char* title);
 extern "C" void rsx_vulkan_backend_present(void);
 extern "C" int  rsx_vulkan_backend_pump_messages(void);
@@ -172,7 +175,9 @@ extern "C" int  rsx_null_backend_pump_messages(void);
  *
  * The ticks are driven off real elapsed time rather than off how long present()
  * took. A hidden or occluded window makes present block hard, and pacing the
- * ticks behind it paces the whole game behind it. */
+ * ticks behind it paces the whole game behind it. Elapsed time is read from
+ * mag_frame_clock_ms (src/mag_frame_clock.h): Windows' GetTickCount64 moves in
+ * 15-16 ms steps, which released the ticks in bursts on that grid. */
 static volatile LONG g_frames_presented = 0;
 /* Initialized before the frame clock or guest workers start. The SDK owns the
  * process-lifetime auto-reset event; this thread only waits without holding
@@ -217,7 +222,8 @@ static void present_guest_frame(const CellGcmFlipReceipt& receipt)
 static DWORD WINAPI frame_clock(LPVOID)
 {
     const char* title = getenv("PS3_TITLE");
-    if (!title || !*title) title = "MAG v1.0 — native macOS";
+    /* One default for every backend (Metal, D3D12, Vulkan, null); PS3_TITLE overrides. */
+    if (!title || !*title) title = "MAG v1.0";
 
 #if defined(__APPLE__)
     // Native diagnostics default on; an explicit 0 preserves the plain title.
@@ -232,7 +238,7 @@ static DWORD WINAPI frame_clock(LPVOID)
             rsx_ok ? "OK -- window open" : "FAILED");
 
     MagFramePresentState present_state;
-    ULONGLONG next_tick = GetTickCount64();
+    ULONGLONG next_tick = mag_frame_clock_ms();
     ULONGLONG next_snapshot = next_tick + 1000;
     ULONGLONG next_fallback_present = next_tick + 4;
 
@@ -240,7 +246,7 @@ static DWORD WINAPI frame_clock(LPVOID)
         if (g_native_consumer) cellGcm_fifo_kick_wait(4);
         else Sleep(4);
         if (auto poll = mag_extension()->frame_poll) poll();
-        ULONGLONG now = GetTickCount64();
+        ULONGLONG now = mag_frame_clock_ms();
         if (now >= next_snapshot) { mag_queue_snapshot(); mag_job_marker_snapshot(); next_snapshot = now + 1000; }
 
         CellGcmFlipReceipt receipt = {};
@@ -296,12 +302,12 @@ static DWORD WINAPI frame_clock(LPVOID)
                 present_guest_frame(receipt);
                 present_state.presented(receipt.flip_count);
             } else if (receipt.flip_count == 0 &&
-                       (!g_native_consumer || GetTickCount64() >= next_fallback_present)) {
+                       (!g_native_consumer || mag_frame_clock_ms() >= next_fallback_present)) {
                 MagRsxConsumerLease consumer_lease;
                 rsx_backend_present();
                 /* Start from completion of this host call, as Sleep(4) did;
                  * never catch up missed fallback presents after a long drain. */
-                if (g_native_consumer) next_fallback_present = GetTickCount64() + 4;
+                if (g_native_consumer) next_fallback_present = mag_frame_clock_ms() + 4;
             }
         }
     }
@@ -362,7 +368,7 @@ static bool alloc_guest_vm(void)
      * front and lazily backed by the OS: only pages the title touches cost
      * anything. It stops below the 0xE0000000 mark, so ppu_vm_size arms the
      * loader's bounds check for what is left. */
-    vm_base = (uint8_t*)calloc(1, 0xE0000000u);
+    vm_base = mag_map_guest_arena(0xE0000000u, (size_t)1 << 32);
     ppu_vm_size = 0xE0000000u;
 #endif
     return vm_base != nullptr;
@@ -391,7 +397,7 @@ int main(int argc, char** argv)
         return 2;
     }
     if (auto prepare = mag_extension()->prepare) prepare(argv[1]);
-#ifdef MAG_PLAYER_SETTINGS
+#if defined(MAG_PLAYER_SETTINGS) || defined(MAG_PLAYER_PORTABLE_SETTINGS)
     // Setup and recovery run before allocating guest memory or connecting.
     const int settings_result = mag_player_settings_prepare();
     if (settings_result <= 0) return settings_result < 0 ? 1 : 0;
@@ -404,6 +410,22 @@ int main(int argc, char** argv)
      * thing. POSIX timers are already fine-grained. */
     timeBeginPeriod(1);
     setvbuf(stdout, NULL, _IONBF, 0);   /* unbuffered: do not lose prints on a kill */
+#endif
+#if defined(_WIN32) && defined(PS3RECOMP_RSX_VULKAN)
+    /* Windows Vulkan builds present through the runtime's Vulkan backend:
+     * open its window and draw with the register-file engine (guest programs
+     * through glslang, batched recording), as the Linux player does. Without
+     * these the backend stays headless on its fixed-function path. An
+     * explicit value, including 0, is kept. */
+    {
+        static const char *const defaults[][2] = {
+            {"PS3RECOMP_VK_WINDOW", "1"},
+            {"PS3RECOMP_VK_GUEST_PROGRAMS", "1"},
+            {"PS3RECOMP_VK_BATCHED_ENGINE", "1"},
+        };
+        for (const auto &d : defaults)
+            if (!getenv(d[0])) _putenv_s(d[0], d[1]);
+    }
 #endif
 
     printf("=== ps3recomp game runner ===\n");
@@ -447,20 +469,8 @@ int main(int argc, char** argv)
     /* Install the guest-callback hook, then start the frame clock. It no-ops
      * until the title registers its vblank and flip handlers during init. */
     g_ps3_guest_caller = harness_guest_caller;
-#if defined(__APPLE__)
-    /* MAG patches fragment-program constants through NV308A inline data about
-     * 1,100 times per menu frame. Draining the GPU before each one held the
-     * menu near 10 fps; report ordering is kept without it. An explicit 0
-     * restores the drain for comparison. */
-    if (!getenv("PS3RECOMP_GCM_INLINE_NO_GPU_WAIT"))
-        setenv("PS3RECOMP_GCM_INLINE_NO_GPU_WAIT", "1", 0);
-    /* Wake the FIFO drain when the guest moves the put pointer instead of
-     * polling it every 4 ms: SPU jobs that wait on RSX labels otherwise sit
-     * out the rest of the poll (training mission ~99 -> ~93 ms per update).
-     * An explicit 0 restores the timed poll. */
-    if (!getenv("MAG_NATIVE_CONSUMER"))
-        setenv("MAG_NATIVE_CONSUMER", "1", 0);
-#endif
+    /* PS3RECOMP_GCM_INLINE_NO_GPU_WAIT and MAG_NATIVE_CONSUMER default on for
+     * every host in mag_apply_runtime_defaults(). */
     cellGcm_native_consumer_init();
     const char* native_consumer = getenv("MAG_NATIVE_CONSUMER");
     if (native_consumer && !strcmp(native_consumer, "1")) {

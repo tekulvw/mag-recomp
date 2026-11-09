@@ -4,8 +4,8 @@
   "upstream": "https://github.com/sp00nznet/ps3recomp",
   "ps3recomp": {
     "runtime": {
-      "tag": "mag-recomp/runtime-2026.11.05",
-      "commit": "f0547a673a5b61384b4ddce3a647cd6bfc9a6141",
+      "tag": "mag-recomp/runtime-2026.11.08",
+      "commit": "9bcb7ade5618dc0e38b96aa036c0686d80ec003d",
       "path": "local/ps3recomp-runtime"
     },
     "lifter-spu": {
@@ -16,7 +16,11 @@
     "lifter-ppu": {
       "tag": "mag-recomp/lifter-ppu-2026.10.12",
       "commit": "dfa7073d2e164aec6890866c4951d8dedc28619d",
-      "path": "local/ps3recomp-lifter-dfa7073"
+      "path": "local/ps3recomp-lifter-dfa7073",
+      "splice_after": {
+        "tag": "mag-recomp/lifter-2026.11.04",
+        "commit": "d31e3fd72c9abb2e823e8f12eca9c9adb63493ef"
+      }
     },
     "spu-programs": {
       "tag": "mag-recomp/spu-programs-2026.10.21",
@@ -25,13 +29,13 @@
     }
   },
   "allowed_runtime_revisions": [
-    "f0547a673a5b61384b4ddce3a647cd6bfc9a6141"
+    "9bcb7ade5618dc0e38b96aa036c0686d80ec003d"
   ],
   "strict_runtime_revisions": [
-    "f0547a673a5b61384b4ddce3a647cd6bfc9a6141"
+    "9bcb7ade5618dc0e38b96aa036c0686d80ec003d"
   ],
   "strict_hle_runtime_revisions": [
-    "f0547a673a5b61384b4ddce3a647cd6bfc9a6141"
+    "9bcb7ade5618dc0e38b96aa036c0686d80ec003d"
   ],
   "first_nonblack_capture_revisions": [],
   "allowed_lifter_revisions": [

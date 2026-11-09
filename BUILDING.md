@@ -15,11 +15,12 @@ substitutes for those sources. Reconcile with main before publishing and after r
 
 Generated PPU code now defaults to optimization level `1`; use `-DMAG_GENERATED_PPU_OPT=0` for an
 explicit diagnostic build. Use a fresh build directory when switching baselines, because an
-existing CMake cache retains its previous value. The executable supplies `SPU_DISPATCH_CACHE=1`,
-`SPU_MFC_LOOKUP_CACHE=1`, `SPU_FLOAT_RZ=1` and `PS3_VERBOSE=0` before SDK initialization. Explicit
-caller values are preserved, including dispatch-cache `shadow` mode. These settings match the
-retained rendering configuration; they are not a frame-rate guarantee. Experimental renderer
-replacement and capture features remain opt-in.
+existing CMake cache retains its previous value. The executable supplies its runtime defaults (SPU
+caches, RSX deferred reports and early release, the PPU store fast path and others) before SDK
+initialization. Explicit caller values are preserved, including dispatch-cache `shadow` mode.
+[docs/ps3recomp-flags.md](docs/ps3recomp-flags.md) lists every runtime switch mag-recomp sets, why,
+and how to turn each off. These settings match the accepted hosted runs; they are not a frame-rate
+guarantee. Experimental renderer replacement and capture features remain opt-in.
 
 ## 1. Host dependencies
 
@@ -51,10 +52,14 @@ python3 -m venv .venv
 
 | Checkout | Tag | Commit | Role |
 | --- | --- | --- | --- |
-| `local/ps3recomp-runtime` | `mag-recomp/runtime-2026.11.05` | `f0547a6` | Runtime SDK passed to CMake as `PS3RECOMP_DIR` |
+| `local/ps3recomp-runtime` | `mag-recomp/runtime-2026.11.08` | `9bcb7ad` | Runtime SDK passed to CMake as `PS3RECOMP_DIR` |
 | `local/ps3recomp-lifter-5244db9` | `mag-recomp/lifter-spu-2026.10.07` | `5244db9` | Inventory and launcher/engine SPU lifting |
 | `local/ps3recomp-lifter-dfa7073` | `mag-recomp/lifter-ppu-2026.10.12` | `dfa7073` | PPU and firmware lifting |
 | `local/ps3recomp-spu-programs` | `mag-recomp/spu-programs-2026.10.21` | `4c5c05f` | Lifting every embedded engine SPU program |
+
+The PPU lifter checkout must also hold one more tagged commit, `mag-recomp/lifter-2026.11.04`
+(`d31e3fd`), pinned as `splice_after` of `lifter-ppu`: step 4's engine dispatcher splice reads its
+fixed lifter from that checkout by revision. The helper fetches the fork's tags and checks it.
 
 Keep them clean and at these exact commits: the tools refuse other or dirty revisions, and the build
 accepts only the pinned runtime. To keep a lifter elsewhere, set `MAG_SPU_LIFTER_REPOSITORY` or
@@ -184,7 +189,9 @@ mismatches.
 The launcher starts, hands off to the engine and runs offline. `boot.py` clears inherited runtime
 diagnostic variables and caps a run at 120 seconds. When the engine was built with FFmpeg (its
 receipt records `movie_playback`), `boot.py` also turns on the runtime's movie playback switches
-(`PS3RECOMP_SAIL_TIMED_THX`, `PS3RECOMP_SAIL_ATRAC_AUDIO` and `PS3RECOMP_GCM_CHECKED_REF`).
+(`PS3RECOMP_SAIL_TIMED_THX`, `PS3RECOMP_SAIL_ATRAC_AUDIO` and `PS3RECOMP_GCM_CHECKED_REF`). The installer's packaged
+MAG app sets the same switches whenever its build has the decoder: without them, the game opens
+and closes each movie at once and then waits forever after the legal screen.
 
 | Keys | PS3 control |
 | --- | --- |

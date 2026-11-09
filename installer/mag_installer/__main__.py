@@ -82,7 +82,12 @@ def main(argv=None):
         else:
             from .ux import format_event
             if 'platforms' in event:
-                message = f"{event['profile']}: real MAG installation is blocked; host {event['host']}."
+                # Build MAG is the player route. The profile below is the older per-host
+                # installation model, which never installs MAG, so say which is which.
+                build = event.get('player_build') or {}
+                message = (f"Build MAG: ready on {event['host']}." if build.get('ready') else
+                           f"Build MAG: not available on {event['host']}: {build.get('reason') or 'see status --json'}")
+                message += f"\nLegacy {event['profile']} profile routes (not used by Build MAG):"
                 message += '\n' + '\n'.join(f"{key}: {value.get('status', 'unknown')} — {value.get('reason', value.get('blockers', 'See status --json for details'))}" for key, value in event['platforms'].items())
             elif event.get('event') == 'preflight':
                 from .ux import space_summary
