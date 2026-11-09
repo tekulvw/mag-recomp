@@ -80,13 +80,58 @@ function(mag_enable_game_controls target)
         "${_controls}/mag_game_controls_guest.cpp" "${_controls}/mag_game_controls_hooks.cpp"
         "${_controls}/mag_game_controls_mouse_aim.cpp" "${_controls}/mag_game_controls_runtime.cpp")
     if(NOT APPLE)
-        # macOS adds the portable player-controls module with its settings UI
-        # (MagPlayerSettings.cmake). Elsewhere add it here, without a desktop capture backend yet.
+        # macOS adds the portable player-controls module with its settings UI and its desktop
+        # capture backend (MagPlayerSettings.cmake). Elsewhere add the module here.
         foreach(_name player_controls_rust player_controls_store player_controls_settings
                 player_input_capture player_preferences_file)
             list(APPEND _sources "${_src}/${_name}.cpp")
         endforeach()
+    endif()
+    # Keyboard/mouse desktop capture: "macos" (MagPlayerSettings.cmake), "sdl" for the SDL2 game
+    # window of Linux and other non-Apple, non-Windows hosts, "none" (refuses visibly) on Windows.
+    # MAG_GAME_CONTROLS_DESKTOP overrides the choice for configure-only fixtures.
+    if(DEFINED MAG_GAME_CONTROLS_DESKTOP)
+        set(_desktop "${MAG_GAME_CONTROLS_DESKTOP}")
+    elseif(APPLE)
+        set(_desktop macos)
+    elseif(WIN32)
+        set(_desktop none)
+    else()
+        set(_desktop sdl)
+    endif()
+    if(_desktop STREQUAL "sdl")
+        if(DEFINED PS3RECOMP_PAD_SDL_KEYBOARD AND NOT PS3RECOMP_PAD_SDL_KEYBOARD)
+            message(FATAL_ERROR "MAG_GAME_CONTROLS needs PS3RECOMP_PAD_SDL_KEYBOARD=ON: the SDL desktop capture "
+                                "runs from the window pump's keyboard sample")
+        endif()
+        list(APPEND _sources "${_src}/player_desktop_capture_core.cpp" "${_src}/player_input_desktop_sdl.cpp")
+        # The SDK's SDL seams, renamed on its own sources only: cellPad's GameController calls reach
+        # the capture layer (shared with macOS), and the window pump's keyboard-pad sample and state
+        # pass through player_input_sdl_keyboard.c.
+        set(_sdk_seams "${_src}/player_input_sdl_pad.c" "${_src}/player_input_sdl_keyboard.c")
+        target_sources(ps3recomp_runtime PRIVATE ${_sdk_seams})
+        set_source_files_properties(${_sdk_seams} DIRECTORY "${PS3RECOMP_DIR}"
+            PROPERTIES INCLUDE_DIRECTORIES "${PS3RECOMP_DIR}")
+        set_property(SOURCE "${PS3RECOMP_DIR}/libs/input/cellPad.c" DIRECTORY "${PS3RECOMP_DIR}"
+            APPEND PROPERTY COMPILE_DEFINITIONS SDL_GameControllerGetButton=mag_player_controller_button
+            SDL_GameControllerGetAxis=mag_player_controller_axis
+            SDL_GameControllerUpdate=mag_player_controller_update SDL_GameControllerOpen=mag_player_controller_open
+            SDL_GameControllerClose=mag_player_controller_close SDL_GameControllerGetAttached=mag_player_controller_attached)
+        set_property(SOURCE "${PS3RECOMP_DIR}/libs/input/pad_sdl_keyboard.c" DIRECTORY "${PS3RECOMP_DIR}"
+            APPEND PROPERTY COMPILE_DEFINITIONS ps3recomp_pad_sdl_keyboard_sample=mag_sdk_pad_sdl_keyboard_sample
+            ps3recomp_pad_sdl_keyboard_state=mag_sdk_pad_sdl_keyboard_state)
+        # The runtime already requires SDL2 here and links it; the backend needs its headers too.
+        find_package(SDL2 QUIET)
+        if(TARGET SDL2::SDL2)
+            target_link_libraries(${target} PRIVATE SDL2::SDL2)
+        elseif(SDL2_FOUND)
+            target_include_directories(${target} PRIVATE ${SDL2_INCLUDE_DIRS})
+            target_link_libraries(${target} PRIVATE ${SDL2_LIBRARIES})
+        endif()
+    elseif(_desktop STREQUAL "none")
         list(APPEND _sources "${_controls}/mag_game_controls_desktop_none.cpp")
+    elseif(NOT _desktop STREQUAL "macos")
+        message(FATAL_ERROR "MAG_GAME_CONTROLS_DESKTOP must be macos, sdl or none")
     endif()
     target_sources(${target} PRIVATE ${_sources})
     set_source_files_properties(${_sources} TARGET_DIRECTORY ${target} PROPERTIES

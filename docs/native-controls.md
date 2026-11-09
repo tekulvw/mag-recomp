@@ -498,7 +498,10 @@ since last seen, reset system and host caches, clear receipts and cancel the mou
    handler. When it is the owner's handler: re-resolve it (not the same owner cancels "native input
    owner changed"); adopt it (also as the handler-scope owner when gameplay is eligible); read the
    pad record's consumed mask (unreadable cancels); mouse is eligible when gameplay is eligible,
-   the state supports mouse look and no look channel is consumed; with mouse eligibility and mouse
+   the state supports mouse look and no look channel is consumed; relative mouse capture is
+   requested only while gameplay is eligible and no look channel is consumed (outside Controller
+   mode), so a menu that takes the look channels releases the mouse lock until look returns
+   (status "on-foot input attached; a menu holds look" while it does); with mouse eligibility and mouse
    motion in the frame, accept the mouse (`mag_controls_accept_mouse`); refresh the frame's policy
    from the engine.
 
@@ -631,9 +634,64 @@ Denial is remembered per camera so that the game finishes any assist motion it a
 ### 8.1 Desktop capture
 
 The adapter asks the desktop layer (`player_input_desktop.h`) for capture and relative mouse
-capture as described above. On macOS the existing backend implements it. Hosts without a backend
-use `mag_game_controls_desktop_none.cpp`, which refuses visibly (one line per state change) and
-leaves the SDK's own keyboard and pad input working.
+capture as described above. Host support:
+
+| Host | Backend | Notes |
+| --- | --- | --- |
+| macOS | `player_input_desktop_macos.mm` (with the player settings module) | AppKit window, GameController keyboard and mice. |
+| Linux and other non-Apple, non-Windows hosts | `player_input_desktop_sdl.cpp` on the portable core | The SDK's SDL2 game window; needs `PS3RECOMP_PAD_SDL_KEYBOARD=ON` (the default). |
+| Windows | `mag_game_controls_desktop_none.cpp` | Refuses visibly (one line per state change) and leaves the SDK's own keyboard and pad input working. |
+
+The portable core (`player_desktop_capture_core.{h,cpp}`) holds these rules; a backend supplies
+the window system through a small platform interface (window attached and focused, input owned by
+a dialog, relative mode, the keys and buttons held now). The SDL backend is built on it. The macOS
+backend predates it and applies the same rules directly, except that it also suspends capture
+while Command is held and leaves the engine's window fields unfocused when capture is removed.
+
+- Capture exists only while the adapter requests it. Installing it releases the engine's keyboard
+  and mouse sources; removing it releases everything it held, gives the cursor back and returns
+  the engine's window fields to their defaults (focused, not captured), so it never gates a
+  controller after it stops. It writes those fields only while installed.
+- Input counts only while ready: installed, the game window attached and focused, and no dialog
+  owning input. Losing readiness (focus loss, Alt-Tab, a dialog) reports the window unfocused and
+  releases every key and button the capture held; releases arriving later are ignored.
+- Regaining readiness is a fresh activation: keys and buttons still held are reported as held
+  while the engine still sees the window unfocused, so each needs a release and a new press.
+  Presses observed before readiness was published are ignored.
+- Relative mouse mode is requested while ready, available and the adapter wants mouse look; a
+  click in the game window or focus returning re-applies it. Motion counts only if it was
+  observed while ready and relative under the current mode. An intentional mouse-mode change
+  (menu versus gameplay) changes relative motion only and keeps held keys and buttons.
+- The left and right GUI keys are never captured.
+
+The SDL backend runs on the game window's thread. The SDK's window pump polls SDL events and then
+takes its keyboard-pad sample; compile definitions on `libs/input/pad_sdl_keyboard.c` rename that
+sample and the keyboard-pad state, and `player_input_sdl_keyboard.c` takes their place: the sample
+first runs the capture backend with the same window and dialog flag, then the SDK's own sample; the
+state is neutral (window flag kept) while the adapter owns the keyboard (8.2), as the macOS window
+pad is. While capture is requested an SDL event filter (chained after any filter already set)
+observes keyboard, mouse and window events and queues them for the pump; it passes every event
+on except one: a press of Escape on the focused game window while the adapter owns the keyboard
+and requests capture and no dialog owns the keyboard, which the pump would treat as quit (the
+controls bind Escape to Start). Closing the window still quits; Escape quits again as soon as any
+of those conditions ends. SDL scancodes 4..231 are the HID usages; mouse buttons map left 0,
+right 1, middle 2, X1 3, X2 4 on one logical mouse; touch-synthesized mouse events are ignored;
+motion is SDL relative mode, reported up-positive. While the mouse is locked the backend also
+holds an explicit window grab (`SDL_SetWindowGrab`), so the pointer stays confined to the game
+window even where relative mode alone does not lock it; it acquires in the order leave relative
+mode, grab, centre the pointer, enter relative mode. Each pump checks the lock: when relative mode
+or the grab is gone or the pointer is outside the window, it re-applies the lock (logged once per
+loss as "mouse lock lost; re-applying"). Re-applying moves the pointer to the centre, so the core
+discards motion observed before or during a re-acquisition (only the motion epoch advances; held
+keys and buttons stay), and the event filter also drops motion SDL reports for the centring warp. Focus loss, a window change and a menu release the lock
+and the grab. Every change of capture state is logged once (`desktop_capture_transition`):
+capture engaged or released, and the mouse locked or released. Installing the filter is SDL's
+`SDL_SetEventFilter`, which discards events still queued at that moment; the backend installs it
+on the pump right after the SDK has drained the queue.
+
+Controllers on macOS and Linux reach the capture layer through `player_input_sdl_pad.c`: compile
+definitions on `libs/input/cellPad.c` route its SDL GameController calls through wrappers that
+report every raw reading before the settings panel's input block masks what the SDK sees.
 
 ### 8.2 Keyboard ownership
 
@@ -690,3 +748,8 @@ configures only the engine with the adapter.
 Synthetic only: tests build a fake big-endian guest memory with the records of section 2, drive the
 adapter through seam events with a fake PPU register file, and check published tuples, register
 writes and engine calls. No test uses game files or lifted code.
+
+The desktop capture core runs against a fake window system and a fake engine
+(`tests/test_player_desktop_capture_core.py`). The SDL backend runs against a real SDL event queue
+with the dummy video driver where SDL2 development files are installed, and its SDK seam against a
+synthetic SDK header (`tests/test_player_input_desktop_sdl.py`).
