@@ -258,18 +258,43 @@ Let `P` be the decoded positions and `N`, `Tg`, `W` the normal, tangent and weig
 | Kind | Rule | Produced vertices `Vout` |
 | --- | --- | --- |
 | Index only (output layout has no declarations) | no vertices are written. Culling uses `P`. | none |
-| Group 0, mode `0x28` | [group-zero-deformation.md](group-zero-deformation.md), "Per instance" and "Per vertex", with the userdata mapping above. `E3` is view record row `+0x40`, instance rows are slot 13, `φm` and `φs` are userdata `+0x50` and `+0x54`, and `T` is the object translation. The colour rows of that specification are not produced here. | `V·I`, instance-major |
-| Group 3, mode `0x28` | [noninstanced-deformation.md](noninstanced-deformation.md), group 3, with `Σ = t.x + t.y + t.z` | `V` |
+| Group 0, mode `0x28` | [group-zero-deformation.md](group-zero-deformation.md), "Per instance" and "Per vertex", with the userdata mapping above and the game's wind values below. `E3` is view record row `+0x40`, instance rows are slot 13, `φm` and `φs` are userdata `+0x50` and `+0x54`, and `T` is the object translation. The colour rows of that specification are not produced here. | `V·I`, instance-major |
+| Group 3, mode `0x28` | [noninstanced-deformation.md](noninstanced-deformation.md), group 3, with `Σ = t.x + t.y + t.z` and the game's wind values below | `V` |
 | Skinned (byte 6 low nibble 1), group 7 | [skinning-deformation.md](skinning-deformation.md) palette blend of positions, normals and tangents. The palette is slots 3 and 4 concatenated, the influences slot 5. No further direction transform is applied to normals or tangents (verified with an identity object transform). | `V` |
 
 The produced positions stay in the object's frame. They are not moved by the object transform.
 
-**Wind tuning values.** The two deformation specifications use this project's own tuning values.
-Tested against the recordings, their input mapping is exact: group-0 vertices without wind match to
-9e-6, and the median error for group 3 is below 1e-8. The sway differs by up to 0.1 units, at the
-99th percentile, from the original job's sway. That is acceptable for this specification's
-tolerance only if Main, Depth and Shadow all use the same producer (see Consequences). Open
-question 1 covers adopting the game's values.
+#### Wind values (game-supplied)
+
+This job uses the game's own wind coefficients. The two deformation specifications keep this
+project's own tuning values for the frontend; this job does not use those. The coefficients are
+game-chosen values, stated here as observed behaviour under the public-specification ruling
+for game state values (2026-11-03).
+
+They were measured black-box. First the recorded outputs were fitted by least squares. Then the
+original job was replayed on the SDK interpreter with the wind phase `θ` stepped through 24–40
+values, and with one material amplitude at a time set to zero to separate the two terms. No
+original code or constant table was consulted. Use each value as the binary32 nearest the
+decimal shown.
+
+| Coefficient | Role | Group 0 | Group 3 |
+| --- | --- | --- | --- |
+| `KA1` | phase rate of the slow vertical wave | 0.375 | 0.375 |
+| `KA2` | phase rate of the second vertical wave | (none) | 0.193 |
+| `KB1` | phase rate of the fast horizontal wave | 1.975 | 1.975 |
+| `KB2` | phase rate of the second horizontal wave | (none) | 0.793 |
+| `KC`, `KC3` | weight of the summed position in the horizontal phase | 0.33 | 0.33 |
+
+Everything else in the two specifications' formulas is unchanged. With these values the
+specification formulas reproduce the recorded outputs:
+
+- group 0: all 15,936 recorded instance vertices to 1.5e-5 absolute;
+- group 3: all 5,769 recorded vertices to 1.9e-4 absolute (99th percentile 2.6e-5).
+
+The group-3 horizontal phase is ill-conditioned. Its coupling multiplies the object-translation
+sum, which is about 10^3 in the recordings, so binary32 rounding alone moves the phase by
+hundredths of a cycle. The horizontal displacement's own amplitude is small, though (at most
+0.004 units in the recordings), so the absolute error stays below 1e-4.
 
 ### 4. Projection
 
@@ -467,7 +492,7 @@ Native arithmetic is used. The reference is exact real arithmetic on the decoded
 
 | Output | Tolerance |
 | --- | --- |
-| Produced positions | as in the deformation specification that produces them; skinned positions matched the original to 7e-7 absolute in recordings |
+| Produced positions | as in the deformation specification that produces them, with the game's wind values. In recordings: skinned positions within 7e-7 absolute, group 0 within 1.5e-5, group 3 within 1.9e-4 |
 | Weights, hole words, index values, sizes, ring fields | exact |
 | Normal fields | within 1 unit of the reference quantization |
 | Tangent fields | within 1 binary16 ulp; magnitudes below the smallest normal binary16 may become zero |
@@ -484,9 +509,10 @@ Native arithmetic is used. The reference is exact real arithmetic on the decoded
   refusal can mix producers. When that happens, the next invocation on that SPU may instead run
   the original. Implementations should avoid it by making native admission take the same
   allocation decision the original would.
-- **Wind parity.** With this project's tuning values, the sway of group 0 and group 3 differs
-  visibly from the original's on close inspection, though not structurally. That is a visual
-  difference, not an ordering hazard, as long as the previous bullet holds.
+- **Wind parity.** With the game's wind values, produced positions match the original to within
+  the stated tolerance. A frame that mixes producers for one partition therefore differs only by
+  rounding, not by a visible sway difference. Depth EQUAL ties at that level are already
+  tolerated between hosts.
 - **Caches.** Any cache of decoded or produced vertices must key on source bytes, codec
   parameters and every userdata and view input it reads, never on output values.
 
@@ -520,15 +546,111 @@ Extension-point shape (keeps AGENTS.md's inert-by-default rule):
 - The payload-hook lift step must be part of the normal build for the override to work. While it
   is off, the native path is unavailable, not silently skipped. Report that in the receipt.
 
-Inputs the hook reads (interface facts of the WWS job ABI):
+### Job API calling contract
 
-- the job API context address in `r3` at entry;
-- userdata: 192 bytes at the address in context word `+0x20`;
-- the inputs: the *get buffer* service for buffer 1 returns a 16-byte descriptor. Bytes 4–5 are the
-  buffer's start divided by 4, bytes 6–7 its length divided by 4. The input list occupies the
-  buffer's last 192 bytes. The streams are packed in slot order from the buffer's start, each
-  taking its listed length. An implementation may instead read every stream from guest memory at
-  the listed address. The bytes are the same because nothing writes them while the job is queued.
+These are interface facts between the WWS job manager and every job it runs. They are observed
+on the retail build by tracing the original job on the SDK interpreter. They are not this job's
+internals.
+
+**Context.** At entry, `r3` holds the local-store address of the job API context (`0x1330` in
+every recording). Context fields used here:
+
+| Field | Meaning |
+| --- | --- |
+| `+0x00` | virtual SPU number `s` (selects the output ring record) |
+| `+0x20` | local-store address of this job's 192-byte userdata copy (`0xC40` in every recording) |
+| `+0x34` | service slot *get buffer* |
+| `+0x44` | service slot *finish* |
+| `+0x48` | service slot *release buffer* |
+
+**Service slots.**
+
+- A slot word is the local-store address of a job-manager function. Its low 18 bits are the
+  address.
+- Call it as an ordinary SPU subroutine:
+  - link in `r0`;
+  - `r1` a valid, 16-byte aligned stack pointer whose 32 bytes from `r1` upward belong to the
+    caller (the callee saves its link at `r1 + 16` and builds its frame below `r1`);
+  - arguments in `r3` upward;
+  - result in `r3`;
+  - `r80`–`r127` preserved.
+- The job makes each call with SPU interrupts disabled and re-enables them on return. A native
+  caller does the same.
+- Any otherwise-unused local-store address may serve as the link when the call is driven from host
+  code with the runtime's call-and-drain mechanism. The entry address `0x15898` is a safe choice: no
+  service executes it.
+- For stack, use the stack pointer from entry minus at least one 512-byte frame. The job's stack
+  region at the top of local store is unused by the services' data.
+
+| Service | Arguments | Result | Observed effects |
+| --- | --- | --- | --- |
+| get buffer | `r3 = 0`; `r4` = buffer number; `r5 = 0`; `r6` = 1 for buffer 1, 0 for buffer 3 | `r3` = 16-byte buffer descriptor | buffer 1 call: writes two quadwords of job-manager bookkeeping; buffer 3 call: none |
+| release buffer | `r3 = 0`; `r4 = 3`; `r5 = 0` | not used | no guest-memory transfer |
+| finish | `r3` and `r4` are not read | `r3`; the job returns its low 16 bits (values 6–14 observed) | job-manager queue update and next-descriptor prefetch |
+
+**Buffer descriptor.** 16 bytes:
+
+| Bytes | Meaning |
+| --- | --- |
+| 0 | buffer number |
+| 4–5 | start / 4 |
+| 6–7 | length / 4 |
+| 8–11 | for buffer 1, the guest address of the input list (child descriptor `+0x100`) |
+| 12–15 | for buffer 1, the list length (192) |
+
+- **Buffer 1 (inputs).** The job manager has already filled it by DMA. The streams are packed in
+  slot order from the buffer's start, each taking its listed length. The input list itself is the
+  buffer's last 192 bytes. Buffer 1 started at `0x1FC00` in every recording, and its length
+  varied (`0xC00`–`0xB000`).
+- **Buffer 3 (output and scratch)** follows buffer 1 directly.
+
+Both buffers belong to the invocation until *release buffer*. A native path may stage outgoing data
+in either, with each DMA at most 16 KiB. Releasing buffer 3 writes nothing back to guest memory.
+
+**Where the list is not.** Local store at userdata `+0xC0` (`0xD00`) holds the job manager's queue
+state, not the input list. Without *get buffer* the list cannot be located from fixed context
+fields.
+
+**Admission and get buffer.** *Get buffer* is not proven free of side effects: the buffer-1 call
+writes job-manager bookkeeping that depends only on the current job. The supported sequence is:
+
+1. Call *get buffer* for buffers 1 and 3 once, as the job does.
+2. Run admission on the buffers.
+3. On success, run natively, then call *release buffer* (3) and *finish*. Return to the dispatcher
+   continuation with `r1` and `r80`–`r127` as at entry and `r3` = the finish result's low 16 bits.
+4. On refusal, run the lifted job from its entry. It repeats the *get buffer* calls.
+
+The oracle must replay a refusal-after-acquisition case for every recorded kind. It must show the
+job manager's local store and every transfer equal to the recording before this path is trusted.
+If they differ, admission must instead move to a host-side copy of the job manager's buffer
+layout rule. That would be a separate specification.
+
+**Identity check at run time.** These facts are sufficient; no per-call hashing is needed:
+
+1. The policy image is the pinned, instrumented one. The payload-hook lift step checks this at build
+   time against `POLICY_SHA` and `FUNCTION_SHA` in `tools/graphics_payload_hooks.py`.
+2. The runtime's residency record for local store `0x4000` names the verified region registered
+   for source address `0x01963A00` with span `0x1B870`. That region's code segments were generated
+   from the image with the SHA-256 above, and the runtime compares them once per load.
+3. The payload target is `0x15898`.
+
+If the region is resident but not yet verified when the payload call is reached (the first
+dispatch after a load), either run the runtime's own one-time comparison or refuse. The lifted
+dispatch then verifies it.
+
+**MFC tags.** The original job issues all of its own transfers on tag 31: data, read-back,
+hole, ring line and label read. The job manager's transfers in the recordings use tag 0. A native
+path that issues MFC commands uses tag 31 and has all of them complete before it calls *release
+buffer*. Host-side writes made through the runtime's write path use no tag.
+
+**Ring protocol.**
+
+- The original reads the ring line with a reservation (GETLLAR) and writes it back
+  unconditionally (PUTLLUC). That is safe only because the record belongs to the running virtual
+  SPU.
+- A GETLLAR/PUTLLC loop that retries on reservation loss is equivalent and acceptable.
+- So is the 4-byte read of `L` (on tag 31) for the refresh in section 6, which is what the original
+  does.
 
 ### Per-invocation fallback
 
@@ -565,8 +687,8 @@ and compares every PUT.
    both shadow cascades, Other) pass, with every admitted kind represented at least 200 times.
 2. **Refusal rate.** Under 2 % of invocations by count in Sabotage, and no unexplained reason.
 3. **Visual parity.** Same-scene captures of Training and Sabotage with the native path on and off
-   on all three hosts. There must be no missing geometry, holes or z-fighting, and the only
-   differences allowed are wind sway.
+   on all three hosts. There must be no missing geometry, holes, z-fighting or visible sway
+   difference.
 4. **Performance.** Same-binary A/B on macOS, Windows and Linux (Training and the
    `sabotage-a-static` scenario). Lifted EdgeGeom CPU per frame must fall by at least 5×, and
    frame time must not regress on any host.
@@ -678,11 +800,9 @@ Group 0, `V = 3`, `K = 3` with indices `(0, 1, 2)`, `I = 2`, nothing culled: sur
 
 ## Open questions
 
-1. **Wind tuning values.** The deformation specifications use this project's own values. The
-   user ruling of 2026-11-03 allows publishing game-chosen values. The recordings can fit the
-   coefficients black-box: wave rates and phase coupling against the produced group-0 and group-3
-   positions, where the input mapping is already exact. Doing so would remove the sway difference
-   and the mixed-producer hazard. That needs a decision before default-on.
+1. **Wind tuning values.** Resolved. This job uses the game's values, measured black-box ("Wind
+   values (game-supplied)"). The frontend's deformation specifications keep their own values;
+   whether they adopt these is a separate decision for the frontend.
 2. **Ripple and group 11.** Group 4 (ripple) and group 11 (skinned, Main) were not in the
    recordings. The private analysis suggests that group 11 normals and tangents get a further
    direction transform after the blend. That is unconfirmed. Both stay refused until a Sabotage
