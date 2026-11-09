@@ -631,8 +631,12 @@ layout rule. That would be a separate specification.
 1. The policy image is the pinned, instrumented one. The payload-hook lift step checks this at build
    time against `POLICY_SHA` and `FUNCTION_SHA` in `tools/graphics_payload_hooks.py`.
 2. The runtime's residency record for local store `0x4000` names the verified region registered
-   for source address `0x01963A00` with span `0x1B870`. That region's code segments were generated
-   from the image with the SHA-256 above, and the runtime compares them once per load.
+   for source address `0x01963A00`. Its span is the lifted code only (from `0x4000` to the lift's
+   code end, as `tools/wws_job_lift.py` registers it), not the whole `0x1B870`-byte image: the job
+   uses the rest of the image area for its own data. That region's code segments were generated
+   from the image with the SHA-256 above, and the runtime compares them once per load. Ask the
+   runtime's own lifted-code lookup whether the loaded code is verified; do not compare spans
+   against the image size.
 3. The payload target is `0x15898`.
 
 If the region is resident but not yet verified when the payload call is reached (the first
