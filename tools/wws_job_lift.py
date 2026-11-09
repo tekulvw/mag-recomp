@@ -638,7 +638,7 @@ def module_plans(raw, roots, lo, hi, static=False, data_pointers=False):
     return plans
 
 
-def lift_module(m, code_end, measured, static, lifter, work, output, merge_chunks):
+def lift_module(m, code_end, measured, static, lifter, work, output, merge_chunks, lifter_args=()):
     """Lift [0x4030, code_end) of one module with the measured and statically
     proven entries; returns (function count, command, extra entries)."""
     lo = LOAD_BASE + HEADER
@@ -656,6 +656,7 @@ def lift_module(m, code_end, measured, static, lifter, work, output, merge_chunk
         cmd += ['--extra-funcs', ','.join(hex(e) for e in extra)]
     if merge_chunks:
         cmd += ['--merge-chunks']
+    cmd += list(lifter_args)
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
     (work / f"lift_{m['ea']:08x}.log").write_text(result.stdout + result.stderr)
     if result.returncode:
@@ -697,6 +698,10 @@ def main():
     ap.add_argument('--merge-chunks', action='store_true',
                     help='lift each contiguous run between call targets as one host function, so '
                          'branches inside it are gotos instead of drain-loop transfers')
+    ap.add_argument('--lifter-arg', action='append', default=[], metavar='ARG',
+                    help='opt-in: pass ARG through to the SDK lifter for every module (repeat for '
+                         'more, e.g. --lifter-arg=--promote-regs); each module\'s recorded command '
+                         'shows it. Without it the lifter command is unchanged')
     ap.add_argument('--require-complete', action='store_true',
                     help='fail after recording results if any discovered job remains interpreted')
     a = ap.parse_args()
@@ -749,7 +754,7 @@ def main():
         for basis, code_end, static in plans:
             try:
                 count, cmd, extra = lift_module(m, code_end, measured, static, lifter, work, output,
-                                                a.merge_chunks)
+                                                a.merge_chunks, a.lifter_arg)
             except ValueError as e:
                 if a.static_indirect:
                     record.setdefault('rejected', []).append(
