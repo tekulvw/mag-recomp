@@ -271,6 +271,38 @@ void quit_key_rule() {
     check(&DesktopQuitKeyContext::game_window_focused, false, "Escape is not withheld without game focus");
     check(&DesktopQuitKeyContext::dialog_active, true, "a dialog always receives Escape");
 }
+
+// The mouse lock is engaged while ready, released on focus loss and in menus, engaged again on
+// return, and re-applied when the backend reports it lost. Each state change has one log line.
+void mouse_lock() {
+    Fixture f;  // engaged: ready and relative
+    require(f.platform.acquisitions == 1 && f.platform.relative, "capture engages the lock once");
+    auto step = [&](auto change) {
+        const bool ready = f.core.ready(), relative = f.core.relative();
+        change();
+        f.core.refresh();
+        return desktop_capture_transition(ready, relative, f.core.ready(), f.core.relative());
+    };
+    const char* line = step([&] { f.platform.focused = false; });
+    require(!f.platform.relative && f.platform.releases == 1, "focus loss releases the lock");
+    require(line && std::string(line).find("capture released") == 0, "focus loss is logged");
+    line = step([&] { f.platform.focused = true; });
+    require(f.platform.relative && f.platform.acquisitions == 2, "focus return engages the lock again");
+    require(line && std::string(line) == "capture engaged; mouse locked to the game window", "re-engagement is logged");
+    line = step([&] { f.core.request_mouse(false); });
+    require(f.core.ready() && !f.platform.relative && f.platform.releases == 2, "a menu releases only the lock");
+    require(line && std::string(line).find("mouse released") == 0, "the menu release is logged");
+    line = step([&] { f.core.request_mouse(true); });
+    require(f.platform.relative && f.platform.acquisitions == 3, "leaving the menu locks the mouse again");
+    require(line && std::string(line) == "mouse locked to the game window", "the menu exit is logged");
+    // The backend found the lock gone (the pointer left the window): it asks for a recapture.
+    f.platform.relative = false;
+    line = step([&] { f.core.request_recapture(); });
+    require(f.platform.relative && f.platform.acquisitions == 4 && f.core.relative(), "a lost lock is re-applied");
+    require(!line, "re-applying an already engaged lock adds no state-change line");
+    line = step([] {});
+    require(!line && f.platform.acquisitions == 4, "a held lock is not re-applied every refresh");
+}
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -285,6 +317,7 @@ int main(int argc, char** argv) {
         else if (which == "mouse-mode") mouse_mode_keeps_buttons();
         else if (which == "recapture") recapture();
         else if (which == "quit-key") quit_key_rule();
+        else if (which == "mouse-lock") mouse_lock();
         else return 2;
         return 0;
     } catch (const std::exception& error) {

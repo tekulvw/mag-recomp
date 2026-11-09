@@ -673,7 +673,14 @@ and requests capture and no dialog owns the keyboard, which the pump would treat
 controls bind Escape to Start). Closing the window still quits; Escape quits again as soon as any
 of those conditions ends. SDL scancodes 4..231 are the HID usages; mouse buttons map left 0,
 right 1, middle 2, X1 3, X2 4 on one logical mouse; touch-synthesized mouse events are ignored;
-motion is SDL relative mode, reported up-positive. Installing the filter is SDL's
+motion is SDL relative mode, reported up-positive. While the mouse is locked the backend also
+holds an explicit window grab (`SDL_SetWindowGrab`), so the pointer stays confined to the game
+window even where relative mode alone does not lock it; it acquires in the order leave relative
+mode, grab, centre the pointer, enter relative mode. Each pump checks the lock: when relative mode
+or the grab is gone or the pointer is outside the window, it re-applies the lock (logged once per
+loss as "mouse lock lost; re-applying"). Focus loss, a window change and a menu release the lock
+and the grab. Every change of capture state is logged once (`desktop_capture_transition`):
+capture engaged or released, and the mouse locked or released. Installing the filter is SDL's
 `SDL_SetEventFilter`, which discards events still queued at that moment; the backend installs it
 on the pump right after the SDK has drained the queue.
 

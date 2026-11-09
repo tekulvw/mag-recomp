@@ -150,4 +150,16 @@ constexpr bool desktop_capture_withholds_quit_key(const DesktopQuitKeyContext& c
            c.game_window_focused && !c.dialog_active;
 }
 
+// One log line for a change of capture state, or nullptr when nothing a player would notice
+// changed. `ready` is keyboard and button capture of the focused game window; `relative` is the
+// mouse locked to it for look.
+constexpr const char* desktop_capture_transition(bool was_ready, bool was_relative, bool ready, bool relative) {
+    if (!was_ready && ready) return relative ? "capture engaged; mouse locked to the game window"
+                                             : "capture engaged; mouse free";
+    if (was_ready && !ready) return "capture released (focus lost, window gone or input blocked); mouse free";
+    if (ready && !was_relative && relative) return "mouse locked to the game window";
+    if (ready && was_relative && !relative) return "mouse released (menu, or the lock could not be applied)";
+    return nullptr;
+}
+
 }  // namespace mag

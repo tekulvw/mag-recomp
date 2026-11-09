@@ -58,15 +58,44 @@ public:
     bool window_focused() override { return window && SDL_GetKeyboardFocus() == window; }
     bool input_blocked() override { return dialog || mag_player_input_blocked(); }
     bool raw_mouse_available() override { return window && !relative_refused; }
+    // Mouse look holds two things while captured: SDL relative mode (hidden cursor, relative
+    // motion, pointer lock where the platform has one) and an explicit window grab that confines
+    // the pointer to the game window, so a long or fast swipe cannot carry it onto another
+    // window even where relative mode alone does not lock it.
     bool set_relative(bool on) override {
-        if (SDL_SetRelativeMouseMode(on ? SDL_TRUE : SDL_FALSE) == 0) return true;
-        if (on) {
-            // Not available here (for example a compositor without relative pointer support):
-            // report it and stop asking until the window changes.
-            relative_refused = true;
-            std::fprintf(stderr, "[game-controls] SDL relative mouse mode unavailable: %s\n", SDL_GetError());
+        if (!on) {
+            SDL_SetRelativeMouseMode(SDL_FALSE);
+            if (window) SDL_SetWindowGrab(window, SDL_FALSE);
+            return true;
         }
+        // SDL ignores warps while relative mode is on, so (re)acquire in this order: leave
+        // relative mode, confine, put the pointer in the middle of the window, then lock it.
+        SDL_SetRelativeMouseMode(SDL_FALSE);
+        if (window) {
+            SDL_SetWindowGrab(window, SDL_TRUE);
+            center_pointer();
+        }
+        if (SDL_SetRelativeMouseMode(SDL_TRUE) == 0) return true;
+        if (window) SDL_SetWindowGrab(window, SDL_FALSE);
+        // Not available here (for example a compositor without relative pointer support):
+        // report it and stop asking until the window changes.
+        relative_refused = true;
+        std::fprintf(stderr, "[game-controls] SDL relative mouse mode unavailable: %s\n", SDL_GetError());
         return false;
+    }
+    void center_pointer() {
+        int w = 0, h = 0;
+        SDL_GetWindowSize(window, &w, &h);
+        if (w > 0 && h > 0) SDL_WarpMouseInWindow(window, w / 2, h / 2);
+    }
+    // While captured: is the lock still in place, with the pointer inside the window?
+    bool lock_held() {
+        if (!window || !SDL_GetRelativeMouseMode() || !SDL_GetWindowGrab(window)) return false;
+        int x = 0, y = 0, wx = 0, wy = 0, w = 0, h = 0;
+        SDL_GetGlobalMouseState(&x, &y);
+        SDL_GetWindowPosition(window, &wx, &wy);
+        SDL_GetWindowSize(window, &w, &h);
+        return w <= 0 || h <= 0 || (x >= wx && y >= wy && x < wx + w && y < wy + h);
     }
     DesktopPressedState pressed() override {
         DesktopPressedState state;
@@ -98,6 +127,7 @@ struct Backend {
     std::vector<Observed> queue;
     bool overflow = false;
     int reported = -1;
+    bool lock_lost_reported = false;
 };
 
 // Never destroyed: SDL may call the filter until the process ends.
@@ -213,7 +243,21 @@ void pump(Backend& b, SDL_Window* window, bool dialog) {
     }
     if (overflow) b.core.interrupt();
     else for (const auto& item : events) deliver(b, item);
+    // Something else (the window manager, another grab) took the lock or the pointer left the
+    // window: put the pointer back and re-apply the lock at this refresh. Logged once per loss.
+    if (b.core.relative() && !b.platform.lock_held()) {
+        if (!b.lock_lost_reported) {
+            std::fprintf(stderr, "[game-controls] mouse lock lost; re-applying\n");
+            b.lock_lost_reported = true;
+        }
+        b.core.request_recapture();
+    } else if (b.core.relative()) {
+        b.lock_lost_reported = false;
+    }
+    const bool was_ready = b.core.ready(), was_relative = b.core.relative();
     b.core.refresh();
+    if (const char* change = desktop_capture_transition(was_ready, was_relative, b.core.ready(), b.core.relative()))
+        std::fprintf(stderr, "[game-controls] %s\n", change);
     const int on = b.core.installed() ? 1 : 0;
     if (on != b.reported) {
         if (b.reported >= 0 || on)

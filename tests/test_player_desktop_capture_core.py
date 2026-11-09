@@ -48,6 +48,9 @@ class DesktopCaptureCoreTests(unittest.TestCase):
     def test_escape_quit_suppression_rule(self):
         self.run_case('quit-key')
 
+    def test_mouse_lock_engages_releases_and_reengages_with_one_log_line_each(self):
+        self.run_case('mouse-lock')
+
 
 if __name__ == '__main__':
     unittest.main()
