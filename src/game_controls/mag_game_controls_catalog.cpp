@@ -76,6 +76,18 @@ ControlsProfile mag_game_controls_default_profile() {
     return profile;
 }
 
+std::vector<ActionDescriptor> mag_game_controls_descriptors() {
+    constexpr uint32_t Keyboard = 1, Mouse = 2, Controller = 4;
+    std::vector<ActionDescriptor> result;
+    for (const auto& action : catalog) {
+        const bool system = action.system_channel >= 0;
+        result.push_back({action.id, action.label, system ? SystemContexts : OnFoot,
+                          Keyboard | Mouse | (action.digital_controller ? Controller : 0u),
+                          system ? "Native menu / command buttons" : "On-foot actions"});
+    }
+    return result;
+}
+
 void mag_game_controls_validate_profile(const ControlsProfile& profile) {
     mag_controls_validate_profile(profile);
     if (profile.mouse.hip_gain != profile.mouse.ads_gain || profile.mouse.hip_gain != profile.mouse.scoped_gain)
