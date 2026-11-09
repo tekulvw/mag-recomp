@@ -66,10 +66,42 @@ class InstallerPPUSpliceTests(unittest.TestCase):
             self.assertEqual((args['base']/'ppu_recomp_000.cpp').read_text(), before+other)
             record = json.loads((output/'provenance.json').read_text())
             self.assertEqual(record['function_splices'][-1]['changed'], ['func_00001000'])
-            self.assertEqual(record['installer_dispatcher_splice']['profile'], args['profile'])
+            self.assertEqual([entry['profile'] for entry in record['installer_splices']], [args['profile']])
             self.assertEqual(sorted(call.args[2] for call in read.call_args_list),
                              ['tools/elf_parser.py', 'tools/ppu_disasm.py', 'tools/ppu_lifter.py', 'tools/ppu_lifter.py'])
             self.assertEqual(sorted(p.name for p in args['work'].iterdir()), ['after.log','before.log','splice.log'])
+
+    def test_chains_a_second_profile_onto_the_first_output_and_keeps_both_records(self):
+        """The installer applies the dispatcher fix, then the CTR fix to its output."""
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            args, pinned, before, after, other = self.fixture(root)
+            with patch.object(tool, 'pinned_blob', side_effect=pinned), patch.object(tool, 'tag_commit', return_value='b'*40):
+                first = tool.prepare(**args)
+            # A second fix changes only the other function; its before lift is the pinned lifter's output.
+            fixed_other = other.replace(' = 99;', ' = 100;')
+            def lifter(text):
+                return ('import pathlib,sys\np=pathlib.Path(sys.argv[sys.argv.index("--output")+1]); p.mkdir()\n'
+                        '(p/"ppu_recomp_000.cpp").write_text('+repr(text)+')\n').encode()
+            old, new = lifter(before + other), lifter(before + fixed_other)
+            second = dict(args['profile'], function='func_00002000', body_sha256=sha(fixed_other.encode()),
+                          after={'revision': 'e'*40, 'tag': 'mag-recomp/lifter-synthetic-2', 'lifter_sha256': sha(new)},
+                          before=dict(args['profile']['before'], lifter_sha256=sha(old)), reason='synthetic CTR correction')
+            def pinned_second(sdk, revision, path, expected):
+                if path.endswith('ppu_lifter.py'):
+                    data = old if revision == 'a'*40 else new
+                    if sha(data) != expected: raise ValueError('SDK Git object hash mismatch')
+                    return data
+                return pinned(sdk, revision, path, expected)
+            chained = dict(args, base=first, output=root/'output-2', work=root/'work-2', profile=second)
+            with patch.object(tool, 'pinned_blob', side_effect=pinned_second), \
+                    patch.object(tool, 'tag_commit', return_value='e'*40):
+                output = tool.prepare(**chained)
+            self.assertEqual((output/'ppu_recomp_000.cpp').read_text(), after + fixed_other)
+            self.assertEqual((first/'ppu_recomp_000.cpp').read_text(), after + other)
+            record = json.loads((output/'provenance.json').read_text())
+            self.assertEqual([s['changed'] for s in record['function_splices']], [['func_00001000'], ['func_00002000']])
+            self.assertEqual([e['profile'] for e in record['installer_splices']], [args['profile'], second])
 
     def test_rejects_wrong_game_and_inventory_before_tool_materialization(self):
         for what in ('elf', 'inventory'):
