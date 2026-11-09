@@ -656,7 +656,7 @@ neither releases nor connects).
 
 ## 9. Settings
 
-The settings registration uses the catalog: one descriptor per action, label from the catalog,
+The settings registration uses the catalog (`mag_game_controls_descriptors`): one descriptor per action, label from the catalog,
 contexts OnFoot|Menu for system actions and OnFoot otherwise, sources keyboard|mouse|controller for
 controller-capable actions and keyboard|mouse otherwise, group "Native menu / command buttons" or
 "On-foot actions". Validation is the catalog's profile validation; upgrade is the catalog upgrade.
