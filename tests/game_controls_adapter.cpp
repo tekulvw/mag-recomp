@@ -851,12 +851,42 @@ void threads_and_errors() {
 }
 }  // namespace
 
+
+// A menu that takes the look channels before the player's handler releases the mouse lock while
+// keyboard capture stays; look coming back locks the mouse again.
+void menu_holds_look() {
+    Harness h;
+    h.idle_tick();
+    h.begin_tick();
+    h.enter_handler();
+    require(capture_on && mouse_on, "gameplay locks the mouse");
+    h.fire(Hook::HandlerExit);
+    h.end_poll();
+    h.end_tick();
+    h.m.put32(Pad + 0x80, 0xFu << 20);  // the look axes, channels 20..23, consumed by a menu
+    h.begin_tick();
+    h.enter_handler();
+    require(capture_on && !mouse_on, "a menu holding look did not release the mouse lock");
+    require(h.status() == std::string("on-foot input attached; a menu holds look"), "menu status not reported");
+    h.fire(Hook::HandlerExit);
+    h.end_poll();
+    h.end_tick();
+    h.m.put32(Pad + 0x80, 0);
+    h.begin_tick();
+    h.enter_handler();
+    require(capture_on && mouse_on, "look returning did not lock the mouse again");
+    require(h.status() == std::string("on-foot Rust input attached"), "status did not return to gameplay");
+    h.fire(Hook::HandlerExit);
+    h.end_poll();
+    h.end_tick();
+}
+
 int main(int argc, char** argv) {
     const std::map<std::string, void (*)()> scenarios = {
         {"owner", owner_resolution}, {"lists", malformed_lists}, {"routes", routes}, {"tick", full_tick},
         {"route", route_recognition},
         {"mouse", mouse_look},       {"assist", aim_assist},     {"lifecycle", lifecycle},
-        {"threads", threads_and_errors}};
+        {"threads", threads_and_errors}, {"menu", menu_holds_look}};
     try {
         if (argc != 2 || !scenarios.count(argv[1])) throw std::runtime_error("usage: game_controls_adapter <scenario>");
         scenarios.at(argv[1])();

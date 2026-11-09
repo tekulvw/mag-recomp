@@ -51,6 +51,9 @@ class DesktopCaptureCoreTests(unittest.TestCase):
     def test_mouse_lock_engages_releases_and_reengages_with_one_log_line_each(self):
         self.run_case('mouse-lock')
 
+    def test_relocking_discards_motion_from_the_centring_warp(self):
+        self.run_case('reacquire')
+
 
 if __name__ == '__main__':
     unittest.main()

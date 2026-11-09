@@ -1,0 +1,20 @@
+{
+  "format": 1,
+  "purpose": "Regenerate and splice the audio command builder with full-width CTR from verified local game inputs",
+  "elf_sha256": "0089f0d6d17e48533ce7ff8d943dddd03487b925e7b04a1a055bfb907568694c",
+  "function": "func_01112114",
+  "body_sha256": "5f82906859736de3199a33f9aba02947a15dcff04504a7780039dc95e49c2b03",
+  "decoder_sha256": "1fd70ab34d22b2c55d49a779c9f9fb4a625ef4469c89314fc2e8bae00253d35e",
+  "parser_sha256": "4430264c27410598d3714c21707b9cd7c65ba23a85c3b6c26a2b1f11089903eb",
+  "before": {
+    "revision": "dfa7073d2e164aec6890866c4951d8dedc28619d",
+    "lifter_sha256": "b603e97109e1ceb42e19dacf5ca29c239e3b93d98ca085a9a4d544f6c392b8e3"
+  },
+  "after": {
+    "revision": "50e99247ee196ed9e1de8694141a8ff5b4ef9ccc",
+    "tag": "mag-recomp/lifter-ppu-ctr64-2026.11.09",
+    "lifter_sha256": "2f3074e429e3a651ccb16b5d9c596c55a1039c9c02f3ed42071f6087cb6738e1"
+  },
+  "reason": "Keep the full 64-bit CTR value the audio command builder holds a high-word flag in, so commands keep it",
+  "scope": "Only the named complete function is replaced; other generated functions and runtime pins remain unchanged"
+}

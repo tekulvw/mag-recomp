@@ -18,7 +18,7 @@ target; Windows x86_64 and Linux x86_64 builds use Vulkan.
 | `src/` | Runtime glue for the recompiled launcher and engine, and default-off trace diagnostics |
 | `profiles/` | Pinned identities of the expected inputs, lifter configurations and allowed SDK revisions |
 | `tests/` | Synthetic tests and fixtures; none contain game data |
-| `docs/` | SPU batch preparation, the guarded partial relift, the clean-room reimplementation method, and [development notes](docs/development/README.md) on workflow, the SDK fork, run verification and performance |
+| `docs/` | SPU batch preparation, the clean-room reimplementation method, and [development notes](docs/development/README.md) on workflow, the SDK fork, run verification and performance |
 | `installer/` | One-button installer that runs the whole build on your machine from your own copy |
 
 Only the v1.0 retail release is supported; any other release or modified file is refused.

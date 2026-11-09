@@ -1,29 +1,47 @@
-"""Reproduce a profile-bound engine dispatcher fix using already pinned SDKs.
+"""Reproduce a profile-bound single-function PPU lifter fix using already pinned SDKs.
+
+Each profile names one function, the pinned lifter before the fix, a tagged lifter
+after it, and the reviewed SHA-256 of the regenerated body. The installer chains
+profiles: the engine dispatcher (jump-table) fix, then the 64-bit CTR fix for the
+audio command builder, each reading the previous output as its base.
 
 No generated body is bundled. The original decoder and ELF parser are shared
 by both runs; only the lifter changes. Both are staged beside each lifter: a
 lifter that cannot import the parser silently reads the ELF as raw bytes and
 finds different function bounds. Keep the complete reviewed function inventory because
 jump-table discovery uses neighbouring function boundaries. This deliberately
-avoids a single-function inventory that could change dispatcher extents.
+avoids a single-function inventory that could change function extents.
 """
 from pathlib import Path
 import argparse
 import hashlib
 import json
+import re
 import subprocess
 import sys
 import tempfile
 
 if __package__ in (None, ''):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from tools.partial_ppu_relift import pinned_blob
 from tools.ppu_function_splice import functions
 
 
 def digest(path):
     with Path(path).open('rb') as stream:
         return hashlib.file_digest(stream, 'sha256').hexdigest()
+
+
+def pinned_blob(sdk, revision, path, expected):
+    """One file of an SDK checkout read by immutable revision, refused unless it has its reviewed hash."""
+    if not re.fullmatch(r'[0-9a-f]{40}', revision):
+        raise ValueError('SDK revision must be a full immutable Git commit')
+    commit = subprocess.check_output(['git', '-C', str(sdk), 'rev-parse', revision + '^{commit}'], text=True).strip()
+    if commit != revision:
+        raise ValueError('SDK object is not the pinned commit')
+    data = subprocess.check_output(['git', '-C', str(sdk), 'show', revision + ':' + path])
+    if hashlib.sha256(data).hexdigest() != expected:
+        raise ValueError('SDK Git object hash mismatch: ' + path)
+    return data
 
 
 def tag_commit(sdk, tag):
@@ -46,7 +64,7 @@ def verify_result(output, profile):
     body = functions(output)[profile['function']][1]
     found = hashlib.sha256(body.encode()).hexdigest()
     if found != profile['body_sha256'] or splice['body_sha256'] != {profile['function']: found}:
-        raise ValueError('Regenerated dispatcher does not match its reviewed body identity')
+        raise ValueError('Regenerated ' + profile['function'] + ' does not match its reviewed body identity')
     return record
 
 
@@ -96,7 +114,7 @@ def prepare(base, output, work, elf, inventory, nonlocal_profile, before_sdk, af
     decoder, parser, lifters = check_lifters(profile, before_sdk, after_sdk)
     work.mkdir(parents=True)
     commands = {}
-    with tempfile.TemporaryDirectory(prefix='dispatcher-relift-', dir=output.parent) as temporary:
+    with tempfile.TemporaryDirectory(prefix='ppu-splice-relift-', dir=output.parent) as temporary:
         temporary = Path(temporary)
         (temporary / 'ppu_disasm.py').write_bytes(decoder)
         (temporary / 'elf_parser.py').write_bytes(parser)
@@ -114,9 +132,10 @@ def prepare(base, output, work, elf, inventory, nonlocal_profile, before_sdk, af
         with (work / 'splice.log').open('w') as log:
             subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, check=True)
         record = verify_result(output, profile)
-        record['installer_dispatcher_splice'] = {'profile': profile, 'commands': commands,
-                                                'nonlocal_profile_sha256': digest(nonlocal_profile),
-                                                'decoder_source_revision': profile['before']['revision']}
+        # One entry per chained profile, in application order.
+        record.setdefault('installer_splices', []).append({'profile': profile, 'commands': commands,
+                                                           'nonlocal_profile_sha256': digest(nonlocal_profile),
+                                                           'decoder_source_revision': profile['before']['revision']})
         (output / 'provenance.json').write_text(json.dumps(record, indent=2) + '\n')
     return output
 
@@ -137,7 +156,7 @@ def main():
     args['profile'] = json.loads(args['profile'].read_text())
     if check_only:
         check_lifters(args['profile'], args['before_sdk'], args['after_sdk'])
-        print('dispatcher splice lifters present: ' + args['profile']['after']['tag'])
+        print(args['profile']['function'] + ' splice lifters present: ' + args['profile']['after']['tag'])
         return
     prepare(**args)
 
