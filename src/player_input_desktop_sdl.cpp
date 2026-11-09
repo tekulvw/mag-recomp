@@ -21,6 +21,8 @@
 #include "player_settings_runtime.h"
 #include <SDL2/SDL.h>
 #include <atomic>
+#include <cstdlib>
+#include <cstring>
 #include <chrono>
 #include <cstdio>
 #include <exception>
@@ -48,7 +50,16 @@ struct Observed {
     SDL_Event event;
     DesktopCaptureGate::Stamp stamp;
     uint64_t time_ns;
+    bool warp = false;  // motion SDL reported for the backend's own centring warp
 };
+
+// Opt-in diagnostics (MAG_GAME_CONTROLS_TRACE=1): after each acquisition of the mouse lock, the
+// next motion events with their SDL deltas, whether they reached the controls, and the epochs.
+constexpr int kTraceMotions = 20;
+bool trace_enabled() {
+    const char* value = std::getenv("MAG_GAME_CONTROLS_TRACE");
+    return value && !std::strcmp(value, "1");
+}
 
 class SdlPlatform final : public DesktopCapturePlatform {
 public:
@@ -75,7 +86,14 @@ public:
             SDL_SetWindowGrab(window, SDL_TRUE);
             center_pointer();
         }
-        if (SDL_SetRelativeMouseMode(SDL_TRUE) == 0) return true;
+        if (SDL_SetRelativeMouseMode(SDL_TRUE) == 0) {
+            tracing = trace_enabled();
+            if (tracing) {
+                trace_left = kTraceMotions;
+                std::fprintf(stderr, "[game-controls] trace mouse lock acquired; tracing the next %d motions\n", kTraceMotions);
+            }
+            return true;
+        }
         if (window) SDL_SetWindowGrab(window, SDL_FALSE);
         // Not available here (for example a compositor without relative pointer support):
         // report it and stop asking until the window changes.
@@ -88,6 +106,8 @@ public:
     // thread). Later X motion for the warp arrives after relative mode is back on and SDL ignores
     // it there.
     std::atomic<bool> warping{false};
+    std::atomic<bool> tracing{false};  // also read by the event filter
+    int trace_left = 0;
     void center_pointer() {
         int w = 0, h = 0;
         SDL_GetWindowSize(window, &w, &h);
@@ -172,11 +192,12 @@ int SDLCALL filter(void* data, SDL_Event* event) {
         }
         const bool repeat = (event->type == SDL_KEYDOWN || event->type == SDL_KEYUP) && event->key.repeat;
         const bool warp = event->type == SDL_MOUSEMOTION && b.platform.warping.load(std::memory_order_acquire);
-        if (!repeat && !warp) {
+        // Warp motion is queued only to be traced; delivery never passes it to the controls.
+        if (!repeat && (!warp || b.platform.tracing)) {
             const auto stamp = b.core.stamp();
             const uint64_t time = steady_ns();
             std::lock_guard lock(b.queue_mutex);
-            if (b.queue.size() < kQueueLimit) b.queue.push_back({*event, stamp, time});
+            if (b.queue.size() < kQueueLimit) b.queue.push_back({*event, stamp, time, warp});
             else b.overflow = true;
         }
     }
@@ -219,10 +240,19 @@ void deliver(Backend& b, const Observed& item) {
         b.core.mouse_button(sdl_desktop_mouse_index(e.button.button), kMouseDevice, e.type == SDL_MOUSEBUTTONDOWN,
                             item.time_ns, item.stamp);
         break;
-    case SDL_MOUSEMOTION:
-        if (e.motion.which == SDL_TOUCH_MOUSEID || e.motion.windowID != id) break;
-        b.core.mouse_motion(double(e.motion.xrel), -double(e.motion.yrel), item.stamp);
+    case SDL_MOUSEMOTION: {
+        const bool foreign = e.motion.which == SDL_TOUCH_MOUSEID || e.motion.windowID != id;
+        const bool accepted = !foreign && !item.warp &&
+                              b.core.mouse_motion(double(e.motion.xrel), -double(e.motion.yrel), item.stamp);
+        if (b.platform.trace_left > 0) {
+            --b.platform.trace_left;
+            std::fprintf(stderr, "[game-controls] trace motion xrel=%d yrel=%d %s epoch=%u current=%u\n",
+                         int(e.motion.xrel), int(e.motion.yrel),
+                         accepted ? "accepted" : item.warp ? "dropped(warp)" : foreign ? "dropped(other window)" : "dropped(stale)",
+                         DesktopCaptureCore::motion_epoch(item.stamp), b.core.motion_epoch());
+        }
         break;
+    }
     case SDL_WINDOWEVENT:
         if (e.window.windowID == id && e.window.event == SDL_WINDOWEVENT_FOCUS_GAINED) b.core.request_recapture();
         break;

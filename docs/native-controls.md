@@ -684,7 +684,10 @@ mode, grab, centre the pointer, enter relative mode. Each pump checks the lock: 
 or the grab is gone or the pointer is outside the window, it re-applies the lock (logged once per
 loss as "mouse lock lost; re-applying"). Re-applying moves the pointer to the centre, so the core
 discards motion observed before or during a re-acquisition (only the motion epoch advances; held
-keys and buttons stay), and the event filter also drops motion SDL reports for the centring warp. Focus loss, a window change and a menu release the lock
+keys and buttons stay), and the event filter also drops motion SDL reports for the centring warp. With
+`MAG_GAME_CONTROLS_TRACE=1` the backend logs, after each acquisition of the lock, the next 20
+motion events with their SDL deltas, whether each reached the controls (accepted, or dropped as
+warp, other window or stale) and the event's and the current motion epoch. Focus loss, a window change and a menu release the lock
 and the grab. Every change of capture state is logged once (`desktop_capture_transition`):
 capture engaged or released, and the mouse locked or released. Installing the filter is SDL's
 `SDL_SetEventFilter`, which discards events still queued at that moment; the backend installs it

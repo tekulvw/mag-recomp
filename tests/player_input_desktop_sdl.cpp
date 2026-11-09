@@ -6,6 +6,7 @@
 #include "player_input_desktop.h"
 #include "player_input_desktop_sdl.h"
 #include <SDL2/SDL.h>
+#include <cstdlib>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -156,6 +157,7 @@ void run() {
     // Something takes the lock (here: relative mode turned off behind the backend's back). The
     // next pump re-applies it, centring the pointer; that warp is not look input.
     const double before_x = motion_x, before_y = motion_y;
+    setenv("MAG_GAME_CONTROLS_TRACE", "1", 1);  // the re-lock below arms the motion trace
     SDL_SetRelativeMouseMode(SDL_FALSE);
     SDL_WarpMouseInWindow(window, 1, 1);  // the pointer has drifted to a corner
     pump();
@@ -165,6 +167,7 @@ void run() {
     motion(2, -1);
     pump();
     require(motion_x == before_x + 2 && motion_y == before_y + 1, "real motion still reaches the controls after a re-lock");
+    unsetenv("MAG_GAME_CONTROLS_TRACE");
 
     mag_input_desktop_set_enabled(0);
     pump();
