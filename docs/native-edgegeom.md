@@ -78,7 +78,12 @@ buffer-acquisition calls, as the specification's integration contract allows.
   - writes guest memory only through the runtime's MFC channels on tag 31, in this order: the
     ring record (GETLLAR/PUTLLC), the data, then the hole, with each 128-byte line's first word
     last;
-  - returns to the policy continuation with the job's hand-back registers.
+  - calls *finish* last, after every output is visible, tag 31 has drained, buffer 3 is
+    released and the invocation is counted. Finish may run other job-manager or workload code,
+    including another invocation on the same thread, before it returns. The shim keeps its saved
+    registers on its own frame and reads nothing of the invocation afterwards;
+  - returns to the policy continuation with `r1` and `r80`–`r127` as at entry. No return value
+    is defined; `r3` holds finish's result.
 - Work stays on the calling SPU thread. Each thread reuses its own scratch memory.
 - The core is compiled without floating-point contraction. The facing rule must see an exact
   zero area for coincident screen positions.

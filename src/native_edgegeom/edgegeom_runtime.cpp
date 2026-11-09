@@ -198,7 +198,9 @@ bool run(spu_context* c) {
     }
 
     const uint32_t context = c->gpr[3]._u32[0] & SPU_LS_MASK;
-    static thread_local Saved saved;
+    /* On this frame, not per thread: finish may run other job-manager code, including another
+     * invocation of this job on the same thread, before it returns here. */
+    Saved saved;
     std::memcpy(saved.gpr, c->gpr, sizeof saved.gpr);
     saved.int_enable = c->int_enable;
     const uint32_t sp = saved.gpr[1]._u32[0];
@@ -335,7 +337,7 @@ bool run(spu_context* c) {
     const uint32_t enable = c->int_enable;
     restore();
     c->int_enable = enable;
-    c->gpr[3] = spu_make_preferred_u32(result);   /* a scalar in the preferred slot, as the job returns it */
+    c->gpr[3] = spu_make_preferred_u32(result);   /* no return value is defined; finish's result */
     c->pc = saved.gpr[0]._u32[0] & SPU_LS_MASK;
     return true;
 }

@@ -27,6 +27,9 @@ static std::vector<Transfer> transfers;
 static std::vector<std::string> services;
 static bool lose_reservation_once;
 static bool link_check = true;
+static bool nested_in_finish;
+static std::vector<uint8_t> next_inputs;   /* buffer 1 as the job manager loads it for the next job */
+static int nested_handled;
 static uint32_t buffer1_start, buffer1_len, buffer3_start, buffer3_len;
 constexpr uint32_t kGet = 0x100, kFinish = 0x200, kRelease = 0x300, kContext = 0x1330, kUserdata = 0xC40;
 
@@ -103,6 +106,27 @@ static void job_manager(spu_context* c, uint32_t entry) {
         services.push_back("release" + std::to_string(c->gpr[4]._u32[0]));
     } else if (entry == kFinish) {
         services.push_back("finish");
+        if (nested_in_finish) {
+            /* The job manager runs the next invocation of this job on the same thread, from
+             * inside finish, on its own stack, before returning to this one. */
+            nested_in_finish = false;
+            spu_context saved_outer; std::memcpy(&saved_outer, c, sizeof saved_outer);
+            std::memcpy(c->ls + buffer1_start, next_inputs.data(), next_inputs.size());
+            for (int r = 80; r < 128; ++r) c->gpr[r] = spu_make_preferred_u32(0xBEEF0000u + r);
+            c->gpr[1]._u32[0] -= 0x400;
+            for (auto& w : c->gpr[3]._u32) w = 0x1330;
+            c->gpr[0] = spu_make_preferred_u32(0x3260);
+            c->pc = 0x15898;
+            const uint32_t depth = c->host_depth;
+            c->host_depth = depth + 1;
+            nested_handled = mag_payload_override(c, 0x15898);
+            c->host_depth = depth;
+            /* finish then returns to the outer job with its own registers back in place, except
+             * for those the call may change */
+            std::memcpy(c->gpr + 80, saved_outer.gpr + 80, 48 * sizeof(u128));
+            c->gpr[1] = saved_outer.gpr[1];
+            c->gpr[0] = saved_outer.gpr[0];
+        }
         for (auto& w : c->gpr[3]._u32) w = 0x00010009;
     } else {
         std::printf("FAIL unknown service 0x%05X\n", entry); ++failures;
@@ -294,6 +318,21 @@ static void small_buffers() {
     CHECK(guest32(0xCF000100u) == 0x00000001u && guest32(0x70000000u) == 0x00041710u);
 }
 
+/* Finish may run another invocation of this job on the same thread before it returns: the
+ * outer invocation must still hand back its own r1 and r80-r127. */
+static void invocation_inside_finish() {
+    reset();
+    const Case c = triangle_case();
+    ring(0xCF000000u, 0xCF010000u, 0xCF000100u, 0xCF000000u, 0xB00005D0u);
+    spu_context* ctx = make_context(c);
+    const u128 r1 = ctx->gpr[1], r80 = ctx->gpr[80], r127 = ctx->gpr[127];
+    next_inputs.assign(ctx->ls + buffer1_start, ctx->ls + buffer3_start);
+    nested_in_finish = true; nested_handled = 0;
+    CHECK(mag_payload_override(ctx, 0x15898) == 1 && nested_handled == 1);
+    CHECK(!std::memcmp(&ctx->gpr[1], &r1, 16) && !std::memcmp(&ctx->gpr[80], &r80, 16) && !std::memcmp(&ctx->gpr[127], &r127, 16));
+    CHECK(ctx->pc == 0x3260);
+}
+
 static void refusals_leave_entry_state() {
     /* Not resident: no service call and no transfer. */
     reset();
@@ -352,6 +391,7 @@ int main(int argc, char** argv) {
     residency();
     handled_invocation();
     small_buffers();
+    invocation_inside_finish();
     hole_across_lines();
     ring_refresh_and_retry();
     refusals_leave_entry_state();
