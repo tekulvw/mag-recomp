@@ -488,6 +488,10 @@ Reason Engine::prepare(const Inputs& in, Prepared& out) {
             if (p[5] > 15) return kOutputFormat;
         }
     }
+    /* The group and a non-empty output layout select production; the mode word and flavour
+     * select culling only. Group 3 with produced vertices is wind, also under mode 0x08/0x0A. */
+    if (kind == kIndexOnly && group == 3 && out.declaration_count) kind = kWind;
+    out.kind = kind;
     if ((kind == kIndexOnly) != (out.declaration_count == 0)) return kKind;
 
     /* Check 6 and the primary format. */

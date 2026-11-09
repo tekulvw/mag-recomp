@@ -40,7 +40,9 @@ Example report line: `[native-edgegeom]   kind=index_only handled=48211`.
 ### Kinds and refusal reasons
 
 Admitted kinds: `index_only` (static items), `instanced_wind` (group 0), `wind` (group 3) and
-`skinned` (group 7). Group 4 (ripple), group 11 (skinned in Main) and anything else the
+`skinned` (group 7). The group and a non-empty output layout select what is produced, and the mode
+word and flavour select culling only. Group 3 with produced vertices is therefore the wind under
+mode `0x28` (two-sided) and under `0x08`/`0x0A` (back-face culled) alike. Group 4 (ripple), group 11 (skinned in Main) and anything else the
 specification marks unconfirmed is refused with `kind`.
 
 | Reason | Meaning |
@@ -98,8 +100,7 @@ buffer-acquisition calls, as the specification's integration contract allows.
 - Culling also applies the near plane: a triangle with every vertex at `c.z < −c.w` is removed,
   and one that only reaches past the near plane is kept without the facing and quarter-pixel
   rules, the same treatment as a vertex at `w ≤ 0`. The Sabotage shadow-cascade recordings show
-  the original job doing both; the specification allows the near test, and the second rule is
-  reported to it.
+  the original job doing both, and the specification states both rules.
 - A private differential comparison against recorded original invocations runs outside this
   repository. On 800 Training recordings, every hole, ring update and index list matches; the
   only exceptions are 2 invocations whose culled lists differ by triangles within 2^-8 pixel of a

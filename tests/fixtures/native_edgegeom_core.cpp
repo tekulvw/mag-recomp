@@ -59,6 +59,22 @@ static void et3_small_primitive() {
     CHECK(run(c, p) == kHandled && p.surviving == 3);
 }
 
+/* Group 3 with produced vertices under mode 0x08, flavour 2: the group-3 wind, culled back-face. */
+static void group3_mode8_wind() {
+    Vertex v0 = at(1, -1, 0); v0.n[0] = 0.5f; v0.n[1] = -1; v0.n[2] = 0.25f;
+    v0.w[0] = 1; v0.w[1] = 0; v0.w[2] = 128.0f / 255.0f;
+    Vertex v1 = at(0.1f, 0, 0), v2 = at(0, 0.1f, 0);
+    v1.w[2] = 1; v2.w[2] = 1;
+    Case c = wind_case({v0, v1, v2}, {0, 1, 2, 0, 2, 1});
+    put32(c.userdata, 0xAC, 0x08); c.userdata[0xA5] = 2;
+    putf(c.userdata, 0x20, 0.5f); putf(c.userdata, 0x24, 1.0f); putf(c.userdata, 0x30, 0.5f);
+    putf(c.userdata, 0x80, 1.0f); putf(c.userdata, 0x88, 1.0f); putf(c.userdata, 0x8C, 0.25f);
+    Prepared p;
+    CHECK(run(c, p) == kHandled && p.kind == kWind && p.surviving == 3);
+    const uint8_t* v = p.data + p.index_bytes;
+    CHECK(near(getf(v), 1.5f) && near(getf(v + 8), -1));
+}
+
 static void et4_zero_area() {
     Case w = wind_case({at(0, 0, 0), at(0.1f, 0, 0), at(0.2f, 0, 0)}, {0, 1, 2});
     Prepared p;
@@ -329,7 +345,7 @@ static void codecs() {
 
 int main() {
     codecs();
-    et1_facing(); et2_frustum(); et3_small_primitive(); near_plane(); et4_zero_area(); et5_ring();
+    et1_facing(); et2_frustum(); et3_small_primitive(); near_plane(); group3_mode8_wind(); et4_zero_area(); et5_ring();
     et6_et7_et8_holes(); et9_instances();
     gz1_placement(); gz3_wind(); ni1_wind(); sk_skinning();
     refusals();
