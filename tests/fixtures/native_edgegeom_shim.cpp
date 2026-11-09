@@ -26,6 +26,7 @@ struct Transfer { uint32_t cmd, ea, size; };
 static std::vector<Transfer> transfers;
 static std::vector<std::string> services;
 static bool lose_reservation_once;
+static bool link_check = true;
 static uint32_t buffer1_start, buffer1_len, buffer3_start, buffer3_len;
 constexpr uint32_t kGet = 0x100, kFinish = 0x200, kRelease = 0x300, kContext = 0x1330, kUserdata = 0xC40;
 
@@ -83,10 +84,12 @@ u128 spu_rdch(spu_context* c, uint32_t ch) {
     if (ch == MFC_RdTagStat) return spu_make_preferred_u32(1u << 31);
     return spu_make_preferred_u32(0);
 }
-int spu_native_service_call(spu_context* c, uint32_t entry, uint32_t ret) {
+SPU_THREAD_LOCAL void (*g_spu_trampoline_fn)(spu_context*);
+/* The stand-in job manager: one service per entry, run when the dispatcher reaches it. */
+static void job_manager(spu_context* c, uint32_t entry) {
     if (c->int_enable) { std::printf("FAIL service with interrupts enabled\n"); ++failures; }
     if ((c->gpr[1]._u32[0] & 15) || c->gpr[1]._u32[0] > 0x3F990 - 512) { std::printf("FAIL stack\n"); ++failures; }
-    if (ret != 0x15898) { std::printf("FAIL link\n"); ++failures; }
+    if (c->host_depth < 2) { std::printf("FAIL service without a nested host frame\n"); ++failures; }
     for (int r = 5; r < 80; ++r) c->gpr[r] = spu_make_preferred_u32(0xDEAD0000u + r);   /* volatile clobber */
     if (entry == kGet) {
         const uint32_t buffer = c->gpr[4]._u32[0];
@@ -101,8 +104,27 @@ int spu_native_service_call(spu_context* c, uint32_t entry, uint32_t ret) {
     } else if (entry == kFinish) {
         services.push_back("finish");
         for (auto& w : c->gpr[3]._u32) w = 0x00010009;
-    } else return -1;
-    c->pc = ret;
+    } else {
+        std::printf("FAIL unknown service 0x%05X\n", entry); ++failures;
+    }
+    c->pc = c->gpr[0]._u32[0];   /* `bi $r0` with a live host frame: return to the link */
+}
+/* The runtime's dispatch and drain, as a lifted job's call uses them. */
+void spu_indirect_branch(spu_context* c) {
+    if (g_spu_trampoline_fn) { std::printf("FAIL dispatch with a pending transfer\n"); ++failures; }
+    if (link_check && (c->gpr[0]._u32[0] != 0x15898 || c->gpr[0]._u32[1])) { std::printf("FAIL link\n"); ++failures; }
+    job_manager(c, c->pc & SPU_LS_MASK);
+}
+void spu_drain_call(spu_context* c, uint32_t ret) {
+    if ((c->pc & SPU_LS_MASK) != ret) { std::printf("FAIL drain did not reach its return\n"); ++failures; }
+}
+void spu_img_restore(spu_context* c, int32_t image) { c->image_id = c->module_img_a00 ? c->module_img_a00 : image; }
+/* The runtime's service scope refuses contexts that are not RUNNING (spu_channels.c); SPURS
+ * policy contexts, which run every WWS job, are not. A shim that used it handled nothing. */
+int spu_native_service_call(spu_context* c, uint32_t entry, uint32_t ret) {
+    if (c->status != SPU_STATUS_RUNNING || c->irq_frame || c->irq_saved || g_spu_trampoline_fn) return -1;
+    c->gpr[0] = spu_make_preferred_u32(ret); c->pc = entry; c->host_depth++;
+    spu_indirect_branch(c); spu_drain_call(c, ret); c->host_depth--;
     return 0;
 }
 void spu_halt(spu_context*) { std::abort(); }
@@ -124,8 +146,9 @@ static spu_context* make_context(const Case& in, bool resident = true) {
     static spu_context ctx;
     std::memset(&ctx, 0, sizeof ctx);
     ctx.ls = ctx.ls_store;
-    ctx.status = SPU_STATUS_RUNNING;
+    ctx.status = SPU_STATUS_STOPPED;   /* as the runtime's SPURS policy contexts are */
     ctx.pc = 0x15898;
+    ctx.host_depth = 1;                /* inside the policy's bracket around the payload call */
     ctx.int_enable = 1;
     for (int r = 0; r < 128; ++r) for (int w = 0; w < 4; ++w) ctx.gpr[r]._u32[w] = 0x01000000u * r + w;
     for (auto& w : ctx.gpr[0]._u32) w = 0x3260;
@@ -171,7 +194,7 @@ static void handled_invocation() {
     CHECK(mag_payload_override(ctx, 0x15898) == 1);
     CHECK((services == std::vector<std::string>{"get1", "get3", "release3", "finish"}));
     CHECK(ctx->pc == 0x3260 && ctx->int_enable == 1);
-    for (int w = 0; w < 4; ++w) CHECK(ctx->gpr[3]._u32[w] == 9);
+    CHECK(ctx->gpr[3]._u32[0] == 9 && !ctx->gpr[3]._u32[1] && !ctx->gpr[3]._u32[2] && !ctx->gpr[3]._u32[3]);
     CHECK(!std::memcmp(&ctx->gpr[1], &r1, 16) && !std::memcmp(&ctx->gpr[80], &r80, 16) && !std::memcmp(&ctx->gpr[127], &r127, 16));
     /* Ring: T advanced by n = 128 from X = old T; U and every other field unchanged. */
     const uint32_t line = 0x10000180u;

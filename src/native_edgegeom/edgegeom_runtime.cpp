@@ -3,7 +3,7 @@
  * integration contract and job API calling contract of
  * docs/render-frontend/behavior/edge-geometry-job.md. Every guest-memory effect goes through
  * the runtime's MFC channel interface (spu_wrch/spu_rdch) on tag 31, and every job-manager
- * service is called through spu_native_service_call. MAG_NATIVE_EDGEGEOM_STATS=1 adds
+ * service is called as the lifted job's own calls are (service()). MAG_NATIVE_EDGEGEOM_STATS=1 adds
  * handled/refused counters per kind and reason, printed every few seconds and at exit. */
 #include "edgegeom.h"
 #include "mag_extension.h"
@@ -30,9 +30,7 @@
 extern "C" {
 void spu_wrch(spu_context* ctx, uint32_t channel, u128 value);
 u128 spu_rdch(spu_context* ctx, uint32_t channel);
-int spu_native_service_call(spu_context* ctx, uint32_t entry_pc, uint32_t return_pc);
 
-void spu_halt(spu_context* ctx);
 }
 #if defined(__clang__)
 #pragma clang diagnostic pop
@@ -113,17 +111,53 @@ void wait_tag(spu_context* c) {
     (void)spu_rdch(c, MFC_RdTagStat);
 }
 
-/* Calls a job-manager service as an SPU subroutine, interrupts disabled around the call.
- * Returns spu_native_service_call's result: 0 returned, 1 halted, -1 refused or mismatched. */
+/* MAG_NATIVE_EDGEGEOM_TRACE=N: print the first N job-manager service calls (diagnostic). */
+const unsigned trace_limit = [] { const char* e = std::getenv("MAG_NATIVE_EDGEGEOM_TRACE"); return e ? unsigned(std::strtoul(e, nullptr, 10)) : 0u; }();
+std::atomic<unsigned> traced{0};
+
+/* Calls a job-manager service as an SPU subroutine, exactly as a lifted job's `bisl` does: link
+ * in r0, a nested host frame (host_depth), the runtime's dispatch and drain up to the link, and
+ * the image restored afterwards. Interrupts are disabled around the call and re-enabled after,
+ * as the job does. This works in whatever context state the lifted job itself would run in; the
+ * runtime's spu_native_service_call scope also requires a RUNNING status that SPURS policy
+ * contexts do not carry, and refused every call in game. Returns 0 when the service returned to
+ * the link with the stack pointer intact, -1 otherwise. */
 int service(spu_context* c, uint32_t context, uint32_t slot, uint32_t a3, uint32_t a4, uint32_t a5, uint32_t a6,
             bool with_a6) {
     const uint32_t entry = ls32(c, context + slot) & SPU_LS_MASK & ~3u;
     c->gpr[3] = splat(a3); c->gpr[4] = splat(a4); c->gpr[5] = splat(a5);
     if (with_a6) c->gpr[6] = splat(a6);
+    const uint32_t stack = c->gpr[1]._u32[0];
+    const bool trace = trace_limit && traced.fetch_add(1, std::memory_order_relaxed) < trace_limit;
+    if (trace)
+        std::fprintf(stderr, "[native-edgegeom] service slot=+0x%02X entry=0x%05X args=%u,%u,%u,%u status=0x%X ie=%u "
+                     "irq_saved=%d irq_frame=%d pending=%d depth=%u policy=%d image=%d sp=0x%05X\n",
+                     slot, entry, a3, a4, a5, with_a6 ? a6 : 0, c->status, c->int_enable, c->irq_saved,
+                     c->irq_frame != nullptr, g_spu_trampoline_fn != nullptr, c->host_depth, c->policy_mode, c->image_id, stack);
     c->int_enable = 0;
-    const int r = spu_native_service_call(c, entry, kEntry);
+    c->gpr[0] = spu_make_preferred_u32(kEntry);
+    const int32_t image = c->image_id;
+    c->pc = entry;
+    c->host_depth++;
+    spu_indirect_branch(c);
+    spu_drain_call(c, kEntry);
+    c->host_depth--;
+    spu_img_restore(c, image);
     c->int_enable = 1;
-    return r;
+    const int result = (c->pc & SPU_LS_MASK) == kEntry && c->gpr[1]._u32[0] == stack ? 0 : -1;
+    if (trace)
+        std::fprintf(stderr, "[native-edgegeom] service slot=+0x%02X -> %d pc=0x%05X r3=%08X %08X %08X %08X sp=0x%05X\n", slot,
+                     result, c->pc, c->gpr[3]._u32[0], c->gpr[3]._u32[1], c->gpr[3]._u32[2], c->gpr[3]._u32[3], c->gpr[1]._u32[0]);
+    return result;
+}
+
+/* A service that does not return to its link, or returns with another stack pointer, has
+ * already changed job-manager state: neither a refusal nor a continuation is safe. Stop visibly. */
+[[noreturn]] void service_failed(spu_context* c, const char* which) {
+    std::fprintf(stderr, "[native-edgegeom] job manager service %s did not return to its link (pc=0x%05X sp=0x%05X)\n",
+                 which, c->pc, c->gpr[1]._u32[0]);
+    std::fflush(stderr);
+    std::abort();
 }
 
 struct Saved {
@@ -179,11 +213,13 @@ bool run(spu_context* c) {
     /* Acquire the buffers as the job does, on a frame below the entry stack. */
     for (auto& w : c->gpr[1]._u32) w -= kFrame;
     std::memcpy(c->ls + (c->gpr[1]._u32[0] & SPU_LS_MASK), &saved.gpr[1], 16);   /* back chain */
-    int s = service(c, context, kSlotGetBuffer, 0, 1, 0, 1, true);
-    if (s) { restore(); if (s == 1) spu_halt(c); count(kKindNone, kService, 0); return false; }
+    /* A pending transfer would make the nested dispatch below ambiguous; the lifted job starts
+     * with none. Refuse before the first call if one is set. */
+    if (g_spu_trampoline_fn) { restore(); count(kKindNone, kService, 0); return false; }
+    const int s = service(c, context, kSlotGetBuffer, 0, 1, 0, 1, true);
+    if (s) service_failed(c, "get buffer 1");
     const u128 buffer1 = c->gpr[3];
-    s = service(c, context, kSlotGetBuffer, 0, 3, 0, 0, true);
-    if (s) { restore(); if (s == 1) spu_halt(c); count(kKindNone, kService, 0); return false; }
+    if (service(c, context, kSlotGetBuffer, 0, 3, 0, 0, true)) service_failed(c, "get buffer 3");
     const u128 buffer3 = c->gpr[3];
 
     /* Inputs (section "Job API calling contract", buffer descriptor). */
@@ -283,23 +319,18 @@ bool run(spu_context* c) {
     wait_tag(c);
 
     /* Hand back: release buffer 3, finish, and return as the job does. */
-    s = service(c, context, kSlotRelease, 0, 3, 0, 0, false);
-    if (s == 0) s = service(c, context, kSlotFinish, 0, 0, 0, 0, false);
-    if (s) {
-        /* The job's guest-visible work is done; a failing service is a runtime fault, not a
-         * refusal. Leave it visible. */
-        std::fprintf(stderr, "[native-edgegeom] job manager service failed (%d) after a native invocation\n", s);
-        if (s == 1) spu_halt(c);
-        std::abort();
-    }
+    if (service(c, context, kSlotRelease, 0, 3, 0, 0, false)) service_failed(c, "release buffer 3");
+    /* Counted before finish: the job manager may continue elsewhere from inside finish instead
+     * of returning, exactly as it may from the lifted job's own call. */
+    count(kind, kHandled, uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now() - t0).count()));
+    if (service(c, context, kSlotFinish, 0, 0, 0, 0, false)) service_failed(c, "finish");
     const uint32_t result = c->gpr[3]._u32[0] & 0xFFFFu;
     const uint32_t enable = c->int_enable;
     restore();
     c->int_enable = enable;
-    c->gpr[3] = splat(result);
+    c->gpr[3] = spu_make_preferred_u32(result);   /* a scalar in the preferred slot, as the job returns it */
     c->pc = saved.gpr[0]._u32[0] & SPU_LS_MASK;
-    count(kind, kHandled, uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(
-        std::chrono::steady_clock::now() - t0).count()));
     return true;
 }
 

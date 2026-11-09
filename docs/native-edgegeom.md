@@ -32,6 +32,7 @@ The same binary runs the lifted job unless the run opts in, so one build serves 
 | Variable | Effect |
 | --- | --- |
 | `MAG_NATIVE_EDGEGEOM=1` | Registers the payload override at start (`[native-edgegeom] enabled` on stderr). Any other value, or none, leaves the job lifted. Set it for the whole run; never toggle it within a run (the Depth and Main passes must take positions from the same producer). |
+| `MAG_NATIVE_EDGEGEOM_TRACE=N` | Prints the first N job-manager service calls: slot, entry, arguments, context state before the call (status, interrupt enable, interrupt save and frame, pending transfer, host depth, policy mode, image, stack) and the result after it. Diagnostic only. |
 | `MAG_NATIVE_EDGEGEOM_STATS=1` | Every 5 seconds and at exit, prints the number of invocations, handled and refused, the mean native time per handled invocation, and the counts per kind and reason. |
 
 Example report line: `[native-edgegeom]   kind=index_only handled=48211`.
@@ -45,7 +46,7 @@ specification marks unconfirmed is refused with `kind`.
 | Reason | Meaning |
 | --- | --- |
 | `identity` | The module's residency record at LS `0x4000` is missing, or the dispatcher's resolver (`spu_lifted_lookup`) does not accept its loaded code. With the counters on, the first refusals also print the residency records |
-| `service` | A job-manager service could not be called |
+| `service` | A transfer was pending when the invocation started, so no service call was made |
 | `mode`, `blend_shapes`, `configuration`, `hole` | Inputs outside the specified values (admission checks 2–5) |
 | `stream_short`, `index_range` | Input streams shorter than their counts need, or an index of `V` or more |
 | `kind`, `codec`, `output_format` | A production rule, input codec or output layout this implementation does not implement |
@@ -69,8 +70,11 @@ buffer-acquisition calls, as the specification's integration contract allows.
     with the span of its lifted code (as `tools/wws_job_lift.py` registers it), so the record
     must cover the entry. Whether the loaded code matches is the dispatcher's own resolver's
     answer: it compares a newly loaded region once, as the lifted dispatch would;
-  - calls the job manager's *get buffer*, *release buffer* and *finish* services through
-    `spu_native_service_call`;
+  - calls the job manager's *get buffer*, *release buffer* and *finish* services the way a
+    lifted job's own call does: link in `r0`, a nested host frame, the runtime's dispatch and
+    drain up to the link, interrupts disabled around each call. (The runtime's
+    `spu_native_service_call` scope requires a RUNNING context status, which the SPURS policy
+    contexts that run every WWS job do not have, so it refused every call in game.);
   - writes guest memory only through the runtime's MFC channels on tag 31, in this order: the
     ring record (GETLLAR/PUTLLC), the data, then the hole, with each 128-byte line's first word
     last;
