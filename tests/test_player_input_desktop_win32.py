@@ -114,6 +114,9 @@ class Win32TranslationTests(unittest.TestCase):
     def test_keyboard_fallback_is_silent_while_owned(self):
         self.run_case('fallback')
 
+    def test_unfocused_presses_and_motion_are_ignored_releases_pass(self):
+        self.run_case('focus')
+
 
 class Win32SeamTests(unittest.TestCase):
     @classmethod

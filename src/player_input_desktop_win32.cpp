@@ -180,6 +180,7 @@ struct Backend {
     // Window thread only.
     bool focused = false, registration_failed = false;
     int reported = -1;
+    bool lock_lost_reported = false;
 };
 
 // Never destroyed: the SDK may pump until the process ends.
@@ -230,19 +231,25 @@ void raw_input(Backend& b, HRAWINPUT handle) {
     if (GetRawInputData(handle, RID_INPUT, &raw, &size, sizeof(RAWINPUTHEADER)) == UINT(-1)) return;
     const auto stamp = b.core.stamp();
     const uint64_t time = steady_ns();
+    // Checked per report: focus can leave between two pumps, before the core has refreshed.
+    const int focused = b.platform.window_focused() ? 1 : 0;
     if (raw.header.dwType == RIM_TYPEKEYBOARD) {
         const RAWKEYBOARD& key = raw.data.keyboard;
         const uint32_t usage = mag_win32_raw_key_usage(key.MakeCode, key.Flags, key.VKey);
         const bool down = (key.Flags & RI_KEY_BREAK) == 0;
-        if (usage && mag_win32_key_edge(&b.platform.keys, usage, down)) b.core.key(usage, down, time, stamp);
+        // The key state still tracks every edge, so auto-repeat stays recognised after refocus.
+        if (usage && mag_win32_key_edge(&b.platform.keys, usage, down) && mag_win32_raw_input_admitted(focused, down))
+            b.core.key(usage, down, time, stamp);
     } else if (raw.header.dwType == RIM_TYPEMOUSE) {
         const RAWMOUSE& mouse = raw.data.mouse;
         MagWin32MouseEdge edges[10];
         const unsigned count = mag_win32_raw_mouse_edges(mouse.usButtonFlags, edges);
         for (unsigned i = 0; i < count; ++i)
-            b.core.mouse_button(edges[i].index, kMouseDevice, edges[i].down != 0, time, stamp);
+            if (mag_win32_raw_input_admitted(focused, edges[i].down))
+                b.core.mouse_button(edges[i].index, kMouseDevice, edges[i].down != 0, time, stamp);
         double dx = 0, dy = 0;
-        if (mag_win32_raw_mouse_motion(mouse.usFlags, mouse.lLastX, mouse.lLastY, &dx, &dy))
+        if (mag_win32_raw_mouse_motion(mouse.usFlags, mouse.lLastX, mouse.lLastY, &dx, &dy) &&
+            mag_win32_raw_input_admitted(focused, 1))
             b.core.mouse_motion(dx, dy, stamp);
     }
 }
@@ -263,8 +270,23 @@ void pump(Backend& b, bool dialog) {
     const bool focused = b.platform.window_focused();
     if (focused && !b.focused) b.core.request_recapture();
     b.focused = focused;
-    if (b.core.relative() && b.platform.clip_lost()) b.core.request_recapture();
+    // Something replaced or dropped the confinement (another window, a resize): re-apply it at
+    // this refresh, logged once per loss.
+    if (b.core.relative() && b.platform.clip_lost()) {
+        if (!b.lock_lost_reported) {
+            std::fprintf(stderr, "[game-controls] mouse lock lost; re-applying\n");
+            b.lock_lost_reported = true;
+        }
+        b.core.request_recapture();
+    } else if (b.core.relative()) {
+        b.lock_lost_reported = false;
+    }
+    const bool was_ready = b.core.ready(), was_relative = b.core.relative();
     b.core.refresh();
+    // Focus loss releases the confinement and shows the cursor (set_relative(false)); one line
+    // per change makes that visible.
+    if (const char* change = desktop_capture_transition(was_ready, was_relative, b.core.ready(), b.core.relative()))
+        std::fprintf(stderr, "[game-controls] %s\n", change);
     const int on = b.core.installed() ? 1 : 0;
     if (on != b.reported) {
         if (b.reported >= 0 || on)

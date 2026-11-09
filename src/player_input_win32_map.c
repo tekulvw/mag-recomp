@@ -167,3 +167,8 @@ int16_t mag_win32_keyboard_fallback_state(int16_t system_state, int keyboard_own
 {
     return keyboard_owned ? 0 : system_state;
 }
+
+int mag_win32_raw_input_admitted(int window_focused, int press_or_motion)
+{
+    return !press_or_motion || window_focused;
+}

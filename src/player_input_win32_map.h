@@ -80,6 +80,9 @@ void mag_win32_xinput_capture(const MagXInputGamepad* in, MagXInputCapture* out)
 /* What the SDK's keyboard fallback reads for one key: nothing while the controls adapter owns the
  * keyboard, otherwise the system's answer unchanged. */
 int16_t mag_win32_keyboard_fallback_state(int16_t system_state, int keyboard_owned);
+/* Whether a Raw Input report reaches the capture core: presses and motion only while the game
+ * window is focused; releases always, so a control held when focus left can still end. */
+int mag_win32_raw_input_admitted(int window_focused, int press_or_motion);
 
 #ifdef __cplusplus
 }

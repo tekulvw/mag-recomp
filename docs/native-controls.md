@@ -718,7 +718,12 @@ the raw relative delta, reported up-positive, and absolute-position devices (tab
 desktop) do not drive look. Ready requires the game window to be the foreground and active window
 and not minimized. Relative mode hides the cursor and confines it to the client area; it is
 re-applied after a click in the window, when focus returns and when the confinement no longer
-matches the window (moved, resized or replaced), and released when readiness ends.
+matches the window (moved, resized or replaced), and released when readiness ends. Each Raw Input report is also checked against focus when
+it arrives: presses and motion count only while the game window is focused, releases always do,
+so a press made in another window before the next pump never reaches the game. Losing focus
+releases the confinement and shows the cursor again; a replaced or dropped confinement is
+re-applied at the next pump ("mouse lock lost; re-applying", once per loss). Every capture state
+change is logged once (`desktop_capture_transition`), as on Linux.
 
 Controllers on macOS and Linux reach the capture layer through `player_input_sdl_pad.c`: compile
 definitions on `libs/input/cellPad.c` route its SDL GameController calls through wrappers that

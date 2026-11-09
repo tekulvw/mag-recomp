@@ -145,6 +145,13 @@ void fallback() {
 }
 }  // namespace
 
+// Presses and motion reach the core only while the game window is focused; releases always do.
+void focus() {
+    require(mag_win32_raw_input_admitted(1, 1) == 1, "focused: presses and motion pass");
+    require(mag_win32_raw_input_admitted(0, 1) == 0, "unfocused: a press (W in another window) or motion is ignored");
+    require(mag_win32_raw_input_admitted(0, 0) == 1 && mag_win32_raw_input_admitted(1, 0) == 1, "releases always pass");
+}
+
 int main(int argc, char** argv) {
     if (argc != 2) return 2;
     const std::string name = argv[1];
@@ -154,6 +161,7 @@ int main(int argc, char** argv) {
         else if (name == "mouse") mouse();
         else if (name == "xinput") xinput();
         else if (name == "fallback") fallback();
+        else if (name == "focus") focus();
         else return 2;
     } catch (const std::exception& error) {
         std::cerr << name << ": " << error.what() << '\n';
