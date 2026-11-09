@@ -40,12 +40,21 @@ Out of scope:
 
 ### Evidence
 
-Statements marked *(verified)* were checked against 800 complete job I/O recordings of this job
-(two Training samples, default renderer). Every recorded invocation was compared with a black-box
-model written from this document. The model reproduces the culled index list exactly in 792 of 794
-checkable invocations. The other 2 differ by three triangles, each within 0.01 pixel of a
-quarter-pixel boundary (see Tolerance). It also reproduces all 800 holes byte for byte, and all output sizes and
-ring updates. Statements marked *(observed)* hold in every recording but were not
+Statements marked *(verified)* were checked against complete job I/O recordings of this job, made
+with the default renderer:
+
+- 800 from two Training samples;
+- 6,000 from hosted Sabotage at spawn, in three windows, covering Main and both shadow cascades.
+
+Every recorded invocation was compared with a black-box model written from this document.
+
+- **Training:** the model reproduces the culled index list exactly in 792 of 794 checkable
+  invocations. It also reproduces all 800 holes byte for byte, and every output size and ring
+  update.
+- **Sabotage:** it reproduces 5,921 of the checkable invocations exactly.
+
+Every remaining difference, in both sets, is a triangle within `2^-8` of a decision boundary (see
+Tolerance). Statements marked *(observed)* hold in every recording but were not
 varied. Statements marked *(unconfirmed)* have no evidence and must be checked with the oracle (see
 Integration contract) before a native path relies on them.
 
@@ -92,7 +101,7 @@ dominate by count.
 | Index format | raw big-endian `u16` (configuration byte 6 high nibble 1) | compressed indices |
 | Skinning | four (weight byte, joint byte) pairs, 3×4 `f32` palette, palettes of 14 to a few dozen matrices | other influence layouts or matrix formats |
 | Blend shapes | never (userdata count is always 0) | any |
-| Culling | frustum, back-face (flavour 2), zero area (flavour 1), small primitive | near or far plane as the only reason; software depth testing |
+| Culling | frustum sides, near plane (shadow cascades), back-face (flavour 2), zero area (flavour 1), small primitive | far plane as the only reason; software depth testing |
 | Output layouts | empty (index only), built-in layout 0, custom layouts of 20 and 24 bytes | built-in layouts 1–3 |
 | Instance counts | 1 to 88 | |
 
@@ -223,7 +232,9 @@ A native implementation handles an invocation only if every check below passes. 
 the invocation to the original job and makes no guest-visible change.
 
 1. Module, entry and policy identities match the table above.
-2. Mode word `0x08` or `0x0A` with flavour 2, or mode word `0x28` with flavour 1.
+2. Mode word `0x08` or `0x0A` with flavour 2, or mode word `0x28` with flavour 1. The mode word
+   and flavour select culling only; vertex production is selected by group and output layout
+   (section 3).
 3. Blend-shape count 0.
 4. Configuration byte 6 is `0x10` or `0x11`, byte 7 is 0, byte 5 is `0xFF`, and bytes 12–15 are
    `0xFFFFFFFF`.
@@ -259,7 +270,7 @@ Let `P` be the decoded positions and `N`, `Tg`, `W` the normal, tangent and weig
 | --- | --- | --- |
 | Index only (output layout has no declarations) | no vertices are written. Culling uses `P`. | none |
 | Group 0, mode `0x28` | [group-zero-deformation.md](group-zero-deformation.md), "Per instance" and "Per vertex", with the userdata mapping above and the game's wind values below. `E3` is view record row `+0x40`, instance rows are slot 13, `φm` and `φs` are userdata `+0x50` and `+0x54`, and `T` is the object translation. The colour rows of that specification are not produced here. | `V·I`, instance-major |
-| Group 3, mode `0x28` | [noninstanced-deformation.md](noninstanced-deformation.md), group 3, with `Σ = t.x + t.y + t.z` and the game's wind values below | `V` |
+| Group 3 with a non-empty output layout, either mode word (`0x28` with flavour 1, or `0x08` with flavour 2) | [noninstanced-deformation.md](noninstanced-deformation.md), group 3, with `Σ = t.x + t.y + t.z` and the game's wind values below. The mode-`0x08` form is wind with back-face culling, not a pass-through: its positions are displaced exactly like mode `0x28` (verified, 6 Sabotage invocations). Group 3 with an empty output layout is index only. | `V` |
 | Skinned (byte 6 low nibble 1), group 7 | [skinning-deformation.md](skinning-deformation.md) palette blend of positions, normals and tangents. The palette is slots 3 and 4 concatenated, the influences slot 5. No further direction transform is applied to normals or tangents (verified with an identity object transform). | `V` |
 
 The produced positions stay in the object's frame. They are not moved by the object transform.
@@ -289,12 +300,14 @@ Everything else in the two specifications' formulas is unchanged. With these val
 specification formulas reproduce the recorded outputs:
 
 - group 0: all 15,936 recorded instance vertices to 1.5e-5 absolute;
-- group 3: all 5,769 recorded vertices to 1.9e-4 absolute (99th percentile 2.6e-5).
+- group 3: all 5,769 Training vertices to 1.9e-4 absolute (99th percentile 2.6e-5). The worst
+  Sabotage error is 0.0045 units, where `Σ ≈ 545`. That is within the tolerance formula of
+  [noninstanced-deformation.md](noninstanced-deformation.md), at most 0.85 of its bound.
 
 The group-3 horizontal phase is ill-conditioned. Its coupling multiplies the object-translation
-sum, which is about 10^3 in the recordings, so binary32 rounding alone moves the phase by
-hundredths of a cycle. The horizontal displacement's own amplitude is small, though (at most
-0.004 units in the recordings), so the absolute error stays below 1e-4.
+sum, which is in the hundreds to thousands in the recordings, so binary32 rounding alone moves the
+phase by hundredths of a cycle. The error is therefore bounded by the horizontal sway amplitude,
+which the noninstanced tolerance already covers, and not by the coefficients.
 
 ### 4. Projection
 
@@ -312,9 +325,10 @@ The index list is read as `K/3` triangles `(a, b, c)`, in order. For group 0, th
 for each instance `i` from 0 to `I − 1`, with `i·V` added to every index. A triangle is removed
 when any of these holds (verified, all flavours unless stated):
 
-1. **Outside one frustum side.** For one of x and y, all three vertices have `c.k > c.w`, or all
-   three have `c.k < −c.w`. These are plain comparisons on the clip values, also when `c.w` is
-   negative.
+1. **Outside one frustum side.** One of these holds for all three vertices: `c.x > c.w`,
+   `c.x < −c.w`, `c.y > c.w`, `c.y < −c.w`, or `c.z < −c.w` (the near plane). These are plain
+   comparisons on the clip values, also when `c.w` is negative. The near plane is verified in
+   Sabotage shadow cascades: all 469 triangles that only that plane separates were removed.
 2. **Facing.** Let `A = (sx_b − sx_a)·(sy_c − sy_a) − (sx_c − sx_a)·(sy_b − sy_a)`.
    - Flavour 2: removed unless `A < 0`. Zero and positive areas are removed.
    - Flavour 1: removed only if `A = 0`.
@@ -325,10 +339,13 @@ when any of these holds (verified, all flavours unless stated):
 The rules are applied in the order listed. Only whether a triangle survives is visible, not which
 rule removed it. Surviving triangles keep their order and their vertex order.
 
-Near and far planes: the near-plane test (`c.z < −c.w` for all three) never decided a triangle by
-itself in the recordings. An implementation may apply it or not. No triangle with any vertex at
-`c.w ≤ 0` survived rule 1 in the recordings. An implementation must keep such a triangle when rules
-1–3 do not remove it. (The GPU clips it; keeping it can never hide geometry.)
+**Crossing the near plane.** A triangle that rule 1 does not remove, but that has at least one
+vertex with `c.z < −c.w` or `c.w ≤ 0`, is kept. Rules 2 and 3 are not applied to it (verified:
+141 of 141 partly-near triangles in Sabotage were kept, whatever their facing or quarter-pixel
+extent). The GPU clips it, so keeping it never hides geometry.
+
+**Far plane.** No vertex beyond the far plane (`c.z > c.w`) appeared in any recording. An
+implementation may apply the far-plane side test or not.
 
 `K'` is the number of surviving indices (three per surviving triangle).
 
@@ -497,7 +514,7 @@ Native arithmetic is used. The reference is exact real arithmetic on the decoded
 | Weights, hole words, index values, sizes, ring fields | exact |
 | Normal fields | within 1 unit of the reference quantization |
 | Tangent fields | within 1 binary16 ulp; magnitudes below the smallest normal binary16 may become zero |
-| Culling decisions | exact, except for triangles within `2^-8` pixel of a decision boundary (a zero area, a quarter-pixel line, or a clip plane after division). Those may go either way. The three borderline differences in the recordings were within 0.01 pixel. |
+| Culling decisions | Exact, except for borderline triangles, which may go either way: those with `|A| < 2^-8` square pixels, a vertex within `2^-8` pixel of a quarter-pixel line, or a vertex within `2^-8·|c.w|` of a clip plane. In the recordings every difference was borderline. The largest Sabotage cases were zero-area group-0 triangles from collapsed instances, and quarter-pixel distances below `1e-4` pixel. |
 
 ### Consequences of non-bit-exact output
 
