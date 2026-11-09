@@ -29,6 +29,16 @@ The result is `<installation>/MAG.app` on macOS or `<installation>\MAG\MAG.exe` 
 it from there. Launch logs are written under `<installation>/logs/launch-*/`, and a startup failure
 also to `<installation>/launch-error.log`.
 
+On Linux, start MAG from a graphical desktop session. The `MAG` supervisor starts the game from a
+fixed environment and passes on only the desktop session's display, audio and session-bus
+variables (`DISPLAY`, `WAYLAND_DISPLAY`, `XDG_RUNTIME_DIR`, `DBUS_SESSION_BUS_ADDRESS`,
+`XAUTHORITY`, `PULSE_SERVER`, `PIPEWIRE_REMOTE`), so other variables set in your shell do not reach
+the game. `MAG/lib` holds the libraries the executables link, FFmpeg included. The C library, the
+dynamic loader and the graphics driver's OpenGL, EGL and Vulkan dispatch come from the system, as do
+the desktop libraries SDL loads at run time (X11 or Wayland, ALSA or PulseAudio, udev). The game
+reads its files from the workspace beside `MAG`, so move the whole installation folder, not just
+`MAG`.
+
 If a build fails or is cancelled, select **Retry build** with the same game and installation
 folders. Inputs are reverified before tools are installed or downloaded. Completed managed
 dependencies and verified cached downloads are reused; older logs are retained in `logs/attempts/`.

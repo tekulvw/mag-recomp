@@ -1,8 +1,9 @@
-# Building mag-recomp on macOS
+# Building mag-recomp
 
 This guide builds the native launcher (`EBOOT`) and engine (`mage_g`) from your own BCUS98110 v1.0
-copy. Read the [legal notice](NOTICE.md) first: every file you supply and everything generated from it
-stays in Git-ignored directories and must not be shared.
+copy. Steps 1–7 are written for macOS; [Linux and Windows hosts](#linux-and-windows-hosts) lists
+what differs on the other two. Read the [legal notice](NOTICE.md) first: every file you supply and
+everything generated from it stays in Git-ignored directories and must not be shared.
 
 A complete clean bootstrap on a second machine has not yet been verified end to end; please report
 any step that does not work as written.
@@ -202,6 +203,70 @@ and closes each movie at once and then waits forever after the legal screen.
 | Q / E, R / T, F / G | L1 / R1, L2 / R2, L3 / R3 |
 
 SDL game controllers take priority over the keyboard.
+
+## Linux and Windows hosts
+
+Steps 2–5 and the project checks are the same on every host (on Windows the virtual
+environment's interpreter is `.venv\Scripts\python.exe`). Steps 1, 6 and 7 differ. The
+installer's recipe is the reference for both hosts: `installer/mag_installer/native_recipe.py` for
+the configure options and `installer/mag_installer/managed_tools.py` for the pinned dependencies.
+[docs/ps3recomp-flags.md](docs/ps3recomp-flags.md) explains every option named here.
+
+### Linux (Ubuntu 24.04 or later, x86_64)
+
+- **System packages.** Ubuntu supplies the compiler, the C library and the desktop development
+  headers: install the package list from the [installer guide](installer/README.md#using-it). A
+  manual build also needs `python3-venv` (for step 2's virtual environment), `cmake` and
+  `ninja-build`.
+- **Compiler.** Build with clang, not GCC: the lifted SPU code's indirect branches rely on
+  clang's guaranteed tail calls. Pass the drivers by their own names,
+  `-DCMAKE_C_COMPILER=/usr/bin/clang -DCMAKE_CXX_COMPILER=/usr/bin/clang++`, and don't resolve
+  them to their link targets. On Ubuntu, `clang++` is a link to LLVM's `clang` binary, and a driver
+  picks its language from the name it was started with. Run under the resolved name, it links as C,
+  without libstdc++ and libm, and the link fails with undefined versioned libm symbols such as
+  `exp@@GLIBC_2.29`.
+- **SDL2, glslang, SPIRV-Cross and FFmpeg.** The installer builds these from pinned sources into a
+  private prefix and passes it as `CMAKE_PREFIX_PATH`. The pins are SDL2 2.32.10, glslang 16.6.0,
+  SPIRV-Cross `vulkan-sdk-1.4.363.0` and FFmpeg 9.0.1. FFmpeg is built as shared libraries with
+  `--disable-x86asm`, so no assembler is needed. SDL2 enables its X11, Wayland, ALSA, PulseAudio and
+  udev support from the development packages it finds at configure time, so install the system
+  packages first. Ubuntu 24.04 does not package FFmpeg 9.
+- **Configure.** Add `-DPS3RECOMP_RSX_VULKAN=ON`, so the runtime presents through its Vulkan
+  backend, and `-DPS3RECOMP_FFMPEG_RUNTIME=ON`, so it loads FFmpeg at run time. Name the FFmpeg
+  libraries `libavcodec.so.63`, `libavformat.so.63`, `libavutil.so.61` and `libswscale.so.10`.
+  The other Linux defaults need no option: mag-recomp's CMake files allocate the SPU decode cache
+  per thread on the heap, and the pinned runtime turns on the SDL text-entry dialog for the
+  on-screen keyboard and the keyboard as controller port 0. On Linux the launcher also links
+  OpenSSL's `libcrypto` (from `libssl-dev`).
+- **Run.** `tools/boot.py` is written for the Metal backend. Its window and frame-dump switches are
+  Metal's, and it clears inherited `PS3RECOMP_` variables, so the Vulkan backend gets no window
+  through it. To play, build with the installer, or package your build the way it does, and start
+  `MAG/MAG`. Its supervisor sets the Vulkan window and guest-program switches, the
+  launcher-to-engine handoff, the save location and the movie switches.
+
+### Windows 10/11 (x86_64)
+
+- **Toolchain.** Visual Studio Build Tools with the MSVC x64 tools, the C++ Clang tools and a
+  Windows SDK. Configure from a `vcvars64.bat` environment, with clang-cl as both compilers and the
+  static C runtime: `-DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl
+  -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded`. The executables then need no VC++ redistributable.
+  Write paths in `-D` values with forward slashes, because CMake later reads backslashes in them as
+  escapes.
+- **Vulkan.** Players present through Vulkan: add `-DPS3RECOMP_RSX_VULKAN=ON` and
+  `-DPS3RECOMP_VULKAN_INCLUDE_DIR=<Vulkan-Headers include directory>`, and put glslang on
+  `CMAKE_PREFIX_PATH`. The installer builds Vulkan-Headers v1.4.328 and glslang 16.6.0, together
+  with the SPIRV-Headers and SPIRV-Tools revisions that glslang release lists as known good.
+  glslang is built with its optimizer on, because the optimizer drops unused bindings and shader
+  reflection depends on that. The Vulkan loader comes from the GPU driver. Without
+  `PS3RECOMP_RSX_VULKAN`, the runtime builds its D3D12 backend instead.
+- **Movies (optional).** The installer uses a pinned prebuilt FFmpeg 9.0.2 (the LGPL shared win64
+  build). Configure with `-DPS3RECOMP_SAIL_FFMPEG=ON -DPS3RECOMP_FFMPEG_RUNTIME=ON`, its `include`
+  directory and its `.lib` import libraries. Place `avcodec-63.dll`, `avformat-63.dll`,
+  `avutil-61.dll`, `swscale-10.dll` and `swresample-7.dll` beside the executables.
+- **Paths.** Keep the build and installation path ASCII-only and short. The runtime opens guest
+  files and its ELF argument through narrow-character APIs, and long build paths exceed Windows'
+  length limit. The installer refuses an installation path with non-ASCII characters or more than
+  100 characters.
 
 ## Extending a build
 

@@ -49,9 +49,27 @@ your permissions; use only ones you trust.
 The `sdks` roles and commits must match the `ps3recomp` table in `profiles/framework.json`
 exactly; `tools/fetch_ps3recomp.py` creates those checkouts. Each must be clean. The `lifter-ppu`
 checkout must also hold the tag named by its `splice_after` pin (the dispatcher splice reads that
-commit by revision). On Windows,
-replace `ffmpeg` with
-`"msvc": {"vcvars": ".../VC/Auxiliary/Build/vcvars64.bat", "clang_cl": ".../VC/Tools/Llvm/x64/bin/clang-cl.exe"}`.
+commit by revision). `python` must be 3.11 or later with the modules from the runtime's
+`requirements.txt`; preflight imports them.
+
+Host differences:
+
+- **Linux** (Ubuntu 24.04 or later, x86_64): add `"host": "linux-x86_64"` and
+  `"linux_toolchain": {"cc": "/usr/bin/clang", "cxx": "/usr/bin/clang++"}`, and name the FFmpeg
+  libraries `libavcodec.so.63`, `libavformat.so.63`, `libavutil.so.61` and `libswscale.so.10`.
+  Preflight checks that every package in the installer's Ubuntu list is installed. The compiler
+  paths are used as written, not resolved through links, because a clang driver picks C or C++
+  from the name it is run as.
+- **Windows**: replace `ffmpeg` with
+  `"msvc": {"vcvars": ".../VC/Auxiliary/Build/vcvars64.bat", "clang_cl": ".../VC/Tools/Llvm/x64/bin/clang-cl.exe"}`.
+  `ffmpeg` is optional there; it names the prebuilt's `include` directory and its `avcodec.lib`,
+  `avformat.lib`, `avutil.lib` and `swscale.lib` import libraries. The output path must be ASCII
+  and at most 100 characters.
+
+`managed_prefix` (optional) names a directory of built dependencies, such as the installer's
+managed prefix, which is passed as `CMAKE_PREFIX_PATH`. On Windows it also selects the
+Vulkan backend, with the Vulkan headers from its `include` directory; without it, Windows builds
+the D3D12 backend.
 
 `jobs` is 1–4 (default 2). `cmake_args` accepts only `-DMAG_GENERATED_PPU_OPT=0|1|2` and a numeric
 `-DCMAKE_OSX_DEPLOYMENT_TARGET`.
