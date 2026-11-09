@@ -245,11 +245,17 @@ bool run(spu_context* c) {
     Reason reason = inputs_ok ? engine.prepare(in, p) : kInputs;
     Kind kind = p.kind;
 
-    /* Staging in buffer 3: ring line, label word, hole, then a data window. */
-    const uint32_t stage = (b3 + 127u) & ~127u;
-    const uint32_t ring_lsa = stage, label_lsa = stage + 128, hole_lsa = stage + 256, window = stage + 768;
-    const uint32_t window_len = b3 + b3_len > window ? std::min<uint32_t>(kMaxDma, (b3 + b3_len - window) & ~127u) : 0;
-    if (reason == kHandled && (window_len < 1024 || p.hole_bytes > 240)) reason = kInputs;
+    /* Staging: the invocation owns buffers 1 and 3 until release, and every input has been
+     * consumed into host memory by now, so buffer 1 and the buffer 3 that directly follows it are
+     * one staging area (small jobs get small buffers). Ring line, label word, hole, then a window
+     * for the data, which goes out in pieces of at most the window's size. */
+    const bool joined = b3 == b1 + b1_len;
+    const uint32_t area = joined || b1_len >= b3_len ? b1 : b3;
+    const uint32_t area_end = joined ? b3 + b3_len : area == b1 ? b1 + b1_len : b3 + b3_len;
+    const uint32_t stage = (area + 127u) & ~127u;
+    const uint32_t ring_lsa = stage, label_lsa = stage + 128, hole_lsa = stage + 256, window = stage + 640;
+    const uint32_t window_len = area_end > window ? std::min<uint32_t>(kMaxDma, (area_end - window) & ~127u) : 0;
+    if (reason == kHandled && (window_len < 128 || p.hole_bytes > 240)) reason = kInputs;
 
     uint32_t X = 0, x_offset = 0, label = 0;
     if (reason == kHandled && p.request) {
