@@ -185,10 +185,10 @@ class NativeRecipeTests(unittest.TestCase):
             self.assertEqual(x86_level_override({}, host), [])
             self.assertEqual(x86_level_override({'MAG_X86_LEVEL': ''}, host), [])
         for host in ('windows-x86_64', 'linux-x86_64'):
-            for level in ('auto', 'v3', 'baseline'):
+            for level in ('auto', 'v4', 'v3', 'baseline'):
                 self.assertEqual(x86_level_override({'MAG_X86_LEVEL': level}, host), ['-DMAG_X86_LEVEL=' + level])
-            with self.assertRaisesRegex(InstallerError, 'auto, v3 or baseline'):
-                x86_level_override({'MAG_X86_LEVEL': 'v4'}, host)
+            with self.assertRaisesRegex(InstallerError, 'auto, v4, v3 or baseline'):
+                x86_level_override({'MAG_X86_LEVEL': 'v5'}, host)
         with self.assertRaisesRegex(InstallerError, 'only to Windows and Linux'):
             x86_level_override({'MAG_X86_LEVEL': 'baseline'}, 'macos-arm64')
 

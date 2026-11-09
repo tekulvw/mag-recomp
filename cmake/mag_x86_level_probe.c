@@ -1,6 +1,7 @@
 /* Configure-time probe (cmake/MagX86Level.cmake): does the build CPU, and the operating system
- * running on it, support every x86-64-v3 feature? Exits 0 when it does. Prints the features it
- * found missing, so the configure output says why a build stayed at the baseline.
+ * running on it, support every x86-64-v3 feature? Exits 0 when it does, and then prints the
+ * highest level it supports, x86-64-v3 or x86-64-v4. Otherwise prints the features it found
+ * missing, so the configure output says why a build stayed at the baseline.
  *
  * Built at the baseline level itself, so it runs on any x86-64 CPU. */
 #include <stdio.h>
@@ -51,6 +52,12 @@ static const struct feature features[] = {
     {"avx2", 7, EBX, 5},     {"bmi2", 7, EBX, 8},    {"lahf", 0x81, ECX, 0}, {"lzcnt", 0x81, ECX, 5},
 };
 
+/* x86-64-v4 adds AVX-512 F, BW, CD, DQ and VL. */
+static const struct feature v4_features[] = {
+    {"avx512f", 7, EBX, 16}, {"avx512dq", 7, EBX, 17}, {"avx512cd", 7, EBX, 28},
+    {"avx512bw", 7, EBX, 30}, {"avx512vl", 7, EBX, 31},
+};
+
 int main(void)
 {
     unsigned basic[4], leaf1[4] = {0}, leaf7[4] = {0}, extended[4], ext1[4] = {0};
@@ -77,6 +84,15 @@ int main(void)
             missing = 1;
         }
     }
-    puts(missing ? "" : "x86-64-v3");
-    return missing;
+    if (missing) {
+        puts("");
+        return missing;
+    }
+    /* v4: every AVX-512 feature, and the OS saving the opmask and all ZMM state (XCR0 bits 5-7
+     * as well as 1-2). */
+    int v4 = (xcr0() & 0xE6u) == 0xE6u;
+    for (unsigned i = 0; i < sizeof v4_features / sizeof v4_features[0]; ++i)
+        if (!((leaf7[v4_features[i].reg] >> v4_features[i].bit) & 1u)) v4 = 0;
+    puts(v4 ? "x86-64-v4" : "x86-64-v3");
+    return 0;
 }

@@ -213,7 +213,7 @@ def record_build(binary: Path, sdk: Path, recomp: Path, spu: Path | None = None,
         record['movie_playback']=True
     if x86_level is not None:
         # x86-64 Linux and Windows builds: the code generation level MAG_X86_LEVEL selected.
-        if x86_level not in ('v3','baseline'):
+        if x86_level not in ('v4','v3','baseline'):
             raise ValueError(f'Unknown x86-64 level: {x86_level!r}')
         record['x86_level']=x86_level
     record.update(validate_modules(image,image_name,spu,firmware))
@@ -234,7 +234,7 @@ if __name__=='__main__':
     parser.add_argument('--firmware',type=Path)
     parser.add_argument('--receipt-extra',action='append',default=[],metavar='NAME=PATH',help='Record an extension input in the receipt')
     parser.add_argument('--movie-playback',action='store_true',help='The binary was built with the runtime FFmpeg movie decoder')
-    parser.add_argument('--x86-level',choices=['v3','baseline'],help='The x86-64 code generation level the binary was built at')
+    parser.add_argument('--x86-level',choices=['v4','v3','baseline'],help='The x86-64 code generation level the binary was built at')
     args=parser.parse_args()
     if args.validate_runtime:
         if args.sdk is None:
