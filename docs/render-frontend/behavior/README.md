@@ -62,6 +62,12 @@ supply their guest inputs.
 | [geometry-streams.md](geometry-streams.md) | Partition stream roles, attribute codecs, counts and the large-stream rule | Complete |
 | [fragment-builtins.md](fragment-builtins.md) | Fragment built-in rows | Complete (kind 31 uses own tuning values) |
 
+### Child jobs
+
+| Specification | Behaviour | Status |
+| --- | --- | --- |
+| [edge-geometry-job.md](edge-geometry-job.md) | Edge geometry child job: decode, deform, cull, output ring, command hole, completion; integration contract and performance plan | Partial: ripple, group 11 and the Depth pass need recordings; wind uses own tuning values |
+
 ### Passes
 
 | Specification | Behaviour | Status |
