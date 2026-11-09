@@ -353,12 +353,19 @@ endif()
 #   -O2                 -- the target-wide -O1 exists for the huge PPU TUs; the
 #                          SPU sources are small and decode-hot, so they get
 #                          full optimization. The last -O on the line wins.
+#   -w / /w             -- generated code, like the lifted PPU TUs below: no
+#                          warnings. Under clang-cl the target's -Wall means
+#                          -Weverything, which costs one large job image tens of
+#                          thousands of warnings (tens of MB of build log) and
+#                          several times its warning-free compile time.
 if(SPU_SOURCES)
     set_source_files_properties(${SPU_SOURCES} PROPERTIES
         INCLUDE_DIRECTORIES "${PS3RECOMP_DIR}/runtime/spu"
         COMPILE_DEFINITIONS SPU_USE_DISPATCH_MT)
     if(NOT MSVC OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-        set_source_files_properties(${SPU_SOURCES} PROPERTIES COMPILE_OPTIONS "-O2")
+        set_source_files_properties(${SPU_SOURCES} PROPERTIES COMPILE_OPTIONS "-O2;-w")
+    else()
+        set_source_files_properties(${SPU_SOURCES} PROPERTIES COMPILE_OPTIONS "/w")
     endif()
 endif()
 
