@@ -36,6 +36,8 @@ def synthetic_body(stage, name):
                 lines += ['        synthetic_step(ctx);', old.rstrip('\n')]
         for lr, target in calls(each, name):
             lines += [f'        ctx->lr = 0x{lr}; func_{target}(ctx); DRAIN_TRAMPOLINE(ctx);', '        synthetic_after(ctx);']
+        for line in getattr(each, 'required', lambda _: [])(name):
+            lines += [line, '        synthetic_step(ctx);']
     lines += ['        return;', '}']
     return '\n'.join(lines)
 

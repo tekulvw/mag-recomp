@@ -664,7 +664,27 @@ With a session, apply queues the profile on the adapter (after the session ends 
 saved controls apply next launch). Without a session (startup), apply only records that the player
 chose explicitly, so the startup mode override no longer applies.
 
-## 10. Tests
+## 10. Building
+
+The adapter needs the Rust toolchain recorded in `rust-toolchain.toml` and an engine lift prepared
+with the `controls` hook stage:
+
+```sh
+python3 tools/render_hooks/prepare.py --base generated/retail-v1.0/mage_g-dispatcher \
+  --output generated/retail-v1.0/mage_g-controls --stage controls
+cmake -S . -B build-engine -G Ninja -DMAG_IMAGE=mage_g \
+  -DRECOMP_DIR=generated/retail-v1.0/mage_g-controls -DMAG_GAME_CONTROLS=ON -DMAG_INPUT_RUST=ON ...
+```
+
+The stage combines with the render adapter's stages on one lift (list every `--stage`). CMake refuses
+a lift without the stage or prepared by different hook tools. The launcher image ignores the option.
+
+An installer recipe builds it when its local configuration names the toolchain:
+`"game_controls": {"cargo": "<path>", "rustc": "<path>"}` (the toolchain's own executables, not
+rustup proxies). The recipe then prepares `mage_g-controls` after the dispatcher splice and
+configures only the engine with the adapter.
+
+## 11. Tests
 
 Synthetic only: tests build a fake big-endian guest memory with the records of section 2, drive the
 adapter through seam events with a fake PPU register file, and check published tuples, register

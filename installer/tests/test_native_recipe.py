@@ -125,6 +125,32 @@ class NativeRecipeTests(unittest.TestCase):
             self.assertIn('-DCMAKE_PREFIX_PATH=' + prefix.resolve().as_posix(), configure)
             self.assertTrue(all('\\' not in argument for argument in configure if argument.startswith('-D')))
 
+    def test_game_controls_are_opt_in_and_prepare_their_own_engine_lift(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); data = self.config(root); workspace = self.workspace(root)
+            default = {stage['id']: stage['argv'] for stage in build_plan(self.load(root, data), workspace)}
+            self.assertNotIn('prepare-controls-hooks', default)
+            self.assertFalse(any('GAME_CONTROLS' in a or 'MAG_INPUT' in a for argv in default.values() for a in argv))
+            for name in ('cargo', 'rustc'):
+                (root / name).write_text('fixture'); (root / name).chmod(0o755)
+            with self.assertRaisesRegex(InstallerError, 'game_controls'):
+                self.load(root, dict(data, game_controls={'cargo': 'cargo'}))
+            config = self.load(root, dict(data, game_controls={'cargo': 'cargo', 'rustc': 'rustc'}))
+            plan = build_plan(config, workspace); commands = {p['id']: p['argv'] for p in plan}
+            ids = [p['id'] for p in plan]
+            self.assertEqual(ids.index('prepare-controls-hooks'), ids.index('splice-engine-dispatcher') + 1)
+            prepare = commands['prepare-controls-hooks']
+            generated = workspace / 'generated/retail-v1.0'
+            self.assertEqual(prepare[prepare.index('--base') + 1], str(generated / 'mage_g-dispatcher'))
+            self.assertEqual(prepare[prepare.index('--output') + 1], str(generated / 'mage_g-controls'))
+            self.assertEqual(prepare[-2:], ['--stage', 'controls'])
+            engine = commands['configure-engine']
+            self.assertIn('-DRECOMP_DIR=' + str(generated / 'mage_g-controls'), engine)
+            for flag in ('-DMAG_GAME_CONTROLS=ON', '-DMAG_INPUT_RUST=ON', '-DMAG_INPUT_CARGO=' + str((root / 'cargo').resolve()),
+                         '-DMAG_INPUT_RUSTC=' + str((root / 'rustc').resolve())):
+                self.assertIn(flag, engine)
+            self.assertFalse(any('GAME_CONTROLS' in a or 'MAG_INPUT' in a for a in commands['configure-launcher']))
+
 
     def test_x86_level_passes_nothing_by_default_and_allows_an_override(self):
         for host in ('windows-x86_64', 'linux-x86_64', 'macos-arm64'):

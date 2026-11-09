@@ -21,7 +21,10 @@ ROLES = ('runtime', 'lifter-spu', 'lifter-ppu', 'spu-programs')
 _REQUIRED = {'schema_version', 'source_tree', 'disc_root', 'eboot_elf', 'engine_elf',
              'firmware', 'python', 'cmake', 'ninja', 'git', 'sdks'}
 # ffmpeg: required on macOS/Linux. msvc/linux_toolchain: host compiler records.
-_OPTIONAL = {'jobs', 'cmake_args', 'native_graphics', 'managed_prefix', 'ffmpeg', 'msvc', 'host', 'linux_toolchain'}
+# game_controls: opt-in keyboard and mouse controls (docs/native-controls.md), with the
+# pinned Rust toolchain's cargo and rustc executables (not rustup proxies).
+_OPTIONAL = {'jobs', 'cmake_args', 'native_graphics', 'managed_prefix', 'ffmpeg', 'msvc', 'host', 'linux_toolchain',
+             'game_controls'}
 
 
 def is_windows(config):
@@ -117,6 +120,10 @@ def load_config(path):
     result['cmake_args'] = list(arguments)
     if raw.get('managed_prefix'):
         result['managed_prefix'] = _path(raw['managed_prefix'], path.parent, 'managed_prefix', directory=True)
+    if 'game_controls' in raw:
+        _object(raw['game_controls'], {'cargo', 'rustc'}, set(), 'game_controls')
+        result['game_controls'] = {key: _path(raw['game_controls'][key], path.parent, 'game_controls.' + key, executable=True)
+                                   for key in ('cargo', 'rustc')}
     return result
 
 
@@ -230,6 +237,13 @@ def build_plan(config, workspace):
            # The after lifter is a tagged fix on the pinned PPU lifter, fetched with it.
            '--before-sdk', sdk['lifter-ppu'], '--after-sdk', sdk['lifter-ppu'],
            '--profile', workspace / 'profiles/retail-v1.0-ppu-jumptable-splice.json')
+    controls = config.get('game_controls')
+    if controls:
+        # Opt-in keyboard and mouse controls: a copy of the engine lift with the controls seams.
+        dispatcher = paths['engine']
+        paths['engine'] = generated / 'mage_g-controls'
+        script('prepare-controls-hooks', 'render_hooks/prepare.py', '--base', dispatcher,
+               '--output', paths['engine'], '--stage', 'controls')
     script('worker-spu', 'spu_lift.py', '--output', paths['worker-spu'])
     script('engine-spu', 'engine_spu_lift.py', '--output', paths['engine-spu'])
     # The policy/task lift alone leaves streamed render jobs interpreted.
@@ -284,6 +298,9 @@ def build_plan(config, workspace):
     for name, image, spu, build in [('launcher', 'EBOOT', 'worker-spu', 'build'),
                                     ('engine', 'mage_g', 'engine-spu', 'build-engine')]:
         extra = ['-DMAG_SPU_PROGRAMS_DIR=' + cmake_path(paths['spu-programs'])] if name == 'engine' else []
+        if name == 'engine' and controls:
+            extra += ['-DMAG_GAME_CONTROLS=ON', '-DMAG_INPUT_RUST=ON',
+                      '-DMAG_INPUT_CARGO=' + cmake_path(controls['cargo']), '-DMAG_INPUT_RUSTC=' + cmake_path(controls['rustc'])]
         command('configure-' + name, cmake, '-S', workspace, '-B', workspace / build, *common,
                 '-DMAG_IMAGE=' + image, '-DRECOMP_DIR=' + cmake_path(paths[name]), '-DSPU_DIR=' + cmake_path(paths[spu]), *extra)
         command('build-' + name, cmake, '--build', workspace / build, '--target', 'MagRecomp', '--parallel', config.get('jobs', 2))
