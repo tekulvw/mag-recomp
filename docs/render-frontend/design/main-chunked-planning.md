@@ -11,6 +11,23 @@ thread. It was the largest single block of FIFO busy time. Items are independent
 walk state they inherit (render state, group transitions, pass openings), so the work can be split
 once that state is known at each range boundary.
 
+A chunk cannot simply plan into a packet of its own and be appended later, because three things
+in the planning loop cross range boundaries:
+- **Producer passes** added at group transitions bring their own passes, images and snapshots,
+  and later items refer to them by packet index (texture bindings, refraction snapshots, the
+  current pass).
+- **Interning tables** (programs, pipelines, views, samplers, source images) keep the first
+  occurrence of each entry, so a chunk's indices depend on what earlier chunks interned.
+- **The state-only walk's packet** is not the full packet either: it lacks material entries, so
+  its indices do not line up.
+
+The design below handles this by performing every boundary-crossing step once, in a serial
+skeleton on the real packet, and by having chunks intern their own resources into the real packet
+at merge time. The alternatives we weighed were an index-remapping merge of fully independent
+chunk packets (largest gain, but every index in passes, draws, items, pipelines and effects would
+need remapping) and a parallel draw build with a serial in-order emit (exact by construction, but
+bounded at about 1.8× because the serial emit is about half the plan).
+
 ## How it works
 
 1. **Skeleton.** One serial walk over all items, on the real packet, in a state-only mode.
@@ -45,8 +62,13 @@ serial planner's.
 
 ## Making it fast
 
-The first version scaled poorly. The chunks contended on the allocator and started with cold
-caches. Three changes fixed most of it:
+The first version scaled poorly. A synthetic 3,000-item plan, sampled while chunked, showed the
+chunk threads spending about twice the serial planner's share of time in the allocator (per-draw
+temporary allocations), plus compiler-cache misses on cold per-chunk caches that serialised on the
+shared compiler lock. Memory copies and per-draw technique decoding cost the same share as in the
+serial planner, and shared reference counts were not a hot spot. Even so, that test planned in
+about 3.7 ms at K=4 and 3.0 ms at K=6, against 6–7 ms serially. Three changes fixed most of the
+overhead:
 - persistent workers with per-thread compiler caches;
 - reusing per-thread scratch vectors for index and uniform data;
 - a lighter skeleton, which skips every per-item cost that only the chunks need.
@@ -88,7 +110,8 @@ about balance. The balance figure is the one to read.
   from about 17.5 ms to 15.3 ms.
   - Frame rate did not move by itself, because the game thread set the update time.
   - K=6 planned about 0.6 ms faster than K=4.
-  - The lighter skeleton brought the K=6 plan to about 3.4 ms in total.
+  - The lighter skeleton brought the K=6 plan to about 3.4 ms in total (skeleton about 0.4 ms,
+    chunks about 2.6 ms, merge about 0.4 ms), from about 4.2 ms before.
 - **On Linux (8 cores, 16 SMT threads),** the chunk phase did not shrink from K=4 to K=6.
   - Equal-count ranges reached a balance of only 0.66–0.70.
   - The cost split raised it to 0.91 and cut the slowest chunk from about 5 ms to about 4 ms.

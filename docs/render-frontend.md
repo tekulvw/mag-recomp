@@ -17,8 +17,9 @@ Original-program verification (differential tests against the original program) 
 this public repository.
 
 Design notes on the adapter's Main path (chunked planning, early completion and the torn-capture
-re-commit, state-first, the FIFO thread and the native worker) and the conclusions of each measured
-round are in [render-frontend/design](render-frontend/design/README.md).
+re-commit, capture preservation, state-first and its latency budget, streaming Main's encode, the
+FIFO thread and the native worker) and the conclusions of each measured round are in
+[render-frontend/design](render-frontend/design/README.md).
 
 ## Game adapter
 

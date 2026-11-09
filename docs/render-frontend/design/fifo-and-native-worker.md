@@ -42,8 +42,10 @@ longer referenced.
 
 ### What fixed it
 
-- **`MAG_RENDER_RESIDENT_ARENAS=1`** (default off) rewrites upload arena buffers whose
-  submission has completed, in place, instead of creating and freeing one per submission.
+- **`MAG_RENDER_RESIDENT_ARENAS=1`** (default off, in `crates/mag-render-native`) rewrites
+  upload arena buffers whose submission has completed, in place, instead of creating and freeing
+  one per submission. A buffer goes back to the free list only after its submission's real
+  completion, and the in-place write refuses while any use is still pending.
   - On Linux this cut the poll wait from about 3.3 ms to 1.1 ms per update and its worst wait
     from about 7.7 ms to 2.5 ms.
   - The control arm's update time improved from about 36.3 ms to 33.2 ms.
