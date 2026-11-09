@@ -83,6 +83,7 @@ class NativeRecipeTests(unittest.TestCase):
             self.assertIn(PINS['runtime']['commit'], streamed)
             self.assertIn('--merge-chunks', streamed)
             self.assertIn('--require-complete', streamed)
+            self.assertIn('--static-indirect', streamed)
             self.assertIn('--engine-profile', streamed)
             self.assertIn('-DSPU_DIR='+str(workspace/'generated/retail-v1.0/spu-engine-retained'), commands['configure-engine'])
             self.assertIn('-DSPU_DIR='+str(workspace/'generated/retail-v1.0/spu-eboot'), commands['configure-launcher'])
