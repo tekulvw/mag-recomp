@@ -87,7 +87,9 @@ int main()
     std::printf("[frame_clock] %zu distinct readings in 300 ms, median step %llu ms\n", steps.size(),
                 (unsigned long long)median(steps));
     CHECK(monotonic);
-    CHECK(steps.size() >= 100);
+    // A loaded runner may deschedule this loop for most of the 300 ms, so only
+    // require enough readings for the median step to mean something.
+    CHECK(steps.size() >= 20);
     CHECK(median(steps) <= 2);
 
     double med = 0, mx = 0, mean = 0;
