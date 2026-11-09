@@ -38,6 +38,19 @@ static void et2_frustum() {
     CHECK(run(c, p) == kHandled && p.surviving == 3);
 }
 
+/* Near plane (Sabotage shadow-cascade recordings): a triangle with every vertex past the near
+ * plane (c.z < -c.w) is removed; one that only reaches past it is kept without the facing and
+ * small-primitive rules, like a triangle with a vertex at w <= 0. */
+static void near_plane() {
+    Case c; c.positions({at(0, 0, -1.5f), at(0.1f, 0, -1.5f), at(0, 0.1f, -1.5f)}); c.counts(3, 3); c.indices({0, 1, 2});
+    Prepared p;
+    CHECK(run(c, p) == kHandled && p.surviving == 0);
+    c.positions({at(0, 0, -1.5f), at(0.1f, 0, 0), at(0, 0.1f, 0)}); c.indices({0, 2, 1});   /* back-facing */
+    CHECK(run(c, p) == kHandled && p.surviving == 3);
+    c.positions({at(0, 0, -0.5f), at(0.1f, 0, 0), at(0, 0.1f, 0)});                       /* in front: facing applies */
+    CHECK(run(c, p) == kHandled && p.surviving == 0);
+}
+
 static void et3_small_primitive() {
     Case c; c.positions({at(0, 0, 0), at(0.0003f, -0.1f, 0), at(0.0001f, 0.1f, 0)}); c.counts(3, 3); c.indices({0, 1, 2});
     Prepared p;
@@ -316,7 +329,7 @@ static void codecs() {
 
 int main() {
     codecs();
-    et1_facing(); et2_frustum(); et3_small_primitive(); et4_zero_area(); et5_ring();
+    et1_facing(); et2_frustum(); et3_small_primitive(); near_plane(); et4_zero_area(); et5_ring();
     et6_et7_et8_holes(); et9_instances();
     gz1_placement(); gz3_wind(); ni1_wind(); sk_skinning();
     refusals();

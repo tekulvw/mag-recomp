@@ -95,6 +95,11 @@ buffer-acquisition calls, as the specification's integration contract allows.
     deformation specifications' vectors.
   - The shim fixture runs against a stand-in job manager and MFC. It checks the call order,
     refusals that leave the entry state, the ring retry and refresh, and the write order.
+- Culling also applies the near plane: a triangle with every vertex at `c.z < −c.w` is removed,
+  and one that only reaches past the near plane is kept without the facing and quarter-pixel
+  rules, the same treatment as a vertex at `w ≤ 0`. The Sabotage shadow-cascade recordings show
+  the original job doing both; the specification allows the near test, and the second rule is
+  reported to it.
 - A private differential comparison against recorded original invocations runs outside this
   repository. On 800 Training recordings, every hole, ring update and index list matches; the
   only exceptions are 2 invocations whose culled lists differ by triangles within 2^-8 pixel of a
