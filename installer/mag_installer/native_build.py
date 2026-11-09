@@ -3,6 +3,7 @@ import hashlib
 import ast
 import json
 import os
+import re
 from pathlib import Path
 import stat
 import subprocess
@@ -103,6 +104,8 @@ def _windows_environment(config, home):
         if key.upper() == 'PATH': system_path = value
     tools = [str(Path(config[k]).parent) for k in ('python', 'cmake', 'ninja', 'git')]
     tools.append(str(Path(config['msvc']['clang_cl']).parent))
+    if config.get('game_controls'):
+        tools.append(str(Path(config['game_controls']['rustc']).parent))
     environment.update({'PATH': os.pathsep.join([*dict.fromkeys(tools), system_path]),
                         'TEMP': str(home), 'TMP': str(home), 'PYTHONNOUSERSITE': '1', 'PYTHONUTF8': '1',
                         'PYTHONPYCACHEPREFIX': str(Path(home) / 'pycache'),
@@ -116,6 +119,8 @@ def _environment(config, home):
     if 'msvc' in config:
         return _windows_environment(config, home)
     tool_dirs = {str(Path(config[k]).parent) for k in ('python', 'cmake', 'ninja', 'git')}
+    if config.get('game_controls'):
+        tool_dirs.add(str(Path(config['game_controls']['rustc']).parent))
     if config.get('managed_prefix'):
         tool_dirs.add(str(Path(config['managed_prefix']) / 'bin'))
     return {'PATH': os.pathsep.join(sorted(tool_dirs)) + os.pathsep + '/usr/bin:/bin:/usr/sbin:/sbin',
@@ -231,6 +236,13 @@ def preflight(config_path, output, token=None):
         _probe(['/usr/bin/xcrun', '--show-sdk-path'], env)
     _probe([config['python'], '-c', 'import sys,json,hashlib,struct,concurrent.futures,Crypto,capstone,construct,tabulate,tqdm; assert sys.version_info >= (3,11), "Python 3.11+ required"'], env)
     for tool in ('cmake', 'ninja', 'git'): _probe([config[tool], '--version'], env)
+    if config.get('game_controls'):
+        channel = re.search(r'channel\s*=\s*"([0-9]+\.[0-9]+\.[0-9]+)"', (source / 'rust-toolchain.toml').read_text())
+        for tool in ('cargo', 'rustc'):
+            inputs.append(_ordinary(config['game_controls'][tool], False))
+            version = _probe([config['game_controls'][tool], '--version'], env)
+            if not channel or not version.startswith(f'{tool} {channel[1]} '):
+                raise InstallerError(f'game_controls.{tool} must be Rust {channel[1] if channel else "of rust-toolchain.toml"}, not: {version}')
     from .native_recipe import framework_pins
     pins = framework_pins(source)
     for role, sdk in config['sdks'].items():

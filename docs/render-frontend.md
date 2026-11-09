@@ -69,6 +69,7 @@ lift to a new directory and adds the hooks of the chosen stages:
 | `update-loop` | which accepted engine update a thread's render work belongs to | `MAG_RENDER_ADAPTER_UPDATE_LOOP` |
 | `cohort` | retained visibility cohort ownership and publication (needs `configuration` and `update-loop`) | `MAG_RENDER_ADAPTER_COHORT` |
 | `ui-handoff` | the UI packet writers at the pre-UI boundary (needs `cohort`) | `MAG_RENDER_ADAPTER_UI_HANDOFF` |
+| `controls` | the game controls adapter's seams ([native-controls.md](native-controls.md)); not a render stage | `MAG_GAME_CONTROLS_HOOKS` |
 
 ```sh
 python3 tools/render_hooks/prepare.py --base generated/retail-v1.0/mage_g-ctr64 \
@@ -83,8 +84,14 @@ and every seam is re-checked when a stage is applied; any mismatch refuses the w
 and writes no output. After a lifter pin change, regenerate the tables with
 `prepare.py --print-pins <unprepared lift>`, review them and commit them with the pin change.
 
-The update function carries both `update-loop` and `cohort` hooks. Each of those stages declares it
-shared and pins it identically, and checks its pin with both stages' hooks removed.
+The update function carries `update-loop`, `cohort` and `controls` hooks. Each of those stages
+declares it shared and pins it identically, and checks its pin with every other stage's hooks
+removed.
+
+The `controls` stage differs from the render stages in one respect: with its guard on, the adapter
+may answer at three kinds of seam (the two assist queries and the control recognition step), and
+the hooked function then returns early or continues at a named label, so that original step does
+not run. With the guard off it is the original program like every other stage.
 
 Hooks only add lines, each under its stage's compile guard. Removing them restores every original
 body byte for byte, which the tool checks before writing. Every original call, drain, guest write

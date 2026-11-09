@@ -21,10 +21,10 @@ if __package__ in (None, ''):
 from tools.movie_picture_hooks import RETAIL_ELF
 from tools.prepare_inputs import ROOT, sha256_file
 from tools.provenance import validate_lift
-from tools.render_hooks import common, configuration, cohort, shadow_view, ui_handoff, update_loop
+from tools.render_hooks import common, configuration, cohort, controls, shadow_view, ui_handoff, update_loop
 from tools.render_hooks.common import HookError
 
-STAGES = {stage.NAME: stage for stage in (configuration, shadow_view, update_loop, cohort, ui_handoff)}
+STAGES = {stage.NAME: stage for stage in (configuration, shadow_view, update_loop, cohort, ui_handoff, controls)}
 REQUIRES = {'shadow-view': {'configuration'}, 'cohort': {'configuration', 'update-loop'}, 'ui-handoff': {'cohort'}}
 RECORD = 'render_adapter_hooks'
 SCHEMA_VERSION = 1
