@@ -14,7 +14,7 @@ has the current table.
 | --- | --- | --- |
 | `runtime` | The SDK compiled into the launcher and engine | Often: each runtime release is a new `mag-recomp/runtime-YYYY.MM.DD` tag |
 | `lifter-spu` | Inventory and the launcher and engine SPU lifts | Rarely |
-| `lifter-ppu` | PPU and firmware lifting, plus the `splice_after` commit whose fixed lifter the engine dispatcher splice reads | Rarely |
+| `lifter-ppu` | PPU and firmware lifting, plus the `splice_after` commits whose fixed lifters the engine's single-function splices (dispatcher, audio CTR) read | Rarely |
 | `spu-programs` | Lifting every embedded engine SPU program | Rarely |
 
 Lifters move rarely on purpose: a new lifter changes the generated sources and every identity

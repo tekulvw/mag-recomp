@@ -36,10 +36,11 @@ def fetch(root, url, role, pin):
     tagged = git(path, 'rev-parse', '--verify', '--quiet', f"refs/tags/{pin['tag']}^{{commit}}")
     if tagged != pin['commit']:
         raise ValueError(f"{role}: tag {pin['tag']} is {tagged}, pinned commit is {pin['commit']}")
-    # A second tagged commit the role's checkout must also hold (the dispatcher
-    # splice's fixed lifter, read from the PPU lifter checkout by revision).
-    extra = pin.get('splice_after')
-    if extra:
+    # Further tagged commits the role's checkout must also hold (the PPU splices'
+    # fixed lifters, read from the PPU lifter checkout by revision). `splice_after`
+    # is one {tag, commit} or a list of them.
+    extras = pin.get('splice_after') or []
+    for extra in [extras] if isinstance(extras, dict) else extras:
         tagged = git(path, 'rev-parse', '--verify', '--quiet', f"refs/tags/{extra['tag']}^{{commit}}")
         if tagged != extra['commit']:
             raise ValueError(f"{role}: tag {extra['tag']} is {tagged}, pinned splice commit is {extra['commit']}")
