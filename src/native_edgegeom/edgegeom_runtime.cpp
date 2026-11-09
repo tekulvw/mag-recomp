@@ -8,6 +8,9 @@
 #include "edgegeom.h"
 #include "mag_extension.h"
 #include "spu_context.h"
+/* spu_lifted_lookup: the dispatcher's own resolver. For a resident verified streamed region it
+ * compares the region's code once per load and returns NULL while it does not match. */
+#include "spu_interp.h"
 
 #include <algorithm>
 #include <atomic>
@@ -28,6 +31,7 @@ extern "C" {
 void spu_wrch(spu_context* ctx, uint32_t channel, u128 value);
 u128 spu_rdch(spu_context* ctx, uint32_t channel);
 int spu_native_service_call(spu_context* ctx, uint32_t entry_pc, uint32_t return_pc);
+
 void spu_halt(spu_context* ctx);
 }
 #if defined(__clang__)
@@ -40,7 +44,7 @@ namespace {
 using namespace mag_edgegeom;
 
 /* Identity (section "Identity"). */
-constexpr uint32_t kEntry = 0x15898, kModuleEa = 0x01963A00, kModuleLs = 0x4000, kModuleSpan = 0x1B870;
+constexpr uint32_t kEntry = 0x15898, kModuleEa = 0x01963A00, kModuleLs = 0x4000, kModuleImage = 0x1B870;
 /* Runtime residency state of a verified streamed region (runtime/spu/spu_channels.c). */
 constexpr int kResidencyVerified = 2;
 /* Job API context fields and service slots ("Job API calling contract"). */
@@ -130,13 +134,34 @@ struct Saved {
 bool run(spu_context* c) {
     const auto t0 = std::chrono::steady_clock::now();
     /* Check 1: the resident module and the target (the policy's identity is checked when the
-     * payload-override lift step is applied). */
-    bool resident = false, verified = false;
-    for (const auto& m : c->resident_code)
-        if (m.size == kModuleSpan && m.lsa == kModuleLs && m.source_ea == kModuleEa) {
-            resident = true; verified = m.verify_state == kResidencyVerified;
+     * payload-override lift step is applied). The runtime's residency record for a verified
+     * streamed region spans the lifted code only (tools/wws_job_lift.py registers code_end minus
+     * the load base), so the record must cover the entry inside the module image, not equal the
+     * image size. Whether its code matches is the dispatcher's own resolver's answer: it compares
+     * a pending region once per load, exactly as the lifted dispatch that would follow does. */
+    const spu_context* ctx = c;
+    int slot = -1;
+    for (int i = 0; i < 4; ++i) {
+        const auto& m = ctx->resident_code[i];
+        if (m.image_id && m.lsa == kModuleLs && m.source_ea == kModuleEa && m.verify_state &&
+            m.size > kEntry - kModuleLs && m.size <= kModuleImage)
+            slot = i;
+    }
+    const bool resolved = slot >= 0 && c->ls == c->ls_store && spu_lifted_lookup(c, kEntry);
+    if (!resolved || c->resident_code[slot].verify_state != kResidencyVerified) {
+        count(kKindNone, kIdentity, 0);
+        static std::atomic<unsigned> shown{0};
+        if (stats && shown.fetch_add(1, std::memory_order_relaxed) < 4) {
+            /* Diagnostics only: what the residency records held when identity failed. */
+            for (int i = 0; i < 4; ++i) {
+                const auto& m = ctx->resident_code[i];
+                std::fprintf(stderr, "[native-edgegeom] identity: slot %d image=%d lsa=0x%05X size=0x%X source=0x%08X state=%d%s\n",
+                             i, m.image_id, m.lsa, m.size, m.source_ea, m.verify_state, i == slot ? " (module)" : "");
+            }
+            std::fprintf(stderr, "[native-edgegeom] identity: resolver %s\n", resolved ? "found the entry" : "refused the entry");
         }
-    if (!resident || !verified || c->ls != c->ls_store) { count(kKindNone, kIdentity, 0); return false; }
+        return false;
+    }
 
     const uint32_t context = c->gpr[3]._u32[0] & SPU_LS_MASK;
     static thread_local Saved saved;

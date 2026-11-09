@@ -44,7 +44,7 @@ specification marks unconfirmed is refused with `kind`.
 
 | Reason | Meaning |
 | --- | --- |
-| `identity` | The module region is not resident and verified (for example, the first dispatch after a load), or this is not the Edge geometry entry |
+| `identity` | The module's residency record at LS `0x4000` is missing, or the dispatcher's resolver (`spu_lifted_lookup`) does not accept its loaded code. With the counters on, the first refusals also print the residency records |
 | `service` | A job-manager service could not be called |
 | `mode`, `blend_shapes`, `configuration`, `hole` | Inputs outside the specified values (admission checks 2–5) |
 | `stream_short`, `index_range` | Input streams shorter than their counts need, or an index of `V` or more |
@@ -65,7 +65,10 @@ buffer-acquisition calls, as the specification's integration contract allows.
   layout. Culled indices, produced vertices and draw parameters (`Prepared`) are kept separate
   from the hole encoder (`Engine::build_hole`).
 - `edgegeom_runtime.cpp` is the engine shim:
-  - checks the resident module and the entry;
+  - checks the resident module and the entry. The runtime records a verified streamed region
+    with the span of its lifted code (as `tools/wws_job_lift.py` registers it), so the record
+    must cover the entry. Whether the loaded code matches is the dispatcher's own resolver's
+    answer: it compares a newly loaded region once, as the lifted dispatch would;
   - calls the job manager's *get buffer*, *release buffer* and *finish* services through
     `spu_native_service_call`;
   - writes guest memory only through the runtime's MFC channels on tag 31, in this order: the

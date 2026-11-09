@@ -6,6 +6,7 @@
 #include "mag_extension.h"
 #include "native_edgegeom_cases.h"
 #include "spu_context.h"
+#include "spu_interp.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -29,6 +30,15 @@ static uint32_t buffer1_start, buffer1_len, buffer3_start, buffer3_len;
 constexpr uint32_t kGet = 0x100, kFinish = 0x200, kRelease = 0x300, kContext = 0x1330, kUserdata = 0xC40;
 
 static uint8_t peek(uint32_t ea) { const auto it = guest.find(ea); return it == guest.end() ? 0 : it->second; }
+/* As the runtime records a verified streamed region: tools/wws_job_lift.py registers the lifted
+ * code's span (code end minus the load base), not the module image size, and a load leaves it
+ * pending until the dispatcher's resolver compares the code. */
+constexpr uint32_t kCodeSpan = 0x12A40;
+static int residency_state = 1;            /* pending */
+static bool code_matches = true;
+static unsigned lookups;
+static void lifted_entry(spu_context*) {}
+
 static uint32_t guest32(uint32_t ea) { uint32_t v = 0; for (int i = 0; i < 4; ++i) v = v << 8 | peek(ea + i); return v; }
 static void guest_put32(uint32_t ea, uint32_t v) { for (int i = 0; i < 4; ++i) guest[ea + i] = uint8_t(v >> (24 - 8 * i)); }
 
@@ -96,6 +106,17 @@ int spu_native_service_call(spu_context* c, uint32_t entry, uint32_t ret) {
     return 0;
 }
 void spu_halt(spu_context*) { std::abort(); }
+/* The dispatcher's resolver: compares a pending verified region once, as the runtime does. */
+spu_lifted_fn spu_lifted_lookup(const spu_context* ctx, uint32_t lsa) {
+    ++lookups;
+    auto* c = const_cast<spu_context*>(ctx);
+    for (auto& m : c->resident_code)
+        if (m.image_id && lsa >= m.lsa && lsa - m.lsa < m.size) {
+            if (m.verify_state == 1) m.verify_state = code_matches ? 2 : 3;
+            return m.verify_state == 2 || m.verify_state == 0 ? lifted_entry : nullptr;
+        }
+    return nullptr;
+}
 }
 
 /* ---- an invocation in local store ------------------------------------------------------- */
@@ -110,7 +131,7 @@ static spu_context* make_context(const Case& in, bool resident = true) {
     for (auto& w : ctx.gpr[0]._u32) w = 0x3260;
     ctx.gpr[1]._u32[0] = 0x3F990; ctx.gpr[1]._u32[1] = 0x1980; ctx.gpr[1]._u32[2] = ctx.gpr[1]._u32[3] = 0;
     for (auto& w : ctx.gpr[3]._u32) w = kContext;
-    if (resident) ctx.resident_code[1] = {0x4000, 0x1B870, 0x01963A00, 77, 2, 0};
+    if (resident) ctx.resident_code[1] = {0x4000, kCodeSpan, 0x01963A00, 77, residency_state, 0};
     auto put = [&](uint32_t a, uint32_t v) { for (int i = 0; i < 4; ++i) ctx.ls[a + i] = uint8_t(v >> (24 - 8 * i)); };
     put(kContext + 0x00, 2);                     /* virtual SPU 2 */
     put(kContext + 0x20, kUserdata);
@@ -208,6 +229,37 @@ static void ring_refresh_and_retry() {
     CHECK(getllar == 2 && label_reads == 2);
 }
 
+static void residency() {
+    const Case c = triangle_case();
+    /* The in-game state: a code-span record, verified on an earlier dispatch. */
+    reset(); residency_state = 2; code_matches = true;
+    ring(0xCF000000u, 0xCF010000u, 0xCF000100u, 0xCF000000u, 0xB00005D0u);
+    spu_context* ctx = make_context(c);
+    CHECK(mag_payload_override(ctx, 0x15898) == 1);
+    /* First dispatch after a load: the resolver verifies it and the invocation runs natively. */
+    reset(); residency_state = 1; lookups = 0;
+    ring(0xCF000000u, 0xCF010000u, 0xCF000100u, 0xCF000000u, 0xB00005D0u);
+    ctx = make_context(c);
+    CHECK(mag_payload_override(ctx, 0x15898) == 1 && lookups == 1 && ctx->resident_code[1].verify_state == 2);
+    /* Loaded bytes that do not match the lifted code: refused before any service call. */
+    reset(); residency_state = 1; code_matches = false;
+    ctx = make_context(c);
+    CHECK(mag_payload_override(ctx, 0x15898) == 0 && services.empty() && transfers.empty());
+    /* A region registered without code bytes, another module's source, or a span that does not
+     * cover the entry: refused. */
+    reset(); residency_state = 0; code_matches = true;
+    ctx = make_context(c);
+    CHECK(mag_payload_override(ctx, 0x15898) == 0 && services.empty());
+    residency_state = 2;
+    ctx = make_context(c); ctx->resident_code[1].source_ea = 0x01963B00;
+    CHECK(mag_payload_override(ctx, 0x15898) == 0 && services.empty());
+    ctx = make_context(c); ctx->resident_code[1].size = 0x11000;
+    CHECK(mag_payload_override(ctx, 0x15898) == 0 && services.empty());
+    ctx = make_context(c); ctx->resident_code[1].image_id = 0;
+    CHECK(mag_payload_override(ctx, 0x15898) == 0 && services.empty());
+    residency_state = 1;
+}
+
 static void refusals_leave_entry_state() {
     /* Not resident: no service call and no transfer. */
     reset();
@@ -263,6 +315,7 @@ int main(int argc, char** argv) {
         std::puts("PASS native edgegeom shim disabled");
         return 0;
     }
+    residency();
     handled_invocation();
     hole_across_lines();
     ring_refresh_and_retry();

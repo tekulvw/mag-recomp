@@ -73,6 +73,17 @@ class NativeEdgeGeomBuild(unittest.TestCase):
         self.assertEqual(len(re.findall(r'mag_enable_native_edgegeom\(', top)), 1)
         self.assertIn('${MAG_NATIVE_EDGEGEOM_RECEIPT_EXTRA}', top)
 
+    def test_residency_record_is_the_lifted_code_span(self):
+        # The shim's identity check expects what the streamed-job lift registers: the module at
+        # LS 0x4000 with a span of its lifted code (shorter than the module image), not the
+        # image size. A span equal to the image size would hide this mismatch.
+        lift = (ROOT / 'tools/wws_job_lift.py').read_text()
+        self.assertIn('LOAD_BASE = 0x4000', lift)
+        self.assertIn("span = m['code_end'] - LOAD_BASE", lift)
+        shim = (SOURCES / 'edgegeom_runtime.cpp').read_text()
+        self.assertIn('spu_lifted_lookup(c, kEntry)', shim)
+        self.assertNotIn('m.size == kModuleImage', shim)
+
     def test_runtime_switch_is_exact(self):
         shim = (SOURCES / 'edgegeom_runtime.cpp').read_text()
         self.assertIn('getenv("MAG_NATIVE_EDGEGEOM")', shim)
