@@ -4,6 +4,7 @@ from pathlib import Path
 import tempfile
 import unittest
 from mag_installer.model import InstallerError
+from mag_installer import native_recipe
 from mag_installer.native_recipe import ROLES, build_plan, framework_pins, load_config, splice_pins, x86_level_override
 
 PINS = {'runtime': {'tag': 'mag-recomp/runtime-fixture', 'commit': 'a' * 40, 'path': 'local/ps3recomp-runtime'},
@@ -111,6 +112,8 @@ class NativeRecipeTests(unittest.TestCase):
             self.assertIn('--merge-chunks', streamed)
             self.assertIn('--require-complete', streamed)
             self.assertIn('--static-indirect', streamed)
+            # The default configuration is macOS arm64.
+            self.assertEqual([a for a in streamed if a.startswith('--lifter-arg')], ['--lifter-arg=--promote-regs'])
             self.assertIn('--engine-profile', streamed)
             self.assertIn('-DSPU_DIR='+str(workspace/'generated/retail-v1.0/spu-engine-retained'), commands['configure-engine'])
             self.assertIn('-DSPU_DIR='+str(workspace/'generated/retail-v1.0/spu-eboot'), commands['configure-launcher'])
@@ -131,6 +134,7 @@ class NativeRecipeTests(unittest.TestCase):
             self.assertEqual(config['msvc']['clang_cl'], str((root / 'clang-cl.exe').resolve()))
             plan = {stage['id']: stage['argv'] for stage in build_plan(config, self.workspace(root))}
             configure = plan['configure-engine']
+            self.assertEqual(plan['streamed-jobs'][-1], '--lifter-arg=--promote-regs')
             self.assertIn('-DCMAKE_C_COMPILER=' + Path(config['msvc']['clang_cl']).as_posix(), configure)
             self.assertIn('-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded', configure)
             self.assertFalse(any('FFMPEG' in argument for argument in configure))
@@ -152,6 +156,16 @@ class NativeRecipeTests(unittest.TestCase):
             self.assertIn('-DPS3RECOMP_VULKAN_INCLUDE_DIR=' + (prefix.resolve() / 'include').as_posix(), configure)
             self.assertIn('-DCMAKE_PREFIX_PATH=' + prefix.resolve().as_posix(), configure)
             self.assertTrue(all('\\' not in argument for argument in configure if argument.startswith('-D')))
+
+    def test_streamed_job_lifter_args_are_chosen_per_host(self):
+        self.assertEqual(native_recipe.config_host({'msvc': {}}), 'windows-x86_64')
+        self.assertEqual(native_recipe.config_host({'host': 'linux-x86_64'}), 'linux-x86_64')
+        self.assertEqual(native_recipe.config_host({}), 'macos-arm64')
+        table = native_recipe.STREAMED_JOB_LIFTER_ARGS
+        self.assertEqual(set(table), {'windows-x86_64', 'linux-x86_64', 'macos-arm64'})
+        self.assertEqual(table['windows-x86_64'], ('--promote-regs',))
+        self.assertEqual(table['linux-x86_64'], ('--promote-regs',))
+        self.assertEqual(table['macos-arm64'], ('--promote-regs',))
 
     def test_game_controls_are_opt_in_and_prepare_their_own_engine_lift(self):
         with tempfile.TemporaryDirectory() as tmp:
