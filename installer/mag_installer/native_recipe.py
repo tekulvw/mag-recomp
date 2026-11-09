@@ -21,7 +21,10 @@ ROLES = ('runtime', 'lifter-spu', 'lifter-ppu', 'spu-programs')
 _REQUIRED = {'schema_version', 'source_tree', 'disc_root', 'eboot_elf', 'engine_elf',
              'firmware', 'python', 'cmake', 'ninja', 'git', 'sdks'}
 # ffmpeg: required on macOS/Linux. msvc/linux_toolchain: host compiler records.
-_OPTIONAL = {'jobs', 'cmake_args', 'native_graphics', 'managed_prefix', 'ffmpeg', 'msvc', 'host', 'linux_toolchain'}
+# game_controls: opt-in keyboard and mouse controls (docs/native-controls.md), with the
+# pinned Rust toolchain's cargo and rustc executables (not rustup proxies).
+_OPTIONAL = {'jobs', 'cmake_args', 'native_graphics', 'managed_prefix', 'ffmpeg', 'msvc', 'host', 'linux_toolchain',
+             'game_controls'}
 
 
 def is_windows(config):
@@ -117,6 +120,10 @@ def load_config(path):
     result['cmake_args'] = list(arguments)
     if raw.get('managed_prefix'):
         result['managed_prefix'] = _path(raw['managed_prefix'], path.parent, 'managed_prefix', directory=True)
+    if 'game_controls' in raw:
+        _object(raw['game_controls'], {'cargo', 'rustc'}, set(), 'game_controls')
+        result['game_controls'] = {key: _path(raw['game_controls'][key], path.parent, 'game_controls.' + key, executable=True)
+                                   for key in ('cargo', 'rustc')}
     return result
 
 
@@ -138,6 +145,20 @@ def x86_level_override(environ, host):
     return ['-DMAG_X86_LEVEL=' + value]
 
 
+def splice_pins(pin):
+    """A role's extra tagged commits (the fixed lifters the PPU splices read), as a list.
+
+    `splice_after` is one {tag, commit} or a list of them; a missing key is none."""
+    extra = pin.get('splice_after')
+    if extra is None:
+        return []
+    if isinstance(extra, dict):
+        return [extra]
+    if isinstance(extra, list) and extra:
+        return extra
+    raise ValueError('splice_after')
+
+
 def framework_pins(workspace):
     """The pinned ps3recomp table: {role: {tag, commit, path}} (read-only)."""
     try:
@@ -147,11 +168,11 @@ def framework_pins(workspace):
             if (re.fullmatch('[0-9a-f]{40}', str(pin.get('commit', ''))) is None
                     or not isinstance(pin.get('tag'), str) or not isinstance(pin.get('path'), str)):
                 raise ValueError(role)
-            extra = pin.get('splice_after')
-            if extra is not None and (not isinstance(extra, dict) or set(extra) != {'tag', 'commit'}
-                                      or re.fullmatch('[0-9a-f]{40}', str(extra.get('commit', ''))) is None
-                                      or not str(extra.get('tag', '')).startswith('mag-recomp/')):
-                raise ValueError(role)
+            for extra in splice_pins(pin):
+                if (not isinstance(extra, dict) or set(extra) != {'tag', 'commit'}
+                        or re.fullmatch('[0-9a-f]{40}', str(extra.get('commit', ''))) is None
+                        or not str(extra.get('tag', '')).startswith('mag-recomp/')):
+                    raise ValueError(role)
             contained(Path(workspace), pin['path'])
         return table
     except (OSError, ValueError, KeyError, TypeError) as exc:
@@ -165,8 +186,8 @@ REQUIRED_SOURCE_FILES = (
     'tools/spu_programs_lift.py', 'tools/provenance.py',
     'tools/wws_job_lift.py', 'tools/verified_spu_jobs.py',
     'tools/movie_picture_hooks.py', 'tools/graphics_trace_hooks.py',
-    'tools/installer_ppu_splice.py', 'tools/partial_ppu_relift.py', 'tools/ppu_function_splice.py',
-    'profiles/retail-v1.0-ppu-jumptable-splice.json',
+    'tools/installer_ppu_splice.py', 'tools/ppu_function_splice.py',
+    'profiles/retail-v1.0-ppu-jumptable-splice.json', 'profiles/retail-v1.0-ppu-ctr64-splice.json',
     'profiles/framework.json', 'profiles/retail-v1.0-spu.json',
     'profiles/retail-v1.0-engine-spu.json', 'profiles/retail-v1.0-firmware.json',
     'profiles/retail-v1.0-engine-modules.json', 'profiles/retail-v1.0-spu-programs.json',
@@ -220,16 +241,29 @@ def build_plan(config, workspace):
                                   ('engine', 'mage_g', 'retail-v1.0-nonlocal.json')]:
         script('lift-' + name, 'lift.py', '--image', image, '--sdk', sdk['lifter-ppu'],
                '--nonlocal-profile', workspace / 'profiles' / profile, '--output', paths[name])
-    engine_base = paths['engine']
-    paths['engine'] = generated / 'mage_g-dispatcher'
-    script('splice-engine-dispatcher', 'installer_ppu_splice.py',
-           '--base', engine_base, '--output', paths['engine'],
-           '--work', workspace.parent / 'logs/dispatcher-splice',
-           '--elf', disc / 'bin/mage_g.elf', '--inventory', workspace / 'analysis/retail-v1.0/mage_g',
-           '--nonlocal-profile', workspace / 'profiles/retail-v1.0-nonlocal.json',
-           # The after lifter is a tagged fix on the pinned PPU lifter, fetched with it.
-           '--before-sdk', sdk['lifter-ppu'], '--after-sdk', sdk['lifter-ppu'],
-           '--profile', workspace / 'profiles/retail-v1.0-ppu-jumptable-splice.json')
+    # Single-function lifter fixes, chained in order, each reading the previous output.
+    # Each after lifter is a tagged fix on the pinned PPU lifter, fetched with it.
+    for step, output, work, profile in (
+            ('splice-engine-dispatcher', 'mage_g-dispatcher', 'dispatcher-splice', 'retail-v1.0-ppu-jumptable-splice.json'),
+            # Full-width CTR in the audio command builder: without it gameplay audio is silent.
+            ('splice-engine-ctr64', 'mage_g-ctr64', 'ctr64-splice', 'retail-v1.0-ppu-ctr64-splice.json')):
+        engine_base = paths['engine']
+        paths['engine'] = generated / output
+        script(step, 'installer_ppu_splice.py',
+               '--base', engine_base, '--output', paths['engine'],
+               '--work', workspace.parent / 'logs' / work,
+               '--elf', disc / 'bin/mage_g.elf', '--inventory', workspace / 'analysis/retail-v1.0/mage_g',
+               '--nonlocal-profile', workspace / 'profiles/retail-v1.0-nonlocal.json',
+               '--before-sdk', sdk['lifter-ppu'], '--after-sdk', sdk['lifter-ppu'],
+               '--profile', workspace / 'profiles' / profile)
+    controls = config.get('game_controls')
+    if controls:
+        # Opt-in keyboard and mouse controls: a copy of the engine lift (after every splice)
+        # with the controls seams.
+        spliced = paths['engine']
+        paths['engine'] = generated / 'mage_g-controls'
+        script('prepare-controls-hooks', 'render_hooks/prepare.py', '--base', spliced,
+               '--output', paths['engine'], '--stage', 'controls')
     script('worker-spu', 'spu_lift.py', '--output', paths['worker-spu'])
     script('engine-spu', 'engine_spu_lift.py', '--output', paths['engine-spu'])
     # The policy/task lift alone leaves streamed render jobs interpreted.
@@ -287,6 +321,9 @@ def build_plan(config, workspace):
     for name, image, spu, build in [('launcher', 'EBOOT', 'worker-spu', 'build'),
                                     ('engine', 'mage_g', 'engine-spu', 'build-engine')]:
         extra = ['-DMAG_SPU_PROGRAMS_DIR=' + cmake_path(paths['spu-programs'])] if name == 'engine' else []
+        if name == 'engine' and controls:
+            extra += ['-DMAG_GAME_CONTROLS=ON', '-DMAG_INPUT_RUST=ON',
+                      '-DMAG_INPUT_CARGO=' + cmake_path(controls['cargo']), '-DMAG_INPUT_RUSTC=' + cmake_path(controls['rustc'])]
         command('configure-' + name, cmake, '-S', workspace, '-B', workspace / build, *common,
                 '-DMAG_IMAGE=' + image, '-DRECOMP_DIR=' + cmake_path(paths[name]), '-DSPU_DIR=' + cmake_path(paths[spu]), *extra)
         command('build-' + name, cmake, '--build', workspace / build, '--target', 'MagRecomp', '--parallel', config.get('jobs', 2))

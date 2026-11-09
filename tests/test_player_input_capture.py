@@ -50,9 +50,13 @@ SDL_bool SDL_GameControllerGetAttached(SDL_GameController*);
 }
 #endif
 ''')
-            wrapper=root/'wrapper.o';binary=root/'capture'
-            subprocess.run(['xcrun','clang','-fobjc-arc','-Wall','-Wextra','-Werror','-I'+str(root),'-I'+str(SOURCE/'src'),'-c',str(SOURCE/'src/player_input_macos.m'),'-o',str(wrapper)],check=True)
-            subprocess.run(['xcrun','clang++','-std=c++20','-Wall','-Wextra','-Werror','-I'+str(root),'-I'+str(SOURCE/'src'),str(wrapper),
+            binary=root/'capture';objects=[]
+            # The SDL controller seam moved to a portable source shared with Linux.
+            for source in (SOURCE/'src/player_input_macos.m',SOURCE/'src/player_input_sdl_pad.c'):
+                if not source.is_file():continue
+                objects.append(root/(source.stem+'.o'))
+                subprocess.run(['xcrun','clang','-fobjc-arc','-Wall','-Wextra','-Werror','-I'+str(root),'-I'+str(SOURCE/'src'),'-c',str(source),'-o',str(objects[-1])],check=True)
+            subprocess.run(['xcrun','clang++','-std=c++20','-Wall','-Wextra','-Werror','-I'+str(root),'-I'+str(SOURCE/'src'),*map(str,objects),
                             str(SOURCE/'src/player_input_capture.cpp'),str(ROOT/'tests/player_input_macos_capture.cpp'),'-o',str(binary)],check=True)
             subprocess.run([str(binary)],check=True)
 if __name__=='__main__':unittest.main()

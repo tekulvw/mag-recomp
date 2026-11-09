@@ -15,7 +15,7 @@ import time
 
 from .model import InstallerError
 from .native_build import _ordinary, _source_files, _files
-from .native_recipe import ROLES, validate_source_tree
+from .native_recipe import ROLES, splice_pins, validate_source_tree
 from .safety import Cancellation, file_digest
 
 
@@ -129,10 +129,9 @@ def prepare(source_tree, sdks, output_archive, token=None, events=None):
             _git([git,'-C',str(clone),'-c','advice.detachedHead=false','checkout','--quiet','--detach',sdk['revision']],temp,env,token)
             if _git([git,'-C',str(clone),'rev-parse','HEAD'],temp,env,token) != sdk['revision']:
                 raise InstallerError(f'SDK {role} checkout identity mismatch')
-            # A second pinned commit read from this checkout by revision (the
-            # dispatcher splice's fixed lifter): pack it with its tag.
-            extra=pins[role].get('splice_after')
-            if extra:
+            # Further pinned commits read from this checkout by revision (the
+            # PPU splices' fixed lifters): pack each with its tag.
+            for extra in splice_pins(pins[role]):
                 ref='refs/tags/'+extra['tag']
                 _git([git,'-C',str(clone),'-c','protocol.file.allow=always','fetch','--quiet','--no-tags','--depth=1','--',str(sdk['path']),'+'+ref+':'+ref],temp,env,token)
                 if _git([git,'-C',str(clone),'rev-parse','--verify','--quiet',ref+'^{commit}'],temp,env,token) != extra['commit']:

@@ -26,7 +26,7 @@ PINS = {
     '00010AF8': {'sha256': '76650fcb75a8de78a5ac782210d6be01dfb6538aa519417a881cbe73e1e1e579', 'file': 'ppu_recomp_008.cpp'},
     '00013C54': {'sha256': 'd88de44f6b44e8115eeed4b594e56059545e20b44c1f6f1d47c97e154689aa95', 'file': 'ppu_recomp_000.cpp'},
 }
-# The update function also carries cohort hooks; both stages pin it identically.
+# The update function also carries cohort and controls hooks; all three pin it identically.
 SHARED = {UPDATE}
 # The callee whose return accepts the update; verified, never changed.
 DEPENDENCIES = {

@@ -4,7 +4,7 @@ from pathlib import Path
 import tempfile
 import unittest
 from mag_installer.model import InstallerError
-from mag_installer.native_recipe import ROLES, build_plan, framework_pins, load_config, x86_level_override
+from mag_installer.native_recipe import ROLES, build_plan, framework_pins, load_config, splice_pins, x86_level_override
 
 PINS = {'runtime': {'tag': 'mag-recomp/runtime-fixture', 'commit': 'a' * 40, 'path': 'local/ps3recomp-runtime'},
         'lifter-spu': {'tag': 'mag-recomp/lifter-spu-fixture', 'commit': 'b' * 40, 'path': 'local/ps3recomp-lifter-spu'},
@@ -59,23 +59,50 @@ class NativeRecipeTests(unittest.TestCase):
             self.assertEqual(framework_pins(workspace), PINS)
             for broken in ({k: v for k, v in PINS.items() if k != 'runtime'},
                            {**PINS, 'runtime': {**PINS['runtime'], 'commit': 'short'}},
-                           {**PINS, 'runtime': {**PINS['runtime'], 'path': '../outside'}}):
+                           {**PINS, 'runtime': {**PINS['runtime'], 'path': '../outside'}},
+                           {**PINS, 'lifter-ppu': {**PINS['lifter-ppu'], 'splice_after': []}},
+                           {**PINS, 'lifter-ppu': {**PINS['lifter-ppu'], 'splice_after': [{'tag': 'other/x', 'commit': 'a' * 40}]}},
+                           {**PINS, 'lifter-ppu': {**PINS['lifter-ppu'], 'splice_after': {'tag': 'mag-recomp/x', 'commit': 'short'}}}):
                 (workspace / 'profiles/framework.json').write_text(json.dumps({'ps3recomp': broken}))
                 with self.subTest(broken=broken), self.assertRaises(InstallerError): framework_pins(workspace)
+
+    def test_framework_pins_accept_one_or_several_splice_commits(self):
+        one = {'tag': 'mag-recomp/lifter-fix-1', 'commit': 'e' * 40}
+        two = {'tag': 'mag-recomp/lifter-fix-2', 'commit': 'f' * 40}
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = self.workspace(Path(tmp))
+            for extra in (one, [one, two]):
+                pins = {**PINS, 'lifter-ppu': {**PINS['lifter-ppu'], 'splice_after': extra}}
+                (workspace / 'profiles/framework.json').write_text(json.dumps({'ps3recomp': pins}))
+                with self.subTest(extra=extra):
+                    self.assertEqual(framework_pins(workspace)['lifter-ppu']['splice_after'], extra)
+                    self.assertEqual(splice_pins(pins['lifter-ppu']), extra if isinstance(extra, list) else [extra])
+            self.assertEqual(splice_pins(PINS['runtime']), [])
 
     def test_plan_follows_building_md_with_sdks_at_their_pinned_paths(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp); config = self.load(root, self.config(root)); workspace = self.workspace(root)
             plan = build_plan(config, workspace); commands = {p['id']: p['argv'] for p in plan}
-            self.assertEqual(list(commands), ['prepare-inputs', 'inventory', 'lift-launcher', 'lift-engine', 'splice-engine-dispatcher', 'worker-spu',
+            self.assertEqual(list(commands), ['prepare-inputs', 'inventory', 'lift-launcher', 'lift-engine', 'splice-engine-dispatcher', 'splice-engine-ctr64', 'worker-spu',
                                               'engine-spu', 'streamed-jobs', 'firmware', 'spu-programs', 'configure-launcher',
                                               'build-launcher', 'configure-engine', 'build-engine'])
             self.assertIn(str(workspace / 'local/ps3recomp-lifter-spu'), commands['inventory'])
             self.assertIn(str(workspace / 'local/ps3recomp-lifter-ppu'), commands['lift-engine'])
             self.assertIn(PINS['spu-programs']['commit'], commands['spu-programs'])
-            self.assertIn(str(workspace / 'generated/retail-v1.0/mage_g-dispatcher'), ' '.join(commands['configure-engine']))
-            splice = commands['splice-engine-dispatcher']
-            self.assertEqual(splice[splice.index('--after-sdk') + 1], str(workspace / 'local/ps3recomp-lifter-ppu'))
+            # The splices chain: lift -> dispatcher fix -> CTR fix -> engine build.
+            generated = workspace / 'generated/retail-v1.0'
+            self.assertIn('-DRECOMP_DIR=' + str(generated / 'mage_g-ctr64'), commands['configure-engine'])
+            chain = [('splice-engine-dispatcher', 'mage_g', 'mage_g-dispatcher', 'retail-v1.0-ppu-jumptable-splice.json'),
+                     ('splice-engine-ctr64', 'mage_g-dispatcher', 'mage_g-ctr64', 'retail-v1.0-ppu-ctr64-splice.json')]
+            for step, base, output, profile in chain:
+                splice = commands[step]
+                self.assertEqual(splice[splice.index('--base') + 1], str(generated / base))
+                self.assertEqual(splice[splice.index('--output') + 1], str(generated / output))
+                self.assertEqual(splice[splice.index('--profile') + 1], str(workspace / 'profiles' / profile))
+                self.assertEqual(splice[splice.index('--before-sdk') + 1], str(workspace / 'local/ps3recomp-lifter-ppu'))
+                self.assertEqual(splice[splice.index('--after-sdk') + 1], str(workspace / 'local/ps3recomp-lifter-ppu'))
+            self.assertNotEqual(commands['splice-engine-dispatcher'][commands['splice-engine-dispatcher'].index('--work') + 1],
+                                commands['splice-engine-ctr64'][commands['splice-engine-ctr64'].index('--work') + 1])
             self.assertIn('-DPS3RECOMP_DIR=' + str(workspace / 'local/ps3recomp-runtime'), commands['configure-engine'])
             streamed = commands['streamed-jobs']
             self.assertIn('wws_job_lift.py', ' '.join(streamed))
@@ -125,6 +152,32 @@ class NativeRecipeTests(unittest.TestCase):
             self.assertIn('-DPS3RECOMP_VULKAN_INCLUDE_DIR=' + (prefix.resolve() / 'include').as_posix(), configure)
             self.assertIn('-DCMAKE_PREFIX_PATH=' + prefix.resolve().as_posix(), configure)
             self.assertTrue(all('\\' not in argument for argument in configure if argument.startswith('-D')))
+
+    def test_game_controls_are_opt_in_and_prepare_their_own_engine_lift(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); data = self.config(root); workspace = self.workspace(root)
+            default = {stage['id']: stage['argv'] for stage in build_plan(self.load(root, data), workspace)}
+            self.assertNotIn('prepare-controls-hooks', default)
+            self.assertFalse(any('GAME_CONTROLS' in a or 'MAG_INPUT' in a for argv in default.values() for a in argv))
+            for name in ('cargo', 'rustc'):
+                (root / name).write_text('fixture'); (root / name).chmod(0o755)
+            with self.assertRaisesRegex(InstallerError, 'game_controls'):
+                self.load(root, dict(data, game_controls={'cargo': 'cargo'}))
+            config = self.load(root, dict(data, game_controls={'cargo': 'cargo', 'rustc': 'rustc'}))
+            plan = build_plan(config, workspace); commands = {p['id']: p['argv'] for p in plan}
+            ids = [p['id'] for p in plan]
+            self.assertEqual(ids.index('prepare-controls-hooks'), ids.index('splice-engine-ctr64') + 1)
+            prepare = commands['prepare-controls-hooks']
+            generated = workspace / 'generated/retail-v1.0'
+            self.assertEqual(prepare[prepare.index('--base') + 1], str(generated / 'mage_g-ctr64'))
+            self.assertEqual(prepare[prepare.index('--output') + 1], str(generated / 'mage_g-controls'))
+            self.assertEqual(prepare[-2:], ['--stage', 'controls'])
+            engine = commands['configure-engine']
+            self.assertIn('-DRECOMP_DIR=' + str(generated / 'mage_g-controls'), engine)
+            for flag in ('-DMAG_GAME_CONTROLS=ON', '-DMAG_INPUT_RUST=ON', '-DMAG_INPUT_CARGO=' + str((root / 'cargo').resolve()),
+                         '-DMAG_INPUT_RUSTC=' + str((root / 'rustc').resolve())):
+                self.assertIn(flag, engine)
+            self.assertFalse(any('GAME_CONTROLS' in a or 'MAG_INPUT' in a for a in commands['configure-launcher']))
 
 
     def test_x86_level_passes_nothing_by_default_and_allows_an_override(self):

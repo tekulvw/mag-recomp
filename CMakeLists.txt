@@ -17,6 +17,7 @@ if(NOT MAG_WORKSPACE STREQUAL CMAKE_CURRENT_SOURCE_DIR AND EXISTS "${MAG_WORKSPA
 endif()
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/MagExtensions.cmake")
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/MagInput.cmake")
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/MagControls.cmake")
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/MagRender.cmake")
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/MagX86Level.cmake")
 
@@ -352,12 +353,19 @@ endif()
 #   -O2                 -- the target-wide -O1 exists for the huge PPU TUs; the
 #                          SPU sources are small and decode-hot, so they get
 #                          full optimization. The last -O on the line wins.
+#   -w / /w             -- generated code, like the lifted PPU TUs below: no
+#                          warnings. Under clang-cl the target's -Wall means
+#                          -Weverything, which costs one large job image tens of
+#                          thousands of warnings (tens of MB of build log) and
+#                          several times its warning-free compile time.
 if(SPU_SOURCES)
     set_source_files_properties(${SPU_SOURCES} PROPERTIES
         INCLUDE_DIRECTORIES "${PS3RECOMP_DIR}/runtime/spu"
         COMPILE_DEFINITIONS SPU_USE_DISPATCH_MT)
     if(NOT MSVC OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-        set_source_files_properties(${SPU_SOURCES} PROPERTIES COMPILE_OPTIONS "-O2")
+        set_source_files_properties(${SPU_SOURCES} PROPERTIES COMPILE_OPTIONS "-O2;-w")
+    else()
+        set_source_files_properties(${SPU_SOURCES} PROPERTIES COMPILE_OPTIONS "/w")
     endif()
 endif()
 
@@ -494,12 +502,14 @@ if(MAG_FIRMWARE_SOURCES)
 endif()
 mag_enable_input(${PROJECT_NAME})
 mag_enable_render_frontend(${PROJECT_NAME})
+mag_enable_game_controls(${PROJECT_NAME})
 mag_apply_extensions(${PROJECT_NAME})
 if(MAG_RUNTIME_CANDIDATE_MANIFEST)
     set_property(TARGET ${PROJECT_NAME} APPEND PROPERTY LINK_DEPENDS "${MAG_RUNTIME_CANDIDATE_MANIFEST}")
 endif()
 list(APPEND MAG_RECEIPT_EXTRA ${MAG_INPUT_RECEIPT_EXTRA})
 list(APPEND MAG_RECEIPT_EXTRA ${MAG_RENDER_RECEIPT_EXTRA})
+list(APPEND MAG_RECEIPT_EXTRA ${MAG_GAME_CONTROLS_RECEIPT_EXTRA})
 set(MAG_EXTENSION_RECEIPT_ARGS "")
 if(MAG_X86_LEVEL_SELECTED)
     list(APPEND MAG_EXTENSION_RECEIPT_ARGS --x86-level "${MAG_X86_LEVEL_SELECTED}")

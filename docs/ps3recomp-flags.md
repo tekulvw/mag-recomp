@@ -4,7 +4,7 @@ The ps3recomp runtime keeps most of its behaviour behind opt-in switches: enviro
 it reads at run time and CMake options it reads at configure time. This page lists every one
 mag-recomp sets, with the value, the platforms, the file that sets it, the reason and how to turn
 it off for a comparison. It applies to the runtime pinned in
-[`profiles/framework.json`](../profiles/framework.json) (`mag-recomp/runtime-2026.11.09`, `767c5311`).
+[`profiles/framework.json`](../profiles/framework.json) (`mag-recomp/runtime-2026.11.09-x86simd2`, `c20e56ef`).
 
 `tools/check_ps3recomp_flags.py` extracts the switches from the sources and fails when this page
 is missing one, lists one nothing sets any more, or gives a value or file the sources no longer
@@ -144,8 +144,8 @@ starts being set here; move its row up when that happens.
 | Switch | Kind | Runtime default | Platforms | Why mag-recomp relies on it | Opt out |
 |---|---|---|---|---|---|
 | `PS3RECOMP_NATIVE_OSK_SDL` | CMake | `ON` | Linux | The SDL2 text-entry dialog for the native on-screen keyboard: players sign in without automation (runtime pin of #128 and #134). | `-DPS3RECOMP_NATIVE_OSK_SDL=OFF` |
-| `PS3RECOMP_PAD_SDL_KEYBOARD` | CMake | `ON` | Linux | The game window's keyboard drives controller port 0 until a controller is connected (README, "For players"). | `PAD_NO_KEYBOARD=1` at run time, or `-DPS3RECOMP_PAD_SDL_KEYBOARD=OFF` |
-| `PS3RECOMP_NATIVE_OSK_WINDOWS` | CMake | `ON` | Windows | Native Windows text input for the on-screen keyboard. | `-DPS3RECOMP_NATIVE_OSK_WINDOWS=OFF` |
+| `PS3RECOMP_PAD_SDL_KEYBOARD` | CMake | `ON` | Linux | The game window's keyboard drives controller port 0 until a controller is connected (README, "For players"). The opt-in controls adapter's SDL keyboard/mouse capture runs from that keyboard's per-pump sample, so `MAG_GAME_CONTROLS` refuses to configure with it off (`cmake/MagControls.cmake`). | `PAD_NO_KEYBOARD=1` at run time, or `-DPS3RECOMP_PAD_SDL_KEYBOARD=OFF` |
+| `PS3RECOMP_NATIVE_OSK_WINDOWS` | CMake | `ON` | Windows | Native Windows text input for the on-screen keyboard. The opt-in controls adapter's Win32 keyboard/mouse capture runs from the window pump calls this host shares, so `MAG_GAME_CONTROLS` refuses to configure with it off (`cmake/MagControls.cmake`). | `-DPS3RECOMP_NATIVE_OSK_WINDOWS=OFF` |
 
 No runtime switch is documented in mag-recomp's code as one that must stay off. Diagnostics stay
 off by default (#136). Other opt-in runtime switches become defaults here only after an A/B run

@@ -53,14 +53,19 @@ python3 -m venv .venv
 
 | Checkout | Tag | Commit | Role |
 | --- | --- | --- | --- |
-| `local/ps3recomp-runtime` | `mag-recomp/runtime-2026.11.09` | `767c531` | Runtime SDK passed to CMake as `PS3RECOMP_DIR` |
+| `local/ps3recomp-runtime` | `mag-recomp/runtime-2026.11.09-x86simd2` | `c20e56e` | Runtime SDK passed to CMake as `PS3RECOMP_DIR` |
 | `local/ps3recomp-lifter-5244db9` | `mag-recomp/lifter-spu-2026.10.07` | `5244db9` | Inventory and launcher/engine SPU lifting |
 | `local/ps3recomp-lifter-dfa7073` | `mag-recomp/lifter-ppu-2026.10.12` | `dfa7073` | PPU and firmware lifting |
 | `local/ps3recomp-spu-programs` | `mag-recomp/spu-programs-2026.10.21` | `4c5c05f` | Lifting every embedded engine SPU program |
 
-The PPU lifter checkout must also hold one more tagged commit, `mag-recomp/lifter-2026.11.04`
-(`d31e3fd`), pinned as `splice_after` of `lifter-ppu`: step 4's engine dispatcher splice reads its
-fixed lifter from that checkout by revision. The helper fetches the fork's tags and checks it.
+The PPU lifter checkout must also hold two more tagged commits, pinned as `splice_after` of
+`lifter-ppu`. Step 5's single-function splices read their fixed lifters from that checkout by
+revision. The helper fetches the fork's tags and checks both:
+
+| Tag | Commit | Fix |
+| --- | --- | --- |
+| `mag-recomp/lifter-2026.11.04` | `d31e3fd` | Recovers the engine dispatcher's stack-spilled jump-table base |
+| `mag-recomp/lifter-ppu-ctr64-2026.11.09` | `50e9924` | Keeps the full 64-bit CTR value in the audio command builder |
 
 Keep them clean and at these exact commits: the tools refuse other or dirty revisions, and the build
 accepts only the pinned runtime. To keep a lifter elsewhere, set `MAG_SPU_LIFTER_REPOSITORY` or
@@ -107,6 +112,16 @@ Each output directory must be new; the generators reject stale output.
 .venv/bin/python tools/lift.py --image mage_g --sdk local/ps3recomp-lifter-dfa7073 \
   --nonlocal-profile profiles/retail-v1.0-nonlocal.json \
   --output generated/retail-v1.0/mage_g
+# Two single-function lifter fixes, applied in order (see below).
+for step in "mage_g mage_g-dispatcher jumptable" "mage_g-dispatcher mage_g-ctr64 ctr64"; do
+  set -- $step
+  .venv/bin/python tools/installer_ppu_splice.py --base generated/retail-v1.0/$1 \
+    --output generated/retail-v1.0/$2 --work runs/splice-$3 \
+    --elf local/retail-v1.0/PS3_GAME/USRDIR/bin/mage_g.elf --inventory analysis/retail-v1.0/mage_g \
+    --nonlocal-profile profiles/retail-v1.0-nonlocal.json \
+    --before-sdk local/ps3recomp-lifter-dfa7073 --after-sdk local/ps3recomp-lifter-dfa7073 \
+    --profile profiles/retail-v1.0-ppu-$3-splice.json
+done
 .venv/bin/python tools/spu_lift.py --output generated/retail-v1.0/spu-eboot
 .venv/bin/python tools/engine_spu_lift.py --output generated/retail-v1.0/spu-engine
 # The engine policy lift is not the full streamed renderer. Include every WWS job.
@@ -150,7 +165,17 @@ keep working.
 `profiles/retail-v1.0-spu-coverage.json`; the engine build re-runs that check and refuses to configure
 without it.
 
-Optionally apply the guarded audio fix described in [docs/partial-ppu-relift.md](docs/partial-ppu-relift.md).
+`installer_ppu_splice.py` regenerates one function with the pinned lifter before a fix and a tagged
+lifter after it, checks the regenerated body against the SHA-256 its profile records, and copies the
+whole lift with only that function replaced. The installer applies both profiles by default:
+
+- `retail-v1.0-ppu-jumptable-splice.json` fixes the engine dispatcher's jump table.
+- `retail-v1.0-ppu-ctr64-splice.json` fixes the audio command builder (`func_01112114`). It keeps a
+  flag in the high word of the 64-bit count register, which the pinned lifter cut to 32 bits.
+  Without the fix, the game's sound engine mixes silence: menu music, interface and gameplay sound
+  are missing, while the intro movies, which use their own path, still play sound.
+
+Build the engine from the last output, `generated/retail-v1.0/mage_g-ctr64`.
 See [docs/retail-spu-batch-preparation.md](docs/retail-spu-batch-preparation.md) to lift every
 embedded SPU program at once.
 
@@ -171,7 +196,7 @@ cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DMAG_IMAGE=EBOOT \
   -DMAG_FIRMWARE_DIR="$PWD/generated/retail-v1.0/libsre" "${FFMPEG_ARGS[@]}"
 cmake -S . -B build-engine -G Ninja -DCMAKE_BUILD_TYPE=Release -DMAG_IMAGE=mage_g \
   -DPS3RECOMP_DIR="$PWD/local/ps3recomp-runtime" \
-  -DRECOMP_DIR="$PWD/generated/retail-v1.0/mage_g" \
+  -DRECOMP_DIR="$PWD/generated/retail-v1.0/mage_g-ctr64" \
   -DSPU_DIR="$PWD/generated/retail-v1.0/spu-engine-retained" \
   -DMAG_SPU_PROGRAMS_DIR="$PWD/local/spu-programs" \
   -DMAG_FIRMWARE_DIR="$PWD/generated/retail-v1.0/libsre" "${FFMPEG_ARGS[@]}"

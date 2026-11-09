@@ -31,9 +31,10 @@ function(mag_enable_player_settings target sdk)
     target_link_libraries(${target} PRIVATE ZLIB::ZLIB "-framework AppKit" "-framework QuartzCore" "-framework GameController" "-framework CoreGraphics")
 
     # Forward the SDK's existing input unchanged unless the panel owns input.
-    target_sources(ps3recomp_runtime PRIVATE "${player_src}/player_input_macos.m")
-    set_source_files_properties("${player_src}/player_input_macos.m" DIRECTORY "${sdk}"
-        PROPERTIES INCLUDE_DIRECTORIES "${sdk}")
+    # The SDL controller seam (player_input_sdl_pad.c) is shared with the Linux controls adapter.
+    target_sources(ps3recomp_runtime PRIVATE "${player_src}/player_input_macos.m" "${player_src}/player_input_sdl_pad.c")
+    set_source_files_properties("${player_src}/player_input_macos.m" "${player_src}/player_input_sdl_pad.c"
+        DIRECTORY "${sdk}" PROPERTIES INCLUDE_DIRECTORIES "${sdk}")
     set_property(SOURCE "${sdk}/libs/input/cellPad.c" DIRECTORY "${sdk}"
         APPEND PROPERTY COMPILE_DEFINITIONS SDL_GameControllerGetButton=mag_player_controller_button
         SDL_GameControllerGetAxis=mag_player_controller_axis
