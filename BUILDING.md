@@ -333,7 +333,7 @@ the configure options and `installer/mag_installer/managed_tools.py` for the pin
 
 ## Extending a build
 
-Six extension points let a separate project build on this repository without patching it. All are
+Seven extension points let a separate project build on this repository without patching it. All are
 off by default.
 
 | Point | How to use it |
@@ -344,6 +344,7 @@ off by default.
 | Receipt extras | `tools/provenance.py --receipt-extra NAME=PATH` (fed from `MAG_RECEIPT_EXTRA`) records a file's or directory's hashes under `extensions` |
 | Lift hooks | `tools/lift.py --hook MODULE` or `MAG_LIFT_HOOKS`: each module's `instrument_source(source)` runs after the built-in hooks |
 | Runtime callbacks | `src/mag_extension.h`: register a `MagExtensionCallbacks` from a static constructor to receive start, frame, trace and payload callbacks. Several extensions may each register prepare, start, frame and stop callbacks (stop runs in reverse order); the trace and payload slots have one owner each |
+| Payload overrides | `python3 tools/payload_override_hooks.py --directory <engine SPU lift>` guards the WWS policy's payload call (after `tools/graphics_payload_hooks.py` if both are used) and records itself in that lift's `provenance.json`; a `payload_override` registered in `MagExtensionCallbacks` is then asked first and may replace a whole job invocation. Several may register, asked in order until one handles it; unhandled payloads run the lifted job unchanged. Without the step the policy lift and its receipt are unchanged |
 
 ## Tests
 

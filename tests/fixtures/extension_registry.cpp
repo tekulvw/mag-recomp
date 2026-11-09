@@ -22,9 +22,20 @@ static void on_exit(void*, uint32_t function, const uint64_t[3], int completed, 
     assert(function == 0x1234 && completed == 1); seen_scratch = scratch[7]; exits++;
 }
 
+static int override_calls;
+static std::string override_order;
+static bool override_none(void*, uint32_t) { override_order += "n"; ++override_calls; return false; }
+static bool override_first(void* ctx, uint32_t target) {
+    override_order += "f"; ++override_calls; assert(ctx == &override_calls); return target == 0x15898u;
+}
+
 int main() {
+    /* With nothing registered the seam reports "not handled" and calls nothing. */
+    assert(mag_payload_override(&override_calls, 0x15898u) == 0 && override_calls == 0);
+
     const MagExtensionCallbacks* none = mag_extension();
-    assert(none && !none->start && !none->frame_poll && !none->stop && !none->trace_enter && !none->payload_select && !none->prepare);
+    assert(none && !none->start && !none->frame_poll && !none->stop && !none->trace_enter && !none->payload_select &&
+           !none->prepare && !none->payload_override);
 
     MagExtensionCallbacks a = {};
     a.prepare = on_prepare; a.start = on_start; a.stop = on_stop; a.trace_enter = on_enter; a.trace_exit = on_exit;
@@ -51,6 +62,20 @@ int main() {
     x->trace_enter(nullptr, 0x1234, args, scratch);
     x->trace_exit(nullptr, 0x1234, args, 1, scratch);
     assert(enters == 1 && exits == 1 && seen_scratch == 0xfeedu);
+
+    /* Payload overrides are asked in registration order until one handles the payload. */
+    MagExtensionCallbacks o1 = {}, o2 = {};
+    o1.payload_override = override_none; o2.payload_override = override_first;
+    assert(mag_extension_register(&o1) == 0);
+    assert(mag_extension()->payload_override == override_none);
+    assert(mag_payload_override(&override_calls, 0x15898u) == 0 && override_order == "n");
+    assert(mag_extension_register(&o2) == 0);
+    override_order.clear();
+    assert(mag_payload_override(&override_calls, 0x15898u) == 1 && override_order == "nf");
+    override_order.clear();
+    assert(mag_payload_override(&override_calls, 0x12D28u) == 0 && override_order == "nf");
+    for (int i = 0; i < 6; ++i) assert(mag_extension_register(&o1) == 0);
+    assert(mag_extension_register(&o1) == -1);
 
     /* Lifecycle slots hold eight registrants; a ninth is refused and changes nothing. */
     MagExtensionCallbacks extra = {};
