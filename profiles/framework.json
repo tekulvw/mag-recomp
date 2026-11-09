@@ -4,8 +4,8 @@
   "upstream": "https://github.com/sp00nznet/ps3recomp",
   "ps3recomp": {
     "runtime": {
-      "tag": "mag-recomp/runtime-2026.11.09-audio",
-      "commit": "a016ed9419539f7bda62fb717590443d814160d4",
+      "tag": "mag-recomp/runtime-2026.11.09-x86simd2",
+      "commit": "c20e56ef4cf703587318808f98fb8c3dbec2b0b9",
       "path": "local/ps3recomp-runtime"
     },
     "lifter-spu": {
@@ -35,13 +35,13 @@
     }
   },
   "allowed_runtime_revisions": [
-    "a016ed9419539f7bda62fb717590443d814160d4"
+    "c20e56ef4cf703587318808f98fb8c3dbec2b0b9"
   ],
   "strict_runtime_revisions": [
-    "a016ed9419539f7bda62fb717590443d814160d4"
+    "c20e56ef4cf703587318808f98fb8c3dbec2b0b9"
   ],
   "strict_hle_runtime_revisions": [
-    "a016ed9419539f7bda62fb717590443d814160d4"
+    "c20e56ef4cf703587318808f98fb8c3dbec2b0b9"
   ],
   "first_nonblack_capture_revisions": [],
   "allowed_lifter_revisions": [
