@@ -501,7 +501,10 @@ since last seen, reset system and host caches, clear receipts and cancel the mou
    the state supports mouse look and no look channel is consumed; relative mouse capture is
    requested only while gameplay is eligible and no look channel is consumed (outside Controller
    mode), so a menu that takes the look channels releases the mouse lock until look returns
-   (status "on-foot input attached; a menu holds look" while it does); with mouse eligibility and mouse
+   (status "on-foot input attached; a menu holds look" while it does). Mouse look stops at once,
+   but the lock and the status follow only after the menu's hold (or its release) has lasted three
+   consecutive handler updates, about 100 ms, so a menu flickering the look channels while it
+   animates does not release and re-take the lock; with mouse eligibility and mouse
    motion in the frame, accept the mouse (`mag_controls_accept_mouse`); refresh the frame's policy
    from the engine.
 

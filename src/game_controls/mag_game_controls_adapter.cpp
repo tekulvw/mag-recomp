@@ -217,7 +217,10 @@ struct MagGameControlsAdapter::State {
     uint64_t session;
     void (*capture)(bool);
     void (*mouse_capture)(bool);
-    bool look_held_by_menu = false;
+    bool look_held_by_menu = false, look_held_seen = false;  // applied state; last observed state
+    unsigned look_held_streak = 0;
+    // Handler updates (about one per frame) a menu's hold on look must last before the lock follows.
+    static constexpr unsigned MenuLookStableUpdates = 3;
     ControlsProfile profile;
     std::mutex pending_mutex;
     std::optional<ControlsProfile> pending;
@@ -746,11 +749,21 @@ struct MagGameControlsAdapter::State {
         // mouse: release the lock (the cursor is free) until look comes back.
         const bool look_held = contract && (*consumed & contract->look_mask);
         mouse_eligible = gameplay_eligible && current->mouse_supported && contract && !look_held;
-        if (mouse_capture) mouse_capture(gameplay_eligible && !look_held && profile.mode != InputMode::Controller);
-        if (gameplay_eligible && look_held != look_held_by_menu) {
-            look_held_by_menu = look_held;
-            status = look_held ? "on-foot input attached; a menu holds look" : "on-foot Rust input attached";
+        // Mouse look stops at once, but the lock follows the menu only once its hold on look has been
+        // stable for a few handler updates: menus flicker the look channels while they animate, and
+        // each flicker would otherwise release and re-take the lock.
+        if (look_held == look_held_seen) {
+            if (look_held_streak < MenuLookStableUpdates) ++look_held_streak;
+        } else {
+            look_held_seen = look_held;
+            look_held_streak = 1;
         }
+        if (look_held_seen != look_held_by_menu && look_held_streak >= MenuLookStableUpdates) {
+            look_held_by_menu = look_held_seen;
+            if (gameplay_eligible)
+                status = look_held_by_menu ? "on-foot input attached; a menu holds look" : "on-foot Rust input attached";
+        }
+        if (mouse_capture) mouse_capture(gameplay_eligible && !look_held_by_menu && profile.mode != InputMode::Controller);
         if (mouse_eligible && mouse_motion()) mag_controls_accept_mouse(*sample_key);
         frame->policy = mag_controls_current_policy();
     }
