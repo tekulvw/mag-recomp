@@ -203,6 +203,9 @@ extern "C" void mag_graphics_payload_begin(MagGraphicsPayloadTrace *t,void *opaq
  errno=saved;
 }
 extern "C" void mag_graphics_payload_end(const MagGraphicsPayloadTrace *t,void *opaque){
+ /* A payload replaced by a payload override (tools/payload_override_hooks.py) never drains to
+  * its continuation, so its job I/O recording ends here; a lifted payload's ended on arrival. */
+ if(ps3_jobio_is(opaque)&&(((spu_context*)opaque)->pc&SPU_LS_MASK)==0x3260){int saved=errno;if(!mag_jobio_selector_end(opaque))ps3_jobio_end((spu_context*)opaque);errno=saved;}
  if(t->capture)payload_arrival(opaque,((spu_context*)opaque)->pc&SPU_LS_MASK,1);
 }
 

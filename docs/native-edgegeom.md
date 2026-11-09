@@ -1,0 +1,93 @@
+# Native Edge geometry job (opt-in)
+
+The streamed Edge geometry job is the largest SPU cost in a frame. It turns one mesh partition
+into an RSX index list, any produced vertices, and the draw commands in the parent's command
+hole. `src/native_edgegeom/` reimplements it natively from
+[render-frontend/behavior/edge-geometry-job.md](render-frontend/behavior/edge-geometry-job.md),
+under [the clean-room method](native-graphics-reimplementation-method.md).
+
+It is off by default, and it changes nothing unless both the build and the run opt in. An
+invocation it does not handle runs the lifted job unchanged.
+
+## Building with it
+
+1. Apply the payload-override lift step to the engine SPU lift. Run it after
+   `tools/wws_job_lift.py`; if you also use `tools/graphics_payload_hooks.py`, run this step after
+   that one:
+
+   ```sh
+   python3 tools/payload_override_hooks.py --directory generated/retail-v1.0/spu-engine-retained
+   ```
+
+   This guards the WWS policy's payload call with `mag_payload_override` (`src/mag_extension.h`)
+   and records `payload_override_hooks` in that directory's `provenance.json`.
+2. Configure the engine with `-DMAG_NATIVE_EDGEGEOM=ON`. Configuring fails if the SPU lift lacks
+   the step, because the native path could never run. The receipt lists the implementation's
+   sources under `extensions` (`native-edgegeom-sources`, `native-edgegeom-build`).
+
+The same binary runs the lifted job unless the run opts in, so one build serves an A/B.
+
+## Running
+
+| Variable | Effect |
+| --- | --- |
+| `MAG_NATIVE_EDGEGEOM=1` | Registers the payload override at start (`[native-edgegeom] enabled` on stderr). Any other value, or none, leaves the job lifted. Set it for the whole run; never toggle it within a run (the Depth and Main passes must take positions from the same producer). |
+| `MAG_NATIVE_EDGEGEOM_STATS=1` | Every 5 seconds and at exit, prints the number of invocations, handled and refused, the mean native time per handled invocation, and the counts per kind and reason. |
+
+Example report line: `[native-edgegeom]   kind=index_only handled=48211`.
+
+### Kinds and refusal reasons
+
+Admitted kinds: `index_only` (static items), `instanced_wind` (group 0), `wind` (group 3) and
+`skinned` (group 7). Group 4 (ripple), group 11 (skinned in Main) and anything else the
+specification marks unconfirmed is refused with `kind`.
+
+| Reason | Meaning |
+| --- | --- |
+| `identity` | The module region is not resident and verified (for example, the first dispatch after a load), or this is not the Edge geometry entry |
+| `service` | A job-manager service could not be called |
+| `mode`, `blend_shapes`, `configuration`, `hole` | Inputs outside the specified values (admission checks 2–5) |
+| `stream_short`, `index_range` | Input streams shorter than their counts need, or an index of `V` or more |
+| `kind`, `codec`, `output_format` | A production rule, input codec or output layout this implementation does not implement |
+| `non_finite`, `joint`, `budget` | Non-finite inputs or outputs, a palette joint out of range, or more than 65,536 produced vertices |
+| `hole_overflow` | The draw does not fit in the parent's hole |
+| `ring_full` | The output ring has no room after one refresh of the consumed position |
+| `inputs` | The buffers could not be read or staged |
+
+A refusal decided before the job-manager services are called leaves no trace at all. A later
+refusal hands the lifted job its exact entry registers, and that job repeats the
+buffer-acquisition calls, as the specification's integration contract allows.
+
+## How it works
+
+- `edgegeom_core.cpp` is a pure function of the invocation's inputs. It covers admission,
+  decoding, deformation, projection and culling, the output data, ring allocation and the hole
+  layout. Culled indices, produced vertices and draw parameters (`Prepared`) are kept separate
+  from the hole encoder (`Engine::build_hole`).
+- `edgegeom_runtime.cpp` is the engine shim:
+  - checks the resident module and the entry;
+  - calls the job manager's *get buffer*, *release buffer* and *finish* services through
+    `spu_native_service_call`;
+  - writes guest memory only through the runtime's MFC channels on tag 31, in this order: the
+    ring record (GETLLAR/PUTLLC), the data, then the hole, with each 128-byte line's first word
+    last;
+  - returns to the policy continuation with the job's hand-back registers.
+- Work stays on the calling SPU thread. Each thread reuses its own scratch memory.
+- The core is compiled without floating-point contraction. The facing rule must see an exact
+  zero area for coincident screen positions.
+
+## Verification
+
+- `tests/test_native_edgegeom.py` builds two synthetic fixtures; neither needs game files.
+  - The core fixture checks the specification's vectors ET-1 to ET-9 and the codec and
+    deformation specifications' vectors.
+  - The shim fixture runs against a stand-in job manager and MFC. It checks the call order,
+    refusals that leave the entry state, the ring retry and refresh, and the write order.
+- A private differential comparison against recorded original invocations runs outside this
+  repository. On 800 Training recordings, every hole, ring update and index list matches; the
+  only exceptions are 2 invocations whose culled lists differ by triangles within 2^-8 pixel of a
+  decision boundary, which the specification's tolerance allows. Every produced vertex is within
+  the specification's tolerance.
+- Before it could become a default, the native path must pass the specification's acceptance
+  gates (oracle coverage, refusal rate, visual parity, performance and robustness on all three
+  hosts).
