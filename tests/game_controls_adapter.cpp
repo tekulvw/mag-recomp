@@ -853,32 +853,40 @@ void threads_and_errors() {
 
 
 // A menu that takes the look channels before the player's handler releases the mouse lock while
-// keyboard capture stays; look coming back locks the mouse again.
+// keyboard capture stays, once its hold has lasted three handler updates; look coming back locks
+// the mouse again the same way. A one- or two-update flicker (a menu animating) changes nothing.
 void menu_holds_look() {
     Harness h;
     h.idle_tick();
-    h.begin_tick();
-    h.enter_handler();
+    auto update = [&](uint32_t consumed) {
+        h.m.put32(Pad + 0x80, consumed);
+        h.begin_tick();
+        h.enter_handler();
+        h.fire(Hook::HandlerExit);
+        h.end_poll();
+        h.end_tick();
+    };
+    constexpr uint32_t Look = 0xFu << 20;  // the look axes, channels 20..23
+    update(0);
     require(capture_on && mouse_on, "gameplay locks the mouse");
-    h.fire(Hook::HandlerExit);
-    h.end_poll();
-    h.end_tick();
-    h.m.put32(Pad + 0x80, 0xFu << 20);  // the look axes, channels 20..23, consumed by a menu
-    h.begin_tick();
-    h.enter_handler();
-    require(capture_on && !mouse_on, "a menu holding look did not release the mouse lock");
+    update(Look);
+    update(Look);
+    update(0);  // a flicker while the menu animates
+    require(mouse_on, "a two-update flicker released the mouse lock");
+    update(Look);
+    update(Look);
+    require(mouse_on, "the lock followed the menu before its hold was stable");
+    update(Look);
+    require(capture_on && !mouse_on, "a stable menu hold on look did not release the mouse lock");
     require(h.status() == std::string("on-foot input attached; a menu holds look"), "menu status not reported");
-    h.fire(Hook::HandlerExit);
-    h.end_poll();
-    h.end_tick();
-    h.m.put32(Pad + 0x80, 0);
-    h.begin_tick();
-    h.enter_handler();
+    update(0);
+    update(Look);  // flicker on the way out
+    update(0);
+    update(0);
+    require(!mouse_on, "the lock came back before look was stably free");
+    update(0);
     require(capture_on && mouse_on, "look returning did not lock the mouse again");
     require(h.status() == std::string("on-foot Rust input attached"), "status did not return to gameplay");
-    h.fire(Hook::HandlerExit);
-    h.end_poll();
-    h.end_tick();
 }
 
 int main(int argc, char** argv) {
