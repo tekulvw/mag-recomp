@@ -283,6 +283,17 @@ static void residency() {
     residency_state = 1;
 }
 
+/* Small jobs get small buffers: buffer 1 just holds the inputs and buffer 3 follows it. */
+static void small_buffers() {
+    reset();
+    const Case c = triangle_case();
+    ring(0xCF000000u, 0xCF010000u, 0xCF000100u, 0xCF000000u, 0xB00005D0u);
+    spu_context* ctx = make_context(c);
+    buffer3_len = 0x300;
+    CHECK(mag_payload_override(ctx, 0x15898) == 1);
+    CHECK(guest32(0xCF000100u) == 0x00000001u && guest32(0x70000000u) == 0x00041710u);
+}
+
 static void refusals_leave_entry_state() {
     /* Not resident: no service call and no transfer. */
     reset();
@@ -340,6 +351,7 @@ int main(int argc, char** argv) {
     }
     residency();
     handled_invocation();
+    small_buffers();
     hole_across_lines();
     ring_refresh_and_retry();
     refusals_leave_entry_state();
