@@ -165,6 +165,27 @@ class WwsJobLift(unittest.TestCase):
         self.assertEqual(executable_sections(elf), [(0x4030, raw[0x30:0x3C])])
         self.assertEqual(struct.unpack_from('>I', elf, 24)[0], 0x4038)
 
+    def test_lifter_args_pass_through_only_when_given(self):
+        raw = module([NOP, BI_LR], 0x200, 0x4030)
+        seen = []
+        def fake_run(cmd, **_):
+            seen.append(cmd)
+            return subprocess.CompletedProcess(cmd, 1, '', '')
+        real = w.subprocess.run
+        w.subprocess.run = fake_run
+        try:
+            with tempfile.TemporaryDirectory() as td:
+                work = pathlib.Path(td)
+                for extra in ((), ('--promote-regs', '--promote-max-regs=32')):
+                    m = dict(ea=0x1234500, raw=raw, entry=0x4030, image_id=200, prefix='p_')
+                    with self.assertRaises(ValueError):
+                        w.lift_module(m, 0x4038, [], [], work / 'lifter.py', work, work, True, extra)
+        finally:
+            w.subprocess.run = real
+        plain, extended = seen
+        self.assertEqual(plain[-1], '--merge-chunks')
+        self.assertEqual(extended, plain + ['--promote-regs', '--promote-max-regs=32'])
+
     def test_registry_registers_each_module_behind_toggle(self):
         raw = module([NOP, BI_LR], 0x200, 0x4030)
         mods = [dict(ea=0x1234500, size=0x200, raw=raw, code_end=0x4038, image_id=200, prefix='p_')]
