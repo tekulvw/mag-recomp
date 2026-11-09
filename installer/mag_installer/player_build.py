@@ -6,11 +6,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
 from pathlib import Path
 from contextlib import nullcontext
 
 from .model import InstallerError, host_key
+from .native_recipe import x86_level_override
 from .pipeline import _exclusive_lock, _write_json, _separate
 from .safety import Cancellation, contained, file_digest
 
@@ -247,6 +249,8 @@ def install(root, source, output, cache, token=None, events=None, retry=False):
     host = record.get('host', host_key())
     windows = host == 'windows-x86_64'
     linux = host == 'linux-x86_64'
+    # A troubleshooting override of the x86-64 code generation level; checked before any download.
+    x86_level = x86_level_override(os.environ, host)
     binding = _binding(inputs, record, token)
     # The OS vendor owns the compiler/SDK installation; settle it before downloads.
     from .managed_tools import bootstrap, ensure_apple_sdk, ensure_windows_build_tools
@@ -315,6 +319,8 @@ def install(root, source, output, cache, token=None, events=None, retry=False):
                                for role, item in kit['sdks'].items()}}
             if managed.get('prefix'):
                 config['managed_prefix'] = str(managed['prefix'])
+            if x86_level:
+                config['cmake_args'] = x86_level
             config_path = output / 'build-settings.json'
             _write_json(config_path, config)
             native_output = output / 'build-work'

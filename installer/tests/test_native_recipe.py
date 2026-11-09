@@ -4,7 +4,7 @@ from pathlib import Path
 import tempfile
 import unittest
 from mag_installer.model import InstallerError
-from mag_installer.native_recipe import ROLES, build_plan, framework_pins, load_config
+from mag_installer.native_recipe import ROLES, build_plan, framework_pins, load_config, x86_level_override
 
 PINS = {'runtime': {'tag': 'mag-recomp/runtime-fixture', 'commit': 'a' * 40, 'path': 'local/ps3recomp-runtime'},
         'lifter-spu': {'tag': 'mag-recomp/lifter-spu-fixture', 'commit': 'b' * 40, 'path': 'local/ps3recomp-lifter-spu'},
@@ -124,6 +124,32 @@ class NativeRecipeTests(unittest.TestCase):
             self.assertIn('-DPS3RECOMP_VULKAN_INCLUDE_DIR=' + (prefix.resolve() / 'include').as_posix(), configure)
             self.assertIn('-DCMAKE_PREFIX_PATH=' + prefix.resolve().as_posix(), configure)
             self.assertTrue(all('\\' not in argument for argument in configure if argument.startswith('-D')))
+
+
+    def test_x86_level_passes_nothing_by_default_and_allows_an_override(self):
+        for host in ('windows-x86_64', 'linux-x86_64', 'macos-arm64'):
+            self.assertEqual(x86_level_override({}, host), [])
+            self.assertEqual(x86_level_override({'MAG_X86_LEVEL': ''}, host), [])
+        for host in ('windows-x86_64', 'linux-x86_64'):
+            for level in ('auto', 'v3', 'baseline'):
+                self.assertEqual(x86_level_override({'MAG_X86_LEVEL': level}, host), ['-DMAG_X86_LEVEL=' + level])
+            with self.assertRaisesRegex(InstallerError, 'auto, v3 or baseline'):
+                x86_level_override({'MAG_X86_LEVEL': 'v4'}, host)
+        with self.assertRaisesRegex(InstallerError, 'only to Windows and Linux'):
+            x86_level_override({'MAG_X86_LEVEL': 'baseline'}, 'macos-arm64')
+
+    def test_x86_level_override_reaches_both_configures(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); data = self.config(root)
+            plan = build_plan(self.load(root, data), self.workspace(root))
+            self.assertFalse(any('MAG_X86_LEVEL' in argument for stage in plan for argument in stage['argv']))
+            config = self.load(root, dict(data, cmake_args=['-DMAG_X86_LEVEL=baseline']))
+            plan = {stage['id']: stage['argv'] for stage in build_plan(config, root / 'workspace')}
+            for name in ('configure-launcher', 'configure-engine'):
+                self.assertIn('-DMAG_X86_LEVEL=baseline', plan[name])
+            for bad in ('-DMAG_X86_LEVEL=native', '-DMAG_X86_LEVEL=v3 -DCMAKE_C_FLAGS=x'):
+                with self.subTest(bad=bad), self.assertRaises(InstallerError):
+                    self.load(root, dict(data, cmake_args=[bad]))
 
 
 if __name__ == '__main__': unittest.main()
