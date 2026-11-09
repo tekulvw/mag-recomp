@@ -35,14 +35,29 @@ class PinTableTests(unittest.TestCase):
             self.assertEqual(load(name)['sdk_revision'], ppu['commit'], name)
         self.assertEqual(load('retail-v1.0-spu-coverage.json')['lifter_revision'], spu['commit'])
 
-    def test_dispatcher_splice_uses_the_pinned_lifter_and_a_tagged_fix(self):
-        profile = load('retail-v1.0-ppu-jumptable-splice.json')
-        self.assertEqual(profile['before']['revision'], self.table['lifter-ppu']['commit'])
-        # The fix is pinned in the table too, so every checkout and kit holds it.
+    def test_splices_use_the_pinned_lifter_and_tagged_fixes(self):
+        names = ('retail-v1.0-ppu-jumptable-splice.json', 'retail-v1.0-ppu-ctr64-splice.json')
+        profiles = [load(name) for name in names]
+        # Every fix is pinned in the table too, in splice order, so every checkout and kit holds it.
         self.assertEqual(self.table['lifter-ppu']['splice_after'],
-                         {'tag': profile['after']['tag'], 'commit': profile['after']['revision']})
-        self.assertRegex(profile['after']['revision'], '^[0-9a-f]{40}$')
-        self.assertTrue(profile['after']['tag'].startswith('mag-recomp/lifter-'))
+                         [{'tag': p['after']['tag'], 'commit': p['after']['revision']} for p in profiles])
+        for name, profile in zip(names, profiles):
+            with self.subTest(profile=name):
+                self.assertEqual(profile['before']['revision'], self.table['lifter-ppu']['commit'])
+                self.assertEqual(profile['elf_sha256'], load('retail-v1.0-nonlocal.json')['elf_sha256'])
+                self.assertRegex(profile['after']['revision'], '^[0-9a-f]{40}$')
+                self.assertRegex(profile['body_sha256'], '^[0-9a-f]{64}$')
+                self.assertTrue(profile['after']['tag'].startswith('mag-recomp/lifter-'))
+                # Both runs read the same decoder and ELF parser from the before revision.
+                self.assertEqual((profile['decoder_sha256'], profile['parser_sha256']),
+                                 (profiles[0]['decoder_sha256'], profiles[0]['parser_sha256']))
+        self.assertEqual(len({p['function'] for p in profiles}), len(profiles))
+
+    def test_splice_lifters_are_named_in_the_building_guide(self):
+        guide = (ROOT / 'BUILDING.md').read_text()
+        for extra in self.table['lifter-ppu']['splice_after']:
+            self.assertIn(extra['tag'], guide)
+            self.assertIn(extra['commit'][:7], guide)
 
     def test_building_guide_uses_the_table(self):
         guide = (ROOT / 'BUILDING.md').read_text()

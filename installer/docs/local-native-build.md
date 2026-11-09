@@ -48,8 +48,8 @@ your permissions; use only ones you trust.
 
 The `sdks` roles and commits must match the `ps3recomp` table in `profiles/framework.json`
 exactly; `tools/fetch_ps3recomp.py` creates those checkouts. Each must be clean. The `lifter-ppu`
-checkout must also hold the tag named by its `splice_after` pin (the dispatcher splice reads that
-commit by revision). `python` must be 3.11 or later with the modules from the runtime's
+checkout must also hold the tags named by its `splice_after` pins (the dispatcher and CTR splices
+read those commits by revision). `python` must be 3.11 or later with the modules from the runtime's
 `requirements.txt`; preflight imports them.
 
 Host differences:

@@ -725,10 +725,11 @@ chose explicitly, so the startup mode override no longer applies.
 ## 10. Building
 
 The adapter needs the Rust toolchain recorded in `rust-toolchain.toml` and an engine lift prepared
-with the `controls` hook stage:
+with the `controls` hook stage, starting from the lift the engine is built from (the last splice
+output, BUILDING.md):
 
 ```sh
-python3 tools/render_hooks/prepare.py --base generated/retail-v1.0/mage_g-dispatcher \
+python3 tools/render_hooks/prepare.py --base generated/retail-v1.0/mage_g-ctr64 \
   --output generated/retail-v1.0/mage_g-controls --stage controls
 cmake -S . -B build-engine -G Ninja -DMAG_IMAGE=mage_g \
   -DRECOMP_DIR=generated/retail-v1.0/mage_g-controls -DMAG_GAME_CONTROLS=ON -DMAG_INPUT_RUST=ON ...
@@ -739,7 +740,7 @@ a lift without the stage or prepared by different hook tools. The launcher image
 
 An installer recipe builds it when its local configuration names the toolchain:
 `"game_controls": {"cargo": "<path>", "rustc": "<path>"}` (the toolchain's own executables, not
-rustup proxies). The recipe then prepares `mage_g-controls` after the dispatcher splice and
+rustup proxies). The recipe then prepares `mage_g-controls` from the last spliced lift (`mage_g-ctr64`) and
 configures only the engine with the adapter.
 
 ## 11. Tests
