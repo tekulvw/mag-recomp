@@ -158,12 +158,14 @@ void DesktopCaptureCore::mouse_button(uint32_t index, uint64_t device, bool down
     sink_.push_event({{InputSource::Mouse, index}, down, time_ns, device});
 }
 
-void DesktopCaptureCore::mouse_motion(double dx, double dy, DesktopCaptureGate::Stamp stamp) {
-    if (!installed_ || !ready_ || !relative_ || !gate_.accepts(stamp, true)) return;
+bool DesktopCaptureCore::mouse_motion(double dx, double dy, DesktopCaptureGate::Stamp stamp) {
+    if (!installed_ || !ready_ || !relative_ || !gate_.accepts(stamp, true)) return false;
     try {
         sink_.push_relative_mouse(dx, dy);
+        return true;
     } catch (...) {
         sink_.release_source(InputSource::Mouse);
+        return false;
     }
 }
 

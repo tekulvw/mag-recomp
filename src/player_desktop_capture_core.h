@@ -97,8 +97,11 @@ public:
     // A mouse-button edge: index 0 left, 1 right, 2 middle, 3 and 4 the side buttons.
     void mouse_button(uint32_t index, uint64_t device, bool down, uint64_t time_ns,
                       DesktopCaptureGate::Stamp stamp);
-    // Relative motion: dx right-positive, dy up-positive.
-    void mouse_motion(double dx, double dy, DesktopCaptureGate::Stamp stamp);
+    // Relative motion: dx right-positive, dy up-positive. Returns whether it reached the engine.
+    bool mouse_motion(double dx, double dy, DesktopCaptureGate::Stamp stamp);
+    // The motion epoch a stamp carries, and the current one, for diagnostics.
+    static uint32_t motion_epoch(DesktopCaptureGate::Stamp stamp) { return uint32_t(stamp.state >> 33); }
+    uint32_t motion_epoch() const { return motion_epoch(gate_.stamp()); }
     // Re-apply relative mode at the next refresh (a click in the window, focus returning).
     void request_recapture() { needs_recapture_ = true; }
     // The attached window changed or went away: drop relative mode, release everything and

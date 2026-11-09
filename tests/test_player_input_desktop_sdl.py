@@ -100,6 +100,10 @@ class SdlDesktopCaptureTests(unittest.TestCase):
             if result.returncode == 77:
                 self.skipTest(result.stderr.strip())
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            # MAG_GAME_CONTROLS_TRACE=1 (set by the fixture around one re-lock) traces motions after it.
+            self.assertIn('[game-controls] trace mouse lock acquired; tracing the next 20 motions', result.stderr)
+            self.assertIn('[game-controls] trace motion xrel=2 yrel=-1 accepted', result.stderr)
+            self.assertEqual(result.stderr.count('trace mouse lock acquired'), 1, 'the trace is off without the variable')
 
 
 if __name__ == '__main__':
