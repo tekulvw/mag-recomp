@@ -131,7 +131,7 @@ done
   --sdk local/ps3recomp-runtime --sdk-revision RUNTIME_COMMIT_FROM_FRAMEWORK_JSON \
   --baseline generated/retail-v1.0/spu-engine \
   --output generated/retail-v1.0/spu-engine-retained --merge-chunks --require-complete \
-  --static-indirect   # on x86-64 hosts, also: --lifter-arg=--promote-regs
+  --static-indirect --lifter-arg=--promote-regs
 .venv/bin/python tools/firmware_lift.py --output generated/retail-v1.0/libsre
 .venv/bin/python tools/spu_programs_lift.py --sdk local/ps3recomp-spu-programs \
   --sdk-revision 4c5c05f60a6ae428b16e5ff7075c24a5e4d282ab --output local/spu-programs
@@ -161,9 +161,9 @@ requires `--static-indirect` and adds a validated heuristic for function pointer
 job data. Without either flag the output is unchanged, so builds that pin job sources by hash
 keep working.
 
-`--lifter-arg ARG` passes `ARG` to the SDK lifter for every job module. On x86-64 (Windows and
-Linux) the installer passes `--promote-regs` (`STREAMED_JOB_LIFTER_ARGS` in
-`installer/mag_installer/native_recipe.py`); macOS arm64 does not yet. Each lifted function then
+`--lifter-arg ARG` passes `ARG` to the SDK lifter for every job module. The installer passes
+`--promote-regs` on every host (`STREAMED_JOB_LIFTER_ARGS` in
+`installer/mag_installer/native_recipe.py` lists the options per host). Each lifted function then
 keeps the SPU registers it uses in C locals and stores them to the register file only before host
 returns and out-of-line calls, re-reading them after. Execution is unchanged; the generated code
 is faster. Its local-store diagnostics (`SPU_LS_WATCH` and related) then need the job sources

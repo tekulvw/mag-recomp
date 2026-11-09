@@ -112,8 +112,8 @@ class NativeRecipeTests(unittest.TestCase):
             self.assertIn('--merge-chunks', streamed)
             self.assertIn('--require-complete', streamed)
             self.assertIn('--static-indirect', streamed)
-            # The default configuration is macOS arm64: no streamed-job lifter options there.
-            self.assertFalse(any(a.startswith('--lifter-arg') for a in streamed))
+            # The default configuration is macOS arm64.
+            self.assertEqual([a for a in streamed if a.startswith('--lifter-arg')], ['--lifter-arg=--promote-regs'])
             self.assertIn('--engine-profile', streamed)
             self.assertIn('-DSPU_DIR='+str(workspace/'generated/retail-v1.0/spu-engine-retained'), commands['configure-engine'])
             self.assertIn('-DSPU_DIR='+str(workspace/'generated/retail-v1.0/spu-eboot'), commands['configure-launcher'])
@@ -165,7 +165,7 @@ class NativeRecipeTests(unittest.TestCase):
         self.assertEqual(set(table), {'windows-x86_64', 'linux-x86_64', 'macos-arm64'})
         self.assertEqual(table['windows-x86_64'], ('--promote-regs',))
         self.assertEqual(table['linux-x86_64'], ('--promote-regs',))
-        self.assertEqual(table['macos-arm64'], ())
+        self.assertEqual(table['macos-arm64'], ('--promote-regs',))
 
     def test_game_controls_are_opt_in_and_prepare_their_own_engine_lift(self):
         with tempfile.TemporaryDirectory() as tmp:

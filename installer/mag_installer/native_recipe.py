@@ -39,12 +39,12 @@ def config_host(config):
 
 
 # SDK lifter options for the streamed job modules, per host. --promote-regs keeps
-# SPU registers in C locals between sync points; it is measured faster on x86-64
-# (Windows) and stays off on arm64 until a macOS A/B shows no regression.
+# SPU registers in C locals between sync points: Training flips +6.8% on Windows
+# x86-64, +1.4% on macOS arm64 (no regression in 6 alternating rounds).
 STREAMED_JOB_LIFTER_ARGS = {
     'windows-x86_64': ('--promote-regs',),
     'linux-x86_64': ('--promote-regs',),
-    'macos-arm64': (),
+    'macos-arm64': ('--promote-regs',),
 }
 
 
