@@ -87,15 +87,16 @@ function(mag_enable_game_controls target)
             list(APPEND _sources "${_src}/${_name}.cpp")
         endforeach()
     endif()
-    # Keyboard/mouse desktop capture: "macos" (MagPlayerSettings.cmake), "sdl" for the SDL2 game
-    # window of Linux and other non-Apple, non-Windows hosts, "none" (refuses visibly) on Windows.
+    # Keyboard/mouse desktop capture: "macos" (MagPlayerSettings.cmake), "win32" for the Win32 game
+    # window of Windows, "sdl" for the SDL2 game window of Linux and other non-Apple, non-Windows
+    # hosts, "none" (refuses visibly) for a host without a backend.
     # MAG_GAME_CONTROLS_DESKTOP overrides the choice for configure-only fixtures.
     if(DEFINED MAG_GAME_CONTROLS_DESKTOP)
         set(_desktop "${MAG_GAME_CONTROLS_DESKTOP}")
     elseif(APPLE)
         set(_desktop macos)
     elseif(WIN32)
-        set(_desktop none)
+        set(_desktop win32)
     else()
         set(_desktop sdl)
     endif()
@@ -128,10 +129,35 @@ function(mag_enable_game_controls target)
             target_include_directories(${target} PRIVATE ${SDL2_INCLUDE_DIRS})
             target_link_libraries(${target} PRIVATE ${SDL2_LIBRARIES})
         endif()
+    elseif(_desktop STREQUAL "win32")
+        if(DEFINED PS3RECOMP_NATIVE_OSK_WINDOWS AND NOT PS3RECOMP_NATIVE_OSK_WINDOWS)
+            message(FATAL_ERROR "MAG_GAME_CONTROLS needs PS3RECOMP_NATIVE_OSK_WINDOWS=ON: the Win32 desktop capture "
+                                "runs from the window pump calls the native on-screen keyboard shares")
+        endif()
+        list(APPEND _sources "${_src}/player_desktop_capture_core.cpp" "${_src}/player_input_desktop_win32.cpp"
+            "${_src}/player_input_win32_map.c")
+        # The SDK's Win32 seams, renamed on its own sources only: cellPad's XInput readings reach the
+        # capture layer and its keyboard fallback goes quiet while the adapter owns the keyboard
+        # (player_input_win32_pad.c); the game window's pump calls shared with the on-screen keyboard
+        # pass through player_input_win32_window.c, in the Vulkan and the D3D12 backend alike.
+        set(_sdk_seams "${_src}/player_input_win32_pad.c" "${_src}/player_input_win32_window.c")
+        target_sources(ps3recomp_runtime PRIVATE ${_sdk_seams})
+        set_source_files_properties(${_sdk_seams} DIRECTORY "${PS3RECOMP_DIR}"
+            PROPERTIES INCLUDE_DIRECTORIES "${PS3RECOMP_DIR}")
+        set_property(SOURCE "${PS3RECOMP_DIR}/libs/input/cellPad.c" DIRECTORY "${PS3RECOMP_DIR}"
+            APPEND PROPERTY COMPILE_DEFINITIONS XInputGetState=mag_player_xinput_get_state
+            GetAsyncKeyState=mag_player_get_async_key_state)
+        foreach(_video rsx_vulkan_backend.c rsx_d3d12_backend.c)
+            set_property(SOURCE "${PS3RECOMP_DIR}/libs/video/${_video}" DIRECTORY "${PS3RECOMP_DIR}"
+                APPEND PROPERTY COMPILE_DEFINITIONS osk_native_win32_set_window=mag_player_win32_set_window
+                osk_native_win32_pump=mag_player_win32_pump osk_native_win32_handle_message=mag_player_win32_message)
+        endforeach()
+        # Raw Input, the cursor and the foreground window.
+        target_link_libraries(${target} PRIVATE user32)
     elseif(_desktop STREQUAL "none")
         list(APPEND _sources "${_controls}/mag_game_controls_desktop_none.cpp")
     elseif(NOT _desktop STREQUAL "macos")
-        message(FATAL_ERROR "MAG_GAME_CONTROLS_DESKTOP must be macos, sdl or none")
+        message(FATAL_ERROR "MAG_GAME_CONTROLS_DESKTOP must be macos, win32, sdl or none")
     endif()
     target_sources(${target} PRIVATE ${_sources})
     set_source_files_properties(${_sources} TARGET_DIRECTORY ${target} PROPERTIES
