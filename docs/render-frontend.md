@@ -8,6 +8,11 @@ and D3D12 command encoders on a borrowed host device. The optional CMake build a
 are integration infrastructure; enabling a build does not establish source coverage, suppress
 original work or prove game performance.
 
+The approved architecture, and the direction later measurements set for it, are in
+[render-frontend/architecture.md](render-frontend/architecture.md). The responsibilities the
+frontend must take over, how removal of original work is proven, and the proposed acceptance
+gates are in [render-frontend/acceptance.md](render-frontend/acceptance.md).
+
 The intended replacement covers render-only preparation across world, depth, shadow, auxiliary,
 effect and UI passes. Acceptance requires complete coverage, independent evidence that targeted
 original work no longer executes, preserved output and behavior, and sustained 60 newly rendered
