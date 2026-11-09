@@ -17,8 +17,8 @@ installation folder, and must not be shared.
 | Host | Status |
 | --- | --- |
 | macOS, Apple Silicon | Build MAG verified end to end from a clean checkout; packages `MAG.app` |
-| Ubuntu 24.04 or later, x86_64 | Linux installer and synthetic native checks; real-game build and play verification pending |
-| Windows 10/11, x86_64 | Toolchain, compilation of MAG's sources and the frozen installer verified in CI; a full build with real game files is not yet verified |
+| Ubuntu 24.04 or later, x86_64 | Build MAG verified end to end on Ubuntu 24.04 with a Vulkan driver; packages `MAG/MAG`, which signs in, plays Training and has joined online matches |
+| Windows 10/11, x86_64 | Build MAG verified with real game files; packages `MAG\MAG.exe`, which signs in, plays Training and has joined online matches. Toolchain, source compilation and the frozen installer are also checked in CI |
 
 Release builds are attached to each GitHub release by CI. Builds of pull requests and of `main` are
 workflow artifacts.
@@ -47,8 +47,8 @@ vendor owns the compiler:
   signed by Microsoft, and runs it with its own progress window, license and UAC prompt. Choose an
   installation path that is ASCII and at most 100 characters, such as `C:\MAG`. The executables use
   the static C runtime. MAG presents through Vulkan: glslang and the Vulkan headers are built from
-  pinned sources, and the Vulkan loader comes with the GPU driver. Movie playback is not yet built on
-  Windows.
+  pinned sources, and the Vulkan loader comes with the GPU driver. Movies play through a pinned
+  prebuilt FFmpeg 9 (LGPL shared build), whose DLLs and licence are packaged beside MAG.
 
 - **Linux** targets Ubuntu 24.04 or later on x86_64 with a graphical desktop and Vulkan driver.
   Build MAG requests Ubuntu authorization for required compiler and desktop development packages
