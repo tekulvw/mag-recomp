@@ -119,6 +119,10 @@ when you move or rebuild MAG.
 `logs/launch-*/` (`launcher.log`, then `engine.log`). On Windows and Linux, a launch that needs
 something from you, such as a player name, also leaves its message in `home/player/launch-message.txt`.
 
+**If MAG crashes at start on an older CPU** (Windows or Linux), rebuild with `MAG_X86_LEVEL=baseline`
+set in the installer's environment, into a new installation folder; see
+[BUILDING.md](BUILDING.md#x86-64-code-generation-windows-and-linux).
+
 ## Releases
 
 Versions follow [Semantic Versioning](https://semver.org/) and are managed by

@@ -71,8 +71,10 @@ managed prefix, which is passed as `CMAKE_PREFIX_PATH`. On Windows it also selec
 Vulkan backend, with the Vulkan headers from its `include` directory; without it, Windows builds
 the D3D12 backend.
 
-`jobs` is 1–4 (default 2). `cmake_args` accepts only `-DMAG_GENERATED_PPU_OPT=0|1|2` and a numeric
-`-DCMAKE_OSX_DEPLOYMENT_TARGET`.
+`jobs` is 1–4 (default 2). `cmake_args` accepts only `-DMAG_GENERATED_PPU_OPT=0|1|2`,
+`-DMAG_X86_LEVEL=auto|v3|baseline` and a numeric `-DCMAKE_OSX_DEPLOYMENT_TARGET`. The player
+installer writes `cmake_args` only when `MAG_X86_LEVEL` is set in its own environment (Windows and
+Linux), as a troubleshooting override of the x86-64 code generation level.
 
 ## Result
 

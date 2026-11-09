@@ -110,13 +110,32 @@ def load_config(path):
     # Arbitrary CMake -D options can inject executable hooks/toolchains or defeat
     # provenance. Keep this optional tuning surface deliberately narrow.
     if not isinstance(arguments, list) or any(not isinstance(a, str) or re.fullmatch(
-            r'-D(?:MAG_GENERATED_PPU_OPT=[012]|CMAKE_OSX_DEPLOYMENT_TARGET=[0-9]+(?:\.[0-9]+){0,2})', a) is None for a in arguments):
-        raise InstallerError('cmake_args supports only MAG_GENERATED_PPU_OPT=0|1|2 and numeric CMAKE_OSX_DEPLOYMENT_TARGET')
+            r'-D(?:MAG_GENERATED_PPU_OPT=[012]|MAG_X86_LEVEL=(?:auto|v3|baseline)'
+            r'|CMAKE_OSX_DEPLOYMENT_TARGET=[0-9]+(?:\.[0-9]+){0,2})', a) is None for a in arguments):
+        raise InstallerError('cmake_args supports only MAG_GENERATED_PPU_OPT=0|1|2, MAG_X86_LEVEL=auto|v3|baseline '
+                             'and numeric CMAKE_OSX_DEPLOYMENT_TARGET')
     result['cmake_args'] = list(arguments)
     if raw.get('managed_prefix'):
         result['managed_prefix'] = _path(raw['managed_prefix'], path.parent, 'managed_prefix', directory=True)
     return result
 
+
+
+def x86_level_override(environ, host):
+    """The cmake_args of a MAG_X86_LEVEL troubleshooting override; [] when it is unset.
+
+    Player builds pass nothing: CMake's default (auto) uses x86-64-v3 when the build CPU has it.
+    Setting MAG_X86_LEVEL=baseline (or v3, or auto) in the installer's environment forces a level
+    on Windows and Linux. The build environment itself never inherits MAG_* variables.
+    """
+    value = environ.get('MAG_X86_LEVEL', '')
+    if not value:
+        return []
+    if host not in ('windows-x86_64', 'linux-x86_64'):
+        raise InstallerError('MAG_X86_LEVEL applies only to Windows and Linux builds; unset it')
+    if value not in ('auto', 'v3', 'baseline'):
+        raise InstallerError(f'MAG_X86_LEVEL must be auto, v3 or baseline, not {value!r}')
+    return ['-DMAG_X86_LEVEL=' + value]
 
 
 def framework_pins(workspace):

@@ -195,7 +195,8 @@ def runtime_identity(sdk: Path, framework: dict, framework_path: Path,
 
 def record_build(binary: Path, sdk: Path, recomp: Path, spu: Path | None = None,
                  firmware: Path | None = None, image_name: str = 'EBOOT', extras: dict | None = None,
-                 runtime_candidate: Path | None = None, movie_playback: bool = False) -> dict:
+                 runtime_candidate: Path | None = None, movie_playback: bool = False,
+                 x86_level: str | None = None) -> dict:
     image,lift=validate_build_image(recomp,image_name)
     framework,framework_path=load_framework()
     runtime=runtime_identity(sdk,framework,framework_path,runtime_candidate)
@@ -210,6 +211,11 @@ def record_build(binary: Path, sdk: Path, recomp: Path, spu: Path | None = None,
     if movie_playback:
         # Built with the runtime's FFmpeg movie decoder; runners enable the playback switches.
         record['movie_playback']=True
+    if x86_level is not None:
+        # x86-64 Linux and Windows builds: the code generation level MAG_X86_LEVEL selected.
+        if x86_level not in ('v3','baseline'):
+            raise ValueError(f'Unknown x86-64 level: {x86_level!r}')
+        record['x86_level']=x86_level
     record.update(validate_modules(image,image_name,spu,firmware))
     binary.with_suffix('.receipt.json').write_text(json.dumps(record,indent=2)+'\n')
     return record
@@ -228,6 +234,7 @@ if __name__=='__main__':
     parser.add_argument('--firmware',type=Path)
     parser.add_argument('--receipt-extra',action='append',default=[],metavar='NAME=PATH',help='Record an extension input in the receipt')
     parser.add_argument('--movie-playback',action='store_true',help='The binary was built with the runtime FFmpeg movie decoder')
+    parser.add_argument('--x86-level',choices=['v3','baseline'],help='The x86-64 code generation level the binary was built at')
     args=parser.parse_args()
     if args.validate_runtime:
         if args.sdk is None:
@@ -245,4 +252,4 @@ if __name__=='__main__':
             if not sep: parser.error('--receipt-extra needs NAME=PATH')
             extras[name]=Path(value)
         record_build(args.binary,args.sdk,args.recomp,args.spu,args.firmware,args.image,extras,args.runtime_candidate,
-                     args.movie_playback)
+                     args.movie_playback,args.x86_level)

@@ -18,6 +18,7 @@ endif()
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/MagExtensions.cmake")
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/MagInput.cmake")
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/MagRender.cmake")
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/MagX86Level.cmake")
 
 # ---------------------------------------------------------------------------
 # Standards
@@ -137,6 +138,10 @@ message(STATUS "Retail image:   ${MAG_IMAGE}")
 # imported one arrives without SDL2, pthreads, the Metal frameworks or the
 # Winsock/XInput imports -- the link then fails on every platform for a
 # different reason. add_subdirectory hands all of that over with the target.
+#
+# The x86-64 code generation level (cmake/MagX86Level.cmake) is chosen first: its options reach
+# every C and C++ unit of the runtime and of the game executable alike.
+mag_x86_level_apply()
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/MagLinuxRuntime.cmake")
 add_subdirectory("${PS3RECOMP_DIR}" "${CMAKE_BINARY_DIR}/ps3recomp_sdk"
                  EXCLUDE_FROM_ALL)
@@ -430,12 +435,15 @@ endif()
 #   - warnings off. They are about generated code and nobody will act on them,
 #     and at this volume they bury the diagnostics that matter.
 #   - no floating-point contraction. arm64 fuses a multiply and an add by
-#     default; a PPC fmadd is spelt as one where the lifter means one.
+#     default, and so does x86-64 once MAG_X86_LEVEL selects x86-64-v3 (which
+#     then turns contraction off for every unit); a PPC fmadd is spelt as one
+#     where the lifter means one.
 #   - /bigobj on MSVC. A single lifted file routinely passes the 65,536-section
 #     limit of the default object format.
 #   - the same MAG_GENERATED_PPU_OPT level everywhere. MSVC-style drivers spell
 #     it /Od, /O1, /O2 (clang-cl ignores -O0 and would keep the Release /O2).
-#     x86-64 without FMA flags never contracts, so no contraction switch there.
+#     Baseline x86-64 has no FMA instruction to contract into, so no contraction
+#     switch there.
 set(MAG_GENERATED_PPU_OPT "1" CACHE STRING "Generated title PPU optimization level (0 for diagnostics)")
 set_property(CACHE MAG_GENERATED_PPU_OPT PROPERTY STRINGS 0 1 2)
 if(NOT MAG_GENERATED_PPU_OPT MATCHES "^[012]$")
@@ -493,6 +501,9 @@ endif()
 list(APPEND MAG_RECEIPT_EXTRA ${MAG_INPUT_RECEIPT_EXTRA})
 list(APPEND MAG_RECEIPT_EXTRA ${MAG_RENDER_RECEIPT_EXTRA})
 set(MAG_EXTENSION_RECEIPT_ARGS "")
+if(MAG_X86_LEVEL_SELECTED)
+    list(APPEND MAG_EXTENSION_RECEIPT_ARGS --x86-level "${MAG_X86_LEVEL_SELECTED}")
+endif()
 if(PS3RECOMP_SAIL_FFMPEG)
     # Runners turn on movie playback only for binaries built with the decoder.
     list(APPEND MAG_EXTENSION_RECEIPT_ARGS --movie-playback)

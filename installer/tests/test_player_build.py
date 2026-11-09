@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -224,8 +225,17 @@ class PlayerBuildTests(unittest.TestCase):
                 player_build._retry_status(linked, {})
 
     def test_linux_route_uses_compilers_ffmpeg_and_mag_directory(self):
+        self.assertNotIn('cmake_args', self.linux_route({}))
+
+    def test_x86_level_override_reaches_the_build_settings(self):
+        self.assertEqual(self.linux_route({'MAG_X86_LEVEL': 'baseline'})['cmake_args'], ['-DMAG_X86_LEVEL=baseline'])
+
+    def linux_route(self, environ):
         from contextlib import ExitStack
+        settings = {}
         with tempfile.TemporaryDirectory() as temp, ExitStack() as stack:
+            stack.enter_context(patch.dict('os.environ', environ))
+            if not environ: os.environ.pop('MAG_X86_LEVEL', None)
             root = Path(temp).resolve(); source = root / 'inputs'; self.inputs(source)
             output = root / 'MAG'
             stack.enter_context(patch.object(player_build, 'readiness', return_value={'ready': True}))
@@ -240,11 +250,13 @@ class PlayerBuildTests(unittest.TestCase):
                 self.assertEqual(data['host'], 'linux-x86_64')
                 self.assertEqual(data['linux_toolchain'], {'cc':'/usr/bin/clang', 'cxx':'/usr/bin/clang++'})
                 self.assertEqual(data['ffmpeg'], {'avcodec':'codec.so'})
+                settings.update(data)
             stack.enter_context(patch('mag_installer.native_build.install', side_effect=native))
             package = stack.enter_context(patch('mag_installer.native_package.package', side_effect=lambda config, work, target, **kwargs: target))
             player_build.install(root, source, output, root / 'cache')
             self.assertEqual(package.call_args.args[2], output / 'MAG')
             apple.assert_not_called()
+        return settings
 
     def test_rejected_game_identity_can_be_corrected_in_same_destination(self):
         from contextlib import ExitStack

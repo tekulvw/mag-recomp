@@ -39,11 +39,14 @@ def main():
     header_dir.mkdir(exist_ok=True)
     run([sys.executable, args.ppu_sdk.resolve() / 'tools/make_smoke_elf.py', '--header', header_dir / 'ppu_recomp.h'], check=True)
 
-    # The pinned runtime, with the Windows POSIX shim applied by MAG's own CMake module.
+    # The pinned runtime, with the Windows POSIX shim applied by MAG's own CMake module and the
+    # x86-64 level (cmake/MagX86Level.cmake, default auto) chosen first, as the MAG build does.
     wrapper = work / 'runtime-project'
     wrapper.mkdir(exist_ok=True)
     (wrapper / 'CMakeLists.txt').write_text(
         'cmake_minimum_required(VERSION 3.20)\nproject(runtime_check C CXX)\n'
+        f'include("{(ROOT / "cmake/MagX86Level.cmake").as_posix()}")\n'
+        'mag_x86_level_apply()\n'
         f'add_subdirectory("{sdk.as_posix()}" sdk EXCLUDE_FROM_ALL)\n'
         f'include("{(ROOT / "cmake/MagWin32Posix.cmake").as_posix()}")\n'
         f'mag_win32_posix_runtime("{sdk.as_posix()}")\n')

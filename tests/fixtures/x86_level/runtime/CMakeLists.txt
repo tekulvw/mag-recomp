@@ -1,0 +1,10 @@
+# Stand-in for the ps3recomp runtime: the same compile options, set the same way.
+add_library(fixture_runtime STATIC runtime.c)
+if(CMAKE_C_COMPILER_ID MATCHES "Clang|GNU")
+    target_compile_options(fixture_runtime PRIVATE -ffp-contract=off $<$<CONFIG:Release,RelWithDebInfo>:-O2>)
+    include(CheckCCompilerFlag)
+    check_c_compiler_flag(-msse4.1 FIXTURE_HAS_MSSE41)
+    if(FIXTURE_HAS_MSSE41)
+        target_compile_options(fixture_runtime PUBLIC -msse4.1)
+    endif()
+endif()

@@ -43,6 +43,15 @@ class BuildImageTests(unittest.TestCase):
         self.assertIs(result['movie_playback'],True)
         self.assertIs(validate_receipt(self.binary,self.images['mage_g']['elf_sha256'])['movie_playback'],True)
 
+    def test_x86_level_is_recorded_only_when_selected(self):
+        # macOS and other non-x86 builds pass no level, and their receipts do not change.
+        self.assertNotIn('x86_level',record_build(self.binary,self.root,self.lifts['EBOOT']))
+        for level in ('v3','baseline'):
+            self.assertEqual(record_build(self.binary,self.root,self.lifts['EBOOT'],x86_level=level)['x86_level'],level)
+            self.assertEqual(validate_receipt(self.binary,self.images['EBOOT']['elf_sha256'])['x86_level'],level)
+        with self.assertRaises(ValueError):
+            record_build(self.binary,self.root,self.lifts['EBOOT'],x86_level='v4')
+
     def test_receipt_extra_file(self):
         extra=self.root/'native.a';extra.write_bytes(b'synthetic archive')
         result=record_build(self.binary,self.root,self.lifts['EBOOT'],extras={'native-core':extra})
