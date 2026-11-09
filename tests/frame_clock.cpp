@@ -1,7 +1,9 @@
 // Synthetic check of the host frame clock's time source (src/mag_frame_clock.h):
 // fine-grained, monotonic, and a model of the frame clock loop (wait 4 ms, release
-// every 16 ms tick that is due) spaces its ticks evenly. Spacing is printed; only
-// coarse bounds are asserted, so a loaded machine does not fail it.
+// every 16 ms tick that is due) keeps a 16 ms tick rate. Spacing is printed. Only the
+// average rate is asserted: on a loaded machine a 4 ms wait can oversleep by tens of
+// milliseconds, and the loop then releases the due ticks back to back, which moves the
+// median gap but not the rate.
 #include "mag_frame_clock.h"
 
 #include <algorithm>
@@ -52,7 +54,8 @@ template <class Clock> static std::vector<double> model_ticks(Clock clock, int t
     return at;
 }
 
-static void report(const char* label, const std::vector<double>& at, double* median_ms, double* max_ms)
+static void report(const char* label, const std::vector<double>& at, double* median_ms, double* max_ms,
+                   double* mean_ms)
 {
     std::vector<double> gaps;
     for (size_t i = 1; i < at.size(); ++i) gaps.push_back(at[i] - at[i - 1]);
@@ -61,8 +64,9 @@ static void report(const char* label, const std::vector<double>& at, double* med
     for (double g : gaps) over_24 += g > 24.0;
     *median_ms = gaps[gaps.size() / 2];
     *max_ms = gaps.back();
-    std::printf("[frame_clock] %-16s %zu ticks: median %.1f ms, max %.1f ms, %d gaps over 24 ms\n",
-                label, at.size(), *median_ms, *max_ms, over_24);
+    *mean_ms = (at.back() - at.front()) / (double)(at.size() - 1);
+    std::printf("[frame_clock] %-16s %zu ticks: mean %.1f ms, median %.1f ms, max %.1f ms, %d gaps over 24 ms\n",
+                label, at.size(), *mean_ms, *median_ms, *max_ms, over_24);
 }
 
 int main()
@@ -86,12 +90,12 @@ int main()
     CHECK(steps.size() >= 100);
     CHECK(median(steps) <= 2);
 
-    double med = 0, mx = 0;
-    report("mag_frame_clock", model_ticks(mag_frame_clock_ms, 120), &med, &mx);
-    CHECK(med > 10.0 && med < 22.0);
+    double med = 0, mx = 0, mean = 0;
+    report("mag_frame_clock", model_ticks(mag_frame_clock_ms, 120), &med, &mx, &mean);
+    CHECK(mean > 14.0 && mean < 20.0);
 #ifdef _WIN32
-    double tick_med = 0, tick_max = 0;
-    report("GetTickCount64", model_ticks(GetTickCount64, 120), &tick_med, &tick_max);
+    double tick_med = 0, tick_max = 0, tick_mean = 0;
+    report("GetTickCount64", model_ticks(GetTickCount64, 120), &tick_med, &tick_max, &tick_mean);
 #endif
     if (failures) { std::printf("[frame_clock] %d failure(s)\n", failures); return 1; }
     std::printf("[frame_clock] PASS\n");
