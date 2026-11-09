@@ -83,26 +83,16 @@ class NativeRecipeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp); config = self.load(root, self.config(root)); workspace = self.workspace(root)
             plan = build_plan(config, workspace); commands = {p['id']: p['argv'] for p in plan}
-            self.assertEqual(list(commands), ['prepare-inputs', 'inventory', 'lift-launcher', 'lift-engine', 'splice-engine-dispatcher', 'splice-engine-ctr64', 'worker-spu',
+            self.assertEqual(list(commands), ['prepare-inputs', 'inventory', 'lift-launcher', 'lift-engine', 'worker-spu',
                                               'engine-spu', 'streamed-jobs', 'firmware', 'spu-programs', 'configure-launcher',
                                               'build-launcher', 'configure-engine', 'build-engine'])
             self.assertIn(str(workspace / 'local/ps3recomp-lifter-spu'), commands['inventory'])
             self.assertIn(str(workspace / 'local/ps3recomp-lifter-ppu'), commands['lift-engine'])
             self.assertIn(PINS['spu-programs']['commit'], commands['spu-programs'])
-            # The splices chain: lift -> dispatcher fix -> CTR fix -> engine build.
+            # The engine is built from the lift itself: the pinned lifter carries its fixes.
             generated = workspace / 'generated/retail-v1.0'
-            self.assertIn('-DRECOMP_DIR=' + str(generated / 'mage_g-ctr64'), commands['configure-engine'])
-            chain = [('splice-engine-dispatcher', 'mage_g', 'mage_g-dispatcher', 'retail-v1.0-ppu-jumptable-splice.json'),
-                     ('splice-engine-ctr64', 'mage_g-dispatcher', 'mage_g-ctr64', 'retail-v1.0-ppu-ctr64-splice.json')]
-            for step, base, output, profile in chain:
-                splice = commands[step]
-                self.assertEqual(splice[splice.index('--base') + 1], str(generated / base))
-                self.assertEqual(splice[splice.index('--output') + 1], str(generated / output))
-                self.assertEqual(splice[splice.index('--profile') + 1], str(workspace / 'profiles' / profile))
-                self.assertEqual(splice[splice.index('--before-sdk') + 1], str(workspace / 'local/ps3recomp-lifter-ppu'))
-                self.assertEqual(splice[splice.index('--after-sdk') + 1], str(workspace / 'local/ps3recomp-lifter-ppu'))
-            self.assertNotEqual(commands['splice-engine-dispatcher'][commands['splice-engine-dispatcher'].index('--work') + 1],
-                                commands['splice-engine-ctr64'][commands['splice-engine-ctr64'].index('--work') + 1])
+            self.assertIn('-DRECOMP_DIR=' + str(generated / 'mage_g'), commands['configure-engine'])
+            self.assertFalse(any('splice' in step for step in commands))
             self.assertIn('-DPS3RECOMP_DIR=' + str(workspace / 'local/ps3recomp-runtime'), commands['configure-engine'])
             streamed = commands['streamed-jobs']
             self.assertIn('wws_job_lift.py', ' '.join(streamed))
@@ -165,10 +155,10 @@ class NativeRecipeTests(unittest.TestCase):
             config = self.load(root, dict(data, game_controls={'cargo': 'cargo', 'rustc': 'rustc'}))
             plan = build_plan(config, workspace); commands = {p['id']: p['argv'] for p in plan}
             ids = [p['id'] for p in plan]
-            self.assertEqual(ids.index('prepare-controls-hooks'), ids.index('splice-engine-ctr64') + 1)
+            self.assertEqual(ids.index('prepare-controls-hooks'), ids.index('lift-engine') + 1)
             prepare = commands['prepare-controls-hooks']
             generated = workspace / 'generated/retail-v1.0'
-            self.assertEqual(prepare[prepare.index('--base') + 1], str(generated / 'mage_g-ctr64'))
+            self.assertEqual(prepare[prepare.index('--base') + 1], str(generated / 'mage_g'))
             self.assertEqual(prepare[prepare.index('--output') + 1], str(generated / 'mage_g-controls'))
             self.assertEqual(prepare[-2:], ['--stage', 'controls'])
             engine = commands['configure-engine']

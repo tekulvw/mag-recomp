@@ -3,7 +3,7 @@ import hashlib,json,re,os
 from pathlib import Path
 from tools.prepare_inputs import sha256_file,verify_hash
 from tools.movie_picture_hooks import RETAIL_ELF
-PINS={'00CFDB5C': {'sha256': 'b856083cd05a86679cb2657f5119310fdf3ec99073a76aa3e7198eafa04bd4bc', 'labels': ['00CFDC28', '00CFDD24', '00CFDE20'], 'file': 'ppu_recomp_013.cpp'}, '00CFDC5C': {'sha256': 'fef774b53cab5faf78d6a23d756c04f76bb02758321e80fd8a99e1c7579a7b2c', 'labels': ['00CFDD24', '00CFDE20'], 'file': 'ppu_recomp_013.cpp'}, '00CFDD58': {'sha256': 'a17bb09ea5b0f8d8eec9c3e4e7ed0ddc85d64a1b075353835a5392c98aff7123', 'labels': ['00CFDE20'], 'file': 'ppu_recomp_013.cpp'}, '00CFDA98': {'sha256': 'accf8227fe70cfb3330442d8e508ba977fef44de55e9f3285aa2d0df35c0b6fc', 'labels': ['00CFDB20', '00CFDC28', '00CFDD24', '00CFDE20'], 'file': 'ppu_recomp_010.cpp'}}
+PINS={'00CFDB5C': {'sha256': '07ffb217be9312bb79e5cfb5ccefb691ccd330dde312991f2946c4c8265776a5', 'labels': ['00CFDC28', '00CFDD24', '00CFDE20'], 'file': 'ppu_recomp_013.cpp'}, '00CFDC5C': {'sha256': 'b092b529ac34c1a5fc67fb30c519721f42737c657406aec7fee5bcf23ea02642', 'labels': ['00CFDD24', '00CFDE20'], 'file': 'ppu_recomp_013.cpp'}, '00CFDD58': {'sha256': 'af25cc609dedafe3587abd316b6668ed6ff0991209bb09c54c18cedd198c0aac', 'labels': ['00CFDE20'], 'file': 'ppu_recomp_013.cpp'}, '00CFDA98': {'sha256': 'cb0e0005a666c33403dbf99633eaa96f9863d2b6dfe1ed469bd6c2a7ed54eea6', 'labels': ['00CFDB20', '00CFDC28', '00CFDD24', '00CFDE20'], 'file': 'ppu_recomp_010.cpp'}}
 STORES={'00CFDB20':(0xCFDB24,8,0),'00CFDC28':(0xCFDC2C,10,1),'00CFDD24':(0xCFDD28,10,2),'00CFDE20':(0xCFDE24,8,3)}
 def instrument_source(source,pins=None):
  pins=PINS if pins is None else pins

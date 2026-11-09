@@ -72,7 +72,7 @@ lift to a new directory and adds the hooks of the chosen stages:
 | `controls` | the game controls adapter's seams ([native-controls.md](native-controls.md)); not a render stage | `MAG_GAME_CONTROLS_HOOKS` |
 
 ```sh
-python3 tools/render_hooks/prepare.py --base generated/retail-v1.0/mage_g-ctr64 \
+python3 tools/render_hooks/prepare.py --base generated/retail-v1.0/mage_g \
   --output generated/retail-v1.0/mage_g-render --stage configuration --stage update-loop --stage cohort
 ```
 

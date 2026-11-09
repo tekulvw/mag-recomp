@@ -3,8 +3,8 @@ import hashlib,json,re,os
 from pathlib import Path
 from tools.prepare_inputs import sha256_file,verify_hash
 from tools.movie_picture_hooks import RETAIL_ELF
-SHAPES={'0023D7D0': '0f4f3c219cf7e77a3a033fcca453aa80d9f4c4be962e00a53ec011e0441d20e2', '00A047D8': 'd82fe1aa47697a98b46959f5e79115f60dc6ad4bb8cce7b28c1b642c19d454c8', '00A05438': '1dc831c304c6d670eb0d5777664b42af079e77bcbcf90208faaf928708c04a65', '01111740': '6e32e64f069b71f9104e8f13681793ce8cd658e72df1ff624ca22aeb854f0214', '00DFD2DC': 'ca54785ec08dcfd56e9745549f388dd1f3f0033f9a54f8770ea763c7ba23402d', '00DFBCAC': 'd50ce683af503dc76daa3cfbcdffe8965172b608d96a6242176ee4e762299070'}
-SHAPES.update({'00A04778': '3800bf3d3e9bc997ce0887fa9919270a3a358550fa70f530f92f9eb27ac0f3ef'})
+SHAPES={'0023D7D0': 'd59f4c5a348956efcdd1a9e8a53545cea4540113ab724c085b5a9bf6a59b5cc3', '00A047D8': 'b77315c00f2e20b89874f8f609b5b2cf348dcd124df1fadc785e52d249c2eea6', '00A05438': '0ca4b56ce41fd973acd80f2f6058bd04c631b613040cf26f0291c24cc0eb541f', '01111740': '05e4d6e0efd186724d24a63a14ae08f6d438062bcbc79c76ec16e38eb56fda23', '00DFD2DC': '2925e117993f59ead22604f63ec47c78869b5ca761d6b09a184ba6e40497c175', '00DFBCAC': 'd50ce683af503dc76daa3cfbcdffe8965172b608d96a6242176ee4e762299070'}
+SHAPES.update({'00A04778': '55253253b5586b396ba2ed652067c0de17f22dea6d1d1d3c43880fa78836cb16'})
 def instrument_source(source,pins=None):
  pins=SHAPES if pins is None else pins
  for name,digest in pins.items():

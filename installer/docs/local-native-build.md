@@ -32,7 +32,7 @@ your permissions; use only ones you trust.
   "sdks": {
     "runtime":      {"path": "path/to/mag-recomp/local/ps3recomp-runtime", "revision": "<pinned commit>"},
     "lifter-spu":   {"path": "path/to/mag-recomp/local/ps3recomp-lifter-5244db9", "revision": "<pinned commit>"},
-    "lifter-ppu":   {"path": "path/to/mag-recomp/local/ps3recomp-lifter-dfa7073", "revision": "<pinned commit>"},
+    "lifter-ppu":   {"path": "path/to/mag-recomp/local/ps3recomp-lifter-4bb5ac2", "revision": "<pinned commit>"},
     "spu-programs": {"path": "path/to/mag-recomp/local/ps3recomp-spu-programs", "revision": "<pinned commit>"}
   },
   "ffmpeg": {
@@ -47,9 +47,8 @@ your permissions; use only ones you trust.
 ```
 
 The `sdks` roles and commits must match the `ps3recomp` table in `profiles/framework.json`
-exactly; `tools/fetch_ps3recomp.py` creates those checkouts. Each must be clean. The `lifter-ppu`
-checkout must also hold the tags named by its `splice_after` pins (the dispatcher and CTR splices
-read those commits by revision). `python` must be 3.11 or later with the modules from the runtime's
+exactly; `tools/fetch_ps3recomp.py` creates those checkouts. Each must be clean. If the `lifter-ppu`
+pin names `splice_after` tags, its checkout must also hold them; the current pin names none. `python` must be 3.11 or later with the modules from the runtime's
 `requirements.txt`; preflight imports them.
 
 Host differences:

@@ -102,33 +102,33 @@ POINTS = {
     '004E1E10': [('AssistFrictionPitch', 'before', multiply_single(1, 0, 1), None)],
 }
 PINS = {
-    '00013C54': {'sha256': 'd88de44f6b44e8115eeed4b594e56059545e20b44c1f6f1d47c97e154689aa95', 'file': 'ppu_recomp_000.cpp'},
-    '003A0E30': {'sha256': 'ee3199b3bc3d4d59015c51ebf2c29b81d6728797dd90de1e3bf398d067557978', 'file': 'ppu_recomp_001.cpp'},
-    '003A1F9C': {'sha256': 'b1c46fb8b152702b8a5e621b5f531cfd27bbf8acc2ea5c3a9a1870cd4d1a7654', 'file': 'ppu_recomp_001.cpp'},
-    '003A2130': {'sha256': '0433affd16e408656f28a7519a4db75e5cebdfc6f2d508ce43671561821b4430', 'file': 'ppu_recomp_001.cpp'},
-    '003A23C0': {'sha256': '4780eba9cebc1d9f3b6e462ecebc05a67abdd6bb3acca189435364435e098d3e', 'file': 'ppu_recomp_001.cpp'},
-    '003A2C84': {'sha256': '9f732d7ed5ed0ad02517c4a70ef752087b69d19f9c5b5423b748a71bbe8dfc3f', 'file': 'ppu_recomp_001.cpp'},
-    '003A3368': {'sha256': '1a52aa1ded5609556a1fb0acf12009ae4987458ab847041b66f72edfb684dc8c', 'file': 'ppu_recomp_001.cpp'},
-    '003A36E4': {'sha256': '20c1f682fc66a7db94b52bde56593fc7e8e0a7de89f42deca976d8afe0fc3a97', 'file': 'ppu_recomp_001.cpp'},
-    '003A5E2C': {'sha256': '286283a0586a6fc73753cc7a1637b70f086c4fd943545a63f9947828cdddb151', 'file': 'ppu_recomp_001.cpp'},
-    '004E1DA8': {'sha256': '31f20012b2586171cce9e01db3cf7621a561cb79eb6601566f7b4611856a2486', 'file': 'ppu_recomp_002.cpp'},
-    '004E1E10': {'sha256': '101becd8f81fecb65ccb4a1bbb8bec500aafb5691432106655b993ffcdf7ad47', 'file': 'ppu_recomp_002.cpp'},
-    '004E42BC': {'sha256': 'ae5c5a50224f4b57f948d639bfbad5f9e0ed4fcdc6db47430d72d5ae6750a169', 'file': 'ppu_recomp_002.cpp'},
-    '004F07D0': {'sha256': '778ac35df5cc74b56f978f09efad10b0c1f186382088dc9fabb0150d98d86630', 'file': 'ppu_recomp_002.cpp'},
-    '004F1EEC': {'sha256': '5a447285229955b1bce51b34a9d44cf97f6b391a56bc37e8876de52f6f0703f8', 'file': 'ppu_recomp_002.cpp'},
-    '005DA0F0': {'sha256': '734a4e3d2a52c20bc3098a87b61d47c453f8c3f7e1cfc258fb458c29fd0e31b4', 'file': 'ppu_recomp_002.cpp'},
-    '00611D80': {'sha256': 'c04c1ac754201c8a6d3003488e3b1de635b3dfcec4616b7278ed521cc8b33298', 'file': 'ppu_recomp_002.cpp'},
-    '0061E524': {'sha256': '4bb6c37807ab4ad2fa94d15c10de4ccaf4456ad1df78a992e57de51be85100de', 'file': 'ppu_recomp_002.cpp'},
-    '006415D0': {'sha256': '6d726222bb6a4b85118467d26f2832ca1940d2dfb75726f5220931bdbc3ee6a6', 'file': 'ppu_recomp_002.cpp'},
-    '00676D2C': {'sha256': 'b1b1b5a2046016231259b1ccd1f7aab708aee384e717fc2a1c9ea4b3f481dd84', 'file': 'ppu_recomp_002.cpp'},
+    '00013C54': {'sha256': 'ae1db95ed4ba73fb73ebeb35886f0b47e5c0e9c3acf1c156f103fc767fa2e704', 'file': 'ppu_recomp_000.cpp'},
+    '003A0E30': {'sha256': 'cf7751610d12ab96e9a3abb5dbedf608ccc318529c153857102bc5d7b54e6287', 'file': 'ppu_recomp_001.cpp'},
+    '003A1F9C': {'sha256': 'e825b1535a7357214fefeca4b16fc1145cd441687ea8648bb830f35cd5ee11d8', 'file': 'ppu_recomp_001.cpp'},
+    '003A2130': {'sha256': '3e575132fef3ebcb089923def06d892850beb54478560196f9cad80a3c3a4b5f', 'file': 'ppu_recomp_001.cpp'},
+    '003A23C0': {'sha256': '10eaeedbdb7281c02ba06b48c657bc9f658a2a664275c4307c9ddaaf5ceaf7e7', 'file': 'ppu_recomp_001.cpp'},
+    '003A2C84': {'sha256': 'ed68681285bb3e968b442fe3299ad9b8abb023117266dc7873795a568df99a93', 'file': 'ppu_recomp_001.cpp'},
+    '003A3368': {'sha256': '7e13c09fea9cd6c1926e37deb131d9b9820e079206661b23f335ad4f9eca71f5', 'file': 'ppu_recomp_001.cpp'},
+    '003A36E4': {'sha256': '22b75f5e0798f29565b1d24b995a14637bfec632cc6a613349d7ecb36447dd61', 'file': 'ppu_recomp_001.cpp'},
+    '003A5E2C': {'sha256': '14eb6fd4c4dc05965e65271e5f636c7f2afef09d739a6efc1fc6bc900277cba2', 'file': 'ppu_recomp_001.cpp'},
+    '004E1DA8': {'sha256': 'c2d0c7015e9b8f9f118a4a28e5fded9fc305d0425e320190d05908f708fa0a61', 'file': 'ppu_recomp_002.cpp'},
+    '004E1E10': {'sha256': '18564ea71fd9b716b100fc275f201469979ac2a4d924e4dbff8ac06f21890a92', 'file': 'ppu_recomp_002.cpp'},
+    '004E42BC': {'sha256': '5329e71f95669ce3afb1e6e00e47644010626353d29242fd678d636c7d945a57', 'file': 'ppu_recomp_002.cpp'},
+    '004F07D0': {'sha256': 'ae9c682f28cb93a0fce795f385a337eca80e9ec36e6f3dcfee45059885e90f09', 'file': 'ppu_recomp_002.cpp'},
+    '004F1EEC': {'sha256': '1c69de6e83c54bf32df33f68fed334d1e238d04974f1780aa945b70e3178c81f', 'file': 'ppu_recomp_002.cpp'},
+    '005DA0F0': {'sha256': '9025cff085347076021b06cb2ad566eeedd5ef3af9a43d5113667d05c147a149', 'file': 'ppu_recomp_002.cpp'},
+    '00611D80': {'sha256': 'affb0531c07d6cd1387797783bcac314bbd6997bceb51c44c5b2a6a5274699e8', 'file': 'ppu_recomp_002.cpp'},
+    '0061E524': {'sha256': '12d8d6770223b7fd28d819adc9b572c7e1f1a9e58bd9794b50b29dcd89b4d1bd', 'file': 'ppu_recomp_002.cpp'},
+    '006415D0': {'sha256': 'e449e9228adf18fe3f268792cd61659151ee4f65e9adc70ea7368016e6995abc', 'file': 'ppu_recomp_002.cpp'},
+    '00676D2C': {'sha256': '8e73a555f96b45dd861c7d6ecc3cb9b05fe448cfc119f1b00fb7e2190cf21002', 'file': 'ppu_recomp_002.cpp'},
 }
 # The update tick also carries update-loop and cohort hooks; all three pin it identically.
 SHARED = {'00013C54'}
 # UI functions the adapter's eligibility rules depend on; verified, never changed.
 DEPENDENCIES = {
-    '0023F108': {'sha256': 'c06078a61eb2ec168ad442de19a85bc27464bbf4026b40dfced38c80e8ce7b2f', 'file': 'ppu_recomp_000.cpp'},
-    '0026F91C': {'sha256': '16ead7d076c23d3286928a039820caaa633084867f1799f5d76126d99c3b6cdf', 'file': 'ppu_recomp_001.cpp'},
-    '002726B8': {'sha256': '88b684eea89b4396bdf2da62219f2e311622e42891bd3e162759e86a45986d7a', 'file': 'ppu_recomp_001.cpp'},
+    '0023F108': {'sha256': 'a737b005e4b46fd489f8277c5881e171d6c5290dde7dac91524bc5c8bb771292', 'file': 'ppu_recomp_000.cpp'},
+    '0026F91C': {'sha256': '8b614e07251147930efccd71037f2bce63e12013a0cbdd48ac8400f0326f4bed', 'file': 'ppu_recomp_001.cpp'},
+    '002726B8': {'sha256': '5ba983c6b0e8faa9bf6d989ac4b4fa09fe3b062c844f37cfe2d2f273d61fa4f5', 'file': 'ppu_recomp_001.cpp'},
 }
 
 

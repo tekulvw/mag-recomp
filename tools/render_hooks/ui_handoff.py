@@ -23,20 +23,20 @@ WORD_DATA_STORE = '        vm_write32(ctx->gpr[11] + 0x4, ctx->gpr[9]);'
 WORD_HEADER_STORE = '        vm_write32(ctx->gpr[11] + 0x0, ctx->gpr[10]);'
 SCISSOR_FINAL_STORE = '        vm_write32(ctx->gpr[8] + 0x4, ctx->gpr[10]);'
 PINS = {
-    '0024EDF0': {'sha256': '8652d47778f2fb02d509c89e5a3b5be7037e0bc66f44f8a415ea9bc8cbccdd16', 'file': 'ppu_recomp_000.cpp'},
-    '00982504': {'sha256': '0f734d21003d1e4b860bf88e9e600d52d26ba63cb0fef00462e04caed5bfc12a', 'file': 'ppu_recomp_004.cpp'},
-    '00D084E8': {'sha256': 'd8cb244639d660d9b85338ff90c382585632f3969f1f5a460694a538092c5d54', 'file': 'ppu_recomp_005.cpp'},
-    '009825B0': {'sha256': '5c744f3d671481b9f4eee29f151718191753c48f2255896cd2adc936e9de6af3', 'file': 'ppu_recomp_004.cpp'},
-    '0098368C': {'sha256': '2c7638717d647c50722bce0a1af83eba1b3949c0f5966c777f84e6dfe1a312d1', 'file': 'ppu_recomp_004.cpp'},
-    '009835B4': {'sha256': '3066238d4ce2e7e3cc376349a502bbf3efac60a83e559bf3a7805cda5aa46c95', 'file': 'ppu_recomp_004.cpp'},
+    '0024EDF0': {'sha256': '8253176182df482f1b4391e8695985698cabcdf7aefbb9b66b4d744d63cfcf7d', 'file': 'ppu_recomp_000.cpp'},
+    '00982504': {'sha256': '334009a552da6bf41831affa837f0524373f2bdbb449f2ca44a1e36751b3117e', 'file': 'ppu_recomp_004.cpp'},
+    '00D084E8': {'sha256': 'a08b771941315b322c2900303de5a92d188c40ef5e6007bdb5e72c08fd16574b', 'file': 'ppu_recomp_005.cpp'},
+    '009825B0': {'sha256': '1470c352f0e9469df747ef545a0436ccedf29776272a30261a8874265386e118', 'file': 'ppu_recomp_004.cpp'},
+    '0098368C': {'sha256': '9a3b6c3cc04ee6a17ce34448a9ec53492439f7c93872be8fc284917dfc6854f3', 'file': 'ppu_recomp_004.cpp'},
+    '009835B4': {'sha256': '4defd5d2d7d69cfc26190a4f228c329c94b4998e67d27fde365da6f5be96fa6a', 'file': 'ppu_recomp_004.cpp'},
 }
 # Callees the writers reach before their final stores; verified, never changed.
 DEPENDENCIES = {
     '00E4E9C0': {'sha256': '2b62665798556d09942fab0d3610c8cbd8b0073c45e2f6386ad829ab20aad4d1', 'file': 'ppu_recomp_005.cpp'},
     '00E59B80': {'sha256': 'c320c2dfab8234d8c4d4784e39c8d40485b7ece3b1f2b3ef0d6c1ad3d5ca5d63', 'file': 'ppu_recomp_005.cpp'},
     '00E5A6C0': {'sha256': 'b180274575e2801b90710691bc05f58818b53f87fc1c564c8001f69b4f266828', 'file': 'ppu_recomp_005.cpp'},
-    '00D7EBE0': {'sha256': '9e8a4ba007135b357da1446fc44b36cec7e6980d01a4c499ad396941802f8ae5', 'file': 'ppu_recomp_005.cpp'},
-    '00D7EBE8': {'sha256': 'e28e8ab53d29312f84af242ce5c1b707cf50fb82f2baa6fb3ef22a1e361f36d3', 'file': 'ppu_recomp_005.cpp'},
+    '00D7EBE0': {'sha256': '45ffb1f9951909a245098c5df192832f2b7c067de56b5182666108c65c65099a', 'file': 'ppu_recomp_005.cpp'},
+    '00D7EBE8': {'sha256': '4e40753f2af7a51c26f9578efa109b5e2e084e253fd665c0183c35a529df1790', 'file': 'ppu_recomp_005.cpp'},
     '00E59B90': {'sha256': '906968436cbd35feb24168a0f4ebe95aea87efb157a8237ab11178efc65fe48d', 'file': 'ppu_recomp_005.cpp'},
 }
 

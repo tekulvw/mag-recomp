@@ -17,7 +17,7 @@ import hashlib
 import re
 from pathlib import Path
 
-LIFTER_REVISION = 'dfa7073d2e164aec6890866c4951d8dedc28619d'
+LIFTER_REVISION = '4bb5ac24e14abb4d4a72579d86a36731984b785b'
 FUNCTION_BODY = re.compile(r'^void func_([0-9A-F]{8})\(ppu_context\* ctx\) \{.*?^}', re.M | re.S)
 DIGEST = re.compile('[0-9a-f]{64}')
 LIFTED_FILE = re.compile(r'ppu_recomp_[0-9]{3}\.cpp')

@@ -45,34 +45,34 @@ FOG_SEAM = '        ctx->lr = 0x00D1A824; func_00D22878(ctx); DRAIN_TRAMPOLINE(c
 # Bound on the distance between a call's return-address store and the call.
 CALL_WINDOW = 1024
 PINS = {
-    '00013C54': {'sha256': 'd88de44f6b44e8115eeed4b594e56059545e20b44c1f6f1d47c97e154689aa95', 'file': 'ppu_recomp_000.cpp'},
-    '000DEB4C': {'sha256': '762987efc6ff7c7ba3de5b8df7b42d3e060909cebd08e99d546aeab694d82ec8', 'file': 'ppu_recomp_000.cpp'},
+    '00013C54': {'sha256': 'ae1db95ed4ba73fb73ebeb35886f0b47e5c0e9c3acf1c156f103fc767fa2e704', 'file': 'ppu_recomp_000.cpp'},
+    '000DEB4C': {'sha256': '4696701ba5305dffe55b107369d3aa3bea7f381803c64f4472ebf805b8d2cb11', 'file': 'ppu_recomp_000.cpp'},
     '00A04688': {'sha256': '15f48c6e4208dead857df4ecac0140cb67e3c611ddc3cb232a70178602876a72', 'file': 'ppu_recomp_015.cpp'},
-    '00A04778': {'sha256': 'ffc05e00cec24d2873ceff36abb64558d9a6189bdf5540c5dc7233ca95d2c041', 'file': 'ppu_recomp_004.cpp'},
-    '00A04F90': {'sha256': 'dbda923058791b3a179147dd791c8f552fa2462944737df97983ad013bc31ed0', 'file': 'ppu_recomp_004.cpp'},
-    '00A05040': {'sha256': '570c13a63dff26c365546009d5cc303b8ccf1390aeeb1c3a012b6df4356c6787', 'file': 'ppu_recomp_004.cpp'},
-    '00A050F0': {'sha256': '66d4ce55887a8513e855ba48f18246c6899cb12decc54c74823f4518d3d542a1', 'file': 'ppu_recomp_004.cpp'},
+    '00A04778': {'sha256': 'db6ad03d1c6a270d69ec7480da9d2794b3bd2f532827f2270160339724316113', 'file': 'ppu_recomp_004.cpp'},
+    '00A04F90': {'sha256': '8db3f8140ba27ef8a6a74e8fa7f93caa6a68c3e59a03fc5ea00900afe70b70c4', 'file': 'ppu_recomp_004.cpp'},
+    '00A05040': {'sha256': '0c3591886247d6e4f586f79f3b4d0354d1455aca4381e3b13845a5ae15b83353', 'file': 'ppu_recomp_004.cpp'},
+    '00A050F0': {'sha256': 'dc30dc486979fa7fac78cd4118a367d7c774551f6eada0a29408d411ac1f1e7b', 'file': 'ppu_recomp_004.cpp'},
     '00A07080': {'sha256': '416f0e9532f6286391b293057bff40be710d55e8345dfed76119dcf8448e007c', 'file': 'ppu_recomp_004.cpp'},
     '00CFDF44': {'sha256': 'd85fab698f7471aeadef4d6d2a186b5d627bdbd71e688a0be1142f0a4af8fcb5', 'file': 'ppu_recomp_013.cpp'},
-    '00D0C12C': {'sha256': 'e30a48ea5557790658fd81b17cf1bbc9d5b2c3fcc1ebcdb90614907ba88bbaa8', 'file': 'ppu_recomp_005.cpp'},
-    '00D0C944': {'sha256': '32cd2d508a6e43c78945f2902a79f7d327547ea49bcd741a72f40987f2fed2e7', 'file': 'ppu_recomp_005.cpp'},
-    '00D10EB8': {'sha256': 'cd0d34d8c0e97c75b1a593e5de556768ecbb9c80cf251da3cdc39718c7be5d5f', 'file': 'ppu_recomp_005.cpp'},
-    '00D116B8': {'sha256': '245ea04ed3e5aecfd270249bfa4297e09e1325cb2ad1845a5457deca377c21c1', 'file': 'ppu_recomp_005.cpp'},
-    '00D11810': {'sha256': '0773966bc6ab23c2dfa23115e68876aa11d9737499f29295b480a871ad4aee1d', 'file': 'ppu_recomp_005.cpp'},
-    '00D16CEC': {'sha256': '14de6479e886f4fecf5e42ebde1ab3b8698e7dc6225447067ea7e289c330d7db', 'file': 'ppu_recomp_005.cpp'},
-    '00D1A430': {'sha256': 'f13e911608c738c9cf47d90c12ccf12919919e95194ac2d4dc13d879c1b2735c', 'file': 'ppu_recomp_005.cpp'},
+    '00D0C12C': {'sha256': '7539b1201116d93c866734981408361d856e5c56200882f87d775bccb99a8f7a', 'file': 'ppu_recomp_005.cpp'},
+    '00D0C944': {'sha256': 'cd0ed80d92545a48f97f40a9d827daea44448a6b3c3a00e94b1ba629e61e9e0e', 'file': 'ppu_recomp_005.cpp'},
+    '00D10EB8': {'sha256': '5f76e3551933b5882fa49e5d321a32194892c6630aa653f2c8a6d792e26c69ce', 'file': 'ppu_recomp_005.cpp'},
+    '00D116B8': {'sha256': '635b55f7542b5feb7e5d11446d6cc940372e4a30236f2d6ff49c165b8f771d40', 'file': 'ppu_recomp_005.cpp'},
+    '00D11810': {'sha256': '875e6b567fddc2cfbad598acfb2ea3e61afe09a03eeb0833d544dd7476dd7706', 'file': 'ppu_recomp_005.cpp'},
+    '00D16CEC': {'sha256': '743089057d48a0a8c8c37a3f04e2a8b73a6d2a6d407f75ebcd637173723d6d6c', 'file': 'ppu_recomp_005.cpp'},
+    '00D1A430': {'sha256': '97bca16b629bc049442175f8f461cbd42b98209ee8bd4d47480f45ed60f47d02', 'file': 'ppu_recomp_005.cpp'},
     '00DFBCAC': {'sha256': '479c1ea369e3afea197f6944545683a329b666164e9a5228402802a8b55c6d67', 'file': 'ppu_recomp_005.cpp'},
-    '00DFCCA4': {'sha256': '3300fe83aaa0b664c27831e50d00e8becf42f8a418cceb528e4202c5b137e6a5', 'file': 'ppu_recomp_005.cpp'},
-    '00DFD2DC': {'sha256': 'b95d8f627b1929b7496c1244160aba99ed09c29c33133faf891ea86fce319e0c', 'file': 'ppu_recomp_005.cpp'},
-    '00DFD51C': {'sha256': '6689f10fb845d64e3cd6227c37788ef772845a27b33a3ad50ab83ec88a76a5c9', 'file': 'ppu_recomp_005.cpp'},
+    '00DFCCA4': {'sha256': '5313696e062c6dcb7af6ef7d20a981e034238524f548288fd84ed3cc3490b3e5', 'file': 'ppu_recomp_005.cpp'},
+    '00DFD2DC': {'sha256': '68a6300fbd99595e0b5298fa9b94e00ad5cf817cee2d87a20af22abcc3acd18e', 'file': 'ppu_recomp_005.cpp'},
+    '00DFD51C': {'sha256': '0d8f877406b6463430f7c4bbe25a31714cf0dd6e136a9f42e6e5e5b483391f7b', 'file': 'ppu_recomp_005.cpp'},
 }
 # The update function also carries update-loop and controls hooks; all three pin it identically.
 SHARED = {'00013C54'}
 # Callees the scoped calls reach; verified, never changed.
 DEPENDENCIES = {
-    '00CFE7B0': {'sha256': '463389e1d79077cae76ab60f3d01c61e9b686a939799f2ce516418e449f1182a', 'file': 'ppu_recomp_005.cpp'},
-    '00CFD9F0': {'sha256': 'a1459c850f23a3978f62ff37c59e3ce2fc4ee3a921bd66df7b522a748d2ba4bb', 'file': 'ppu_recomp_005.cpp'},
-    '00CFE834': {'sha256': '4b1f2e83708d0ef5f844ee15f9d753000b4351c5c4f6b37be574b604f764dff8', 'file': 'ppu_recomp_005.cpp'},
+    '00CFE7B0': {'sha256': 'b5fe71ca91c1cb6da578ed10f9014b4bdc187a2873df7e2b6fd746e24ed0e853', 'file': 'ppu_recomp_005.cpp'},
+    '00CFD9F0': {'sha256': '4f7adcc9f0a1c8bc9de1dae1db48b95e38364436f4618d9db6c494df319a3802', 'file': 'ppu_recomp_005.cpp'},
+    '00CFE834': {'sha256': '49d89530e946cdfa02c2803c894fe51598130d07804ac613816e5d1bb3d1b600', 'file': 'ppu_recomp_005.cpp'},
 }
 
 
@@ -97,7 +97,8 @@ def patches(name):
         result.append((store, _guarded(
             f'        mag_render_returning_job=static_cast<uint32_t>(ctx->gpr[{register}]);\n'
             '        mag_render_cohort_pool_before(mag_render_returning_job);') + store))
-        branch = f'        if (((ctx->cr >> 0) & 2)) goto loc_{label};\n'
+        # The success branch: CR7 EQ set (CR bit 30), branching to the pinned label.
+        branch = f'        if (((ctx->cr >> 1) & 1)) goto loc_{label};\n'
         result.append((branch, branch + _guarded('        mag_render_cohort_pool_returned(mag_render_returning_job);')))
     return result
 

@@ -22,9 +22,9 @@ ACCEPTED = '        ctx->lr = 0x00013EA4; func_00E49380(ctx); DRAIN_TRAMPOLINE(c
 ACCEPTED_STEP = 'ctx->fpr[31]'
 CALL_WINDOW = 1024
 PINS = {
-    '00010AE8': {'sha256': '8a5a4630026885a79bf3ceaa4bedec66bddd178b88666c7c6e2bb63501de0abc', 'file': 'ppu_recomp_000.cpp'},
-    '00010AF8': {'sha256': '76650fcb75a8de78a5ac782210d6be01dfb6538aa519417a881cbe73e1e1e579', 'file': 'ppu_recomp_008.cpp'},
-    '00013C54': {'sha256': 'd88de44f6b44e8115eeed4b594e56059545e20b44c1f6f1d47c97e154689aa95', 'file': 'ppu_recomp_000.cpp'},
+    '00010AE8': {'sha256': 'a9b3aeb7f2470302d43956768dc99b4b9d700ce299b8de86d9055fa1786205e8', 'file': 'ppu_recomp_000.cpp'},
+    '00010AF8': {'sha256': 'bc12c889f18c113e09c1bd38ed26e79d1209e57865fc92b8256dc070039bc80a', 'file': 'ppu_recomp_008.cpp'},
+    '00013C54': {'sha256': 'ae1db95ed4ba73fb73ebeb35886f0b47e5c0e9c3acf1c156f103fc767fa2e704', 'file': 'ppu_recomp_000.cpp'},
 }
 # The update function also carries cohort and controls hooks; all three pin it identically.
 SHARED = {UPDATE}

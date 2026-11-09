@@ -10,8 +10,8 @@
     "0x1656D49F",
     "0x73E06F91"
   ],
-  "lifter_repository": "local/ps3recomp-lifter-dfa7073",
-  "lifter_revision": "dfa7073d2e164aec6890866c4951d8dedc28619d",
+  "lifter_repository": "local/ps3recomp-lifter-4bb5ac2",
+  "lifter_revision": "4bb5ac24e14abb4d4a72579d86a36731984b785b",
   "hle_bridges": [
     {
       "library": "cellSpurs",

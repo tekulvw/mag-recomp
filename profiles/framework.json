@@ -14,19 +14,9 @@
       "path": "local/ps3recomp-lifter-5244db9"
     },
     "lifter-ppu": {
-      "tag": "mag-recomp/lifter-ppu-2026.10.12",
-      "commit": "dfa7073d2e164aec6890866c4951d8dedc28619d",
-      "path": "local/ps3recomp-lifter-dfa7073",
-      "splice_after": [
-        {
-          "tag": "mag-recomp/lifter-2026.11.04",
-          "commit": "d31e3fd72c9abb2e823e8f12eca9c9adb63493ef"
-        },
-        {
-          "tag": "mag-recomp/lifter-ppu-ctr64-2026.11.09",
-          "commit": "50e99247ee196ed9e1de8694141a8ff5b4ef9ccc"
-        }
-      ]
+      "tag": "mag-recomp/lifter-ppu-vmx-2026.11.09",
+      "commit": "4bb5ac24e14abb4d4a72579d86a36731984b785b",
+      "path": "local/ps3recomp-lifter-4bb5ac2"
     },
     "spu-programs": {
       "tag": "mag-recomp/spu-programs-2026.10.21",
@@ -45,6 +35,6 @@
   ],
   "first_nonblack_capture_revisions": [],
   "allowed_lifter_revisions": [
-    "dfa7073d2e164aec6890866c4951d8dedc28619d"
+    "4bb5ac24e14abb4d4a72579d86a36731984b785b"
   ]
 }

@@ -186,8 +186,6 @@ REQUIRED_SOURCE_FILES = (
     'tools/spu_programs_lift.py', 'tools/provenance.py',
     'tools/wws_job_lift.py', 'tools/verified_spu_jobs.py',
     'tools/movie_picture_hooks.py', 'tools/graphics_trace_hooks.py',
-    'tools/installer_ppu_splice.py', 'tools/ppu_function_splice.py',
-    'profiles/retail-v1.0-ppu-jumptable-splice.json', 'profiles/retail-v1.0-ppu-ctr64-splice.json',
     'profiles/framework.json', 'profiles/retail-v1.0-spu.json',
     'profiles/retail-v1.0-engine-spu.json', 'profiles/retail-v1.0-firmware.json',
     'profiles/retail-v1.0-engine-modules.json', 'profiles/retail-v1.0-spu-programs.json',
@@ -241,28 +239,12 @@ def build_plan(config, workspace):
                                   ('engine', 'mage_g', 'retail-v1.0-nonlocal.json')]:
         script('lift-' + name, 'lift.py', '--image', image, '--sdk', sdk['lifter-ppu'],
                '--nonlocal-profile', workspace / 'profiles' / profile, '--output', paths[name])
-    # Single-function lifter fixes, chained in order, each reading the previous output.
-    # Each after lifter is a tagged fix on the pinned PPU lifter, fetched with it.
-    for step, output, work, profile in (
-            ('splice-engine-dispatcher', 'mage_g-dispatcher', 'dispatcher-splice', 'retail-v1.0-ppu-jumptable-splice.json'),
-            # Full-width CTR in the audio command builder: without it gameplay audio is silent.
-            ('splice-engine-ctr64', 'mage_g-ctr64', 'ctr64-splice', 'retail-v1.0-ppu-ctr64-splice.json')):
-        engine_base = paths['engine']
-        paths['engine'] = generated / output
-        script(step, 'installer_ppu_splice.py',
-               '--base', engine_base, '--output', paths['engine'],
-               '--work', workspace.parent / 'logs' / work,
-               '--elf', disc / 'bin/mage_g.elf', '--inventory', workspace / 'analysis/retail-v1.0/mage_g',
-               '--nonlocal-profile', workspace / 'profiles/retail-v1.0-nonlocal.json',
-               '--before-sdk', sdk['lifter-ppu'], '--after-sdk', sdk['lifter-ppu'],
-               '--profile', workspace / 'profiles' / profile)
     controls = config.get('game_controls')
     if controls:
-        # Opt-in keyboard and mouse controls: a copy of the engine lift (after every splice)
-        # with the controls seams.
-        spliced = paths['engine']
+        # Opt-in keyboard and mouse controls: a copy of the engine lift with the controls seams.
+        lifted = paths['engine']
         paths['engine'] = generated / 'mage_g-controls'
-        script('prepare-controls-hooks', 'render_hooks/prepare.py', '--base', spliced,
+        script('prepare-controls-hooks', 'render_hooks/prepare.py', '--base', lifted,
                '--output', paths['engine'], '--stage', 'controls')
     script('worker-spu', 'spu_lift.py', '--output', paths['worker-spu'])
     script('engine-spu', 'engine_spu_lift.py', '--output', paths['engine-spu'])

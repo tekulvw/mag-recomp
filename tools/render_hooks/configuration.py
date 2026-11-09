@@ -15,13 +15,13 @@ SCOPES = {'00E8155C': 'MagRenderShadowConfigInitScope',
           '00E813E8': 'MagRenderShadowConfigShutdownScope'}
 PINS = {
     '00E8155C': {'sha256': '38623a9ad0bdcba96abe3a9b657b22b51a78c58cdcdc5d2a68f39510ae2e98be', 'file': 'ppu_recomp_006.cpp'},
-    '00E813E8': {'sha256': '7942bb7ee6a1e3b1e249ce8c5fb7fdbb1515c6c4f2eda31c464318fbad7dbfa2', 'file': 'ppu_recomp_006.cpp'},
+    '00E813E8': {'sha256': '2bc9a58140bacfaf2bf7808d381969ba62f953b05fef2f56920e8e80f6df5564', 'file': 'ppu_recomp_006.cpp'},
 }
 # Callees whose behaviour the scopes rely on; verified, never changed.
 DEPENDENCIES = {
-    '00D145C8': {'sha256': '867f5c02535811ef2f6f3ca667493bbcdb1e9f6b683417319c3b4578fff37b75', 'file': 'ppu_recomp_010.cpp'},
+    '00D145C8': {'sha256': '6e4f99076a8a1fcae1d5c87d9a213a12d05addd83b533c592ff72bb4035235d3', 'file': 'ppu_recomp_010.cpp'},
     '01524AC0': {'sha256': '7d3ca1c50964fa99677963b110c0ac88f410a801e7bfb3c4ea33c1d0f17241f4', 'file': 'ppu_recomp_008.cpp'},
-    '00D13F34': {'sha256': '7bc29cf3697500c82c257f1ba13b6b67ea368b7803a8bd7f5a9a6bb037713afa', 'file': 'ppu_recomp_005.cpp'},
+    '00D13F34': {'sha256': '456d795ec35c0327e54eb12a8cd7b1a839bc77de577e7072cf0e624c7a2ddd49', 'file': 'ppu_recomp_005.cpp'},
     '01524AA0': {'sha256': 'b1348f9f095b16a3c10aab66c7337ed755cc56845bbf2df09c2c25d2605507d4', 'file': 'ppu_recomp_008.cpp'},
 }
 
