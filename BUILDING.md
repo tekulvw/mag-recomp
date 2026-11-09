@@ -130,7 +130,8 @@ done
   --engine-profile profiles/retail-v1.0-engine-spu.json \
   --sdk local/ps3recomp-runtime --sdk-revision RUNTIME_COMMIT_FROM_FRAMEWORK_JSON \
   --baseline generated/retail-v1.0/spu-engine \
-  --output generated/retail-v1.0/spu-engine-retained --merge-chunks --require-complete
+  --output generated/retail-v1.0/spu-engine-retained --merge-chunks --require-complete \
+  --static-indirect
 .venv/bin/python tools/firmware_lift.py --output generated/retail-v1.0/libsre
 .venv/bin/python tools/spu_programs_lift.py --sdk local/ps3recomp-spu-programs \
   --sdk-revision 4c5c05f60a6ae428b16e5ff7075c24a5e4d282ab --output local/spu-programs
@@ -149,11 +150,13 @@ interpreter fallback. This restores compiled streamed-job coverage, not the
 separate opt-in native/Rust or Group0 GPU replacements. Verified-geometry,
 connected-geometry and audio experiment activation is unchanged.
 
-By default each job's lifted code is bounded by direct branches from its header entry,
-plus any `--attribution` interpreter entries. `--static-indirect` is opt-in until it passes
-in-game acceptance. It also follows the indirect-branch targets a static pass proves:
-computed jumps, explicit return addresses, constant-address pointer loads and bounded jump
-tables. A job whose extended lift fails is retried with the direct bound. `--data-code-pointers`
+Without options each job's lifted code is bounded by direct branches from its header entry,
+plus any `--attribution` interpreter entries. `--static-indirect`, which the installer and the
+command above pass, also follows the indirect-branch targets a static pass proves: computed
+jumps, explicit return addresses, constant-address pointer loads and bounded jump tables. A job
+whose extended lift fails is retried with the direct bound, and lifted job code is entered only
+when the verified region's expected bytes match local store. Code reached only indirectly
+otherwise ran in the SPU interpreter. `--data-code-pointers`
 requires `--static-indirect` and adds a validated heuristic for function pointers held only in
 job data. Without either flag the output is unchanged, so builds that pin job sources by hash
 keep working.

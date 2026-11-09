@@ -268,6 +268,9 @@ def build_plan(config, workspace):
     script('engine-spu', 'engine_spu_lift.py', '--output', paths['engine-spu'])
     # The policy/task lift alone leaves streamed render jobs interpreted.
     # Generate and register every discovered WWS module before configuring CMake.
+    # --static-indirect also lifts the code each job reaches only through
+    # indirect branches; bounded by direct branches alone, that code ran in the
+    # SPU interpreter (most of the workers' interpreted time in Training).
     engine_spu_base = paths['engine-spu']
     paths['engine-spu'] = generated / 'spu-engine-retained'
     script('streamed-jobs', 'wws_job_lift.py',
@@ -275,7 +278,7 @@ def build_plan(config, workspace):
            '--engine-profile', workspace / 'profiles/retail-v1.0-engine-spu.json',
            '--sdk', sdk['runtime'], '--sdk-revision', pins['runtime']['commit'],
            '--baseline', engine_spu_base, '--output', paths['engine-spu'],
-           '--merge-chunks', '--require-complete')
+           '--merge-chunks', '--require-complete', '--static-indirect')
     script('firmware', 'firmware_lift.py', '--output', paths['firmware'])
     script('spu-programs', 'spu_programs_lift.py', '--sdk', sdk['spu-programs'],
            '--sdk-revision', pins['spu-programs']['commit'], '--output', paths['spu-programs'])
