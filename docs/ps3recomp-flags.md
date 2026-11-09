@@ -4,7 +4,7 @@ The ps3recomp runtime keeps most of its behaviour behind opt-in switches: enviro
 it reads at run time and CMake options it reads at configure time. This page lists every one
 mag-recomp sets, with the value, the platforms, the file that sets it, the reason and how to turn
 it off for a comparison. It applies to the runtime pinned in
-[`profiles/framework.json`](../profiles/framework.json) (`mag-recomp/runtime-2026.11.09-x86simd2`, `c20e56ef`).
+[`profiles/framework.json`](../profiles/framework.json) (`mag-recomp/runtime-2026.11.09-promote`, `de1e7ecc`).
 
 `tools/check_ps3recomp_flags.py` extracts the switches from the sources and fails when this page
 is missing one, lists one nothing sets any more, or gives a value or file the sources no longer
