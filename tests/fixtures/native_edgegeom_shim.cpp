@@ -307,6 +307,20 @@ static void residency() {
     residency_state = 1;
 }
 
+/* Large draws get large holes (up to 255 units): one of 40 units, spanning several lines. */
+static void large_hole() {
+    reset();
+    Case c = triangle_case();
+    c.hole(40);
+    ring(0xCF000000u, 0xCF010000u, 0xCF000100u, 0xCF000000u, 0xB00005D0u);
+    spu_context* ctx = make_context(c);
+    CHECK(mag_payload_override(ctx, 0x15898) == 1);
+    CHECK(guest32(0x70000000u) == 0x00041710u && guest32(0x70000000u + 4 * 21) == 0x00041D74u);
+    unsigned first_words = 0;
+    for (const Transfer& t : transfers) first_words += t.size == 4 && (t.ea & 127u) == 0 && t.ea >= 0x70000000u && t.ea < 0x70000280u;
+    CHECK(first_words == 5);
+}
+
 /* Small jobs get small buffers: buffer 1 just holds the inputs and buffer 3 follows it. */
 static void small_buffers() {
     reset();
@@ -395,6 +409,7 @@ int main(int argc, char** argv) {
     residency();
     handled_invocation();
     small_buffers();
+    large_hole();
     invocation_inside_finish();
     hole_across_lines();
     ring_refresh_and_retry();

@@ -50,6 +50,7 @@ constexpr uint32_t kCtxSpu = 0x00, kCtxUserdata = 0x20, kSlotGetBuffer = 0x34, k
 constexpr uint32_t kTag = 31;
 constexpr uint32_t kFrame = 512;
 constexpr uint32_t kMaxDma = 16384;
+constexpr uint32_t kMaxHole = 255u * 16u;   /* configuration byte 1 is the size in 16-byte units */
 
 const bool enabled = [] { const char* e = std::getenv("MAG_NATIVE_EDGEGEOM"); return e && !std::strcmp(e, "1"); }();
 /* MAG_NATIVE_EDGEGEOM_FORCE_REFUSE=1 (diagnostic): refuse every invocation at the latest
@@ -279,9 +280,11 @@ bool run(spu_context* c) {
      * refuse any more. */
     const uint32_t frame = c->gpr[1]._u32[0] & SPU_LS_MASK;
     const uint32_t ring_lsa = (frame + 32u + 127u) & ~127u, label_lsa = ring_lsa + 128;
-    const uint32_t hole_lsa = stage, window = stage + 384;
+    /* The hole (up to 255 units: large draws need many batches) is staged first, then the data
+     * window. */
+    const uint32_t hole_lsa = stage, window = (stage + (p.hole_address & 127u) + p.hole_bytes + 127u) & ~127u;
     const uint32_t window_len = area_end > window ? std::min<uint32_t>(kMaxDma, (area_end - window) & ~127u) : 0;
-    if (reason == kHandled && (window_len < 128 || p.hole_bytes > 240)) reason = kInputs;
+    if (reason == kHandled && (window_len < 128 || p.hole_bytes > kMaxHole)) reason = kInputs;
 
     uint32_t X = 0, x_offset = 0, label = 0;
     if (reason == kHandled && p.request) {
@@ -335,7 +338,7 @@ bool run(spu_context* c) {
         }
     }
     /* Section 8 and 9: the hole, every line's first word last. */
-    uint8_t hole[256];
+    uint8_t hole[kMaxHole];
     Engine::build_hole(p, X, x_offset, label, hole);
     const uint32_t H = p.hole_address, hole_base = hole_lsa + (H & 127u);
     std::memcpy(c->ls + hole_base, hole, p.hole_bytes);
