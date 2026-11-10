@@ -39,7 +39,7 @@ enum Reason : uint8_t {
 const char* reason_name(Reason reason);
 
 /* Kinds, for per-kind counters. */
-enum Kind : uint8_t { kKindNone = 0, kIndexOnly, kInstancedWind, kWind, kSkinned, kKindCount };
+enum Kind : uint8_t { kKindNone = 0, kIndexOnly, kInstancedWind, kWind, kSkinned, kRipple, kKindCount };
 const char* kind_name(Kind kind);
 
 struct Stream {

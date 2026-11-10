@@ -41,11 +41,11 @@ Example report line: `[native-edgegeom]   kind=index_only handled=48211`.
 ### Kinds and refusal reasons
 
 Admitted kinds: `index_only` (an empty output layout, any group), `instanced_wind` (group 0),
-`wind` (group 3) and `skinned` (groups 7 and 11; normals and tangents are also turned by the
-object's rotation and scale). The group and a non-empty output layout select what is produced, and the mode
+`wind` (group 3), `ripple` (group 4) and `skinned` (groups 7 and 11; normals and tangents are
+also turned by the object's rotation and scale). The group and a non-empty output layout select what is produced, and the mode
 word and flavour select culling only. Group 3 with produced vertices is therefore the wind under
-mode `0x28` (two-sided) and under `0x08`/`0x0A` (back-face culled) alike. Group 4 (ripple) and other produced
-vertices the specification does not cover are refused with `kind`.
+mode `0x28` (two-sided) and under `0x08`/`0x0A` (back-face culled) alike. Produced vertices the specification does
+not cover are refused with `kind`.
 
 | Reason | Meaning |
 | --- | --- |

@@ -76,6 +76,32 @@ static void et3_small_primitive() {
     CHECK(run(c, p) == kHandled && p.surviving == 3);
 }
 
+/* noninstanced-deformation.md NI-3 through the ripple job (group 4, stream set 0x84, 28-byte
+ * layout: position, packed normal, weight bytes, half tangent). */
+static void ni3_ripple() {
+    Vertex v0 = at(0.5f, 1, 0); v0.n[2] = 1; v0.t[0] = 1; v0.t[1] = 0; v0.t[3] = 1;
+    v0.w[0] = 1; v0.w[1] = 1; v0.w[2] = 0;
+    Vertex v1 = at(0.6f, 0.9f, 0), v2 = at(0.5f, 0.9f, 0);
+    for (Vertex* v : {&v1, &v2}) { v->n[2] = 1; v->t[0] = 1; v->w[0] = 0; v->w[1] = 0; }
+    for (int flip = 0; flip < 2; ++flip) {
+        v0.t[3] = flip ? -1.0f : 1.0f;
+        Case c = wind_case({v0, v1, v2}, {0, 1, 2});
+        c.userdata[0xA7] = 4; c.slot[19][0] = 0x84; c.slot[21].assign(8, 0);
+        c.layout({{0, 2, 3, 1, 0}, {12, 6, 1, 2, 2}, {16, 4, 4, 9, 3}, {20, 3, 4, 3, 9}}, 28);
+        c.hole(15);
+        const float M[3][4] = {{1, 0, 0, 1}, {0.5f, 0, 2, 0}, {0.25f, 1, 4, 0}};
+        for (int r = 0; r < 3; ++r) for (int l = 0; l < 4; ++l) putf(c.userdata, 0x20 + 16 * r + 4 * l, M[r][l]);
+        putf(c.userdata, 0x90, 0.25f);
+        Prepared p;
+        CHECK(run(c, p) == kHandled && p.kind == kRipple && p.surviving == 3 && p.stride == 28);
+        if (!p.data) continue;
+        const uint8_t* v = p.data + p.index_bytes;
+        CHECK(near(getf(v), 0.5f) && near(getf(v + 4), 1) && near(getf(v + 8), flip ? 0.25f : -0.25f));
+        CHECK(get32(v + 12) == pack_normal_cmp(0, 0, 1) && v[16] == 255 && v[17] == 255 && v[18] == 0);
+        CHECK(get16(v + 20) == 0x3C00 && get16(v + 26) == (flip ? 0xBC00 : 0x3C00));
+    }
+}
+
 /* Group 3 with produced vertices under mode 0x08, flavour 2: the group-3 wind, culled back-face. */
 static void group3_mode8_wind() {
     Vertex v0 = at(1, -1, 0); v0.n[0] = 0.5f; v0.n[1] = -1; v0.n[2] = 0.25f;
@@ -357,8 +383,8 @@ static void refusals() {
     c = base(); putf(c.slot[17], 0x10, INFINITY); CHECK(run(c, p) == kNonFinite);
     c = base(); c.slot[19][1] = 1; put32(c.userdata, 0x9C, 1); CHECK(run(c, p) == kHoleOverflow);
     c = base(); c.layout({{0, 2, 3, 1, 0}}, 12); CHECK(run(c, p) == kKind);
-    /* Ripple (group 4) stays refused until confirmed. */
-    Case r = wind_case({at(0, 0, 0), at(0.1f, 0, 0), at(0, 0.1f, 0)}, {0, 1, 2}); r.userdata[0xA7] = 4;
+    /* Produced vertices for a group without a production rule. */
+    Case r = wind_case({at(0, 0, 0), at(0.1f, 0, 0), at(0, 0.1f, 0)}, {0, 1, 2}); r.userdata[0xA7] = 5;
     CHECK(run(r, p) == kKind);
     /* Codec 8 position: undecodable. */
     Case k = wind_case({at(0, 0, 0), at(0.1f, 0, 0), at(0, 0.1f, 0)}, {0, 1, 2}); k.slot[20][8 + 1] = 8;
@@ -403,7 +429,7 @@ static void codecs() {
 
 int main() {
     codecs();
-    et1_facing(); et2_frustum(); et3_small_primitive(); near_plane(); et10_behind_camera(); group3_mode8_wind(); et4_zero_area(); et5_ring();
+    et1_facing(); et2_frustum(); et3_small_primitive(); near_plane(); et10_behind_camera(); group3_mode8_wind(); ni3_ripple(); et4_zero_area(); et5_ring();
     et6_et7_et8_holes(); et9_instances();
     gz1_placement(); gz3_wind(); ni1_wind(); sk_skinning();
     continuation_slots();

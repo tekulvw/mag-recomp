@@ -84,7 +84,7 @@ const char* reason_name(Reason r) {
 }
 
 const char* kind_name(Kind k) {
-    static const char* const names[kKindCount] = {"none", "index_only", "instanced_wind", "wind", "skinned"};
+    static const char* const names[kKindCount] = {"none", "index_only", "instanced_wind", "wind", "skinned", "ripple"};
     return k < kKindCount ? names[k] : "unknown";
 }
 
@@ -441,7 +441,7 @@ Reason Engine::prepare(const Inputs& in, Prepared& out) {
     const uint8_t* cfg = cs.data;
     if ((cfg[6] != 0x10 && cfg[6] != 0x11) || cfg[7] != 0 || cfg[5] != 0xFF || be32(cfg + 12) != 0xFFFFFFFFu)
         return kConfiguration;
-    if ((cfg[0] != 0x81 && cfg[0] != 0x83) || (cfg[2] != 0x00 && cfg[2] != 0xFF) || cfg[3] != 0xFF ||
+    if ((cfg[0] != 0x81 && cfg[0] != 0x83 && cfg[0] != 0x84) || (cfg[2] != 0x00 && cfg[2] != 0xFF) || cfg[3] != 0xFF ||
         (cfg[4] != 0x00 && cfg[4] != 0xFF))
         return kConfiguration;
     /* Check 5. */
@@ -454,7 +454,9 @@ Reason Engine::prepare(const Inputs& in, Prepared& out) {
     const uint32_t V = be16(cfg + 8), K = be16(cfg + 10);
     out.vertex_count = V; out.index_count = K;
     const bool skinned = (cfg[6] & 0x0F) == 1;
-    const bool has_secondary = cfg[0] == 0x83;
+    /* Stream set: 0x81 primary only; 0x83 primary and secondary; 0x84 primary and a secondary
+     * that also carries a tangent (ripple). */
+    const bool has_secondary = cfg[0] == 0x83 || cfg[0] == 0x84;
     const uint32_t I = (group == 0 && mode == 0x28) ? u[kInstanceCount] : 1;
     out.instances = I;
 
@@ -494,7 +496,9 @@ Reason Engine::prepare(const Inputs& in, Prepared& out) {
     /* Index only: an empty layout, whatever the group. A non-empty layout produces vertices:
      * group 3 is the wind under either mode word; other groups are not specified. */
     if (kind == kIndexOnly && out.declaration_count) {
-        if (group == 3) kind = kWind; else return kKind;
+        if (group == 3) kind = kWind;
+        else if (group == 4) kind = kRipple;
+        else return kKind;
     }
     out.kind = kind;
     if (kind == kSkinned && out.declaration_count == 0) return kKind;
@@ -652,6 +656,43 @@ Reason Engine::prepare(const Inputs& in, Prepared& out) {
         }
         if (!all_finite(ox, oy, oz, V)) return kNonFinite;
         out_nx_ = normal_.lane[0]; out_ny_ = normal_.lane[1]; out_nz_ = normal_.lane[2];
+    } else if (kind == kRipple) {
+        /* noninstanced-deformation.md, group 4, with o = frac(t.x + t.y + t.z). */
+        if ((r = lookup(kSemNormal, normal_, true)) != kHandled) return r;
+        if ((r = lookup(kSemWeights, weight_, true)) != kHandled) return r;
+        if ((r = lookup(kSemTangent, tangent_, true)) != kHandled) return r;
+        float M[3][4];
+        for (int row = 0; row < 3; ++row) for (int l = 0; l < 4; ++l) M[row][l] = bef32(u + kM0 + 16 * row + 4 * l);
+        const float theta = bef32(u + kPhase);
+        const float T[3] = {bef32(u + kTranslation), bef32(u + kTranslation + 4), bef32(u + kTranslation + 8)};
+        for (float f : {M[0][0], M[0][1], M[0][2], M[0][3], M[1][0], M[1][1], M[1][2], M[2][0], M[2][1], M[2][2],
+                        theta, T[0], T[1], T[2]})
+            if (!finite(f)) return kNonFinite;
+        const float off = frac(T[0] + T[1] + T[2]);
+        const float r1 = 1.0f / M[1][2], r2 = 1.0f / M[2][2];
+        if (!finite(r1) || !finite(r2)) return kNonFinite;
+        out_x_.resize(V); out_y_.resize(V); out_z_.resize(V);
+        const float* nx = normal_.lane[0].data(); const float* ny = normal_.lane[1].data(); const float* nz = normal_.lane[2].data();
+        const float* tx = tangent_.lane[0].data(); const float* ty = tangent_.lane[1].data();
+        const float* tz = tangent_.lane[2].data(); const float* th = tangent_.lane[3].data();
+        const float* Wx = weight_.lane[0].data(); const float* Wy = weight_.lane[1].data(); const float* Wz = weight_.lane[2].data();
+        float* ox = out_x_.data(); float* oy = out_y_.data(); float* oz = out_z_.data();
+        auto ripple = [](float phase) { return 2.0f * smooth(std::fabs(2.0f * frac(phase) - 1.0f)) - 1.0f; };
+        for (uint32_t v = 0; v < V; ++v) {
+            /* Bitangent h·(N × t), then the two ripple directions. */
+            const float bx = th[v] * (ny[v] * tz[v] - nz[v] * ty[v]);
+            const float by = th[v] * (nz[v] * tx[v] - nx[v] * tz[v]);
+            const float bz = th[v] * (nx[v] * ty[v] - ny[v] * tx[v]);
+            const float d1x = M[0][0] * tx[v] + M[0][1] * bx, d1y = M[0][0] * ty[v] + M[0][1] * by, d1z = M[0][0] * tz[v] + M[0][1] * bz;
+            const float d2x = M[0][2] * tx[v] + M[0][3] * bx, d2y = M[0][2] * ty[v] + M[0][3] * by, d2z = M[0][2] * tz[v] + M[0][3] * bz;
+            const float phi1 = r1 * (px[v] * d1x + py[v] * d1y + pz[v] * d1z) + off - M[1][1] * theta + Wz[v] + 0.5f;
+            const float phi2 = r2 * (px[v] * d2x + py[v] * d2y + pz[v] * d2z) + off - M[2][1] * theta + Wz[v] + 0.5f;
+            const float D = ripple(phi1) * M[1][0] * Wx[v] + ripple(phi2) * M[2][0] * Wy[v];
+            ox[v] = px[v] + D * nx[v]; oy[v] = py[v] + D * ny[v]; oz[v] = pz[v] + D * nz[v];
+        }
+        if (!all_finite(ox, oy, oz, V)) return kNonFinite;
+        out_nx_ = normal_.lane[0]; out_ny_ = normal_.lane[1]; out_nz_ = normal_.lane[2];
+        out_tx_ = tangent_.lane[0]; out_ty_ = tangent_.lane[1]; out_tz_ = tangent_.lane[2];
     } else if (kind == kSkinned) {
         if ((r = lookup(kSemNormal, normal_, false)) != kHandled) return r;
         if ((r = lookup(kSemTangent, tangent_, false)) != kHandled) return r;
@@ -759,11 +800,11 @@ Reason Engine::encode_vertices(Prepared& out) {
         unsigned bytes;
         if (decl.semantic == kSemPosition && decl.format == kFormatFloat && decl.count == 3) bytes = 12;
         else if (decl.semantic == kSemNormal && decl.format == kFormatCmp && decl.count == 1 &&
-                 (out.kind == kWind || (out.kind == kSkinned && normal_.present))) bytes = 4;
+                 (out.kind == kWind || out.kind == kRipple || (out.kind == kSkinned && normal_.present))) bytes = 4;
         else if (decl.semantic == kSemTangent && decl.format == kFormatHalf && decl.count == 4 &&
-                 out.kind == kSkinned && tangent_.present) bytes = 8;
+                 (out.kind == kSkinned || out.kind == kRipple) && tangent_.present) bytes = 8;
         else if (decl.semantic == kSemWeights && decl.format == kFormatUByte && decl.count == 4 &&
-                 out.kind == kWind && weight_.codec == 4) bytes = 4;
+                 (out.kind == kWind || out.kind == kRipple) && weight_.codec == 4) bytes = 4;
         else return kOutputFormat;
         if (decl.offset + bytes > stride) return kOutputFormat;
     }
