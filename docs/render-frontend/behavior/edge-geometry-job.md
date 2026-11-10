@@ -680,6 +680,13 @@ every recording). Context fields used here:
 Both buffers belong to the invocation until *release buffer*. A native path may stage outgoing data
 in either, with each DMA at most 16 KiB. Releasing buffer 3 writes nothing back to guest memory.
 
+Staging may begin only after the last point at which the invocation can still be refused, which
+is the ring allocation (admission check 10). Buffer 1 holds the lifted job's inputs. Any byte
+written to either buffer before that point corrupts the fallback: a refused invocation hands the
+lifted job modified inputs, and the job then derails. Scratch state needed before that point,
+such as the ring line and the label value, belongs in host memory or in the native code's own
+stack frame.
+
 **Where the list is not.** Local store at userdata `+0xC0` (`0xD00`) holds the job manager's queue
 state, not the input list. Without *get buffer* the list cannot be located from fixed context
 fields.
@@ -693,10 +700,12 @@ writes job-manager bookkeeping that depends only on the current job. The support
    continuation with `r1` and `r80`–`r127` as at entry. `r3` is not defined.
 4. On refusal, run the lifted job from its entry. It repeats the *get buffer* calls.
 
-The oracle must replay a refusal-after-acquisition case for every recorded kind. It must show the
-job manager's local store and every transfer equal to the recording before this path is trusted.
-If they differ, admission must instead move to a host-side copy of the job manager's buffer
-layout rule. That would be a separate specification.
+This path is now verified. The implementer's replay used the real runtime and job-manager code.
+In it, *get buffer* was called, the invocation was refused, and the lifted job then ran from its
+entry. Of 40 cases, 37 left the job manager's local store, registers and transfers equal to the
+original alone. The other 3 differed only in a timer word, in runs where *finish* entered the
+kernel during replay. So the repeated *get buffer* calls are equivalent, provided the buffers are
+untouched (above). Oracle runs should keep a forced-refusal case for every kind.
 
 **Identity check at run time.** These facts are sufficient; no per-call hashing is needed:
 
@@ -782,8 +791,8 @@ buffer*. Host-side writes made through the runtime's write path use no tag.
 
 ### Per-invocation fallback
 
-Admission runs to completion before any effect, and a refusal leaves no trace (the ring is not
-touched). The fallback is the unmodified lifted job. Refusal reasons are counted per kind and
+Admission runs to completion before any effect, and a refusal leaves no trace. Neither the ring
+record nor any byte of buffers 1 and 3 has been written. The fallback is the unmodified lifted job. Refusal reasons are counted per kind and
 reason, and periodically reported when diagnostics are enabled.
 
 ### Differential oracle (outside this repository)
