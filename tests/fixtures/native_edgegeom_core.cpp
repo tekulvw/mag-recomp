@@ -311,6 +311,25 @@ static void sk_skinning() {
     CHECK(run(j, p) == kJoint);
 }
 
+/* A stream longer than 16 KiB arrives as slot 1 (or 7) holding its first 0x4000 bytes and slot 2
+ * (or 8) holding the rest, contiguous in guest memory and in the buffer. */
+static void continuation_slots() {
+    Case c; c.positions({at(0, 0, 0), at(0.1f, 0, 0), at(0, 0.1f, 0)});
+    const uint16_t K = 8196;
+    c.counts(3, K); c.hole(15);
+    std::vector<uint8_t> blob(0x4000 + 16, 0);
+    for (uint32_t i = 0; i < K; ++i) put16(blob, 2 * i, uint16_t(i % 3));
+    Inputs in = c.inputs();
+    in.slot[1] = Stream{blob.data(), 0x4000, 0x30000000};
+    in.slot[2] = Stream{blob.data() + 0x4000, 16, 0x30004000};
+    Prepared p;
+    static Engine engine;
+    CHECK(engine.prepare(in, p) == kHandled && p.surviving == K);
+    /* Not contiguous in guest memory: not a continuation, so the index stream is short. */
+    in.slot[2].address = 0x30005000;
+    CHECK(engine.prepare(in, p) == kHandled && p.surviving == 0);
+}
+
 static void refusals() {
     auto base = [] { Case c; c.positions({at(0, 0, 0), at(0.1f, 0, 0), at(0, 0.1f, 0)}); c.counts(3, 3); c.indices({0, 1, 2}); return c; };
     Prepared p;
@@ -323,8 +342,12 @@ static void refusals() {
     c = base(); put32(c.userdata, 0x9C, 8); CHECK(run(c, p) == kHole);
     c = base(); put32(c.userdata, 0x98, 0x70000008); CHECK(run(c, p) == kHole);
     c = base(); c.indices({0, 1, 3}); CHECK(run(c, p) == kIndexRange);
-    c = base(); c.counts(3, 9); CHECK(run(c, p) == kStreamShort);
-    c = base(); c.counts(5, 3); CHECK(run(c, p) == kStreamShort);
+    /* Index only with a stream shorter than its counts draws nothing (spec c776496); a produced
+     * kind with a short stream is refused. */
+    c = base(); c.counts(3, 9); CHECK(run(c, p) == kHandled && p.surviving == 0 && p.request == 0);
+    c = base(); c.counts(5, 3); CHECK(run(c, p) == kHandled && p.surviving == 0 && p.request == 0);
+    Case sw = wind_case({at(0, 0, 0), at(0.1f, 0, 0), at(0, 0.1f, 0)}, {0, 1, 2}); sw.counts(9, 3);
+    CHECK(run(sw, p) == kStreamShort);
     /* Index only applies whatever the group. */
     c = base(); c.userdata[0xA7] = 12; CHECK(run(c, p) == kHandled && p.kind == kIndexOnly);
     c = base(); c.userdata[0xA7] = 4; CHECK(run(c, p) == kHandled && p.kind == kIndexOnly);
@@ -384,6 +407,7 @@ int main() {
     et1_facing(); et2_frustum(); et3_small_primitive(); near_plane(); et10_behind_camera(); group3_mode8_wind(); et4_zero_area(); et5_ring();
     et6_et7_et8_holes(); et9_instances();
     gz1_placement(); gz3_wind(); ni1_wind(); sk_skinning();
+    continuation_slots();
     refusals();
     if (failures) { std::printf("%d failures\n", failures); return 1; }
     std::puts("PASS native edgegeom core");

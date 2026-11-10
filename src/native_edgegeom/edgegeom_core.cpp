@@ -499,16 +499,36 @@ Reason Engine::prepare(const Inputs& in, Prepared& out) {
     out.kind = kind;
     if (kind == kSkinned && out.declaration_count == 0) return kKind;
 
-    /* Check 6 and the primary format. */
-    const Stream& is = in.slot[kSlotIndices];
-    const Stream& vs = in.slot[kSlotVertices];
-    if (is.size < 2u * K || (K && !is.data)) return kStreamShort;
+    /* Check 6 and the primary format. A stream longer than 16 KiB arrives as its first 0x4000
+     * bytes in slot 1 (or 7) and the rest in slot 2 (or 8), contiguous in guest memory and packed
+     * contiguously in buffer 1: read the two as one stream. */
+    auto joined = [](const Stream& first, const Stream& rest) {
+        Stream s = first;
+        if (first.size == 0x4000u && rest.size && rest.address == first.address + 0x4000u && first.data &&
+            rest.data == first.data + 0x4000u)
+            s.size += rest.size;
+        return s;
+    };
+    const Stream is = joined(in.slot[kSlotIndices], in.slot[2]);
+    const Stream vs = joined(in.slot[kSlotVertices], in.slot[8]);
     if (in.slot[kSlotView].size < 128 || !in.slot[kSlotView].data) return kStreamShort;
     Table primary;
     const bool primary_list = cfg[2] == 0xFF;
     if (primary_list && !parse_table(in.slot[kSlotPrimaryTable], primary)) return kStreamShort;
     const uint32_t primary_stride = primary_list ? primary.stride : 12;
-    if (uint64_t(vs.size) < uint64_t(V) * primary_stride || (V && !vs.data)) return kStreamShort;
+    const bool indices_short = is.size < 2u * K || (K && !is.data);
+    const bool vertices_short = uint64_t(vs.size) < uint64_t(V) * primary_stride || (V && !vs.data);
+    if (indices_short || vertices_short) {
+        /* Index only with a stream still shorter than its counts: the original draws nothing
+         * (spec c776496). Produced kinds stay refused. */
+        if (kind != kIndexOnly) return kStreamShort;
+        uint32_t words[1024];
+        if (out.hole_bytes / 4 > 1024 || layout_hole(out, 0, 0, 0xB0000000u, words, out.hole_bytes / 4) > out.hole_bytes / 4)
+            return kHoleOverflow;
+        data_.clear();
+        out.data = data_.data();
+        return kHandled;
+    }
     if (kind == kInstancedWind && in.slot[kSlotInstances].size < 16u * I) return kStreamShort;
     if (uint64_t(V) * I > 65536u) return kBudget;
 
