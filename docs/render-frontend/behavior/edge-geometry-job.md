@@ -269,13 +269,13 @@ the invocation to the original job and makes no guest-visible change.
    - slot 17 has 128 bytes;
    - slot 19 has 16 bytes.
 
-   One exception is not refused: an index-only invocation whose index or vertex run is still
-   short. The original draws nothing for it (*verified*, 128 of 128 recordings): no allocation,
-   no data, and a hole of only the four invalidate packets. A native path produces exactly that.
+   A short invocation is refused, whatever its kind. The original does not stop at the listed
+   length. It reads on into whatever bytes follow in local store, so its result depends on the
+   neighbouring streams and on stale data (open question 3).
 
-   Any other short invocation (produced kinds: groups 0, 3, 11) is refused. In such invocations
-   the original reads on past the listed length into whatever bytes follow in local store, so the
-   result depends on the neighbouring streams and on stale data (open question 3).
+   An earlier revision said that short index-only invocations draw nothing (128 of 128). That was
+   an analysis error and is withdrawn. In those recordings the analysis had located a stale input
+   list left in local store by an earlier job, and with the true list none of them is short.
 7. The production rule below is one of the supported kinds. Unsupported kinds (ripple, any
    built-in output layout other than 0, any undecodable codec) are refused until the oracle
    confirms them.
@@ -995,14 +995,17 @@ and 3.07 on the right, and between 0.5 and 1.0 on the left, as the formula predi
    oracle confirm it. Group 11 is resolved: it is the full skinning specification, including the
    object direction matrix (section 3).
 3. **Short streams.** Part resolved.
-   - Long streams are split across slots 1 + 2 and 7 + 8 (Stream slots).
-   - Index-only invocations that are still short draw nothing (128 of 128).
-   - For produced kinds the original reads on past the listed length. 5 of the 5 short produced
-     invocations that drew are reproduced exactly by reading local store contiguously from each
-     stream's packed position. Another 15 drew nothing, and that is not explained.
+   - Long streams are split across slots 1 + 2 and 7 + 8 (Stream slots). With the continuation
+     slots counted, no recorded index-only invocation is short.
+   - The short invocations that remain are of produced kinds (groups 0 and 3), 8 in 12,423
+     recordings. In those the original reads on past the listed length; reading local store
+     contiguously from each stream's packed position reproduces the 5 that drew.
 
-   These invocations stay refused. Why the parent sends short lists at all (streaming not yet
-   complete, or a level-of-detail switch) is not established.
+   They stay refused. Why the parent sends short lists at all is not established.
+
+   An implementation should locate buffer 1 with *get buffer*, as specified, and never by
+   scanning local store. A recording's local store also holds input lists left behind by earlier
+   jobs, and a scan can pick one of those up.
 4. **Ring boundary cases.** Whether an allocation may end exactly at `U`, and what the job does
    when a refreshed `U` still leaves no room (wait or omit the draw), were not observed. The
    native path refuses the second case.
