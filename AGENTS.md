@@ -53,7 +53,21 @@ Use [Conventional Commits](https://www.conventionalcommits.org/): `feat:`, `fix:
 `refactor:`, `docs:`, `test:`, `build:`, `ci:` or `chore:`, with `!` (or a `BREAKING CHANGE:` footer)
 for incompatible changes. [release-please](https://github.com/googleapis/release-please) reads them on
 `main` to keep a release pull request with the next version and `CHANGELOG.md`; merging it tags the
-release. Squash-merged pull requests need a conventional title.
+release. Squash-merged pull requests need a conventional title. The actual squash commit subject
+must preserve that title: release-please reads the commit on `main`, not just PR metadata.
+
+The **PR title** check validates types from `release-please-config.json`. Changes to
+`profiles/framework.json` (the single source of SDK/runtime/lifter pins and revision policy), including
+renames from that path, require `fix:`, `perf:` or `feat:` with an optional scope and `!`. Use the type
+that describes the delivered change, for example `fix(sdk): update the reviewed runtime pin` or
+`perf(sdk): adopt faster job execution`. Do not label an SDK update only `build:`, `chore:`, `ci:` or
+`docs:`; hidden maintenance types can leave a delivered SDK change without a release PR. Ordinary
+docs, CI and maintenance PRs keep their appropriate conventional types, and the release bot's
+`chore(main): release ...` title is valid when it does not change the SDK profile. A breaking SDK
+change still uses `fix(sdk)!:`, `perf(sdk)!:` or `feat(sdk)!:`.
+
+Releases, release tags and merging release PRs are manual human actions. A passing title check or
+an open release candidate PR does not authorize an agent to publish or cut a release.
 
 Release assets are only the installers CI builds from the release's own source
 (`.github/workflows/installers.yml`). An installer may contain this repository's tooling and source
