@@ -66,7 +66,7 @@ supply their guest inputs.
 
 | Specification | Behaviour | Status |
 | --- | --- | --- |
-| [edge-geometry-job.md](edge-geometry-job.md) | Edge geometry child job: decode, deform, cull, output ring, command hole, completion; integration contract and performance plan | Partial: ripple, group 11 and the Depth pass need recordings; wind uses the game's values |
+| [edge-geometry-job.md](edge-geometry-job.md) | Edge geometry child job: decode, deform, cull, output ring, command hole, completion; integration contract and performance plan | Partial: the Depth pass needs recordings; wind uses the game's values |
 
 ### Passes
 

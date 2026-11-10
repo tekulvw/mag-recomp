@@ -91,7 +91,7 @@ The *kind* is selected by the userdata mode word, cull flavour and material grou
 | Static | `0x08` or `0x0A` / 2 | 1, 2, 8, 12, 13, 15 (also 3 without deformation); any group with an empty output layout | about 70 % | about 80 % | indices only |
 | Instanced wind | `0x28` / 1 | 0 | about 15 % | 0 | positions (12 bytes per vertex) and indices |
 | Wind | `0x28` / 1 | 3 | about 14 % | about 13 % | 20-byte vertices and indices |
-| Ripple | `0x28` / 1 | 4 | 0.6 % | 0.2 % | 28-byte vertices and indices *(unconfirmed layout)* |
+| Ripple | `0x28` / 1 | 4 | 0.6 % | 0.2 % | 28-byte vertices and indices |
 | Skinned | `0x08` or `0x0A` / 2 | 7, 11 (group 11: the first-person view model in Main, about 10 per 1,600 Training invocations) | 0.4 % | about 3 % | 24-byte vertices and indices |
 
 Typical sizes (Training sample, vertices `V` / indices `K`, medians): static 30 / 54 (largest 886 /
@@ -200,7 +200,7 @@ The field meanings are in [geometry-streams.md](geometry-streams.md). Values see
 
 | Byte | Values seen | Meaning here |
 | --- | --- | --- |
-| 0 | `0x81`, `0x83` | stream set (one primary stream; or primary plus secondary) |
+| 0 | `0x81`, `0x83`, `0x84` | stream set: one primary stream; primary plus secondary (3 secondary attributes); or primary plus secondary with a tangent as well (ripple) |
 | 1 | 7–15 | hole size in 16-byte units |
 | 2 | `0x00`, `0xFF` | position codec: three `f32`, or the slot-20 table |
 | 3 | `0xFF` | secondary attributes from the slot-21 table |
@@ -276,9 +276,9 @@ the invocation to the original job and makes no guest-visible change.
    An earlier revision said that short index-only invocations draw nothing (128 of 128). That was
    an analysis error and is withdrawn. In those recordings the analysis had located a stale input
    list left in local store by an earlier job, and with the true list none of them is short.
-7. The production rule below is one of the supported kinds. Unsupported kinds (ripple, any
-   built-in output layout other than 0, any undecodable codec) are refused until the oracle
-   confirms them.
+7. The production rule below is one of the supported kinds. Unsupported kinds (any built-in
+   output layout other than 0, any undecodable codec) are refused until the oracle confirms
+   them.
 8. Every index is below `V`. When the lengths are sufficient but an index is `V` or more, the
    original still draws. It reads that vertex's position from the bytes after the vertex stream
    (2 recordings), so the invocation is refused.
@@ -304,6 +304,7 @@ Let `P` be the decoded positions and `N`, `Tg`, `W` the normal, tangent and weig
 | --- | --- | --- |
 | Index only: the output layout has no declarations and `I = 1`, whatever the group (groups 1, 2, 3, 8, 12, 13 and 15 observed) | no vertices are written. Culling uses `P`. | none |
 | Group 0, mode `0x28` | [group-zero-deformation.md](group-zero-deformation.md), "Per instance" and "Per vertex", with the userdata mapping above and the game's wind values below. `E3` is view record row `+0x40`, instance rows are slot 13, `φm` and `φs` are userdata `+0x50` and `+0x54`, and `T` is the object translation. The colour rows of that specification are not produced here. | `V·I`, instance-major |
+| Group 4 (ripple), mode `0x28`, flavour 1 | [noninstanced-deformation.md](noninstanced-deformation.md), group 4, with `o = frac(t.x + t.y + t.z)`, `M0`, `M1`, `M2` from userdata `+0x20`, `+0x30`, `+0x40`, and `θ` from userdata `+0x90`. Group 4 has no tuning coefficients, so no game values are involved. Verified on 4 Sabotage invocations: positions within 4.5e-5 on displacements up to 0.22, normal fields exact, weights copied, tangents to binary16 rounding. Configuration byte 0 is `0x84`; the secondary stream is a packed normal, four weight bytes and four half tangents (stride 15). | `V` |
 | Group 3 with a non-empty output layout, either mode word (`0x28` with flavour 1, or `0x08` with flavour 2) | [noninstanced-deformation.md](noninstanced-deformation.md), group 3, with `Σ = t.x + t.y + t.z` and the game's wind values below. The mode-`0x08` form is wind with back-face culling, not a pass-through: its positions are displaced exactly like mode `0x28` (verified, 6 Sabotage invocations). Group 3 with an empty output layout is index only. | `V` |
 | Skinned (byte 6 low nibble 1), groups 7 and 11 | [skinning-deformation.md](skinning-deformation.md) in full: palette blend of positions, normals and tangents, then normals and tangents (not positions) turned by the object direction matrix `O = σ·R(q)` from the userdata quaternion and scale. The palette is slots 3 and 4 concatenated, the influences slot 5. Verified for group 11 with non-identity object rotations: positions within 1e-6, normal fields within 1 unit, tangents within binary16 rounding, tangent handedness lane exact. An empty palette (slots 3 and 4 both empty) is refused, as that specification requires. | `V` |
 
@@ -455,6 +456,7 @@ Output layouts:
 | Built-in 0 (group 0) | 12 | position as three `f32` |
 | Custom, group 3 (observed) | 20 | position three `f32` at 0; normal as RSX CMP at 12; weights as four bytes at 16 |
 | Custom, skinned (observed) | 24 | position three `f32` at 0; normal as RSX CMP at 12; tangent as four binary16 at 16 |
+| Custom, ripple (observed) | 28 | position three `f32` at 0; normal as RSX CMP at 12 (slot 2); weights as four bytes at 16 (slot 3); tangent as four binary16 at 20 (slot 9) |
 
 A custom layout is the slot-0 table read as in [geometry-streams.md](geometry-streams.md). Byte 1
 of each declaration is the RSX vertex format, byte 2 the component count, byte 3 the semantic,
@@ -993,9 +995,9 @@ and 3.07 on the right, and between 0.5 and 1.0 on the left, as the formula predi
 1. **Wind tuning values.** Resolved. This job uses the game's values, measured black-box ("Wind
    values (game-supplied)"). The frontend's deformation specifications keep their own values;
    whether they adopt these is a separate decision for the frontend.
-2. **Ripple.** Group 4 (ripple) has not been recorded. It stays refused until a recording and the
-   oracle confirm it. Group 11 is resolved: it is the full skinning specification, including the
-   object direction matrix (section 3).
+2. **Ripple and group 11.** Both resolved. Ripple is the group-4 formula of the noninstanced
+   specification (section 3; verified on 4 Sabotage invocations). Group 11 is the full skinning
+   specification, including the object direction matrix.
 3. **Short streams.** Part resolved.
    - Long streams are split across slots 1 + 2 and 7 + 8 (Stream slots). With the continuation
      slots counted, no recorded index-only invocation is short.
