@@ -422,6 +422,8 @@ int main(int argc, char** argv)
             {"PS3RECOMP_VK_WINDOW", "1"},
             {"PS3RECOMP_VK_GUEST_PROGRAMS", "1"},
             {"PS3RECOMP_VK_BATCHED_ENGINE", "1"},
+            {"PS3RECOMP_VK_MERGE_PASSES", "1"},
+            {"PS3RECOMP_VK_DESCRIPTOR_REUSE", "1"},
         };
         for (const auto &d : defaults)
             if (!getenv(d[0])) _putenv_s(d[0], d[1]);

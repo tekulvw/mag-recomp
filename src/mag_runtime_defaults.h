@@ -64,7 +64,12 @@ inline int mag_apply_runtime_defaults()
              // RSX reports and labels: deferred reports (which early release needs),
              // early label release with early FIFO sync, and the GPU depth view.
              Setting{"PS3RECOMP_RSX_DEFERRED_REPORTS", "1"},
-             Setting{"PS3RECOMP_RSX_DEFERRED_REPORT_CAPACITY", "4096"},
+             // With early release the records are already applied when queued, so the
+             // issue batch only sets how often a completion ticket (a backend submit) is
+             // taken: 256 instead of the runtime's 32 (Linux Training +18.6% with pass
+             // merging), and room for 8192 queued records.
+             Setting{"PS3RECOMP_RSX_DEFERRED_REPORT_BATCH", "256"},
+             Setting{"PS3RECOMP_RSX_DEFERRED_REPORT_CAPACITY", "8192"},
              Setting{"PS3RECOMP_RSX_EARLY_LABEL_RELEASE", "1"},
              Setting{"PS3RECOMP_RSX_EARLY_FIFO_SYNC", "1"},
              Setting{"PS3RECOMP_RSX_GPU_DEPTH_VIEW", "1"},
@@ -75,9 +80,18 @@ inline int mag_apply_runtime_defaults()
              Setting{"SPU_REGION_FRAMED", "1"},
              Setting{"SPU_INTERP_REJOIN_PREFILTER", "1"},
              Setting{"PS3RECOMP_SPURS_WORKLOAD_STACK_ARG9", "1"},
+             // The FIFO walker hands plain register methods straight to the draw engine.
+             Setting{"PS3RECOMP_GCM_FAST_WALK", "1"},
+             // Async SPU tasks reuse an idle host thread instead of starting a new one
+             // each (Windows Training +6.5%; neutral on Linux).
+             Setting{"PS3RECOMP_SPU_TASK_POOL", "1"},
 #if defined(__linux__)
              // Linux renders with the SDK's Vulkan backend: batch its engine work.
              Setting{"PS3RECOMP_VK_BATCHED_ENGINE", "1"},
+             // Same-target draws share one render pass (RSX thread 97.5% -> 80.6% busy,
+             // GPU 74% -> 24% in Training), and descriptor sets are reused across draws.
+             Setting{"PS3RECOMP_VK_MERGE_PASSES", "1"},
+             Setting{"PS3RECOMP_VK_DESCRIPTOR_REUSE", "1"},
 #endif
          }) {
         if (std::getenv(setting.name)) continue;
