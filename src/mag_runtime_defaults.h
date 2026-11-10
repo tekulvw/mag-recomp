@@ -85,6 +85,9 @@ inline int mag_apply_runtime_defaults()
              // Async SPU tasks reuse an idle host thread instead of starting a new one
              // each (Windows Training +6.5%; neutral on Linux).
              Setting{"PS3RECOMP_SPU_TASK_POOL", "1"},
+             // Per-line coherence versions avoid scanning every registered SPU
+             // context on ordinary writes; explicit 0 keeps the earlier scheme.
+             Setting{"PS3RECOMP_COH_VERSIONS", "1"},
 #if defined(__linux__)
              // Linux renders with the SDK's Vulkan backend: batch its engine work.
              Setting{"PS3RECOMP_VK_BATCHED_ENGINE", "1"},

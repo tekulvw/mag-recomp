@@ -14,7 +14,8 @@ DEFAULTS={'SPU_DISPATCH_CACHE':'1','SPU_MFC_LOOKUP_CACHE':'1','SPU_FLOAT_RZ':'1'
           'PS3RECOMP_RSX_DEFERRED_REPORT_CAPACITY':'8192',
           'PS3RECOMP_RSX_EARLY_LABEL_RELEASE':'1','PS3RECOMP_RSX_EARLY_FIFO_SYNC':'1','PS3RECOMP_RSX_GPU_DEPTH_VIEW':'1',
           'PS3RECOMP_PPU_STORE_FASTPATH':'1','SPU_REGION_FRAMED':'1','SPU_INTERP_REJOIN_PREFILTER':'1',
-          'PS3RECOMP_SPURS_WORKLOAD_STACK_ARG9':'1','PS3RECOMP_GCM_FAST_WALK':'1','PS3RECOMP_SPU_TASK_POOL':'1'}
+          'PS3RECOMP_SPURS_WORKLOAD_STACK_ARG9':'1','PS3RECOMP_GCM_FAST_WALK':'1','PS3RECOMP_SPU_TASK_POOL':'1',
+          'PS3RECOMP_COH_VERSIONS':'1'}
 LINUX_VULKAN={'PS3RECOMP_VK_BATCHED_ENGINE':'1','PS3RECOMP_VK_MERGE_PASSES':'1','PS3RECOMP_VK_DESCRIPTOR_REUSE':'1'}
 if sys.platform.startswith('linux'): DEFAULTS.update(LINUX_VULKAN)
 KEYS=tuple(DEFAULTS)+('RUST_MIN_STACK',)+tuple(LINUX_VULKAN)
@@ -44,7 +45,7 @@ for (auto k : {'''+','.join(f'"{k}"' for k in DEFAULTS)+'''}) { const char* v=st
     def test_defaults_reach_sdk_constructors(self):
         """An SDK constructor that reads its switches before main() sees the defaults."""
         keys=('PS3RECOMP_RSX_DEFERRED_REPORTS','PS3RECOMP_RSX_DEFERRED_REPORT_BATCH','PS3RECOMP_RSX_DEFERRED_REPORT_CAPACITY',
-              'PS3RECOMP_RSX_EARLY_LABEL_RELEASE','PS3RECOMP_RSX_EARLY_FIFO_SYNC')
+              'PS3RECOMP_RSX_EARLY_LABEL_RELEASE','PS3RECOMP_RSX_EARLY_FIFO_SYNC','PS3RECOMP_COH_VERSIONS')
         with tempfile.TemporaryDirectory() as tmp:
             tmp=Path(tmp)
             # Stands in for cellGcmSys.c: a default-priority constructor in a static library.

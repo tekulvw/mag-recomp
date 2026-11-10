@@ -4,7 +4,7 @@ The ps3recomp runtime keeps most of its behaviour behind opt-in switches: enviro
 it reads at run time and CMake options it reads at configure time. This page lists every one
 mag-recomp sets, with the value, the platforms, the file that sets it, the reason and how to turn
 it off for a comparison. It applies to the runtime pinned in
-[`profiles/framework.json`](../profiles/framework.json) (`mag-recomp/runtime-2026.11.09-rsx`, `5e533c9a`).
+[`profiles/framework.json`](../profiles/framework.json) (`mag-recomp/runtime-2026.11.10-reviewed`, `30dd3ea9`).
 
 `tools/check_ps3recomp_flags.py` extracts the switches from the sources and fails when this page
 is missing one, lists one nothing sets any more, or gives a value or file the sources no longer
@@ -53,6 +53,7 @@ applied before the constructors it reached 21.0.
 |---|---|---|---|---|---|---|
 | `SPU_DISPATCH_CACHE` | env | `1` | all | `src/mag_runtime_defaults.h` | Per-thread cache of lifted SPU function lookups for indirect dispatch (#15). | `0`; `shadow` checks every hit against the full resolver |
 | `SPU_MFC_LOOKUP_CACHE` | env | `1` | all | `src/mag_runtime_defaults.h` | Per-thread cache of the last MFC engine lookup (#15). | `0` |
+| `PS3RECOMP_COH_VERSIONS` | env | `1` | all | `src/mag_runtime_defaults.h` | Per-line coherence versions replace global context scans on ordinary writes. The version-counter scheme was measured on all three hosts; the pinned runtime tests the guest-visible coherence contract under both schemes. | `0` restores the earlier scheme |
 | `SPU_FLOAT_RZ` | env | `1` | all (takes effect on arm64 only) | `src/mag_runtime_defaults.h` | SPU code runs with round-toward-zero and flush-to-zero, so the single-precision helpers take their native form (#15). | `0` |
 | `PS3_VERBOSE` | env | `0` | all | `src/mag_runtime_defaults.h` | Quiet per-event logging. Without it a redirected stderr turns logging on, and one shared log lock changes the title's timing (#15). | `1` |
 | `PS3RECOMP_GCM_INLINE_NO_GPU_WAIT` | env | `1` | all | `src/mag_runtime_defaults.h` | MAG patches fragment-program constants through NV308A inline data about 1,100 times per menu frame; draining the GPU before each held the menu near 10 fps. Report ordering is kept. macOS only before #136. | `0` |
