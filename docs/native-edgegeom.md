@@ -98,20 +98,64 @@ the lifted job alone.
 
 ## Verification
 
-- `tests/test_native_edgegeom.py` builds two synthetic fixtures; neither needs game files.
-  - The core fixture checks the specification's vectors ET-1 to ET-9 and the codec and
-    deformation specifications' vectors.
-  - The shim fixture runs against a stand-in job manager and MFC. It checks the call order,
-    refusals that leave the entry state, the ring retry and refresh, and the write order.
-- Culling follows the specification's rule 1: the near plane, and the four viewport sides tested
-  on positions divided by `|c.w|` (which reproduces the original for triangles reaching behind
-  the camera). A triangle that survives it with a vertex past the near plane or at `c.w ≤ 0` is
-  kept without the facing and quarter-pixel rules.
-- A private differential comparison against recorded original invocations runs outside this
-  repository. On 800 Training recordings, every hole, ring update and index list matches; the
-  only exceptions are 2 invocations whose culled lists differ by triangles within 2^-8 pixel of a
-  decision boundary, which the specification's tolerance allows. Every produced vertex is within
-  the specification's tolerance.
-- Before it could become a default, the native path must pass the specification's acceptance
-  gates (oracle coverage, refusal rate, visual parity, performance and robustness on all three
-  hosts).
+### Synthetic tests
+
+`tests/test_native_edgegeom.py` builds two fixtures; neither needs game files. CI runs them on
+Linux, macOS and Windows.
+
+- The core fixture checks the specification's vectors ET-1 to ET-10 and the vectors of the codec
+  and deformation specifications (normals, rebased halves, wave, GZ-1, GZ-3, NI-1, NI-3, SK-1, SK-2,
+  SK-7), plus near-plane, continuation-slot, group-11 and refusal cases.
+- The shim fixture runs against a stand-in job manager and MFC. It checks:
+  - identity against the runtime's residency records;
+  - the service calls and their order, with SPURS policy contexts that are not RUNNING;
+  - that refusals leave the entry registers and every buffer byte untouched;
+  - the ring retry and refresh;
+  - data before hole, with each hole line's first word last, for holes of any size;
+  - another invocation running inside *finish*;
+  - an inert seam when the switch is unset.
+
+### Culling
+
+Culling follows the specification's rule 1: the near plane, and the four viewport sides tested on
+positions divided by `|c.w|`, which reproduces the original for triangles reaching behind the
+camera. A triangle that survives rule 1 with a vertex past the near plane or at `c.w ≤ 0` is kept
+without the facing and quarter-pixel rules.
+
+### Differential comparison (private, outside this repository)
+
+Recorded original invocations (job I/O recordings, native off) are compared output by output:
+hole bytes, ring update, index list and produced vertices.
+
+- **Recordings:** 12,423 invocations from Training (standing and on a walk route) and hosted
+  Sabotage (7 sessions), covering every kind:
+  - index-only for groups 1, 2, 3, 8, 12, 13 and 15;
+  - instanced wind;
+  - wind under both mode words;
+  - ripple;
+  - skinned groups 7 and 11;
+  - Main, shadow-cascade and 160 × 160 views.
+- **Handled invocations:** every one conforms to the specification. Each either matches exactly,
+  differs only by triangles the specification's tolerance classes as borderline, or (group 3)
+  differs only in vertex positions within its tolerance.
+- **Refusals:** 10 — short streams of produced kinds, and indices of `V` or more.
+- **Refusal-after-acquisition:** a replay that runs the job manager's own code from recorded
+  local store confirms it is equivalent to the lifted job alone. The run is forced to refuse at
+  the latest point, then the original job runs; job-manager state and every transfer are
+  unchanged.
+
+### In game (acceptance runs so far)
+
+| Host | Scene | Build | Result |
+|---|---|---|---|
+| macOS | Training | `c4205e7` | +4.7% fps; SPU workers about 17% less busy; no visual difference |
+| macOS | Training walk route | `e1dd9c4`, `ff794c2` | no missing near-camera geometry, holes or z-fighting |
+| macOS | hosted Sabotage | `9923544`, `ff794c2` | +6.5% and +7.1% fps; no freeze; the forced-refusal run plays normally |
+| Linux | Training | `9923544`, `edcd663` | the job's CPU falls from about 70 ms to about 5 ms per frame; fps flat on the RSX-bound main runtime, with process CPU −20% |
+
+Native work averages 4–5 µs per invocation. Refusals in game are expected `ring_full` cases
+(the ring is momentarily full; the lifted job then waits) and a handful of unrecognised mode
+words, which `MAG_NATIVE_EDGEGEOM_STATS=1` prints.
+
+The native path stays opt-in. Making it the default is a separate decision, after the
+specification's acceptance gates pass on all three hosts at the current head.

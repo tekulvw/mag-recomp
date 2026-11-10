@@ -250,17 +250,17 @@ bool run(spu_context* c) {
     static thread_local Engine engine;
     Prepared p;
     Reason reason = inputs_ok ? engine.prepare(in, p) : kInputs;
-    if (stats && reason == kConfiguration) {
-        /* Diagnostics only: the configuration bytes and output-layout header of the first few
-         * configuration refusals, to extend the specification. */
+    if (stats && (reason == kConfiguration || reason == kMode)) {
+        /* Diagnostics only: the configuration bytes, output-layout header, mode word, flavour and
+         * group of the first few configuration or mode refusals, to extend the specification. */
         static std::atomic<unsigned> shown{0};
         if (shown.fetch_add(1, std::memory_order_relaxed) < 8) {
             const Stream& cs = in.slot[19];
             const Stream& ls = in.slot[0];
             char text[160]; int at = 0;
             for (uint32_t i = 0; i < 16 && i < cs.size; ++i) at += std::snprintf(text + at, sizeof text - at, "%02x", cs.data[i]);
-            std::fprintf(stderr, "[native-edgegeom] configuration: cfg=%s layout_size=%u layout=%02x%02x mode=0x%X flavour=%u group=%u\n",
-                         at ? text : "-", ls.size, ls.size > 0 ? ls.data[0] : 0, ls.size > 1 ? ls.data[1] : 0,
+            std::fprintf(stderr, "[native-edgegeom] %s: cfg=%s layout_size=%u layout=%02x%02x mode=0x%X flavour=%u group=%u\n",
+                         reason_name(reason), at ? text : "-", ls.size, ls.size > 0 ? ls.data[0] : 0, ls.size > 1 ? ls.data[1] : 0,
                          ls32(c, userdata + 0xAC), c->ls[userdata + 0xA5], c->ls[userdata + 0xA7]);
         }
     }
