@@ -44,7 +44,13 @@ Statements marked *(verified)* were checked against complete job I/O recordings 
 with the default renderer:
 
 - 800 from two Training samples;
-- 6,000 from hosted Sabotage at spawn, in three windows, covering Main and both shadow cascades.
+- 6,000 from hosted Sabotage at spawn, in three windows, covering Main and both shadow cascades;
+- 1,623 from Training with camera movement, in three windows. These cover triangles that reach
+  behind the camera, group-11 skinning in the Main view, groups 12 and 13, and a 160 × 160 view.
+
+Behaviour for triangles that reach behind the camera was also measured directly. The original job
+was replayed on the SDK interpreter with about 5,000 synthetic triangles substituted into a
+recorded invocation.
 
 Every recorded invocation was compared with a black-box model written from this document.
 
@@ -52,9 +58,10 @@ Every recorded invocation was compared with a black-box model written from this 
   invocations. It also reproduces all 800 holes byte for byte, and every output size and ring
   update.
 - **Sabotage:** it reproduces 5,921 of the checkable invocations exactly.
+- **Training with movement:** it reproduces 1,452 of 1,461 checkable invocations exactly.
 
-Every remaining difference, in both sets, is a triangle within `2^-8` of a decision boundary (see
-Tolerance). Statements marked *(observed)* hold in every recording but were not
+Every remaining difference, in all three sets, is a borderline triangle as defined under
+Tolerance. Statements marked *(observed)* hold in every recording but were not
 varied. Statements marked *(unconfirmed)* have no evidence and must be checked with the oracle (see
 Integration contract) before a native path relies on them.
 
@@ -81,11 +88,11 @@ The *kind* is selected by the userdata mode word, cull flavour and material grou
 
 | Kind | Mode / flavour | Groups | Main share | Shadow share | Output |
 | --- | --- | --- | ---: | ---: | --- |
-| Static | `0x08` or `0x0A` / 2 | 1, 2, 8, 13, 15 (also 3 without deformation) | about 70 % | about 80 % | indices only |
+| Static | `0x08` or `0x0A` / 2 | 1, 2, 8, 12, 13, 15 (also 3 without deformation); any group with an empty output layout | about 70 % | about 80 % | indices only |
 | Instanced wind | `0x28` / 1 | 0 | about 15 % | 0 | positions (12 bytes per vertex) and indices |
 | Wind | `0x28` / 1 | 3 | about 14 % | about 13 % | 20-byte vertices and indices |
 | Ripple | `0x28` / 1 | 4 | 0.6 % | 0.2 % | 28-byte vertices and indices *(unconfirmed layout)* |
-| Skinned | `0x08` or `0x0A` / 2 | 7, 11 | 0.4 % | about 3 % | 24-byte vertices and indices |
+| Skinned | `0x08` or `0x0A` / 2 | 7, 11 (group 11: the first-person view model in Main, about 10 per 1,600 Training invocations) | 0.4 % | about 3 % | 24-byte vertices and indices |
 
 Typical sizes (Training sample, vertices `V` / indices `K`, medians): static 30 / 54 (largest 886 /
 4,866), instanced 24 / 36 with 1 to 88 instances, wind 42 / 108, skinned characters 710 / 3,930
@@ -268,10 +275,10 @@ Let `P` be the decoded positions and `N`, `Tg`, `W` the normal, tangent and weig
 
 | Kind | Rule | Produced vertices `Vout` |
 | --- | --- | --- |
-| Index only (output layout has no declarations) | no vertices are written. Culling uses `P`. | none |
+| Index only: the output layout has no declarations and `I = 1`, whatever the group (groups 1, 2, 3, 8, 12, 13 and 15 observed) | no vertices are written. Culling uses `P`. | none |
 | Group 0, mode `0x28` | [group-zero-deformation.md](group-zero-deformation.md), "Per instance" and "Per vertex", with the userdata mapping above and the game's wind values below. `E3` is view record row `+0x40`, instance rows are slot 13, `φm` and `φs` are userdata `+0x50` and `+0x54`, and `T` is the object translation. The colour rows of that specification are not produced here. | `V·I`, instance-major |
 | Group 3 with a non-empty output layout, either mode word (`0x28` with flavour 1, or `0x08` with flavour 2) | [noninstanced-deformation.md](noninstanced-deformation.md), group 3, with `Σ = t.x + t.y + t.z` and the game's wind values below. The mode-`0x08` form is wind with back-face culling, not a pass-through: its positions are displaced exactly like mode `0x28` (verified, 6 Sabotage invocations). Group 3 with an empty output layout is index only. | `V` |
-| Skinned (byte 6 low nibble 1), group 7 | [skinning-deformation.md](skinning-deformation.md) palette blend of positions, normals and tangents. The palette is slots 3 and 4 concatenated, the influences slot 5. No further direction transform is applied to normals or tangents (verified with an identity object transform). | `V` |
+| Skinned (byte 6 low nibble 1), groups 7 and 11 | [skinning-deformation.md](skinning-deformation.md) in full: palette blend of positions, normals and tangents, then normals and tangents (not positions) turned by the object direction matrix `O = σ·R(q)` from the userdata quaternion and scale. The palette is slots 3 and 4 concatenated, the influences slot 5. Verified for group 11 with non-identity object rotations: positions within 1e-6, normal fields within 1 unit, tangents within binary16 rounding, tangent handedness lane exact. An empty palette (slots 3 and 4 both empty) is refused, as that specification requires. | `V` |
 
 The produced positions stay in the object's frame. They are not moved by the object transform.
 
@@ -325,10 +332,28 @@ The index list is read as `K/3` triangles `(a, b, c)`, in order. For group 0, th
 for each instance `i` from 0 to `I − 1`, with `i·V` added to every index. A triangle is removed
 when any of these holds (verified, all flavours unless stated):
 
-1. **Outside one frustum side.** One of these holds for all three vertices: `c.x > c.w`,
-   `c.x < −c.w`, `c.y > c.w`, `c.y < −c.w`, or `c.z < −c.w` (the near plane). These are plain
-   comparisons on the clip values, also when `c.w` is negative. The near plane is verified in
-   Sabotage shadow cascades: all 469 triangles that only that plane separates were removed.
+1. **Outside one frustum side.** Either all three vertices are in front of the near plane, or all
+   three lie beyond the same side of the viewport.
+   - *Near plane:* all three have `c.z < −c.w`. In Sabotage shadow cascades, all 469 triangles
+     that only this plane separates were removed.
+   - *Viewport sides:* these are tested on the side position
+     `(ux, uy) = ((c.x·kx + c.w·ox) / |c.w|, (c.y·ky + c.w·oy) / |c.w|)`.
+     The removal conditions, each over all three vertices, are:
+     - `ux < ox − |kx|`;
+     - `ux > ox + |kx|`;
+     - `uy < oy − |ky|`;
+     - `uy > oy + |ky|`.
+
+     The bounds are the viewport rectangle. Note that the division is by `|c.w|`, not `c.w`:
+     - For `c.w > 0`, `(ux, uy)` is the screen position `(sx, sy)` and the test is the ordinary
+       one.
+     - For `c.w < 0` it is not a projection, and the four sides are no longer symmetric. With the
+       Main viewport and `c.w = −1`, a vertex counts as left of the viewport when `c.x < 1`, but
+       right of it only when `c.x > 3`.
+
+     This was measured by replaying the original on synthetic triangles. It is the rule that
+     separates kept from removed triangles that reach behind the camera. Plain clip comparisons
+     and divided (NDC) comparisons each disagree with the original on hundreds of them.
 2. **Facing.** Let `A = (sx_b − sx_a)·(sy_c − sy_a) − (sx_c − sx_a)·(sy_b − sy_a)`.
    - Flavour 2: removed unless `A < 0`. Zero and positive areas are removed.
    - Flavour 1: removed only if `A = 0`.
@@ -340,9 +365,17 @@ The rules are applied in the order listed. Only whether a triangle survives is v
 rule removed it. Surviving triangles keep their order and their vertex order.
 
 **Crossing the near plane.** A triangle that rule 1 does not remove, but that has at least one
-vertex with `c.z < −c.w` or `c.w ≤ 0`, is kept. Rules 2 and 3 are not applied to it (verified:
-141 of 141 partly-near triangles in Sabotage were kept, whatever their facing or quarter-pixel
-extent). The GPU clips it, so keeping it never hides geometry.
+vertex with `c.z < −c.w` or `c.w ≤ 0`, is kept. Rules 2 and 3 are not applied to it. Verified in
+two ways:
+
+- 141 of 141 partly-near triangles in Sabotage were kept, whatever their facing or quarter-pixel
+  extent;
+- synthetic crossing triangles confined to one quarter-pixel column were kept, 141 of 141.
+
+The GPU clips such a triangle, so keeping it never hides geometry.
+
+A vertex with `c.w = 0` exactly was not measured. An implementation may treat it as `c.w < 0` with
+`|c.w|` replaced by the smallest positive normal binary32.
 
 **Far plane.** No vertex beyond the far plane (`c.z > c.w`) appeared in any recording. An
 implementation may apply the far-plane side test or not.
@@ -514,7 +547,29 @@ Native arithmetic is used. The reference is exact real arithmetic on the decoded
 | Weights, hole words, index values, sizes, ring fields | exact |
 | Normal fields | within 1 unit of the reference quantization |
 | Tangent fields | within 1 binary16 ulp; magnitudes below the smallest normal binary16 may become zero |
-| Culling decisions | Exact, except for borderline triangles, which may go either way: those with `|A| < 2^-8` square pixels, a vertex within `2^-8` pixel of a quarter-pixel line, or a vertex within `2^-8·|c.w|` of a clip plane. In the recordings every difference was borderline. The largest Sabotage cases were zero-area group-0 triangles from collapsed instances, and quarter-pixel distances below `1e-4` pixel. |
+| Culling decisions | Exact, except for borderline triangles, which may go either way (see the definition after this table). In the recordings every difference was borderline. The largest Sabotage cases were zero-area group-0 triangles from collapsed instances, and quarter-pixel distances below `1e-4` pixel. The largest Training-with-movement cases were group-11 slivers about 0.4 units from the camera, at world coordinates near 1,000. |
+
+**Borderline triangle.** For each vertex `v`, let
+
+- `R_v` be the largest magnitude among the vertex's world coordinates and the object translation,
+  and
+- `δ_v = 2^-8 + 2^-22 · R_v · max(|kx|, |ky|) / |c.w|`, in pixels.
+
+`δ_v` is the screen-position uncertainty, at a few binary32 ulps of the world coordinates. Let
+`δ` be the largest `δ_v` over the triangle and `L` its longest screen edge. The triangle is
+borderline if any of these holds:
+
+- `|A| < 2^-8 + 2·L·δ` square pixels;
+- a vertex lies within `δ` pixel of a quarter-pixel line;
+- a vertex lies within `δ` of a viewport side (in the units of `(ux, uy)`), or within
+  `2^-8·|c.w|` of the near plane.
+
+The `2^-22·R` term is what makes the rule scale. With world coordinates near 1,000, as on the
+Training map, and the first-person view model 0.4 units from the camera, binary32 rounding alone
+moves screen positions by about a tenth of a pixel.
+
+An implementation may evaluate the projection in binary64, or relative to the camera position.
+That reduces its own error, but it does not remove the original's, so the tolerance stays.
 
 ### Consequences of non-bit-exact output
 
@@ -875,15 +930,33 @@ and the next starts `0x0008181C 0x0F000000 0x00000010`.
 Group 0, `V = 3`, `K = 3` with indices `(0, 1, 2)`, `I = 2`, nothing culled: surviving list
 `0, 1, 2, 3, 4, 5`, `Vout = 6`, vertex bytes `roundup(6·12, 16) = 80`, index bytes 16, `n = 128`.
 
+### ET-10: a triangle reaching behind the camera
+
+Main viewport (scale `(640, −360)`, offset `(640, 360)`). Clip coordinates are given directly.
+Two vertices are in front: `(2, 0.5, 0.8, 1)` and `(2.5, −0.5, 0.8, 1)`, with `ux` = 1920 and
+2240. The third vertex is behind the camera at `(x0, 0, −1.2, −1)`, with `ux = 640·x0 − 640`.
+
+- `x0 = 0`: `ux = −640`, which is not beyond the right side. The triangle is kept, even though
+  every vertex has `c.x > c.w`. It crosses the near plane, so facing and small-primitive tests
+  are skipped.
+- `x0 = 3.5`: `ux = 1600`, beyond the right side. Removed.
+
+Mirror case, with front vertices `(−2, 0.5, 0.8, 1)` and `(−2.5, −0.5, 0.8, 1)`:
+
+- `x0 = 0.5`: `ux = −320`, left of the viewport, as are the other two. Removed.
+- `x0 = 1.5`: `ux = 320`. Kept.
+
+The original agrees with all four cases. Its measured switching points are `x0` between 2.96
+and 3.07 on the right, and between 0.5 and 1.0 on the left, as the formula predicts.
+
 ## Open questions
 
 1. **Wind tuning values.** Resolved. This job uses the game's values, measured black-box ("Wind
    values (game-supplied)"). The frontend's deformation specifications keep their own values;
    whether they adopt these is a separate decision for the frontend.
-2. **Ripple and group 11.** Group 4 (ripple) and group 11 (skinned, Main) were not in the
-   recordings. The private analysis suggests that group 11 normals and tangents get a further
-   direction transform after the blend. That is unconfirmed. Both stay refused until a Sabotage
-   recording and the oracle confirm them.
+2. **Ripple.** Group 4 (ripple) has not been recorded. It stays refused until a recording and the
+   oracle confirm it. Group 11 is resolved: it is the full skinning specification, including the
+   object direction matrix (section 3).
 3. **Short streams.** Four invocations had index and position streams shorter than `V` and `K`
    need. They drew nothing. Whether the job detects this or merely culls what it read is
    unknown. The native path refuses these invocations.
