@@ -33,6 +33,7 @@ The same binary runs the lifted job unless the run opts in, so one build serves 
 | --- | --- |
 | `MAG_NATIVE_EDGEGEOM=1` | Registers the payload override at start (`[native-edgegeom] enabled` on stderr). Any other value, or none, leaves the job lifted. Set it for the whole run; never toggle it within a run (the Depth and Main passes must take positions from the same producer). |
 | `MAG_NATIVE_EDGEGEOM_TRACE=N` | Prints the first N job-manager service calls: slot, entry, arguments, context state before the call (status, interrupt enable, interrupt save and frame, pending transfer, host depth, policy mode, image, stack) and the result after it. Diagnostic only. |
+| `MAG_NATIVE_EDGEGEOM_FORCE_REFUSE=1` | Diagnostic: refuses every invocation at the latest refusal point (buffers acquired, ring line reserved), reason `forced`, so the fallback to the lifted job can be exercised in game. |
 | `MAG_NATIVE_EDGEGEOM_STATS=1` | Every 5 seconds and at exit, prints the number of invocations, handled and refused, the mean native time per handled invocation, and the counts per kind and reason. |
 
 Example report line: `[native-edgegeom]   kind=index_only handled=48211`.
@@ -58,8 +59,12 @@ specification marks unconfirmed is refused with `kind`.
 | `inputs` | The buffers could not be read or staged |
 
 A refusal decided before the job-manager services are called leaves no trace at all. A later
-refusal hands the lifted job its exact entry registers, and that job repeats the
-buffer-acquisition calls, as the specification's integration contract allows.
+refusal hands the lifted job its exact entry registers and untouched buffers (the ring line and
+label word are staged in the invocation's own stack frame), and that job repeats the
+buffer-acquisition calls, as the specification's integration contract allows. A private replay
+that runs the job manager and the original job from recorded local store confirms that a refusal
+at the latest point followed by the lifted job leaves the same job-manager state and transfers as
+the lifted job alone.
 
 ## How it works
 

@@ -366,6 +366,10 @@ static void refusals_leave_entry_state() {
     const auto ring_before = guest;
     CHECK(mag_payload_override(ctx, 0x15898) == 0);
     CHECK(guest == ring_before && !std::memcmp(ctx->gpr, before.gpr, sizeof before.gpr) && ctx->pc == 0x15898);
+    /* The lifted job that runs next reads its inputs from the buffers: a refusal after the ring
+     * reservation must leave every buffer byte as the job manager loaded it (a ring line staged
+     * in buffer 1 corrupted them and froze hosted Sabotage). */
+    CHECK(!std::memcmp(ctx->ls + buffer1_start, before.ls_store + buffer1_start, buffer3_start + buffer3_len - buffer1_start));
 }
 
 static void nothing_drawn() {

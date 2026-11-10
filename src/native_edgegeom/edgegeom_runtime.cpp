@@ -52,6 +52,10 @@ constexpr uint32_t kFrame = 512;
 constexpr uint32_t kMaxDma = 16384;
 
 const bool enabled = [] { const char* e = std::getenv("MAG_NATIVE_EDGEGEOM"); return e && !std::strcmp(e, "1"); }();
+/* MAG_NATIVE_EDGEGEOM_FORCE_REFUSE=1 (diagnostic): refuse every invocation at the latest
+ * refusal point, after the buffers are acquired and the ring line is reserved, so the fallback to
+ * the lifted job can be checked in game. */
+const bool force_refuse = [] { const char* e = std::getenv("MAG_NATIVE_EDGEGEOM_FORCE_REFUSE"); return e && !std::strcmp(e, "1"); }();
 const bool stats = [] { const char* e = std::getenv("MAG_NATIVE_EDGEGEOM_STATS"); return e && !std::strcmp(e, "1"); }();
 
 /* Diagnostic counters: [kind][reason]; kind none for refusals decided before the kind. */
@@ -255,7 +259,13 @@ bool run(spu_context* c) {
     const uint32_t area = joined || b1_len >= b3_len ? b1 : b3;
     const uint32_t area_end = joined ? b3 + b3_len : area == b1 ? b1 + b1_len : b3 + b3_len;
     const uint32_t stage = (area + 127u) & ~127u;
-    const uint32_t ring_lsa = stage, label_lsa = stage + 128, hole_lsa = stage + 256, window = stage + 640;
+    /* The ring line and label word are staged in this invocation's own frame, between the
+     * services' caller area and the entry stack pointer, never in the buffers: a ring refusal
+     * hands the lifted job its untouched inputs. The buffers are written only once nothing can
+     * refuse any more. */
+    const uint32_t frame = c->gpr[1]._u32[0] & SPU_LS_MASK;
+    const uint32_t ring_lsa = (frame + 32u + 127u) & ~127u, label_lsa = ring_lsa + 128;
+    const uint32_t hole_lsa = stage, window = stage + 384;
     const uint32_t window_len = area_end > window ? std::min<uint32_t>(kMaxDma, (area_end - window) & ~127u) : 0;
     if (reason == kHandled && (window_len < 128 || p.hole_bytes > 240)) reason = kInputs;
 
@@ -281,6 +291,7 @@ bool run(spu_context* c) {
                 a = allocate(ring, p.request, &fresh, &X, &consumed);
             }
             if (a != Allocation::kPlaced) break;
+            if (force_refuse) { reason = kForced; break; }   /* diagnostic: the latest refusal point */
             write_ring(record, X + p.request, consumed);
             std::memcpy(c->ls + ring_lsa, record, 128);
             mfc(c, MFC_PUTLLC_CMD, ring_lsa, line, 128);

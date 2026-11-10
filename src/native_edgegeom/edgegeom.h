@@ -33,6 +33,7 @@ enum Reason : uint8_t {
     kRingFull,        /* check 10 */
     kInputs,          /* the caller could not read or stage the inputs */
     kService,         /* a job-manager service could not be called before admission */
+    kForced,          /* MAG_NATIVE_EDGEGEOM_FORCE_REFUSE diagnostic */
     kReasonCount
 };
 const char* reason_name(Reason reason);

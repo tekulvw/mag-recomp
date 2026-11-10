@@ -79,7 +79,7 @@ const char* reason_name(Reason r) {
     static const char* const names[kReasonCount] = {
         "handled", "identity", "mode", "blend_shapes", "configuration", "hole", "stream_short", "kind",
         "codec", "index_range", "non_finite", "joint", "budget", "output_format", "hole_overflow",
-        "ring_full", "inputs", "service"};
+        "ring_full", "inputs", "service", "forced"};
     return r < kReasonCount ? names[r] : "unknown";
 }
 
