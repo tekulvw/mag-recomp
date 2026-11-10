@@ -53,7 +53,7 @@ python3 -m venv .venv
 
 | Checkout | Tag | Commit | Role |
 | --- | --- | --- | --- |
-| `local/ps3recomp-runtime` | `mag-recomp/runtime-2026.11.09-rsx` | `5e533c9` | Runtime SDK passed to CMake as `PS3RECOMP_DIR` |
+| `local/ps3recomp-runtime` | `mag-recomp/runtime-2026.11.10-reviewed` | `30dd3ea` | Runtime SDK passed to CMake as `PS3RECOMP_DIR` |
 | `local/ps3recomp-lifter-5244db9` | `mag-recomp/lifter-spu-2026.10.07` | `5244db9` | Inventory and launcher/engine SPU lifting |
 | `local/ps3recomp-lifter-dfa7073` | `mag-recomp/lifter-ppu-2026.10.12` | `dfa7073` | PPU and firmware lifting |
 | `local/ps3recomp-spu-programs` | `mag-recomp/spu-programs-2026.10.21` | `4c5c05f` | Lifting every embedded engine SPU program |
