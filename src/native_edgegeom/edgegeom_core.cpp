@@ -431,8 +431,9 @@ Reason Engine::prepare(const Inputs& in, Prepared& out) {
     if (!u) return kInputs;
     const uint32_t mode = be32(u + kModeWord);
     const uint8_t flavour = u[kFlavour], group = u[kGroup];
-    /* Check 2. */
-    if (!(((mode == 0x08 || mode == 0x0A) && flavour == 2) || (mode == 0x28 && flavour == 1))) return kMode;
+    /* Check 2 (spec 8828d44): the mode words 0x08, 0x0A, 0x28 and 0x2A with flavour 1 or 2. Bit 1
+     * of the mode word has no observable effect, and culling follows the flavour alone. */
+    if ((mode != 0x08 && mode != 0x0A && mode != 0x28 && mode != 0x2A) || (flavour != 1 && flavour != 2)) return kMode;
     /* Check 3. */
     if (u[kBlendCount] != 0) return kBlendShapes;
     /* Check 4. */
@@ -465,7 +466,7 @@ Reason Engine::prepare(const Inputs& in, Prepared& out) {
     Kind kind = kKindNone;
     if (skinned) {
         if ((group == 7 || group == 11) && cfg[4] == 0xFF) kind = kSkinned; else return kKind;
-    } else if (group == 0 && mode == 0x28 && cfg[4] == 0x00) {
+    } else if (group == 0 && (mode | 2u) == 0x2A && cfg[4] == 0x00) {
         kind = kInstancedWind;
     } else if (cfg[4] == 0xFF) {
         kind = kIndexOnly;   /* becomes wind for group 3 with a non-empty layout */

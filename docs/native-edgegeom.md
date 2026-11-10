@@ -51,7 +51,7 @@ not cover are refused with `kind`.
 | --- | --- |
 | `identity` | The module's residency record at LS `0x4000` is missing, or the dispatcher's resolver (`spu_lifted_lookup`) does not accept its loaded code. With the counters on, the first refusals also print the residency records |
 | `service` | A transfer was pending when the invocation started, so no service call was made |
-| `mode`, `blend_shapes`, `configuration`, `hole` | Inputs outside the specified values (admission checks 2–5) |
+| `mode`, `blend_shapes`, `configuration`, `hole` | Inputs outside the specified values (admission checks 2–5; the mode words 0x08, 0x0A, 0x28 and 0x2A are admitted with flavour 1 or 2) |
 | `stream_short`, `index_range` | An input stream shorter than its counts need, or an index of `V` or more. Slots 2 and 8 continue slots 1 and 7 past 16 KiB and are counted |
 | `kind`, `codec`, `output_format` | A production rule, input codec or output layout this implementation does not implement |
 | `non_finite`, `joint`, `budget` | Non-finite inputs or outputs, a palette joint out of range, or more than 65,536 produced vertices |
@@ -152,10 +152,10 @@ hole bytes, ring update, index list and produced vertices.
 | macOS | Training walk route | `e1dd9c4`, `ff794c2` | no missing near-camera geometry, holes or z-fighting |
 | macOS | hosted Sabotage | `9923544`, `ff794c2` | +6.5% and +7.1% fps; no freeze; the forced-refusal run plays normally |
 | Linux | Training | `9923544`, `edcd663` | the job's CPU falls from about 70 ms to about 5 ms per frame; fps flat on the RSX-bound main runtime, with process CPU −20% |
+| Windows | Training | `84ef5de` | +2.4% flips/s; 6,111,546 of 6,111,554 invocations handled; no freeze or abort |
 
-Native work averages 4–5 µs per invocation. Refusals in game are expected `ring_full` cases
-(the ring is momentarily full; the lifted job then waits) and a handful of unrecognised mode
-words, which `MAG_NATIVE_EDGEGEOM_STATS=1` prints.
+Native work averages 4–5 µs per invocation. Refusals in game are the expected `ring_full`
+cases (the ring is momentarily full; the lifted job then waits).
 
 The native path stays opt-in. Making it the default is a separate decision, after the
 specification's acceptance gates pass on all three hosts at the current head.

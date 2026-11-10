@@ -361,7 +361,17 @@ static void refusals() {
     Prepared p;
     Case c = base(); CHECK(run(c, p) == kHandled);
     c = base(); put32(c.userdata, 0xAC, 0x18); CHECK(run(c, p) == kMode);
-    c = base(); c.userdata[0xA5] = 1; CHECK(run(c, p) == kMode);
+    /* Mode words 0x08, 0x0A, 0x28 and 0x2A with flavour 1 or 2 are admitted; the flavour alone
+     * decides culling. ET-1's back-facing triangle survives flavour 1 under mode 0x2A. */
+    c = base(); c.userdata[0xA5] = 1; CHECK(run(c, p) == kHandled);
+    c = base(); c.userdata[0xA5] = 3; CHECK(run(c, p) == kMode);
+    {
+        Case m; m.positions({at(0, 0, 0), at(0.1f, 0, 0), at(0, 0.1f, 0)}); m.counts(3, 6); m.indices({0, 1, 2, 0, 2, 1});
+        put32(m.userdata, 0xAC, 0x2A); m.userdata[0xA5] = 1;
+        CHECK(run(m, p) == kHandled && p.surviving == 6);
+        m.userdata[0xA5] = 2;
+        CHECK(run(m, p) == kHandled && p.surviving == 3);
+    }
     c = base(); c.userdata[0xA4] = 1; CHECK(run(c, p) == kBlendShapes);
     c = base(); c.slot[19][7] = 1; CHECK(run(c, p) == kConfiguration);
     c = base(); c.slot[19][12] = 0; CHECK(run(c, p) == kConfiguration);
