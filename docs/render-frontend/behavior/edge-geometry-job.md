@@ -40,12 +40,28 @@ Out of scope:
 
 ### Evidence
 
-Statements marked *(verified)* were checked against 800 complete job I/O recordings of this job
-(two Training samples, default renderer). Every recorded invocation was compared with a black-box
-model written from this document. The model reproduces the culled index list exactly in 792 of 794
-checkable invocations. The other 2 differ by three triangles, each within 0.01 pixel of a
-quarter-pixel boundary (see Tolerance). It also reproduces all 800 holes byte for byte, and all output sizes and
-ring updates. Statements marked *(observed)* hold in every recording but were not
+Statements marked *(verified)* were checked against complete job I/O recordings of this job, made
+with the default renderer:
+
+- 800 from two Training samples;
+- 6,000 from hosted Sabotage at spawn, in three windows, covering Main and both shadow cascades;
+- 1,623 from Training with camera movement, in three windows. These cover triangles that reach
+  behind the camera, group-11 skinning in the Main view, groups 12 and 13, and a 160 × 160 view.
+
+Behaviour for triangles that reach behind the camera was also measured directly. The original job
+was replayed on the SDK interpreter with about 5,000 synthetic triangles substituted into a
+recorded invocation.
+
+Every recorded invocation was compared with a black-box model written from this document.
+
+- **Training:** the model reproduces the culled index list exactly in 792 of 794 checkable
+  invocations. It also reproduces all 800 holes byte for byte, and every output size and ring
+  update.
+- **Sabotage:** it reproduces 5,921 of the checkable invocations exactly.
+- **Training with movement:** it reproduces 1,452 of 1,461 checkable invocations exactly.
+
+Every remaining difference, in all three sets, is a borderline triangle as defined under
+Tolerance. Statements marked *(observed)* hold in every recording but were not
 varied. Statements marked *(unconfirmed)* have no evidence and must be checked with the oracle (see
 Integration contract) before a native path relies on them.
 
@@ -72,11 +88,11 @@ The *kind* is selected by the userdata mode word, cull flavour and material grou
 
 | Kind | Mode / flavour | Groups | Main share | Shadow share | Output |
 | --- | --- | --- | ---: | ---: | --- |
-| Static | `0x08` or `0x0A` / 2 | 1, 2, 8, 13, 15 (also 3 without deformation) | about 70 % | about 80 % | indices only |
+| Static | `0x08` or `0x0A` / 2 | 1, 2, 8, 12, 13, 15 (also 3 without deformation); any group with an empty output layout | about 70 % | about 80 % | indices only |
 | Instanced wind | `0x28` / 1 | 0 | about 15 % | 0 | positions (12 bytes per vertex) and indices |
 | Wind | `0x28` / 1 | 3 | about 14 % | about 13 % | 20-byte vertices and indices |
-| Ripple | `0x28` / 1 | 4 | 0.6 % | 0.2 % | 28-byte vertices and indices *(unconfirmed layout)* |
-| Skinned | `0x08` or `0x0A` / 2 | 7, 11 | 0.4 % | about 3 % | 24-byte vertices and indices |
+| Ripple | `0x28` / 1 | 4 | 0.6 % | 0.2 % | 28-byte vertices and indices |
+| Skinned | `0x08` or `0x0A` / 2 | 7, 11 (group 11: the first-person view model in Main, about 10 per 1,600 Training invocations) | 0.4 % | about 3 % | 24-byte vertices and indices |
 
 Typical sizes (Training sample, vertices `V` / indices `K`, medians): static 30 / 54 (largest 886 /
 4,866), instanced 24 / 36 with 1 to 88 instances, wind 42 / 108, skinned characters 710 / 3,930
@@ -92,7 +108,7 @@ dominate by count.
 | Index format | raw big-endian `u16` (configuration byte 6 high nibble 1) | compressed indices |
 | Skinning | four (weight byte, joint byte) pairs, 3×4 `f32` palette, palettes of 14 to a few dozen matrices | other influence layouts or matrix formats |
 | Blend shapes | never (userdata count is always 0) | any |
-| Culling | frustum, back-face (flavour 2), zero area (flavour 1), small primitive | near or far plane as the only reason; software depth testing |
+| Culling | frustum sides, near plane (shadow cascades), back-face (flavour 2), zero area (flavour 1), small primitive | far plane as the only reason; software depth testing |
 | Output layouts | empty (index only), built-in layout 0, custom layouts of 20 and 24 bytes | built-in layouts 1–3 |
 | Instance counts | 1 to 88 | |
 
@@ -144,25 +160,39 @@ These fields are copies made by the parent: `M0`, `M1` and `M2` come from the pr
 
 ### Stream slots
 
-Slot roles are as in [geometry-streams.md](geometry-streams.md). The parent has already applied
-that document's address and length replacements, so each list entry is the exact byte range to
-read. Every length is a multiple of 16 *(observed)*.
+Slot roles are as in [geometry-streams.md](geometry-streams.md). Every length is a multiple of 16
+*(observed)*.
+
+**Long streams continue in the next slot.** A single list entry carries at most 16 KiB. When the
+index list or the primary vertex data is longer than that, the stream is split:
+
+- slot 1 carries the first `0x4000` bytes of the index list and slot 2 the rest;
+- slot 7 carries the first `0x4000` bytes of the primary vertex data and slot 8 the rest.
+
+The two parts are contiguous in guest memory: slot 2's address is slot 1's address plus `0x4000`,
+and likewise for slots 7 and 8. Because buffer 1 packs the slots in slot order, they are also
+contiguous in local store. Read each stream as one run across both slots. This is *verified*:
+7 invocations, all reproduced exactly when the run is read that way. The `0x4000` length here is
+the same quantity as the large-stream control in geometry-streams.md. The parent does not
+replace it; it adds the second slot instead.
 
 | Slot | Content here |
 | --- | --- |
 | 0 | output layout (descriptor table; zero declarations means *index only*) |
-| 1 | index list, `K` raw `u16` |
+| 1 | index list, `K` raw `u16` (first 16 KiB of it, when slot 2 is non-empty) |
+| 2 | continuation of slot 1 |
 | 3, 4 | skinning palette segments, concatenated |
 | 5 | skinning influences, 8 bytes per vertex |
-| 7 | primary vertex data |
+| 7 | primary vertex data (first 16 KiB of it, when slot 8 is non-empty) |
+| 8 | continuation of slot 7 |
 | 10 | secondary vertex data |
 | 13 | instance rows, 16 bytes each (group 0) |
 | 17 | view record, 128 bytes (below) |
 | 19 | configuration, 16 bytes |
 | 20, 21 | primary and secondary descriptor tables |
 
-Any other slot is non-empty in at least one recording (2, 8, 9, 11, 12), but no verified output
-depends on it.
+Slots 9, 11 and 12 are non-empty in at least one recording, but no verified output depends on
+them.
 
 ### Configuration (slot 19)
 
@@ -170,7 +200,7 @@ The field meanings are in [geometry-streams.md](geometry-streams.md). Values see
 
 | Byte | Values seen | Meaning here |
 | --- | --- | --- |
-| 0 | `0x81`, `0x83` | stream set (one primary stream; or primary plus secondary) |
+| 0 | `0x81`, `0x83`, `0x84` | stream set: one primary stream; primary plus secondary (3 secondary attributes); or primary plus secondary with a tangent as well (ripple) |
 | 1 | 7–15 | hole size in 16-byte units |
 | 2 | `0x00`, `0xFF` | position codec: three `f32`, or the slot-20 table |
 | 3 | `0xFF` | secondary attributes from the slot-21 table |
@@ -223,20 +253,44 @@ A native implementation handles an invocation only if every check below passes. 
 the invocation to the original job and makes no guest-visible change.
 
 1. Module, entry and policy identities match the table above.
-2. Mode word `0x08` or `0x0A` with flavour 2, or mode word `0x28` with flavour 1.
+2. Mode word `0x08`, `0x0A`, `0x28` or `0x2A`, with flavour 1 or 2. Bit 1 of the mode word
+   (`0x02`) changes nothing observable. Culling is selected by the flavour alone, and vertex
+   production by group and output layout (section 3).
+
+   This was verified by replaying the original on the interpreter with the mode word and flavour
+   substituted, on 760 synthetic triangles:
+   - `0x2A` with flavour 1 culls identically to `0x28` with flavour 1, and to the flavour-1 model;
+   - `0x0A` with flavour 2 culls identically to `0x08` with flavour 2;
+   - `0x08` with flavour 1 culls like `0x28` with flavour 1.
+
+   Mode `0x2A` occurs in game: index-only, group 1, a few invocations per run on Windows and
+   Linux.
 3. Blend-shape count 0.
 4. Configuration byte 6 is `0x10` or `0x11`, byte 7 is 0, byte 5 is `0xFF`, and bytes 12–15 are
    `0xFFFFFFFF`.
 5. Hole size: configuration byte 1 is non-zero and equals userdata `+0x9C`. `H` is non-zero and
    16-byte aligned.
-6. The input list lengths cover what the counts need: slot 1 has at least `2K` bytes; slot 7 has
-   at least `V` times the primary stride; slot 13 has at least `16I` bytes; slot 17 has 128 bytes;
-   slot 19 has 16 bytes. A recording in which slots 1 and 7 were shorter than the counts needed
-   drew nothing. That case is refused rather than reproduced (open question 3).
-7. The production rule below is one of the supported kinds. Unsupported kinds (ripple, group 11,
-   any built-in output layout other than 0, any undecodable codec) are refused until the oracle
-   confirms them.
-8. Every index is below `V`.
+6. **Stream lengths.** The listed lengths, counting slots 2 and 8 as continuations, must cover
+   what the counts need:
+   - slots 1 + 2 have at least `2K` bytes;
+   - slots 7 + 8 have at least `V` times the primary stride;
+   - slot 13 has at least `16I` bytes;
+   - slot 17 has 128 bytes;
+   - slot 19 has 16 bytes.
+
+   A short invocation is refused, whatever its kind. The original does not stop at the listed
+   length. It reads on into whatever bytes follow in local store, so its result depends on the
+   neighbouring streams and on stale data (open question 3).
+
+   An earlier revision said that short index-only invocations draw nothing (128 of 128). That was
+   an analysis error and is withdrawn. In those recordings the analysis had located a stale input
+   list left in local store by an earlier job, and with the true list none of them is short.
+7. The production rule below is one of the supported kinds. Unsupported kinds (any built-in
+   output layout other than 0, any undecodable codec) are refused until the oracle confirms
+   them.
+8. Every index is below `V`. When the lengths are sufficient but an index is `V` or more, the
+   original still draws. It reads that vertex's position from the bytes after the vertex stream
+   (2 recordings), so the invocation is refused.
 9. The hole content (section 7) fits in the hole.
 10. Ring allocation (section 6) succeeds.
 
@@ -257,10 +311,11 @@ Let `P` be the decoded positions and `N`, `Tg`, `W` the normal, tangent and weig
 
 | Kind | Rule | Produced vertices `Vout` |
 | --- | --- | --- |
-| Index only (output layout has no declarations) | no vertices are written. Culling uses `P`. | none |
+| Index only: the output layout has no declarations and `I = 1`, whatever the group (groups 1, 2, 3, 8, 12, 13 and 15 observed) | no vertices are written. Culling uses `P`. | none |
 | Group 0, mode `0x28` | [group-zero-deformation.md](group-zero-deformation.md), "Per instance" and "Per vertex", with the userdata mapping above and the game's wind values below. `E3` is view record row `+0x40`, instance rows are slot 13, `φm` and `φs` are userdata `+0x50` and `+0x54`, and `T` is the object translation. The colour rows of that specification are not produced here. | `V·I`, instance-major |
-| Group 3, mode `0x28` | [noninstanced-deformation.md](noninstanced-deformation.md), group 3, with `Σ = t.x + t.y + t.z` and the game's wind values below | `V` |
-| Skinned (byte 6 low nibble 1), group 7 | [skinning-deformation.md](skinning-deformation.md) palette blend of positions, normals and tangents. The palette is slots 3 and 4 concatenated, the influences slot 5. No further direction transform is applied to normals or tangents (verified with an identity object transform). | `V` |
+| Group 4 (ripple), mode `0x28`, flavour 1 | [noninstanced-deformation.md](noninstanced-deformation.md), group 4, with `o = frac(t.x + t.y + t.z)`, `M0`, `M1`, `M2` from userdata `+0x20`, `+0x30`, `+0x40`, and `θ` from userdata `+0x90`. Group 4 has no tuning coefficients, so no game values are involved. Verified on 4 Sabotage invocations: positions within 4.5e-5 on displacements up to 0.22, normal fields exact, weights copied, tangents to binary16 rounding. Configuration byte 0 is `0x84`; the secondary stream is a packed normal, four weight bytes and four half tangents (stride 15). | `V` |
+| Group 3 with a non-empty output layout, either mode word (`0x28` with flavour 1, or `0x08` with flavour 2) | [noninstanced-deformation.md](noninstanced-deformation.md), group 3, with `Σ = t.x + t.y + t.z` and the game's wind values below. The mode-`0x08` form is wind with back-face culling, not a pass-through: its positions are displaced exactly like mode `0x28` (verified, 6 Sabotage invocations). Group 3 with an empty output layout is index only. | `V` |
+| Skinned (byte 6 low nibble 1), groups 7 and 11 | [skinning-deformation.md](skinning-deformation.md) in full: palette blend of positions, normals and tangents, then normals and tangents (not positions) turned by the object direction matrix `O = σ·R(q)` from the userdata quaternion and scale. The palette is slots 3 and 4 concatenated, the influences slot 5. Verified for group 11 with non-identity object rotations: positions within 1e-6, normal fields within 1 unit, tangents within binary16 rounding, tangent handedness lane exact. An empty palette (slots 3 and 4 both empty) is refused, as that specification requires. | `V` |
 
 The produced positions stay in the object's frame. They are not moved by the object transform.
 
@@ -289,12 +344,14 @@ Everything else in the two specifications' formulas is unchanged. With these val
 specification formulas reproduce the recorded outputs:
 
 - group 0: all 15,936 recorded instance vertices to 1.5e-5 absolute;
-- group 3: all 5,769 recorded vertices to 1.9e-4 absolute (99th percentile 2.6e-5).
+- group 3: all 5,769 Training vertices to 1.9e-4 absolute (99th percentile 2.6e-5). The worst
+  Sabotage error is 0.0045 units, where `Σ ≈ 545`. That is within the tolerance formula of
+  [noninstanced-deformation.md](noninstanced-deformation.md), at most 0.85 of its bound.
 
 The group-3 horizontal phase is ill-conditioned. Its coupling multiplies the object-translation
-sum, which is about 10^3 in the recordings, so binary32 rounding alone moves the phase by
-hundredths of a cycle. The horizontal displacement's own amplitude is small, though (at most
-0.004 units in the recordings), so the absolute error stays below 1e-4.
+sum, which is in the hundreds to thousands in the recordings, so binary32 rounding alone moves the
+phase by hundredths of a cycle. The error is therefore bounded by the horizontal sway amplitude,
+which the noninstanced tolerance already covers, and not by the coefficients.
 
 ### 4. Projection
 
@@ -312,9 +369,28 @@ The index list is read as `K/3` triangles `(a, b, c)`, in order. For group 0, th
 for each instance `i` from 0 to `I − 1`, with `i·V` added to every index. A triangle is removed
 when any of these holds (verified, all flavours unless stated):
 
-1. **Outside one frustum side.** For one of x and y, all three vertices have `c.k > c.w`, or all
-   three have `c.k < −c.w`. These are plain comparisons on the clip values, also when `c.w` is
-   negative.
+1. **Outside one frustum side.** Either all three vertices are in front of the near plane, or all
+   three lie beyond the same side of the viewport.
+   - *Near plane:* all three have `c.z < −c.w`. In Sabotage shadow cascades, all 469 triangles
+     that only this plane separates were removed.
+   - *Viewport sides:* these are tested on the side position
+     `(ux, uy) = ((c.x·kx + c.w·ox) / |c.w|, (c.y·ky + c.w·oy) / |c.w|)`.
+     The removal conditions, each over all three vertices, are:
+     - `ux < ox − |kx|`;
+     - `ux > ox + |kx|`;
+     - `uy < oy − |ky|`;
+     - `uy > oy + |ky|`.
+
+     The bounds are the viewport rectangle. Note that the division is by `|c.w|`, not `c.w`:
+     - For `c.w > 0`, `(ux, uy)` is the screen position `(sx, sy)` and the test is the ordinary
+       one.
+     - For `c.w < 0` it is not a projection, and the four sides are no longer symmetric. With the
+       Main viewport and `c.w = −1`, a vertex counts as left of the viewport when `c.x < 1`, but
+       right of it only when `c.x > 3`.
+
+     This was measured by replaying the original on synthetic triangles. It is the rule that
+     separates kept from removed triangles that reach behind the camera. Plain clip comparisons
+     and divided (NDC) comparisons each disagree with the original on hundreds of them.
 2. **Facing.** Let `A = (sx_b − sx_a)·(sy_c − sy_a) − (sx_c − sx_a)·(sy_b − sy_a)`.
    - Flavour 2: removed unless `A < 0`. Zero and positive areas are removed.
    - Flavour 1: removed only if `A = 0`.
@@ -325,10 +401,21 @@ when any of these holds (verified, all flavours unless stated):
 The rules are applied in the order listed. Only whether a triangle survives is visible, not which
 rule removed it. Surviving triangles keep their order and their vertex order.
 
-Near and far planes: the near-plane test (`c.z < −c.w` for all three) never decided a triangle by
-itself in the recordings. An implementation may apply it or not. No triangle with any vertex at
-`c.w ≤ 0` survived rule 1 in the recordings. An implementation must keep such a triangle when rules
-1–3 do not remove it. (The GPU clips it; keeping it can never hide geometry.)
+**Crossing the near plane.** A triangle that rule 1 does not remove, but that has at least one
+vertex with `c.z < −c.w` or `c.w ≤ 0`, is kept. Rules 2 and 3 are not applied to it. Verified in
+two ways:
+
+- 141 of 141 partly-near triangles in Sabotage were kept, whatever their facing or quarter-pixel
+  extent;
+- synthetic crossing triangles confined to one quarter-pixel column were kept, 141 of 141.
+
+The GPU clips such a triangle, so keeping it never hides geometry.
+
+A vertex with `c.w = 0` exactly was not measured. An implementation may treat it as `c.w < 0` with
+`|c.w|` replaced by the smallest positive normal binary32.
+
+**Far plane.** No vertex beyond the far plane (`c.z > c.w`) appeared in any recording. An
+implementation may apply the far-plane side test or not.
 
 `K'` is the number of surviving indices (three per surviving triangle).
 
@@ -378,6 +465,7 @@ Output layouts:
 | Built-in 0 (group 0) | 12 | position as three `f32` |
 | Custom, group 3 (observed) | 20 | position three `f32` at 0; normal as RSX CMP at 12; weights as four bytes at 16 |
 | Custom, skinned (observed) | 24 | position three `f32` at 0; normal as RSX CMP at 12; tangent as four binary16 at 16 |
+| Custom, ripple (observed) | 28 | position three `f32` at 0; normal as RSX CMP at 12 (slot 2); weights as four bytes at 16 (slot 3); tangent as four binary16 at 20 (slot 9) |
 
 A custom layout is the slot-0 table read as in [geometry-streams.md](geometry-streams.md). Byte 1
 of each declaration is the RSX vertex format, byte 2 the component count, byte 3 the semantic,
@@ -463,10 +551,11 @@ What other agents can observe, and when:
    - at start, *get buffer* (slot `+0x34`) for buffer 1 (inputs) and buffer 3 (output and scratch);
    - at the end, *release buffer* (slot `+0x48`) for buffer 3, then *finish* (slot `+0x44`).
 
-   Then return to the dispatcher with `r1` and `r80`–`r127` as at entry, and `r3` as the finish
-   service left it. The job manager's own effects (the queue line update and the prefetch of the
-   next descriptor) follow from those calls. They are compared by the oracle (Integration
-   contract), not re-specified here.
+   Then return to the dispatcher with `r1` and `r80`–`r127` as at entry. No return value is
+   defined ("Return value" under Integration contract). *Finish* is a scheduling point and is the
+   invocation's last act ("Finish" under Integration contract). The job manager's own effects
+   (the queue line update and the prefetch of the next descriptor) follow from those calls. The
+   oracle compares them (Integration contract); they are not re-specified here.
 
 No other guest memory is written. In particular the invocation writes nothing back to the
 descriptor or the input streams *(observed)*.
@@ -475,7 +564,8 @@ descriptor or the input streams *(observed)*.
 
 - `K = 0`, or every triangle culled: no allocation, no data, a hole of the four invalidate packets
   followed by zeros (verified).
-- An index of `V` or more, a stream shorter than its counts need, an undecodable codec or selector,
+- An index of `V` or more, a stream shorter than its counts need (except the index-only empty
+  draw in admission check 6), an undecodable codec or selector,
   a palette joint index out of range (see [skinning-deformation.md](skinning-deformation.md)), or a
   non-finite input lane: refused before any effect.
 - Hole size 0, hole address 0 or misaligned, or content that does not fit: refused.
@@ -496,7 +586,29 @@ Native arithmetic is used. The reference is exact real arithmetic on the decoded
 | Weights, hole words, index values, sizes, ring fields | exact |
 | Normal fields | within 1 unit of the reference quantization |
 | Tangent fields | within 1 binary16 ulp; magnitudes below the smallest normal binary16 may become zero |
-| Culling decisions | exact, except for triangles within `2^-8` pixel of a decision boundary (a zero area, a quarter-pixel line, or a clip plane after division). Those may go either way. The three borderline differences in the recordings were within 0.01 pixel. |
+| Culling decisions | Exact, except for borderline triangles, which may go either way (see the definition after this table). In the recordings every difference was borderline. The largest Sabotage cases were zero-area group-0 triangles from collapsed instances, and quarter-pixel distances below `1e-4` pixel. The largest Training-with-movement cases were group-11 slivers about 0.4 units from the camera, at world coordinates near 1,000. |
+
+**Borderline triangle.** For each vertex `v`, let
+
+- `R_v` be the largest magnitude among the vertex's world coordinates and the object translation,
+  and
+- `δ_v = 2^-8 + 2^-22 · R_v · max(|kx|, |ky|) / |c.w|`, in pixels.
+
+`δ_v` is the screen-position uncertainty, at a few binary32 ulps of the world coordinates. Let
+`δ` be the largest `δ_v` over the triangle and `L` its longest screen edge. The triangle is
+borderline if any of these holds:
+
+- `|A| < 2^-8 + 2·L·δ` square pixels;
+- a vertex lies within `δ` pixel of a quarter-pixel line;
+- a vertex lies within `δ` of a viewport side (in the units of `(ux, uy)`), or within
+  `2^-8·|c.w|` of the near plane.
+
+The `2^-22·R` term is what makes the rule scale. With world coordinates near 1,000, as on the
+Training map, and the first-person view model 0.4 units from the camera, binary32 rounding alone
+moves screen positions by about a tenth of a pixel.
+
+An implementation may evaluate the projection in binary64, or relative to the camera position.
+That reduces its own error, but it does not remove the original's, so the tolerance stays.
 
 ### Consequences of non-bit-exact output
 
@@ -586,7 +698,7 @@ every recording). Context fields used here:
 | --- | --- | --- | --- |
 | get buffer | `r3 = 0`; `r4` = buffer number; `r5 = 0`; `r6` = 1 for buffer 1, 0 for buffer 3 | `r3` = 16-byte buffer descriptor | buffer 1 call: writes two quadwords of job-manager bookkeeping; buffer 3 call: none |
 | release buffer | `r3 = 0`; `r4 = 3`; `r5 = 0` | not used | no guest-memory transfer |
-| finish | `r3` and `r4` are not read | `r3`; the job returns its low 16 bits (values 6–14 observed) | job-manager queue update and next-descriptor prefetch |
+| finish | `r3` and `r4` are not read | `r3`; not used by the job afterwards | completion published to the job queue, next-descriptor prefetch, and possibly a pass through the SPURS kernel's workload selection (below) |
 
 **Buffer descriptor.** 16 bytes:
 
@@ -600,12 +712,21 @@ every recording). Context fields used here:
 
 - **Buffer 1 (inputs).** The job manager has already filled it by DMA. The streams are packed in
   slot order from the buffer's start, each taking its listed length. The input list itself is the
-  buffer's last 192 bytes. Buffer 1 started at `0x1FC00` in every recording, and its length
-  varied (`0xC00`–`0xB000`).
+  buffer's last 192 bytes. The streams fill the buffer exactly up to the list: the 24 listed
+  lengths sum to the list's offset from the buffer start. Buffer 1 started at `0x1FC00` in every
+  recording. The implementer confirmed both facts against the real *get buffer* result on the
+  interpreter, for 300 randomly sampled recordings.
 - **Buffer 3 (output and scratch)** follows buffer 1 directly.
 
 Both buffers belong to the invocation until *release buffer*. A native path may stage outgoing data
 in either, with each DMA at most 16 KiB. Releasing buffer 3 writes nothing back to guest memory.
+
+Staging may begin only after the last point at which the invocation can still be refused, which
+is the ring allocation (admission check 10). Buffer 1 holds the lifted job's inputs. Any byte
+written to either buffer before that point corrupts the fallback: a refused invocation hands the
+lifted job modified inputs, and the job then derails. Scratch state needed before that point,
+such as the ring line and the label value, belongs in host memory or in the native code's own
+stack frame.
 
 **Where the list is not.** Local store at userdata `+0xC0` (`0xD00`) holds the job manager's queue
 state, not the input list. Without *get buffer* the list cannot be located from fixed context
@@ -617,26 +738,83 @@ writes job-manager bookkeeping that depends only on the current job. The support
 1. Call *get buffer* for buffers 1 and 3 once, as the job does.
 2. Run admission on the buffers.
 3. On success, run natively, then call *release buffer* (3) and *finish*. Return to the dispatcher
-   continuation with `r1` and `r80`–`r127` as at entry and `r3` = the finish result's low 16 bits.
+   continuation with `r1` and `r80`–`r127` as at entry. `r3` is not defined.
 4. On refusal, run the lifted job from its entry. It repeats the *get buffer* calls.
 
-The oracle must replay a refusal-after-acquisition case for every recorded kind. It must show the
-job manager's local store and every transfer equal to the recording before this path is trusted.
-If they differ, admission must instead move to a host-side copy of the job manager's buffer
-layout rule. That would be a separate specification.
+This path is now verified. The implementer's replay used the real runtime and job-manager code.
+In it, *get buffer* was called, the invocation was refused, and the lifted job then ran from its
+entry. Of 40 cases, 37 left the job manager's local store, registers and transfers equal to the
+original alone. The other 3 differed only in a timer word, in runs where *finish* entered the
+kernel during replay. So the repeated *get buffer* calls are equivalent, provided the buffers are
+untouched (above). Oracle runs should keep a forced-refusal case for every kind.
 
 **Identity check at run time.** These facts are sufficient; no per-call hashing is needed:
 
 1. The policy image is the pinned, instrumented one. The payload-hook lift step checks this at build
    time against `POLICY_SHA` and `FUNCTION_SHA` in `tools/graphics_payload_hooks.py`.
 2. The runtime's residency record for local store `0x4000` names the verified region registered
-   for source address `0x01963A00` with span `0x1B870`. That region's code segments were generated
-   from the image with the SHA-256 above, and the runtime compares them once per load.
+   for source address `0x01963A00`. Its span is the lifted code only (from `0x4000` to the lift's
+   code end, as `tools/wws_job_lift.py` registers it), not the whole `0x1B870`-byte image: the job
+   uses the rest of the image area for its own data. That region's code segments were generated
+   from the image with the SHA-256 above, and the runtime compares them once per load. Ask the
+   runtime's own lifted-code lookup whether the loaded code is verified; do not compare spans
+   against the image size.
 3. The payload target is `0x15898`.
 
 If the region is resident but not yet verified when the payload call is reached (the first
 dispatch after a load), either run the runtime's own one-time comparison or refuse. The lifted
 dispatch then verifies it.
+
+**Return value.** The dispatcher does not consume any value the job returns:
+
+- After the payload call returns, the policy saves `r0`, `r3` and `r4` into three job-manager
+  local-store save slots (`0x1630`, `0x1640`, `0x1650`), runs a bookkeeping helper, and restores
+  them.
+- On both paths it can then take, each register is overwritten before any read.
+
+So the value left in `r3` (and `r0`, `r4` and the other volatile registers `r2`–`r79`) at
+hand-back has no guest-visible effect. It survives only as the content of those three save slots
+until the next payload overwrites them.
+
+- The original job leaves an incidental value: neither the *finish* result nor its low half.
+  Recordings and replays disagree about it because the recorder snapshots registers at a
+  different moment.
+- A native path may leave any value. Returning the *finish* result unchanged is a reasonable
+  choice.
+- Oracle comparisons must exclude `r0`, `r2`–`r79` and those three save slots.
+
+**Finish.** *Finish* ends the invocation from the job manager's point of view:
+
+- It publishes the job's completion to the job queue with an atomic update. From that moment the
+  parent and, through it, the PPU may treat the child as done.
+- It may prefetch the next job's descriptor into the job manager's local store.
+- It may pass through the SPURS kernel's workload-selection service. In the runtime's HLE that
+  service lives at local store `0x9D0`; the replay harness stops at `0x9D4` because it does not
+  model the kernel. Control may then run other job-manager or workload code, on its own stack,
+  before or instead of coming back to the caller in the same host call.
+
+"*Finish* may not return to its caller promptly, or at all within the current host frame" is
+therefore expected behaviour of the contract, not an error. In game, every recorded invocation
+eventually reached the dispatcher continuation `0x3260`.
+
+Before calling *finish*, a native implementation must guarantee:
+
+1. **Outputs visible.** Every guest-visible effect of the invocation is complete and visible to
+   the RSX and to other agents: ring record, index and vertex data, the whole hole (ordering rules
+   1–5 of section 9).
+2. **Transfers drained.** Any MFC command it issued has completed (tag 31 drained).
+3. **Buffers given back.** *Release buffer* (3) has already been called. Buffers 1 and 3, the
+   staging data in them and the job's stack area may be reused by the next job as soon as *finish*
+   runs.
+4. **Bookkeeping closed.** The invocation is counted as handled (and any per-kind statistics
+   updated) before the call. No host lock is held across it, and no host object needs the call
+   to return in order to be released.
+5. **Bracketed call.** The call goes through the runtime's ordinary lifted-call mechanism (link
+   register set, the call driven until control comes back to the link). The runtime can then
+   carry the SPU through the kernel service and any other code that runs in between.
+6. **Nothing read afterwards.** If and when the call returns, the native code reads nothing from
+   local store or volatile registers that belonged to the invocation. It restores `r1` and
+   `r80`–`r127` from values it saved itself, then continues at the dispatcher continuation.
 
 **MFC tags.** The original job issues all of its own transfers on tag 31: data, read-back,
 hole, ring line and label read. The job manager's transfers in the recordings use tag 0. A native
@@ -654,8 +832,8 @@ buffer*. Host-side writes made through the runtime's write path use no tag.
 
 ### Per-invocation fallback
 
-Admission runs to completion before any effect, and a refusal leaves no trace (the ring is not
-touched). The fallback is the unmodified lifted job. Refusal reasons are counted per kind and
+Admission runs to completion before any effect, and a refusal leaves no trace. Neither the ring
+record nor any byte of buffers 1 and 3 has been written. The fallback is the unmodified lifted job. Refusal reasons are counted per kind and
 reason, and periodically reported when diagnostics are enabled.
 
 ### Differential oracle (outside this repository)
@@ -676,8 +854,12 @@ and compares every PUT.
    - produced vertices: within Tolerance;
    - the culled list: exact, or differing only by triangles the oracle confirms are borderline
      (recompute rules 2 and 3 for each differing triangle and check the boundary distance);
-   - exit `r1`, `r3` and `r80`–`r127`, and the job manager's local-store state after the finish
-     call: exact.
+   - exit `r1` and `r80`–`r127`, and the job manager's local-store state after the finish call,
+     excluding the three save slots named under "Return value": exact. `r0` and `r2`–`r79` are not
+     compared.
+   - Replays that reach the kernel's workload-selection service end there (the harness has no
+     kernel). Compare them up to that point: every transfer before it, and the job manager's local
+     store at that point.
 5. Synthetic inputs (this document's vectors and generated ones) run in the public repository
    without game data.
 
@@ -798,18 +980,45 @@ and the next starts `0x0008181C 0x0F000000 0x00000010`.
 Group 0, `V = 3`, `K = 3` with indices `(0, 1, 2)`, `I = 2`, nothing culled: surviving list
 `0, 1, 2, 3, 4, 5`, `Vout = 6`, vertex bytes `roundup(6·12, 16) = 80`, index bytes 16, `n = 128`.
 
+### ET-10: a triangle reaching behind the camera
+
+Main viewport (scale `(640, −360)`, offset `(640, 360)`). Clip coordinates are given directly.
+Two vertices are in front: `(2, 0.5, 0.8, 1)` and `(2.5, −0.5, 0.8, 1)`, with `ux` = 1920 and
+2240. The third vertex is behind the camera at `(x0, 0, −1.2, −1)`, with `ux = 640·x0 − 640`.
+
+- `x0 = 0`: `ux = −640`, which is not beyond the right side. The triangle is kept, even though
+  every vertex has `c.x > c.w`. It crosses the near plane, so facing and small-primitive tests
+  are skipped.
+- `x0 = 3.5`: `ux = 1600`, beyond the right side. Removed.
+
+Mirror case, with front vertices `(−2, 0.5, 0.8, 1)` and `(−2.5, −0.5, 0.8, 1)`:
+
+- `x0 = 0.5`: `ux = −320`, left of the viewport, as are the other two. Removed.
+- `x0 = 1.5`: `ux = 320`. Kept.
+
+The original agrees with all four cases. Its measured switching points are `x0` between 2.96
+and 3.07 on the right, and between 0.5 and 1.0 on the left, as the formula predicts.
+
 ## Open questions
 
 1. **Wind tuning values.** Resolved. This job uses the game's values, measured black-box ("Wind
    values (game-supplied)"). The frontend's deformation specifications keep their own values;
    whether they adopt these is a separate decision for the frontend.
-2. **Ripple and group 11.** Group 4 (ripple) and group 11 (skinned, Main) were not in the
-   recordings. The private analysis suggests that group 11 normals and tangents get a further
-   direction transform after the blend. That is unconfirmed. Both stay refused until a Sabotage
-   recording and the oracle confirm them.
-3. **Short streams.** Four invocations had index and position streams shorter than `V` and `K`
-   need. They drew nothing. Whether the job detects this or merely culls what it read is
-   unknown. The native path refuses these invocations.
+2. **Ripple and group 11.** Both resolved. Ripple is the group-4 formula of the noninstanced
+   specification (section 3; verified on 4 Sabotage invocations). Group 11 is the full skinning
+   specification, including the object direction matrix.
+3. **Short streams.** Part resolved.
+   - Long streams are split across slots 1 + 2 and 7 + 8 (Stream slots). With the continuation
+     slots counted, no recorded index-only invocation is short.
+   - The short invocations that remain are of produced kinds (groups 0 and 3), 8 in 12,423
+     recordings. In those the original reads on past the listed length; reading local store
+     contiguously from each stream's packed position reproduces the 5 that drew.
+
+   They stay refused. Why the parent sends short lists at all is not established.
+
+   An implementation should locate buffer 1 with *get buffer*, as specified, and never by
+   scanning local store. A recording's local store also holds input lists left behind by earlier
+   jobs, and a scan can pick one of those up.
 4. **Ring boundary cases.** Whether an allocation may end exactly at `U`, and what the job does
    when a refreshed `U` still leaves no room (wait or omit the draw), were not observed. The
    native path refuses the second case.
