@@ -160,25 +160,39 @@ These fields are copies made by the parent: `M0`, `M1` and `M2` come from the pr
 
 ### Stream slots
 
-Slot roles are as in [geometry-streams.md](geometry-streams.md). The parent has already applied
-that document's address and length replacements, so each list entry is the exact byte range to
-read. Every length is a multiple of 16 *(observed)*.
+Slot roles are as in [geometry-streams.md](geometry-streams.md). Every length is a multiple of 16
+*(observed)*.
+
+**Long streams continue in the next slot.** A single list entry carries at most 16 KiB. When the
+index list or the primary vertex data is longer than that, the stream is split:
+
+- slot 1 carries the first `0x4000` bytes of the index list and slot 2 the rest;
+- slot 7 carries the first `0x4000` bytes of the primary vertex data and slot 8 the rest.
+
+The two parts are contiguous in guest memory: slot 2's address is slot 1's address plus `0x4000`,
+and likewise for slots 7 and 8. Because buffer 1 packs the slots in slot order, they are also
+contiguous in local store. Read each stream as one run across both slots. This is *verified*:
+7 invocations, all reproduced exactly when the run is read that way. The `0x4000` length here is
+the same quantity as the large-stream control in geometry-streams.md. The parent does not
+replace it; it adds the second slot instead.
 
 | Slot | Content here |
 | --- | --- |
 | 0 | output layout (descriptor table; zero declarations means *index only*) |
-| 1 | index list, `K` raw `u16` |
+| 1 | index list, `K` raw `u16` (first 16 KiB of it, when slot 2 is non-empty) |
+| 2 | continuation of slot 1 |
 | 3, 4 | skinning palette segments, concatenated |
 | 5 | skinning influences, 8 bytes per vertex |
-| 7 | primary vertex data |
+| 7 | primary vertex data (first 16 KiB of it, when slot 8 is non-empty) |
+| 8 | continuation of slot 7 |
 | 10 | secondary vertex data |
 | 13 | instance rows, 16 bytes each (group 0) |
 | 17 | view record, 128 bytes (below) |
 | 19 | configuration, 16 bytes |
 | 20, 21 | primary and secondary descriptor tables |
 
-Any other slot is non-empty in at least one recording (2, 8, 9, 11, 12), but no verified output
-depends on it.
+Slots 9, 11 and 12 are non-empty in at least one recording, but no verified output depends on
+them.
 
 ### Configuration (slot 19)
 
@@ -247,14 +261,27 @@ the invocation to the original job and makes no guest-visible change.
    `0xFFFFFFFF`.
 5. Hole size: configuration byte 1 is non-zero and equals userdata `+0x9C`. `H` is non-zero and
    16-byte aligned.
-6. The input list lengths cover what the counts need: slot 1 has at least `2K` bytes; slot 7 has
-   at least `V` times the primary stride; slot 13 has at least `16I` bytes; slot 17 has 128 bytes;
-   slot 19 has 16 bytes. A recording in which slots 1 and 7 were shorter than the counts needed
-   drew nothing. That case is refused rather than reproduced (open question 3).
-7. The production rule below is one of the supported kinds. Unsupported kinds (ripple, group 11,
-   any built-in output layout other than 0, any undecodable codec) are refused until the oracle
+6. **Stream lengths.** The listed lengths, counting slots 2 and 8 as continuations, must cover
+   what the counts need:
+   - slots 1 + 2 have at least `2K` bytes;
+   - slots 7 + 8 have at least `V` times the primary stride;
+   - slot 13 has at least `16I` bytes;
+   - slot 17 has 128 bytes;
+   - slot 19 has 16 bytes.
+
+   One exception is not refused: an index-only invocation whose index or vertex run is still
+   short. The original draws nothing for it (*verified*, 128 of 128 recordings): no allocation,
+   no data, and a hole of only the four invalidate packets. A native path produces exactly that.
+
+   Any other short invocation (produced kinds: groups 0, 3, 11) is refused. In such invocations
+   the original reads on past the listed length into whatever bytes follow in local store, so the
+   result depends on the neighbouring streams and on stale data (open question 3).
+7. The production rule below is one of the supported kinds. Unsupported kinds (ripple, any
+   built-in output layout other than 0, any undecodable codec) are refused until the oracle
    confirms them.
-8. Every index is below `V`.
+8. Every index is below `V`. When the lengths are sufficient but an index is `V` or more, the
+   original still draws. It reads that vertex's position from the bytes after the vertex stream
+   (2 recordings), so the invocation is refused.
 9. The hole content (section 7) fits in the hole.
 10. Ring allocation (section 6) succeeds.
 
@@ -526,7 +553,8 @@ descriptor or the input streams *(observed)*.
 
 - `K = 0`, or every triangle culled: no allocation, no data, a hole of the four invalidate packets
   followed by zeros (verified).
-- An index of `V` or more, a stream shorter than its counts need, an undecodable codec or selector,
+- An index of `V` or more, a stream shorter than its counts need (except the index-only empty
+  draw in admission check 6), an undecodable codec or selector,
   a palette joint index out of range (see [skinning-deformation.md](skinning-deformation.md)), or a
   non-finite input lane: refused before any effect.
 - Hole size 0, hole address 0 or misaligned, or content that does not fit: refused.
@@ -966,9 +994,15 @@ and 3.07 on the right, and between 0.5 and 1.0 on the left, as the formula predi
 2. **Ripple.** Group 4 (ripple) has not been recorded. It stays refused until a recording and the
    oracle confirm it. Group 11 is resolved: it is the full skinning specification, including the
    object direction matrix (section 3).
-3. **Short streams.** Four invocations had index and position streams shorter than `V` and `K`
-   need. They drew nothing. Whether the job detects this or merely culls what it read is
-   unknown. The native path refuses these invocations.
+3. **Short streams.** Part resolved.
+   - Long streams are split across slots 1 + 2 and 7 + 8 (Stream slots).
+   - Index-only invocations that are still short draw nothing (128 of 128).
+   - For produced kinds the original reads on past the listed length. 5 of the 5 short produced
+     invocations that drew are reproduced exactly by reading local store contiguously from each
+     stream's packed position. Another 15 drew nothing, and that is not explained.
+
+   These invocations stay refused. Why the parent sends short lists at all (streaming not yet
+   complete, or a level-of-detail switch) is not established.
 4. **Ring boundary cases.** Whether an allocation may end exactly at `U`, and what the job does
    when a refreshed `U` still leaves no room (wait or omit the draw), were not observed. The
    native path refuses the second case.
