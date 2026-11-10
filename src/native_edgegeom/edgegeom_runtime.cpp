@@ -88,9 +88,15 @@ void report(const char* when) {
     std::fflush(stderr);
 }
 
+/* The only clock read in this file. Every caller runs only with the counters on, so an
+ * invocation without MAG_NATIVE_EDGEGEOM_STATS reads no clock (tests/test_native_edgegeom.py). */
+uint64_t clock_ns() {
+    return uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count());
+}
+
 void on_frame() {
-    const int64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::steady_clock::now().time_since_epoch()).count();
+    const int64_t now = int64_t(clock_ns() / 1000000u);
     int64_t last = last_report_ms.load(std::memory_order_relaxed);
     if (!last) { last_report_ms.store(now); return; }
     if (now - last >= 5000 && last_report_ms.compare_exchange_strong(last, now)) report("periodic");
@@ -171,7 +177,7 @@ struct Saved {
 };
 
 bool run(spu_context* c) {
-    const auto t0 = std::chrono::steady_clock::now();
+    const uint64_t t0 = stats ? clock_ns() : 0;
     /* Check 1: the resident module and the target (the policy's identity is checked when the
      * payload-override lift step is applied). The runtime's residency record for a verified
      * streamed region spans the lifted code only (tools/wws_job_lift.py registers code_end minus
@@ -358,8 +364,7 @@ bool run(spu_context* c) {
     if (service(c, context, kSlotRelease, 0, 3, 0, 0, false)) service_failed(c, "release buffer 3");
     /* Counted before finish: the job manager may continue elsewhere from inside finish instead
      * of returning, exactly as it may from the lifted job's own call. */
-    count(kind, kHandled, uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(
-        std::chrono::steady_clock::now() - t0).count()));
+    count(kind, kHandled, stats ? clock_ns() - t0 : 0);
     if (service(c, context, kSlotFinish, 0, 0, 0, 0, false)) service_failed(c, "finish");
     const uint32_t result = c->gpr[3]._u32[0] & 0xFFFFu;
     const uint32_t enable = c->int_enable;

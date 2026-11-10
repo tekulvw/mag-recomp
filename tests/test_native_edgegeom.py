@@ -84,6 +84,18 @@ class NativeEdgeGeomBuild(unittest.TestCase):
         self.assertIn('spu_lifted_lookup(c, kEntry)', shim)
         self.assertNotIn('m.size == kModuleImage', shim)
 
+    def test_no_clock_read_without_counters(self):
+        # Every invocation without MAG_NATIVE_EDGEGEOM_STATS must stay clock-free: the one clock
+        # read sits in clock_ns(), and each per-invocation call is guarded by the cached flag.
+        shim = (SOURCES / 'edgegeom_runtime.cpp').read_text()
+        self.assertEqual(shim.count('steady_clock::now'), 1)
+        body = shim[shim.index('bool run(spu_context* c)'):shim.index('bool payload_override(')]
+        calls = [m.start() for m in re.finditer(r'clock_ns\(\)', body)]
+        self.assertTrue(calls)
+        for at in calls:
+            self.assertIn('stats ?', body[max(0, at - 40):at], body[max(0, at - 80):at + 20])
+        self.assertIn('const bool stats = [] {', shim)
+
     def test_runtime_switch_is_exact(self):
         shim = (SOURCES / 'edgegeom_runtime.cpp').read_text()
         self.assertIn('getenv("MAG_NATIVE_EDGEGEOM")', shim)
