@@ -125,7 +125,7 @@ private:
     std::vector<float> out_nx_, out_ny_, out_nz_, out_nw_;
     std::vector<float> out_tx_, out_ty_, out_tz_, out_tw_;
     std::vector<float> sx_, sy_;
-    std::vector<int32_t> qx_, qy_;
+    std::vector<float> qx_, qy_;   /* floor(4·sx), floor(4·sy) */
     std::vector<uint8_t> code_;
     std::vector<uint16_t> indices_;
     std::vector<uint16_t> kept_;

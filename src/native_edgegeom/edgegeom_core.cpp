@@ -301,7 +301,9 @@ Reason Engine::project_and_cull(const Inputs& in, uint32_t vertices, uint32_t in
     /* World position σ·R(q)·p + t, then the clip position C·(w, 1), evaluated in that order (the
      * order the recordings' borderline decisions agree with best). */
     sx_.resize(points); sy_.resize(points); qx_.resize(points); qy_.resize(points); code_.resize(points);
-    float* sx = sx_.data(); float* sy = sy_.data(); int32_t* fx = qx_.data(); int32_t* fy = qy_.data();
+    float* sx = sx_.data(); float* sy = sy_.data(); float* fx = qx_.data(); float* fy = qy_.data();
+    const float xlo = o[0] - std::fabs(k[0]), xhi = o[0] + std::fabs(k[0]);
+    const float ylo = o[1] - std::fabs(k[1]), yhi = o[1] + std::fabs(k[1]);
     uint8_t* code = code_.data();
     for (uint32_t i = 0; i < points; ++i) {
         const float x = px[i], y = py[i], z = pz[i];
@@ -312,15 +314,17 @@ Reason Engine::project_and_cull(const Inputs& in, uint32_t vertices, uint32_t in
         const float cy = C[1][0] * wx + C[1][1] * wy + C[1][2] * wz + C[1][3];
         const float cz = C[2][0] * wx + C[2][1] * wy + C[2][2] * wz + C[2][3];
         const float cw = C[3][0] * wx + C[3][1] * wy + C[3][2] * wz + C[3][3];
+        /* Side position: divided by |w| (section 5); for w > 0 it is the screen position. */
+        const float aw = cw == 0.0f ? std::numeric_limits<float>::min() : std::fabs(cw);
+        const float ux = (cx * k[0] + cw * o[0]) / aw, uy = (cy * k[1] + cw * o[1]) / aw;
+        const int behind = int(!(cw > 0.0f)) | int(cz < -cw);
+        code[i] = uint8_t(int(ux < xlo) | int(ux > xhi) << 1 | int(uy < ylo) << 2 | int(uy > yhi) << 3 |
+                          int(cz < -cw) << 5 | behind << 4);
         const float inv = 1.0f / cw;
         const float X = cx * inv * k[0] + o[0], Y = cy * inv * k[1] + o[1];
-        const float FX = std::floor(4.0f * X), FY = std::floor(4.0f * Y);
-        /* Screen values outside int32 or undefined (w <= 0) bypass rules 2 and 3. */
-        const int undefined = int(!(cw > 0.0f)) | int(!(std::fabs(FX) < 1.0e9f)) | int(!(std::fabs(FY) < 1.0e9f));
-        code[i] = uint8_t((cx > cw) | (cx < -cw) << 1 | (cy > cw) << 2 | (cy < -cw) << 3 | undefined << 4 | (cz < -cw) << 5 | int(!(cw > 0.0f)) << 6);
         sx[i] = X; sy[i] = Y;
-        fx[i] = int32_t(undefined ? 0.0f : FX);
-        fy[i] = int32_t(undefined ? 0.0f : FY);
+        fx[i] = std::floor(4.0f * X);
+        fy[i] = std::floor(4.0f * Y);
     }
     const uint32_t triangles = (uint32_t)indices_.size() / 3;
     kept_.resize(size_t(triangles) * 3 * instances);
@@ -333,15 +337,10 @@ Reason Engine::project_and_cull(const Inputs& in, uint32_t vertices, uint32_t in
             const uint32_t a = base + ix[3 * tri], b = base + ix[3 * tri + 1], c = base + ix[3 * tri + 2];
             const uint8_t ca = code[a], cb = code[b], cc = code[c];
             bool keep;
-            /* A triangle with every vertex at w <= 0 lies behind the eye and is removed. One with
-             * only some there crosses the eye plane: rule 1's plain comparisons do not reproduce
-             * the original's decisions for it (recordings with camera movement), so it is kept
-             * for the GPU to clip, which can never hide geometry. Otherwise rule 1 for x, y and
-             * the near plane, and a triangle that only reaches past the near plane is kept. */
-            if (ca & cb & cc & 0x40) keep = false;
-            else if ((ca | cb | cc) & 0x40) keep = true;
-            else if (ca & cb & cc & 0x2F) keep = false;
-            else if ((ca | cb | cc) & 0x30) keep = true;
+            /* Rule 1: the near plane, or one viewport side for all three. A triangle that survives
+             * it with a vertex past the near plane or at w <= 0 is kept, rules 2 and 3 skipped. */
+            if (ca & cb & cc & 0x2F) keep = false;
+            else if ((ca | cb | cc) & 0x10) keep = true;
             else {
                 const float area = (sx[b] - sx[a]) * (sy[c] - sy[a]) - (sx[c] - sx[a]) * (sy[b] - sy[a]);
                 keep = flavour == 2 ? area < 0.0f : area != 0.0f;
@@ -459,18 +458,17 @@ Reason Engine::prepare(const Inputs& in, Prepared& out) {
     const uint32_t I = (group == 0 && mode == 0x28) ? u[kInstanceCount] : 1;
     out.instances = I;
 
-    /* Check 7: the production rule. */
+    /* Check 7: the production rule (section 3). The group and the output layout select what is
+     * produced; the mode word and flavour select culling. The layout is read below. */
     Kind kind = kKindNone;
-    if (mode == 0x28) {
-        if (skinned) return kKind;
-        if (group == 0 && cfg[4] == 0x00) kind = kInstancedWind;
-        else if (group == 3 && cfg[4] == 0xFF) kind = kWind;
-        else return kKind;
+    if (skinned) {
+        if ((group == 7 || group == 11) && cfg[4] == 0xFF) kind = kSkinned; else return kKind;
+    } else if (group == 0 && mode == 0x28 && cfg[4] == 0x00) {
+        kind = kInstancedWind;
+    } else if (cfg[4] == 0xFF) {
+        kind = kIndexOnly;   /* becomes wind for group 3 with a non-empty layout */
     } else {
-        if (skinned) { if (group == 7 && cfg[4] == 0xFF) kind = kSkinned; else return kKind; }
-        else if (cfg[4] == 0xFF && (group == 1 || group == 2 || group == 3 || group == 8 || group == 13 || group == 15))
-            kind = kIndexOnly;
-        else return kKind;
+        return kKind;
     }
     if (u[kInstanceCount] != 1 && kind != kInstancedWind) return kKind;
     if (kind == kInstancedWind && I == 0) return kKind;
@@ -493,11 +491,13 @@ Reason Engine::prepare(const Inputs& in, Prepared& out) {
             if (p[5] > 15) return kOutputFormat;
         }
     }
-    /* The group and a non-empty output layout select production; the mode word and flavour
-     * select culling only. Group 3 with produced vertices is wind, also under mode 0x08/0x0A. */
-    if (kind == kIndexOnly && group == 3 && out.declaration_count) kind = kWind;
+    /* Index only: an empty layout, whatever the group. A non-empty layout produces vertices:
+     * group 3 is the wind under either mode word; other groups are not specified. */
+    if (kind == kIndexOnly && out.declaration_count) {
+        if (group == 3) kind = kWind; else return kKind;
+    }
     out.kind = kind;
-    if ((kind == kIndexOnly) != (out.declaration_count == 0)) return kKind;
+    if (kind == kSkinned && out.declaration_count == 0) return kKind;
 
     /* Check 6 and the primary format. */
     const Stream& is = in.slot[kSlotIndices];
@@ -662,6 +662,18 @@ Reason Engine::prepare(const Inputs& in, Prepared& out) {
         }
         out_x_.resize(V); out_y_.resize(V); out_z_.resize(V);
         const bool has_n = normal_.present, has_t = tangent_.present;
+        /* Normals and tangents are then turned by O = σ·R(q), the stored quaternion used
+         * literally (skinning-deformation.md, steps 5 and 6). */
+        const float oq[4] = {bef32(u + kQuat), bef32(u + kQuat + 4), bef32(u + kQuat + 8), bef32(u + kQuat + 12)};
+        const float os = bef32(u + kScale);
+        for (float f : {oq[0], oq[1], oq[2], oq[3], os, bef32(u + kTranslation), bef32(u + kTranslation + 4),
+                        bef32(u + kTranslation + 8)})
+            if (!finite(f)) return kNonFinite;
+        const float qx = oq[0], qy = oq[1], qz = oq[2], qw = oq[3];
+        const float O[3][3] = {
+            {os * (1 - 2 * (qy * qy + qz * qz)), os * (2 * (qx * qy - qz * qw)), os * (2 * (qx * qz + qy * qw))},
+            {os * (2 * (qx * qy + qz * qw)), os * (1 - 2 * (qx * qx + qz * qz)), os * (2 * (qy * qz - qx * qw))},
+            {os * (2 * (qx * qz - qy * qw)), os * (2 * (qy * qz + qx * qw)), os * (1 - 2 * (qx * qx + qy * qy))}};
         if (has_n) { out_nx_.resize(V); out_ny_.resize(V); out_nz_.resize(V); }
         if (has_t) { out_tx_.resize(V); out_ty_.resize(V); out_tz_.resize(V); }
         for (uint32_t v = 0; v < V; ++v) {
@@ -683,15 +695,19 @@ Reason Engine::prepare(const Inputs& in, Prepared& out) {
             if (!finite(out_x_[v]) || !finite(out_y_[v]) || !finite(out_z_[v])) return kNonFinite;
             if (has_n) {
                 const float a = normal_.lane[0][v], b = normal_.lane[1][v], c = normal_.lane[2][v];
-                out_nx_[v] = B[0] * a + B[1] * b + B[2] * c;
-                out_ny_[v] = B[4] * a + B[5] * b + B[6] * c;
-                out_nz_[v] = B[8] * a + B[9] * b + B[10] * c;
+                const float n0 = B[0] * a + B[1] * b + B[2] * c, n1 = B[4] * a + B[5] * b + B[6] * c,
+                            n2 = B[8] * a + B[9] * b + B[10] * c;
+                out_nx_[v] = O[0][0] * n0 + O[0][1] * n1 + O[0][2] * n2;
+                out_ny_[v] = O[1][0] * n0 + O[1][1] * n1 + O[1][2] * n2;
+                out_nz_[v] = O[2][0] * n0 + O[2][1] * n1 + O[2][2] * n2;
             }
             if (has_t) {
                 const float a = tangent_.lane[0][v], b = tangent_.lane[1][v], c = tangent_.lane[2][v];
-                out_tx_[v] = B[0] * a + B[1] * b + B[2] * c;
-                out_ty_[v] = B[4] * a + B[5] * b + B[6] * c;
-                out_tz_[v] = B[8] * a + B[9] * b + B[10] * c;
+                const float t0 = B[0] * a + B[1] * b + B[2] * c, t1 = B[4] * a + B[5] * b + B[6] * c,
+                            t2 = B[8] * a + B[9] * b + B[10] * c;
+                out_tx_[v] = O[0][0] * t0 + O[0][1] * t1 + O[0][2] * t2;
+                out_ty_[v] = O[1][0] * t0 + O[1][1] * t1 + O[1][2] * t2;
+                out_tz_[v] = O[2][0] * t0 + O[2][1] * t1 + O[2][2] * t2;
             }
         }
     }

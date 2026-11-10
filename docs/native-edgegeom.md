@@ -40,11 +40,12 @@ Example report line: `[native-edgegeom]   kind=index_only handled=48211`.
 
 ### Kinds and refusal reasons
 
-Admitted kinds: `index_only` (static items), `instanced_wind` (group 0), `wind` (group 3) and
-`skinned` (group 7). The group and a non-empty output layout select what is produced, and the mode
+Admitted kinds: `index_only` (an empty output layout, any group), `instanced_wind` (group 0),
+`wind` (group 3) and `skinned` (groups 7 and 11; normals and tangents are also turned by the
+object's rotation and scale). The group and a non-empty output layout select what is produced, and the mode
 word and flavour select culling only. Group 3 with produced vertices is therefore the wind under
-mode `0x28` (two-sided) and under `0x08`/`0x0A` (back-face culled) alike. Group 4 (ripple), group 11 (skinned in Main) and anything else the
-specification marks unconfirmed is refused with `kind`.
+mode `0x28` (two-sided) and under `0x08`/`0x0A` (back-face culled) alike. Group 4 (ripple) and other produced
+vertices the specification does not cover are refused with `kind`.
 
 | Reason | Meaning |
 | --- | --- |
@@ -102,14 +103,10 @@ the lifted job alone.
     deformation specifications' vectors.
   - The shim fixture runs against a stand-in job manager and MFC. It checks the call order,
     refusals that leave the entry state, the ring retry and refresh, and the write order.
-- Culling also applies the near plane: a triangle with every vertex at `c.z < −c.w` is removed,
-  and one that only reaches past the near plane is kept without the facing and quarter-pixel
-  rules, the same treatment as a vertex at `w ≤ 0`. The Sabotage shadow-cascade recordings show
-  the original job doing both, and the specification states both rules.
-- A triangle that crosses the eye plane (some but not all vertices at `c.w ≤ 0`) is always kept
-  for the GPU to clip. Recordings with camera movement show the original drawing some such
-  triangles that plain clip comparisons would remove, and no rule found so far reproduces its
-  decisions; keeping them can never hide geometry. The specification is being revised.
+- Culling follows the specification's rule 1: the near plane, and the four viewport sides tested
+  on positions divided by `|c.w|` (which reproduces the original for triangles reaching behind
+  the camera). A triangle that survives it with a vertex past the near plane or at `c.w ≤ 0` is
+  kept without the facing and quarter-pixel rules.
 - A private differential comparison against recorded original invocations runs outside this
   repository. On 800 Training recordings, every hole, ring update and index list matches; the
   only exceptions are 2 invocations whose culled lists differ by triangles within 2^-8 pixel of a

@@ -51,20 +51,21 @@ static void near_plane() {
     CHECK(run(c, p) == kHandled && p.surviving == 0);
 }
 
-/* Eye plane (Training recordings with camera movement): plain clip comparisons do not reproduce
- * the original's decisions for a triangle that crosses w = 0, and the original draws some that
- * they would remove, so such a triangle is kept for the GPU to clip. One with every vertex at
- * w <= 0 is removed. */
-static void eye_plane() {
-    Case c; c.counts(3, 3); c.indices({0, 1, 2});
-    for (int r = 0; r < 4; ++r) for (int k = 0; k < 4; ++k) putf(c.slot[17], 0x10 + 16 * r + 4 * k, 0.0f);
-    putf(c.slot[17], 0x10, 1.0f); putf(c.slot[17], 0x24, 1.0f); putf(c.slot[17], 0x38, 1.0f);
-    putf(c.slot[17], 0x48, -1.0f);                         /* w = -z */
-    c.positions({at(5, 0, -1), at(5, 0.1f, 1), at(6, 0, -1)});   /* every c.x > c.w; one w < 0 */
-    Prepared p;
-    CHECK(run(c, p) == kHandled && p.surviving == 3);
-    c.positions({at(5, 0, 1), at(5, 0.1f, 1), at(6, 0, 1)});     /* all w < 0 */
-    CHECK(run(c, p) == kHandled && p.surviving == 0);
+/* ET-10: a triangle reaching behind the camera. Viewport sides are tested on positions divided
+ * by |c.w|; a surviving triangle with a vertex behind skips the facing and small-primitive rules.
+ * C maps p directly to clip coordinates, with w = z + 0.2. */
+static void et10_behind_camera() {
+    struct Case10 { float front_x0, front_x1, x0; uint16_t want; } cases[] = {
+        {2, 2.5f, 0, 3}, {2, 2.5f, 3.5f, 0}, {-2, -2.5f, 0.5f, 0}, {-2, -2.5f, 1.5f, 3}};
+    for (const auto& k : cases) {
+        Case c; c.counts(3, 3); c.indices({0, 1, 2});
+        for (int r = 0; r < 4; ++r) for (int q = 0; q < 4; ++q) putf(c.slot[17], 0x10 + 16 * r + 4 * q, 0.0f);
+        putf(c.slot[17], 0x10, 1.0f); putf(c.slot[17], 0x24, 1.0f); putf(c.slot[17], 0x38, 1.0f);
+        putf(c.slot[17], 0x48, 1.0f); putf(c.slot[17], 0x4C, 0.2f);
+        c.positions({at(k.front_x0, 0.5f, 0.8f), at(k.front_x1, -0.5f, 0.8f), at(k.x0, 0, -1.2f)});
+        Prepared p;
+        CHECK(run(c, p) == kHandled && p.surviving == k.want);
+    }
 }
 
 static void et3_small_primitive() {
@@ -276,8 +277,24 @@ static void sk_skinning() {
     CHECK((kept(p) == std::vector<uint16_t>{0, 2, 1}));
     const uint8_t* v = p.data + p.index_bytes;
     CHECK(near(getf(v), 1) && near(getf(v + 4), 3) && near(getf(v + 8), 3));
-    CHECK(get32(v + 12) == pack_normal_cmp(0, 1, 0));
-    CHECK(get16(v + 16) == 0xBC00 && (get16(v + 18) & 0x7FFF) == 0 && (get16(v + 20) & 0x7FFF) == 0 && get16(v + 22) == 0xBC00);
+    /* Normals and tangents are then turned by O = σ·R(q): here σ = 0.1 and q = identity. */
+    CHECK(get32(v + 12) == pack_normal_cmp(0, 0.1f, 0));
+    CHECK(get16(v + 16) == to_binary16(-0.1f) && (get16(v + 18) & 0x7FFF) == 0 && (get16(v + 20) & 0x7FFF) == 0 && get16(v + 22) == 0xBC00);
+
+    /* Group 11, and a non-identity object rotation (90° about z): positions are not turned, but
+     * normals and tangents are (skinning-deformation.md SK-5 with σ = 0.1). */
+    Case g = skinned_case({v0, v1, v2}, {0, 1, 2, 0, 2, 1}, {rot}, one);
+    g.userdata[0xA7] = 11;
+    putf(g.userdata, 0x68, std::sqrt(0.5f)); putf(g.userdata, 0x6C, std::sqrt(0.5f));
+    CHECK(run(g, p) == kHandled && p.kind == kSkinned && p.surviving == 3);
+    v = p.data + p.index_bytes;
+    CHECK(near(getf(v), 1) && near(getf(v + 4), 3) && near(getf(v + 8), 3));
+    CHECK(get32(v + 12) == pack_normal_cmp(-0.1f, 0, 0));
+    CHECK(get16(v + 16) == 0 || get16(v + 16) == 0x8000 || (get16(v + 16) & 0x7FFF) < 4);
+    CHECK(get16(v + 18) == to_binary16(-0.1f) && get16(v + 22) == 0xBC00);
+    /* An empty palette is refused. */
+    Case e = skinned_case({v0, v1, v2}, {0, 1, 2}, {}, one);
+    CHECK(run(e, p) == kKind);
 
     const std::vector<float> ident = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0};
     const std::vector<float> twice = {2, 0, 0, 4, 0, 2, 0, 0, 0, 0, 2, 0};
@@ -308,8 +325,11 @@ static void refusals() {
     c = base(); c.indices({0, 1, 3}); CHECK(run(c, p) == kIndexRange);
     c = base(); c.counts(3, 9); CHECK(run(c, p) == kStreamShort);
     c = base(); c.counts(5, 3); CHECK(run(c, p) == kStreamShort);
-    c = base(); c.userdata[0xA7] = 11; CHECK(run(c, p) == kKind);
-    c = base(); c.userdata[0xA7] = 4; CHECK(run(c, p) == kKind);
+    /* Index only applies whatever the group. */
+    c = base(); c.userdata[0xA7] = 12; CHECK(run(c, p) == kHandled && p.kind == kIndexOnly);
+    c = base(); c.userdata[0xA7] = 4; CHECK(run(c, p) == kHandled && p.kind == kIndexOnly);
+    /* Produced vertices for a group without a specified production rule. */
+    c = base(); c.userdata[0xA7] = 1; c.layout({{0, 2, 3, 1, 0}}, 12); c.hole(15); CHECK(run(c, p) == kKind);
     c = base(); c.slot[19][6] = 0x11; c.userdata[0xA7] = 11; CHECK(run(c, p) == kKind);
     c = base(); putf(c.slot[7], 4, std::nanf("")); CHECK(run(c, p) == kNonFinite);
     c = base(); putf(c.slot[17], 0x10, INFINITY); CHECK(run(c, p) == kNonFinite);
@@ -361,7 +381,7 @@ static void codecs() {
 
 int main() {
     codecs();
-    et1_facing(); et2_frustum(); et3_small_primitive(); near_plane(); eye_plane(); group3_mode8_wind(); et4_zero_area(); et5_ring();
+    et1_facing(); et2_frustum(); et3_small_primitive(); near_plane(); et10_behind_camera(); group3_mode8_wind(); et4_zero_area(); et5_ring();
     et6_et7_et8_holes(); et9_instances();
     gz1_placement(); gz3_wind(); ni1_wind(); sk_skinning();
     refusals();
