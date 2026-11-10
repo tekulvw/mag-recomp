@@ -14,8 +14,6 @@ jobs:
   title:
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    env:
-      PR_TITLE_INPUT: ${{ runner.temp }}/pr-title.json
     steps:
       - uses: actions/checkout@v4
         with:
@@ -26,6 +24,8 @@ jobs:
           python-version: '3.13'
       - name: Read the current PR title and every changed file
         uses: actions/github-script@v7
+        env:
+          PR_TITLE_INPUT: ${{ runner.temp }}/pr-title.json
         with:
           script: |
             const fs = require('node:fs');
@@ -48,4 +48,6 @@ jobs:
               files: files.map(({ filename, previous_filename }) => ({ filename, previous_filename }))
             }));
       - name: Check Conventional Commit and SDK release policy
+        env:
+          PR_TITLE_INPUT: ${{ runner.temp }}/pr-title.json
         run: python tools/check_pr_title.py --input "$PR_TITLE_INPUT"
