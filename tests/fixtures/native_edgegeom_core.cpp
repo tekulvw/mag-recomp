@@ -327,7 +327,7 @@ static void continuation_slots() {
     CHECK(engine.prepare(in, p) == kHandled && p.surviving == K);
     /* Not contiguous in guest memory: not a continuation, so the index stream is short. */
     in.slot[2].address = 0x30005000;
-    CHECK(engine.prepare(in, p) == kHandled && p.surviving == 0);
+    CHECK(engine.prepare(in, p) == kStreamShort);
 }
 
 static void refusals() {
@@ -342,10 +342,9 @@ static void refusals() {
     c = base(); put32(c.userdata, 0x9C, 8); CHECK(run(c, p) == kHole);
     c = base(); put32(c.userdata, 0x98, 0x70000008); CHECK(run(c, p) == kHole);
     c = base(); c.indices({0, 1, 3}); CHECK(run(c, p) == kIndexRange);
-    /* Index only with a stream shorter than its counts draws nothing (spec c776496); a produced
-     * kind with a short stream is refused. */
-    c = base(); c.counts(3, 9); CHECK(run(c, p) == kHandled && p.surviving == 0 && p.request == 0);
-    c = base(); c.counts(5, 3); CHECK(run(c, p) == kHandled && p.surviving == 0 && p.request == 0);
+    /* A stream shorter than its counts is refused, whatever the kind (spec 2f4a283). */
+    c = base(); c.counts(3, 9); CHECK(run(c, p) == kStreamShort);
+    c = base(); c.counts(5, 3); CHECK(run(c, p) == kStreamShort);
     Case sw = wind_case({at(0, 0, 0), at(0.1f, 0, 0), at(0, 0.1f, 0)}, {0, 1, 2}); sw.counts(9, 3);
     CHECK(run(sw, p) == kStreamShort);
     /* Index only applies whatever the group. */

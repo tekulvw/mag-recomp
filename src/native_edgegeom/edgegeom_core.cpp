@@ -518,17 +518,9 @@ Reason Engine::prepare(const Inputs& in, Prepared& out) {
     const uint32_t primary_stride = primary_list ? primary.stride : 12;
     const bool indices_short = is.size < 2u * K || (K && !is.data);
     const bool vertices_short = uint64_t(vs.size) < uint64_t(V) * primary_stride || (V && !vs.data);
-    if (indices_short || vertices_short) {
-        /* Index only with a stream still shorter than its counts: the original draws nothing
-         * (spec c776496). Produced kinds stay refused. */
-        if (kind != kIndexOnly) return kStreamShort;
-        uint32_t words[1024];
-        if (out.hole_bytes / 4 > 1024 || layout_hole(out, 0, 0, 0xB0000000u, words, out.hole_bytes / 4) > out.hole_bytes / 4)
-            return kHoleOverflow;
-        data_.clear();
-        out.data = data_.data();
-        return kHandled;
-    }
+    /* A stream still shorter than its counts: the original's behaviour is not specified, so the
+     * invocation is refused (spec 2f4a283). */
+    if (indices_short || vertices_short) return kStreamShort;
     if (kind == kInstancedWind && in.slot[kSlotInstances].size < 16u * I) return kStreamShort;
     if (uint64_t(V) * I > 65536u) return kBudget;
 

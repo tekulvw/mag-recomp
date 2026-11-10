@@ -52,7 +52,7 @@ vertices the specification does not cover are refused with `kind`.
 | `identity` | The module's residency record at LS `0x4000` is missing, or the dispatcher's resolver (`spu_lifted_lookup`) does not accept its loaded code. With the counters on, the first refusals also print the residency records |
 | `service` | A transfer was pending when the invocation started, so no service call was made |
 | `mode`, `blend_shapes`, `configuration`, `hole` | Inputs outside the specified values (admission checks 2–5) |
-| `stream_short`, `index_range` | A produced kind's input stream is shorter than its counts need (an index-only one draws nothing, as the original does), or an index of `V` or more. Slots 2 and 8 continue slots 1 and 7 past 16 KiB |
+| `stream_short`, `index_range` | An input stream shorter than its counts need, or an index of `V` or more. Slots 2 and 8 continue slots 1 and 7 past 16 KiB and are counted |
 | `kind`, `codec`, `output_format` | A production rule, input codec or output layout this implementation does not implement |
 | `non_finite`, `joint`, `budget` | Non-finite inputs or outputs, a palette joint out of range, or more than 65,536 produced vertices |
 | `hole_overflow` | The draw does not fit in the parent's hole |
