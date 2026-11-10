@@ -701,8 +701,10 @@ every recording). Context fields used here:
 
 - **Buffer 1 (inputs).** The job manager has already filled it by DMA. The streams are packed in
   slot order from the buffer's start, each taking its listed length. The input list itself is the
-  buffer's last 192 bytes. Buffer 1 started at `0x1FC00` in every recording, and its length
-  varied (`0xC00`–`0xB000`).
+  buffer's last 192 bytes. The streams fill the buffer exactly up to the list: the 24 listed
+  lengths sum to the list's offset from the buffer start. Buffer 1 started at `0x1FC00` in every
+  recording. The implementer confirmed both facts against the real *get buffer* result on the
+  interpreter, for 300 randomly sampled recordings.
 - **Buffer 3 (output and scratch)** follows buffer 1 directly.
 
 Both buffers belong to the invocation until *release buffer*. A native path may stage outgoing data
