@@ -30,7 +30,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, mag-recomp, windows-latest]
+        # Pull requests skip hosted macOS here (scarce); the Metal frontend-native
+        # job stays as their macOS smoke check, and pushes to main run macOS too.
+        os: ${{ fromJSON(github.event_name == 'pull_request' && '["mag-recomp","windows-latest"]' || '["macos-latest","mag-recomp","windows-latest"]') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     env:
@@ -315,7 +317,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, mag-recomp, windows-latest]
+        # Pull requests skip hosted macOS here (scarce); the Metal frontend-native
+        # job stays as their macOS smoke check, and pushes to main run macOS too.
+        os: ${{ fromJSON(github.event_name == 'pull_request' && '["mag-recomp","windows-latest"]' || '["macos-latest","mag-recomp","windows-latest"]') }}
     env:
       CMAKE_GENERATOR: Ninja
       CMAKE_PREFIX_PATH: ${{ github.workspace }}/build/program-compiler-install
