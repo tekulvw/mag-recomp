@@ -1,0 +1,51 @@
+name: PR title
+on:
+  # Validate metadata on title/base edits too. Only trusted base code is checked
+  # out: never run a PR's scripts with pull_request_target privileges.
+  pull_request_target:
+    types: [opened, edited, synchronize, reopened, ready_for_review]
+permissions:
+  contents: read
+  pull-requests: read
+concurrency:
+  group: pr-title-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  title:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      PR_TITLE_INPUT: ${{ runner.temp }}/pr-title.json
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Read the current PR title and every changed file
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('node:fs');
+            const params = { ...context.repo, pull_number: context.payload.pull_request.number };
+            const { data: before } = await github.rest.pulls.get(params);
+            if (before.base.sha !== context.payload.pull_request.base.sha) {
+              throw new Error('PR base changed; use the latest PR title check.');
+            }
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              ...params, per_page: 100
+            });
+            const { data: after } = await github.rest.pulls.get(params);
+            if (before.head.sha !== after.head.sha || before.base.sha !== after.base.sha ||
+                before.title !== after.title || before.changed_files !== after.changed_files) {
+              throw new Error('PR changed during validation; use the latest PR title check.');
+            }
+            // Untrusted titles/filenames remain JSON data, never script or shell text.
+            fs.writeFileSync(process.env.PR_TITLE_INPUT, JSON.stringify({
+              title: after.title, changed_files: after.changed_files,
+              files: files.map(({ filename, previous_filename }) => ({ filename, previous_filename }))
+            }));
+      - name: Check Conventional Commit and SDK release policy
+        run: python tools/check_pr_title.py --input "$PR_TITLE_INPUT"
