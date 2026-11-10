@@ -1,5 +1,58 @@
 # Changelog
 
+## [0.5.0](https://github.com/tekulvw/mag-recomp/compare/v0.4.0...v0.5.0) (2026-11-10)
+
+
+### Features
+
+* **controls:** add the opt-in game controls adapter ([619d29a](https://github.com/tekulvw/mag-recomp/commit/619d29a4a4d685c31e51500e6b038f68f3ee3a36))
+* **controls:** add the opt-in game controls adapter ([732276f](https://github.com/tekulvw/mag-recomp/commit/732276fcad963765561609370bde520b8444c6ed))
+* **controls:** capture keyboard and mouse on Linux through SDL ([10b56fe](https://github.com/tekulvw/mag-recomp/commit/10b56feaeb59aadc1e116d4f218a4db5ecb17e75))
+* **controls:** capture keyboard and mouse on Linux through SDL ([64d1dc8](https://github.com/tekulvw/mag-recomp/commit/64d1dc8daa6781a1324fb7cee0c22bf159469e3b))
+* **controls:** capture keyboard and mouse on Windows through Raw Input ([7fbf410](https://github.com/tekulvw/mag-recomp/commit/7fbf41076aa1c7137916558f5abe6178f743e19a))
+* **controls:** capture keyboard and mouse on Windows through Raw Input ([d9cd38c](https://github.com/tekulvw/mag-recomp/commit/d9cd38c3c663db13aefbc0f35ef8387dd3b8bf7f))
+* **controls:** prepare the controls hook stage and build it from the installer recipe ([da9fa76](https://github.com/tekulvw/mag-recomp/commit/da9fa76aa9871be36b32454b5433dfde70a95e93))
+* **controls:** prepare the controls hook stage and build it from the installer recipe ([1490dba](https://github.com/tekulvw/mag-recomp/commit/1490dba3f8590e6f31f84ee49d801e62edf159b4))
+* **controls:** register the game controls catalog with the settings service ([68980fd](https://github.com/tekulvw/mag-recomp/commit/68980fd3174c0b438b38bc6ce5f8c50d0cc4784c))
+* **controls:** register the game controls catalog with the settings service ([87394f7](https://github.com/tekulvw/mag-recomp/commit/87394f7dd93c6668dce34f6e96b329b729904dee))
+* **controls:** trace mouse motion after each Linux mouse re-lock (opt-in) ([#161](https://github.com/tekulvw/mag-recomp/issues/161)) ([8604da9](https://github.com/tekulvw/mag-recomp/commit/8604da9451f65f15e091d6901e9dc7eda343e538))
+* **extension:** opt-in payload override at the WWS policy payload call ([cc66a66](https://github.com/tekulvw/mag-recomp/commit/cc66a66012fbce3c8608322ebeb0cfd09d4236fc))
+* **extension:** opt-in payload override at the WWS policy payload call ([786c8cd](https://github.com/tekulvw/mag-recomp/commit/786c8cd19ce4775dfbc4030df81bcb15485d1e2a))
+* **spu:** opt-in native Edge geometry job through the payload override ([#174](https://github.com/tekulvw/mag-recomp/issues/174)) ([9344e2a](https://github.com/tekulvw/mag-recomp/commit/9344e2ad1bf68b2248558819853e190d3d21367d))
+
+
+### Bug Fixes
+
+* **controls:** confine the Linux mouse lock to the game window and log capture changes ([95b4fe6](https://github.com/tekulvw/mag-recomp/commit/95b4fe66fdb4f80a01f8429c7e62d01fd3d37058))
+* **controls:** debounce the menu mouse-lock release ([#162](https://github.com/tekulvw/mag-recomp/issues/162)) ([ba1b093](https://github.com/tekulvw/mag-recomp/commit/ba1b093a30b04c45f008ec5be0881068fabc7ed4))
+* **controls:** do not re-acquire a held mouse lock on every click ([#164](https://github.com/tekulvw/mag-recomp/issues/164)) ([b161974](https://github.com/tekulvw/mag-recomp/commit/b161974783079384ea6f109f3b3d791643f34ccf))
+* **controls:** log Windows capture changes and ignore input from an unfocused window ([ed3fbf6](https://github.com/tekulvw/mag-recomp/commit/ed3fbf6dec29983874509b03c4b1c831d70157b6))
+* **controls:** release the mouse lock while a menu holds look, and ignore the re-lock warp ([88a34b0](https://github.com/tekulvw/mag-recomp/commit/88a34b09d3ffd1267d4832e58bb46058d93f72d8))
+* **installer:** splice the full-width CTR audio command builder by default ([#154](https://github.com/tekulvw/mag-recomp/issues/154)) ([8b7a6aa](https://github.com/tekulvw/mag-recomp/commit/8b7a6aa852dc6a76f8250b741392e906d3c910e1))
+* **tools:** payload hook steps update Windows receipt keys in place ([#176](https://github.com/tekulvw/mag-recomp/issues/176)) ([284ebc1](https://github.com/tekulvw/mag-recomp/commit/284ebc16e96433a43c4df890d99a590e41627a0e))
+
+
+### Performance
+
+* **build:** an x86-64-v4 level, chosen automatically where the CPU has AVX-512 ([#168](https://github.com/tekulvw/mag-recomp/issues/168)) ([95a17ae](https://github.com/tekulvw/mag-recomp/commit/95a17aeefd76308eaa50aaab33bc66dbe884ece9))
+* **build:** lift indirectly reached WWS job code (--static-indirect) ([#155](https://github.com/tekulvw/mag-recomp/issues/155)) ([2e6cdf8](https://github.com/tekulvw/mag-recomp/commit/2e6cdf841c34b4cd0d9b5eef2d10894a843f4e2a))
+* **build:** register-promote the streamed job modules on every host ([#170](https://github.com/tekulvw/mag-recomp/issues/170)) ([83a3c15](https://github.com/tekulvw/mag-recomp/commit/83a3c156a22750dd847bf73c11df9a9a8aa4c5ab))
+* **build:** use x86-64-v3 code generation when the build CPU supports it ([#144](https://github.com/tekulvw/mag-recomp/issues/144)) ([3c40d33](https://github.com/tekulvw/mag-recomp/commit/3c40d338838d826abd3063763d5475596e11b17c))
+* **windows:** time the frame clock with the performance counter ([#141](https://github.com/tekulvw/mag-recomp/issues/141)) ([74dae46](https://github.com/tekulvw/mag-recomp/commit/74dae46f37a6f7f575a1ced96542f71503018af9))
+
+
+### Documentation
+
+* a controller is needed for matches on Windows ([#143](https://github.com/tekulvw/mag-recomp/issues/143)) ([7ec0e49](https://github.com/tekulvw/mag-recomp/commit/7ec0e4988d8137d01a2ad09fed4507d96432cafb))
+* add development notes on workflow, the SDK fork, run verification and performance ([#146](https://github.com/tekulvw/mag-recomp/issues/146)) ([a1a091f](https://github.com/tekulvw/mag-recomp/commit/a1a091f2cc103c1d862a9678edda8abf5e394a1a))
+* Linux and Windows host build facts, and current installer status ([#145](https://github.com/tekulvw/mag-recomp/issues/145)) ([3c2002b](https://github.com/tekulvw/mag-recomp/commit/3c2002bc6619984f3e5c39ea685105afa8f36ebe))
+* list the ps3recomp switches mag-recomp sets and check the list ([#142](https://github.com/tekulvw/mag-recomp/issues/142)) ([5c11668](https://github.com/tekulvw/mag-recomp/commit/5c11668e376c34b20223454a8b12031c70ae56ee))
+* record the macOS online match and the first-launch permission step ([#138](https://github.com/tekulvw/mag-recomp/issues/138)) ([f131e36](https://github.com/tekulvw/mag-recomp/commit/f131e367f29c98e9a5815a5eef10b96ffb47a40b))
+* **render:** design notes and performance history for the Main path ([#147](https://github.com/tekulvw/mag-recomp/issues/147)) ([60726b5](https://github.com/tekulvw/mag-recomp/commit/60726b553d7b4e0814f9354b2279355d01d61930))
+* **render:** Edge geometry job return value and finish contract ([#175](https://github.com/tekulvw/mag-recomp/issues/175)) ([e9f3fe9](https://github.com/tekulvw/mag-recomp/commit/e9f3fe9040a1778ec3061b972e7cfa711a8f1e04))
+* **render:** frontend architecture, scope and acceptance ([#148](https://github.com/tekulvw/mag-recomp/issues/148)) ([de2d14d](https://github.com/tekulvw/mag-recomp/commit/de2d14d24c63c6410bb9a740b3ec8144274277bc))
+* **render:** specify the Edge geometry child job ([#172](https://github.com/tekulvw/mag-recomp/issues/172)) ([c88968d](https://github.com/tekulvw/mag-recomp/commit/c88968deb424f0dfabfcc7c662b500ef852494de))
+
 ## [0.4.0](https://github.com/tekulvw/mag-recomp/compare/v0.3.0...v0.4.0) (2026-11-08)
 
 
