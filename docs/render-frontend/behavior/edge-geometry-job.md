@@ -253,9 +253,18 @@ A native implementation handles an invocation only if every check below passes. 
 the invocation to the original job and makes no guest-visible change.
 
 1. Module, entry and policy identities match the table above.
-2. Mode word `0x08` or `0x0A` with flavour 2, or mode word `0x28` with flavour 1. The mode word
-   and flavour select culling only; vertex production is selected by group and output layout
-   (section 3).
+2. Mode word `0x08`, `0x0A`, `0x28` or `0x2A`, with flavour 1 or 2. Bit 1 of the mode word
+   (`0x02`) changes nothing observable. Culling is selected by the flavour alone, and vertex
+   production by group and output layout (section 3).
+
+   This was verified by replaying the original on the interpreter with the mode word and flavour
+   substituted, on 760 synthetic triangles:
+   - `0x2A` with flavour 1 culls identically to `0x28` with flavour 1, and to the flavour-1 model;
+   - `0x0A` with flavour 2 culls identically to `0x08` with flavour 2;
+   - `0x08` with flavour 1 culls like `0x28` with flavour 1.
+
+   Mode `0x2A` occurs in game: index-only, group 1, a few invocations per run on Windows and
+   Linux.
 3. Blend-shape count 0.
 4. Configuration byte 6 is `0x10` or `0x11`, byte 7 is 0, byte 5 is `0xFF`, and bytes 12–15 are
    `0xFFFFFFFF`.
