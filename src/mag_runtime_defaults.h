@@ -95,6 +95,9 @@ inline int mag_apply_runtime_defaults()
              // GPU 74% -> 24% in Training), and descriptor sets are reused across draws.
              Setting{"PS3RECOMP_VK_MERGE_PASSES", "1"},
              Setting{"PS3RECOMP_VK_DESCRIPTOR_REUSE", "1"},
+             // A target still pinned by native work retires after both native and
+             // later original completion tickets, instead of waiting at release.
+             Setting{"PS3RECOMP_VK_PIN_RELEASE_NOWAIT", "1"},
 #endif
          }) {
         if (std::getenv(setting.name)) continue;
