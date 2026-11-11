@@ -27,12 +27,17 @@
     X(vkCmdBindVertexBuffers) X(vkCmdBindIndexBuffer) X(vkCmdDrawIndexed) X(vkCmdCopyImageToBuffer) \
     X(vkCreateSampler) X(vkDestroySampler) X(vkCmdCopyBufferToImage) X(vkCmdSetDepthBounds)
 
+/* All physical buffers here have this one creation contract. Pool matches
+ * exact logical size and usage; no rounded capacity or cross-owner reuse. */
+#define FRONTEND_VK_BUFFER_USAGE (VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT)
+#define FRONTEND_VK_BUFFER_POOL_ENTRIES 32u
+#define FRONTEND_VK_BUFFER_POOL_BYTES (128ull * 1024ull * 1024ull)
 typedef struct frontend_vk_family {
     uint64_t id, last_version; uint32_t public_versions; struct frontend_vk_family *next;
 } frontend_vk_family;
 typedef struct frontend_vk_buffer {
     uint64_t id, version, length; uint32_t public_ref, readers, writers; int seed_zero,gpu_written;
-    VkBuffer gpu; VkDeviceMemory memory; VkDeviceSize memory_bytes; void *mapped; struct frontend_vk_buffer *next;
+    VkBuffer gpu; VkDeviceMemory memory; VkDeviceSize memory_bytes; void *mapped; VkBufferUsageFlags usage; struct frontend_vk_buffer *next;
 } frontend_vk_buffer;
 typedef struct frontend_vk_imported_image {
     uint64_t id;uint32_t public_ref,references;
@@ -72,6 +77,12 @@ typedef struct frontend_vk {
     int failed;
     frontend_vk_family *families; frontend_vk_buffer *buffers; frontend_vk_pipeline *pipelines;
     frontend_vk_imported_image *images;
+    /* Physical storage only. Entries have no logical id/version/public owner
+     * and reached here only after all GPU readers/writers retired. */
+    frontend_vk_buffer *buffer_pool;
+    uint32_t buffer_pool_entries;
+    uint64_t buffer_pool_bytes,buffer_pool_hits,buffer_pool_misses,buffer_pool_evictions;
+    int buffer_pool_configured,buffer_pool_enabled,buffer_pool_report;
     frontend_vk_slot slots[2];
     /* Memory census (mag_native_memory_stats): bytes this context allocated
      * and still holds, and scene submissions for the periodic report. */
@@ -121,6 +132,47 @@ static void native_memory_free(frontend_vk *c,VkDeviceMemory memory,VkDeviceSize
     c->allocated_bytes-=*bytes<=c->allocated_bytes?*bytes:c->allocated_bytes;*bytes=0;
 }
 
+static void buffer_physical_destroy(frontend_vk *c,frontend_vk_buffer *b){
+    if(b->mapped)c->vkUnmapMemory(c->owner.device,b->memory);
+    if(b->gpu)c->vkDestroyBuffer(c->owner.device,b->gpu,NULL);
+    native_memory_free(c,b->memory,&b->memory_bytes);free(b);
+}
+static void buffer_pool_drop_oldest(frontend_vk *c){
+    frontend_vk_buffer **link=&c->buffer_pool;
+    while((*link)->next)link=&(*link)->next;
+    frontend_vk_buffer *b=*link;*link=NULL;
+    --c->buffer_pool_entries;c->buffer_pool_bytes-=b->memory_bytes;
+    buffer_physical_destroy(c,b);
+}
+static void buffer_pool_disable(frontend_vk *c){
+    c->buffer_pool_configured=1;c->buffer_pool_enabled=0;
+    while(c->buffer_pool)buffer_pool_drop_oldest(c);
+}
+static void mark_device_failed(frontend_vk *c){
+    c->failed=1;buffer_pool_disable(c);
+}
+static void buffer_pool_configure(frontend_vk *c){
+    if(c->buffer_pool_configured)return;
+    c->buffer_pool_configured=1;
+    const char *reuse=getenv("MAG_RENDER_VULKAN_BUFFER_REUSE");
+    c->buffer_pool_enabled=reuse&&!strcmp(reuse,"1");
+    const char *report=getenv("MAG_RENDER_NATIVE_PHASE_TIMING");
+    c->buffer_pool_report=report&&!strcmp(report,"1");
+}
+static frontend_vk_buffer *buffer_pool_take(frontend_vk *c,uint64_t length){
+    if(!c->buffer_pool_enabled)return NULL;
+    frontend_vk_buffer **link=&c->buffer_pool;
+    while(*link&&((*link)->length!=length||(*link)->usage!=FRONTEND_VK_BUFFER_USAGE))link=&(*link)->next;
+    frontend_vk_buffer *b=*link;
+    if(b){*link=b->next;b->next=NULL;--c->buffer_pool_entries;c->buffer_pool_bytes-=b->memory_bytes;++c->buffer_pool_hits;}
+    else ++c->buffer_pool_misses;
+    uint64_t n=c->buffer_pool_hits+c->buffer_pool_misses;
+    if(c->buffer_pool_report&&(n<=4||n%120==0))
+        fprintf(stderr,"[mag native buffer reuse] generation=%llu hits=%llu misses=%llu entries=%u bytes=%llu evictions=%llu backend=vulkan\n",
+            (unsigned long long)c->generation,(unsigned long long)c->buffer_pool_hits,(unsigned long long)c->buffer_pool_misses,
+            c->buffer_pool_entries,(unsigned long long)c->buffer_pool_bytes,(unsigned long long)c->buffer_pool_evictions);
+    return b;
+}
 static frontend_vk_buffer *buffer_find(frontend_vk *c, mag_native_buffer ref) {
     if (ref.device_generation != c->generation || !ref.id || !ref.version) return NULL;
     for (frontend_vk_buffer *b = c->buffers; b; b = b->next)
@@ -137,10 +189,20 @@ static void buffer_dispose(frontend_vk *c, frontend_vk_buffer *b) {
     frontend_vk_buffer **link = &c->buffers;
     while (*link && *link != b) link = &(*link)->next;
     if (*link) *link = b->next;
-    if (b->mapped) c->vkUnmapMemory(c->owner.device, b->memory);
-    if (b->gpu) c->vkDestroyBuffer(c->owner.device, b->gpu, NULL);
-    native_memory_free(c, b->memory, &b->memory_bytes);
-    free(b);
+    if(c->buffer_pool_enabled&&!c->failed&&!b->public_ref&&!b->readers&&!b->writers&&
+       b->id&&b->version&&b->gpu&&b->memory&&b->mapped&&b->memory_bytes&&
+       b->usage==FRONTEND_VK_BUFFER_USAGE&&b->memory_bytes<=FRONTEND_VK_BUFFER_POOL_BYTES){
+        while(c->buffer_pool_entries>=FRONTEND_VK_BUFFER_POOL_ENTRIES||
+              c->buffer_pool_bytes>FRONTEND_VK_BUFFER_POOL_BYTES-b->memory_bytes){
+            buffer_pool_drop_oldest(c);++c->buffer_pool_evictions;
+        }
+        /* Logical tokens are never pooled. Families/versions were retired by
+         * public release; the next create publishes a newly assigned token. */
+        b->id=b->version=0;b->seed_zero=b->gpu_written=0;
+        b->next=c->buffer_pool;c->buffer_pool=b;
+        ++c->buffer_pool_entries;c->buffer_pool_bytes+=b->memory_bytes;return;
+    }
+    buffer_physical_destroy(c,b);
 }
 static void pipeline_dispose(frontend_vk *c, frontend_vk_pipeline *p) {
     frontend_vk_pipeline **link = &c->pipelines;
@@ -194,7 +256,8 @@ static int caps(void *opaque, mag_native_caps_desc *out) {
 static int buffer_create(void *opaque, mag_native_buffer previous,
     const mag_native_buffer_desc *desc, mag_native_buffer *out) {
     frontend_vk *c = opaque;
-    if (c->failed) return MAG_NATIVE_DEVICE_FAILED;
+    if (c->failed) {buffer_pool_disable(c);return MAG_NATIVE_DEVICE_FAILED;}
+    buffer_pool_configure(c);
     if (!desc->byte_length || desc->byte_length % 4) return MAG_NATIVE_INVALID;
     if (desc->byte_length > UINT32_MAX) return MAG_NATIVE_UNSUPPORTED;
     frontend_vk_family *family = NULL;
@@ -203,11 +266,13 @@ static int buffer_create(void *opaque, mag_native_buffer previous,
         for (family = c->families; family && family->id != previous.id; family = family->next) {}
         if (!family || family->last_version == UINT64_MAX) return MAG_NATIVE_STALE;
     } else if (c->next_buffer == UINT64_MAX) return MAG_NATIVE_ALLOCATION_FAILED;
-    frontend_vk_buffer *b = calloc(1, sizeof(*b));
-    if (!b) return MAG_NATIVE_ALLOCATION_FAILED;
-    b->length = desc->byte_length;b->seed_zero=!desc->initial_bytes;
+    frontend_vk_buffer *b = buffer_pool_take(c,desc->byte_length);
+    if(!b)b=calloc(1,sizeof(*b));
+    if(!b){buffer_pool_disable(c);return MAG_NATIVE_ALLOCATION_FAILED;}
+    b->length=desc->byte_length;b->usage=FRONTEND_VK_BUFFER_USAGE;b->seed_zero=!desc->initial_bytes;
+    if(!b->gpu){
     VkBufferCreateInfo info = {.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, .size = b->length,
-        .usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+        .usage = FRONTEND_VK_BUFFER_USAGE,
         .sharingMode = VK_SHARING_MODE_EXCLUSIVE};
     if (c->vkCreateBuffer(c->owner.device, &info, NULL, &b->gpu) != VK_SUCCESS) goto fail;
     VkMemoryRequirements requirements; c->vkGetBufferMemoryRequirements(c->owner.device, b->gpu, &requirements);
@@ -216,12 +281,14 @@ static int buffer_create(void *opaque, mag_native_buffer previous,
         if ((requirements.memoryTypeBits & (1u << type)) &&
             (c->owner.memory.memoryTypes[type].propertyFlags & (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) ==
             (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) break;
-    if (type == c->owner.memory.memoryTypeCount) { buffer_dispose(c, b); return MAG_NATIVE_UNSUPPORTED; }
+    if (type == c->owner.memory.memoryTypeCount) { buffer_pool_disable(c);buffer_dispose(c, b);return MAG_NATIVE_UNSUPPORTED; }
     VkMemoryAllocateInfo allocation = {.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
         .allocationSize = requirements.size, .memoryTypeIndex = type};
     if (native_memory_allocate(c, &allocation, &b->memory, &b->memory_bytes) != VK_SUCCESS ||
         c->vkBindBufferMemory(c->owner.device, b->gpu, b->memory, 0) != VK_SUCCESS ||
         c->vkMapMemory(c->owner.device, b->memory, 0, VK_WHOLE_SIZE, 0, &b->mapped) != VK_SUCCESS) goto fail;
+    }
+    /* Required on every logical creation, even a pool hit. */
     if (desc->initial_bytes) memcpy(b->mapped, desc->initial_bytes, (size_t)b->length);
     else memset(b->mapped, 0, (size_t)b->length);
     if (!family) {
@@ -232,7 +299,7 @@ static int buffer_create(void *opaque, mag_native_buffer previous,
     b->public_ref = 1; b->next = c->buffers; c->buffers = b;
     *out = (mag_native_buffer){c->generation, b->id, b->version}; return MAG_NATIVE_OK;
 fail:
-    buffer_dispose(c, b); return MAG_NATIVE_ALLOCATION_FAILED;
+    buffer_pool_disable(c);buffer_dispose(c,b);return MAG_NATIVE_ALLOCATION_FAILED;
 }
 static int buffer_release(void *opaque, mag_native_buffer ref) {
     frontend_vk *c = opaque; frontend_vk_buffer *b = buffer_find(c, ref);
@@ -452,7 +519,7 @@ static int submit_owned(frontend_vk *c, const mag_native_frame *frame, mag_nativ
         slot_release(c, slot); return MAG_NATIVE_ALLOCATION_FAILED;
     }
     *out = slot->ticket;
-    if (result != VK_SUCCESS) { c->failed = 1; return MAG_NATIVE_INDETERMINATE; }
+    if (result != VK_SUCCESS) { mark_device_failed(c); return MAG_NATIVE_INDETERMINATE; }
     return MAG_NATIVE_OK;
 }
 static int submit(void *opaque,const mag_native_frame *frame,mag_native_ticket *out) {
@@ -469,7 +536,7 @@ static int poll(void *opaque, mag_native_event *events, uint32_t capacity, uint3
         frontend_vk_slot *slot = &c->slots[i]; if (!slot->occupied) continue;
         VkResult result = c->vkGetFenceStatus(c->owner.device, slot->fence);
         if (result == VK_NOT_READY) continue;
-        if (result != VK_SUCCESS) { c->failed = fault = 1; continue; }
+        if (result != VK_SUCCESS) { mark_device_failed(c);fault=1;continue; }
         if (*count == capacity) continue;
         events[(*count)++] = (mag_native_event){sizeof(*events), 1, slot->ticket, 1, 1, VK_SUCCESS, 0};
         timing_report(c, slot, result);
@@ -493,6 +560,7 @@ static int close_context(void *opaque) {
         if (slot->timestamps) c->vkDestroyQueryPool(c->owner.device, slot->timestamps, NULL);
     }
     int sampler_status=mag_native_sampler_registry_close(&c->samplers);if(sampler_status)return sampler_status;
+    buffer_pool_disable(c);
     while (c->buffers) buffer_dispose(c, c->buffers);
     while (c->pipelines) pipeline_dispose(c, c->pipelines);
     while (c->images) imported_image_dispose(c,c->images);

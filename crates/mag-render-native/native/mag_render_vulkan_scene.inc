@@ -1124,7 +1124,7 @@ static int submit_scene_owned(frontend_vk *c, const mag_native_scene *scene, mag
     }
     *out = slot->ticket;
     if (result != VK_SUCCESS) {
-        c->failed = 1;
+        mark_device_failed(c);
         return MAG_NATIVE_INDETERMINATE;
     }
     slot->timed = timed;
