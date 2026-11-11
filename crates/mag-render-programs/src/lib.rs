@@ -561,10 +561,19 @@ pub fn fragment_with_texcoords(
     let mut source = output(&buffer)?;
     // These are exact declarations emitted by the isolated compiler above, not
     // arbitrary caller shader text. All texture indices are ISA immediates.
+    // Declare only source-observable units; unused resource removal must not
+    // depend on a platform's shader optimizer to match the source layout.
+    // SAFETY: the same admitted, terminated instruction span is live under the
+    // compiler lock. This is the parser used by fragment_texture_units.
+    let sampled_units =
+        u16::try_from(unsafe { mrf_rsx_fp_texture_units(program.bytes.as_ptr(), offset as u32) })
+            .map_err(|_| ProgramError::Compiler)?;
     let texture_decls = (0..16)
+        .filter(|&i| sampled_units & (1 << i) != 0)
         .map(|i| format!("Texture2D rsx_tex{i} : register(t{i});\n"))
         .collect::<String>();
     let sampler_decls = (0..16)
+        .filter(|&i| sampled_units & (1 << i) != 0)
         .map(|i| format!("SamplerState rsx_samp{i} : register(s{i});\n"))
         .collect::<String>();
     source = source
@@ -574,6 +583,13 @@ pub fn fragment_with_texcoords(
             &sampler_decls,
         );
     for i in 0..16 {
+        if sampled_units & (1 << i) == 0 {
+            // A cube/volume control makes this same emitter declare separate
+            // typed units instead of the array, including unused controls.
+            for kind in ["TextureCube", "Texture3D  ", "Texture2D  "] {
+                source = source.replace(&format!("{kind} rsx_tex{i} : register(t{i});\n"), "");
+            }
+        }
         source = source
             .replace(&format!("rsx_tex[{i}]"), &format!("rsx_tex{i}"))
             .replace(&format!("rsx_samp[{i}]"), &format!("rsx_samp{i}"));
