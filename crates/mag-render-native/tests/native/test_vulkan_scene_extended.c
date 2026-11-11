@@ -1,4 +1,7 @@
 /* Actual Vulkan encoder through injected CPU dispatch. No GPU device/driver calls. */
+#if !defined(_WIN32) && !defined(_POSIX_C_SOURCE)
+#define _POSIX_C_SOURCE 200809L
+#endif
 #ifdef NDEBUG
 #undef NDEBUG
 #endif

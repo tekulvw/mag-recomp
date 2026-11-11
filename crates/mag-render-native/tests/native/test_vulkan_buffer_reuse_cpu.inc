@@ -32,13 +32,75 @@ static frontend_vk *reuse_context(void){
 static mag_native_buffer reuse_new(frontend_vk *c,mag_native_buffer previous,uint64_t n,const void *bytes){
     mag_native_buffer out={0};mag_native_buffer_desc d={sizeof(d),1,n,bytes};assert(buffer_create(c,previous,&d,&out)==0);return out;
 }
+static int reuse_environment(const char *value){
+#ifdef _WIN32
+    return _putenv_s("MAG_RENDER_VULKAN_BUFFER_REUSE",value?value:"");
+#else
+    return value?setenv("MAG_RENDER_VULKAN_BUFFER_REUSE",value,1):unsetenv("MAG_RENDER_VULKAN_BUFFER_REUSE");
+#endif
+}
+static VKAPI_ATTR VkResult VKAPI_CALL reuse_sampler_lost(VkDevice d,const VkSamplerCreateInfo *i,const VkAllocationCallbacks *a,VkSampler *out){
+    (void)d;(void)i;(void)a;(void)out;return VK_ERROR_DEVICE_LOST;
+}
+static VKAPI_ATTR VkResult VKAPI_CALL reuse_queue_lost(VkQueue q,uint32_t n,const VkSubmitInfo *s,VkFence f){
+    (void)q;(void)f;assert(n==1&&s->commandBufferCount==1);return VK_ERROR_DEVICE_LOST;
+}
+static VKAPI_ATTR void VKAPI_CALL reuse_update(VkDevice d,uint32_t n,const VkWriteDescriptorSet *w,uint32_t count,const VkCopyDescriptorSet *copy){
+    (void)d;assert(n==1&&w->descriptorType==VK_DESCRIPTOR_TYPE_STORAGE_BUFFER&&w->pBufferInfo->range==8&&!count&&!copy);
+}
+static VKAPI_ATTR void VKAPI_CALL reuse_bind_sets(VkCommandBuffer b,VkPipelineBindPoint p,VkPipelineLayout l,uint32_t first,uint32_t n,const VkDescriptorSet *sets,uint32_t count,const uint32_t *offsets){
+    (void)b;(void)l;assert(p==VK_PIPELINE_BIND_POINT_COMPUTE&&!first&&n==1&&sets[0]&&!count&&!offsets);
+}
+static VKAPI_ATTR void VKAPI_CALL reuse_dispatch(VkCommandBuffer b,uint32_t x,uint32_t y,uint32_t z){(void)b;assert(x==1&&y==1&&z==1);}
+/* Exercise each device-loss entry point, rather than call the new drain helper
+ * directly. Idle storage must drain immediately; submitted storage stays pinned. */
+static void reuse_failure_drains(void){
+    frontend_vk *c=reuse_context();
+    mag_native_buffer idle=reuse_new(c,(mag_native_buffer){0},4,NULL);
+    assert(!buffer_release(c,idle));unsigned freed=reuse_frees;
+    c->vkCreateSampler=reuse_sampler_lost;
+    mag_native_sampler_desc desc={.struct_size=sizeof(desc),.abi_version=1,
+        .state={.known_fields=MAG_NATIVE_SAMPLER_KNOWN_ALL,.max_anisotropy=1}};
+    mag_native_sampler sampler={0};
+    assert(sampler_create(c,&desc,&sampler)==MAG_NATIVE_DEVICE_FAILED&&c->failed);
+    assert(reuse_frees==freed+1&&!c->buffer_pool&&!c->allocated_bytes);
+    assert(!close_context(c));
+
+    c=reuse_context();
+    mag_native_buffer live=reuse_new(c,(mag_native_buffer){0},8,NULL);
+    idle=reuse_new(c,(mag_native_buffer){0},4,NULL);assert(!buffer_release(c,idle));freed=reuse_frees;
+    frontend_vk_buffer *pending=buffer_find(c,live);
+    frontend_vk_pipeline compute={.id=1,.public_ref=1,.count=1,.gpu=(VkPipeline)(uintptr_t)17,
+        .bindings={{.slot=0,.access=MAG_NATIVE_READ,.minimum_bytes=4,.alignment_bytes=4}}};
+    c->pipelines=&compute;
+    for(unsigned k=0;k<3;++k)c->owner.properties.limits.maxComputeWorkGroupCount[k]=1;
+    c->owner.properties.limits.maxStorageBufferRange=64;
+    c->vkResetCommandPool=reset_pool;c->vkResetDescriptorPool=reset_descriptors;c->vkResetFences=reset_fences;
+    c->vkAllocateDescriptorSets=descriptor_sets;c->vkUpdateDescriptorSets=reuse_update;
+    c->vkBeginCommandBuffer=begin_command;c->vkEndCommandBuffer=end_command;c->vkCmdPipelineBarrier=barrier;
+    c->vkCmdBindPipeline=pipeline;c->vkCmdBindDescriptorSets=reuse_bind_sets;c->vkCmdDispatch=reuse_dispatch;c->vkQueueSubmit=reuse_queue_lost;
+    c->slots[0].fence=(VkFence)(uintptr_t)1;
+    mag_native_binding binding={.slot=0,.buffer=live,.byte_length=8};
+    mag_native_frame frame={.struct_size=sizeof(frame),.abi_version=1,.pipeline={19,1},.bindings=&binding,.binding_count=1,.groups={1,1,1}};
+    mag_native_batch_resource resource={.buffer=live,.role=MAG_NATIVE_UPLOAD};
+    mag_native_batch_command command={.kind=MAG_NATIVE_DISPATCH,.dispatch=&frame};
+    mag_native_batch batch={.struct_size=sizeof(batch),.abi_version=1,.resources=&resource,.resource_count=1,.command_count=1,.commands=&command};
+    mag_native_ticket ticket={0};
+    assert(submit_batch_owned(c,&batch,&ticket)==MAG_NATIVE_INDETERMINATE&&c->failed);
+    assert(reuse_frees==freed+1&&!c->buffer_pool&&pending->readers==1&&compute.references==1);
+    assert(!buffer_release(c,live)&&pending->readers==1);
+    reuse_fence=VK_SUCCESS;mag_native_event event={0};uint32_t count=0;
+    assert(!poll(c,&event,1,&count)&&count==1&&event.no_further_gpu_access);
+    assert(reuse_frees==freed+2&&!c->allocated_bytes&&!compute.references);
+    c->slots[0].fence=VK_NULL_HANDLE;c->pipelines=NULL;assert(!close_context(c));
+}
 static void test_vulkan_buffer_reuse_cpu(void){
     const unsigned begin_allocates=reuse_allocates,begin_frees=reuse_frees;
-    unsetenv("MAG_RENDER_VULKAN_BUFFER_REUSE");frontend_vk *c=reuse_context();
+    assert(!reuse_environment(NULL));frontend_vk *c=reuse_context();
     unsigned created=reuse_creates,freed=reuse_frees;mag_native_buffer a=reuse_new(c,(mag_native_buffer){0},4,NULL);
     assert(buffer_release(c,a)==0&&reuse_frees==freed+1&&c->allocated_bytes==0);assert(close_context(c)==0);
     assert(reuse_creates==created+1);
-    setenv("MAG_RENDER_VULKAN_BUFFER_REUSE","1",1);c=reuse_context();
+    assert(!reuse_environment("1"));c=reuse_context();
     const uint8_t first[4]={1,3,5,7},second[4]={2,4,6,8};uint8_t read[4]={0};
     a=reuse_new(c,(mag_native_buffer){0},4,first);VkBuffer a_physical=buffer_find(c,a)->gpu;
     mag_native_buffer b=reuse_new(c,(mag_native_buffer){0},4,second);VkBuffer b_physical=buffer_find(c,b)->gpu;
@@ -110,6 +172,7 @@ static void test_vulkan_buffer_reuse_cpu(void){
     assert(buffer_create(c,(mag_native_buffer){0},&bad,&out)==MAG_NATIVE_DEVICE_FAILED);
     reuse_fence=VK_SUCCESS;assert(poll(c,&event,1,&count)==0&&count==1&&reuse_frees==freed+2&&c->allocated_bytes==0);
     c->slots[0].fence=VK_NULL_HANDLE;assert(close_context(c)==0);
+    reuse_failure_drains();
     assert(reuse_allocates-begin_allocates==reuse_frees-begin_frees&&reuse_maps==reuse_unmaps&&reuse_creates==reuse_destroys);
-    unsetenv("MAG_RENDER_VULKAN_BUFFER_REUSE");puts("PASS Vulkan physical buffer reuse: ownership/fence, initialization, logical versions, caps and cleanup; CPU dispatch only");
+    assert(!reuse_environment(NULL));puts("PASS Vulkan physical buffer reuse: ownership/fence, initialization, logical versions, caps and cleanup; CPU dispatch only");
 }
