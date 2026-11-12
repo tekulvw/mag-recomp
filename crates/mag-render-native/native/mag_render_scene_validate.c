@@ -2,12 +2,46 @@
 #include "mag_render_stencil_validate.h"
 #include "mag_render_image_validate.h"
 #include <math.h>
+#include <stdlib.h>
 #include <string.h>
 static int zero_buffer(mag_native_buffer b) { return !b.device_generation && !b.id && !b.version; }
 static int same(mag_native_buffer a, mag_native_buffer b) {
     return a.device_generation == b.device_generation && a.id == b.id && a.version == b.version;
 }
-static int resource(const mag_native_scene *s, mag_native_buffer b) {
+/* Per-validation indices only: no registry ownership, caching across calls,
+ * allocation or ABI changes. At most4096 resources occupy8192 slots. Stored
+ * values are scene positions+1; every hit still compares the FULL token. */
+enum { SCENE_RESOURCE_SLOTS = MAG_NATIVE_SCENE_MAX_RESOURCES * 2u };
+_Static_assert(MAG_NATIVE_SCENE_MAX_RESOURCES < UINT16_MAX, "resource index fits local slot");
+_Static_assert(!(SCENE_RESOURCE_SLOTS & (SCENE_RESOURCE_SLOTS-1)), "resource slots power of two");
+static uint32_t resource_hash(mag_native_buffer b) {
+    uint64_t h=b.id ^ ((b.device_generation<<21)|(b.device_generation>>43)) ^
+                    ((b.version<<42)|(b.version>>22));
+    h=(h^(h>>30))*UINT64_C(0xbf58476d1ce4e5b9);
+    h=(h^(h>>27))*UINT64_C(0x94d049bb133111eb);
+    return (uint32_t)(h^(h>>31)) & (SCENE_RESOURCE_SLOTS-1u);
+}
+static int resource_insert(const mag_native_scene *s,uint16_t *slots,uint32_t i) {
+    uint32_t slot=resource_hash(s->resources[i].buffer);
+    for(uint32_t probe=0;probe<SCENE_RESOURCE_SLOTS;++probe){
+        uint32_t row=slots[slot];
+        if(!row){slots[slot]=(uint16_t)(i+1u);return 1;}
+        if(same(s->resources[row-1u].buffer,s->resources[i].buffer))return 0;
+        slot=(slot+1u)&(SCENE_RESOURCE_SLOTS-1u);
+    }
+    return 0; /* Unreachable at the admitted <=1/2 load; fail closed. */
+}
+static int resource(const mag_native_scene *s, mag_native_buffer b,const uint16_t *slots) {
+    if(slots){
+        uint32_t slot=resource_hash(b);
+        for(uint32_t probe=0;probe<SCENE_RESOURCE_SLOTS;++probe){
+            uint32_t row=slots[slot];
+            if(!row)return -1;
+            if(same(s->resources[row-1u].buffer,b))return (int)(row-1u);
+            slot=(slot+1u)&(SCENE_RESOURCE_SLOTS-1u);
+        }
+        return -1;
+    }
     for (uint32_t i = 0; i < s->resource_count; ++i)
         if (same(s->resources[i].buffer, b))
             return (int)i;
@@ -105,8 +139,8 @@ int mag_native_scene_graphics_v2_validate(const mag_native_scene_graphics_v2_des
 }
 static int read_buffer(const mag_native_scene *s, mag_native_buffer b, uint64_t off, uint64_t len,
                        uint64_t align, const mag_native_scene_buffer_info *infos, const int *writers,
-                       mag_native_scene_usage *u) {
-    int i = resource(s, b);
+                       mag_native_scene_usage *u,const uint16_t *resource_slots) {
+    int i = resource(s, b,resource_slots);
     if (i < 0 || s->resources[i].role == MAG_NATIVE_READBACK ||
         (s->resources[i].role == MAG_NATIVE_PRODUCED && writers[i] < 0) ||
         !range(off, len, infos[i].length, align))
@@ -130,6 +164,12 @@ static int scene_validate(const mag_native_scene *s, const mag_native_scene_regi
         (s->dispatch_count && !s->dispatches))
         return MAG_NATIVE_INVALID;
     memset(u, 0, sizeof(*u));
+    uint16_t indexed_resources[SCENE_RESOURCE_SLOTS];
+    uint16_t *resource_slots=NULL;
+    const char *index_flag=getenv("MAG_RENDER_SCENE_RESOURCE_INDEX");
+    if(index_flag && !strcmp(index_flag,"1")){
+        memset(indexed_resources,0,sizeof(indexed_resources));resource_slots=indexed_resources;
+    }
     mag_native_scene_buffer_info infos[MAG_NATIVE_SCENE_MAX_RESOURCES];
     int writers[MAG_NATIVE_SCENE_MAX_RESOURCES];
     memset(writers, -1, sizeof(writers));
@@ -137,7 +177,11 @@ static int scene_validate(const mag_native_scene *s, const mag_native_scene_regi
         const mag_native_batch_resource *b = &s->resources[i];
         if (b->reserved || b->role > MAG_NATIVE_READBACK)
             return MAG_NATIVE_INVALID;
-        for (uint32_t j = 0; j < i; ++j)
+        /* Insert exactly where the old duplicate scan ran, before this
+         * registry callback. Earlier malformed entries/statuses keep priority. */
+        if(resource_slots){
+            if(!resource_insert(s,resource_slots,i))return MAG_NATIVE_INVALID;
+        }else for (uint32_t j = 0; j < i; ++j)
             if (same(b->buffer, s->resources[j].buffer))
                 return MAG_NATIVE_INVALID;
         int status = r->buffer(r->context, b->buffer, &infos[i]);
@@ -189,7 +233,7 @@ static int scene_validate(const mag_native_scene *s, const mag_native_scene_regi
                 alignment = layout->alignment_bytes;
             uint64_t maximum =
                 layout->binding_kind == MAG_NATIVE_UNIFORM ? r->max_uniform_bytes : r->max_storage_bytes;
-            int i = resource(s, b->buffer);
+            int i = resource(s, b->buffer,resource_slots);
             if (i < 0 || !range(b->offset, b->byte_length, infos[i].length, alignment) ||
                 b->byte_length > maximum)
                 return MAG_NATIVE_INVALID;
@@ -199,7 +243,7 @@ static int scene_validate(const mag_native_scene *s, const mag_native_scene_regi
                 accesses[i] = 2;
             } else {
                 if (accesses[i] == 2 ||
-                    read_buffer(s, b->buffer, b->offset, b->byte_length, alignment, infos, writers, u))
+                    read_buffer(s, b->buffer, b->offset, b->byte_length, alignment, infos, writers, u,resource_slots))
                     return MAG_NATIVE_INVALID;
                 accesses[i] = 1;
             }
@@ -244,7 +288,7 @@ static int scene_validate(const mag_native_scene *s, const mag_native_scene_regi
         }}
 
         if(!zero_buffer(im->upload)){
-            int j=resource(s,im->upload);
+            int j=resource(s,im->upload,resource_slots);
             if(j<0||s->resources[j].role!=MAG_NATIVE_UPLOAD||(v3&&v3->image_layout_count?infos[j].length<upload_extent:infos[j].length!=upload_extent)||
                ((!v3||!v3->image_layout_count)&&im->format==MAG_NATIVE_SCENE_D32))return MAG_NATIVE_INVALID;
             u->read[j]=1;initialized[i]=1;
@@ -327,8 +371,8 @@ static int scene_validate(const mag_native_scene *s, const mag_native_scene_regi
                 g->color_format != (p->color.image == MAG_NATIVE_SCENE_NONE ? 0 : s->images[p->color.image].format) ||
                 g->depth_format != (p->depth.image == MAG_NATIVE_SCENE_NONE ? 0 : s->images[p->depth.image].format))
                 return MAG_NATIVE_INVALID;
-            if (read_buffer(s, d->vertices, d->vertex_offset, d->vertex_length, 4, infos, writers, u) ||
-                read_buffer(s, d->indices, d->index_offset, d->index_length, 4, infos, writers, u))
+            if (read_buffer(s, d->vertices, d->vertex_offset, d->vertex_length, 4, infos, writers, u,resource_slots) ||
+                read_buffer(s, d->indices, d->index_offset, d->index_length, 4, infos, writers, u,resource_slots))
                 return MAG_NATIVE_INVALID;
             uint32_t slots[2] = {0}, textures[2] = {0}, samplers[2] = {0}, sampler_kinds[2][16] = {{0}};
             for (uint32_t j = 0; j < d->buffer_count; ++j) {
@@ -351,7 +395,7 @@ static int scene_validate(const mag_native_scene *s, const mag_native_scene_regi
                     layout->binding_kind == MAG_NATIVE_UNIFORM ? r->max_uniform_bytes : r->max_storage_bytes;
                 if (b->binding.byte_length > max ||
                     read_buffer(s, b->binding.buffer, b->binding.offset, b->binding.byte_length, align, infos,
-                                writers, u))
+                                writers, u,resource_slots))
                     return MAG_NATIVE_INVALID;
             }
             for (uint32_t j = 0; j < d->texture_count; ++j) {
@@ -414,7 +458,7 @@ static int scene_validate(const mag_native_scene *s, const mag_native_scene_regi
             return MAG_NATIVE_INVALID;
     }
     if (!zero_buffer(s->diagnostic_readback)) {
-        int i = resource(s, s->diagnostic_readback);
+        int i = resource(s, s->diagnostic_readback,resource_slots);
         if (i < 0 || s->output_image == MAG_NATIVE_SCENE_NONE || s->resources[i].role != MAG_NATIVE_READBACK)
             return MAG_NATIVE_INVALID;
         const mag_native_scene_image *im = &s->images[s->output_image];

@@ -75,7 +75,7 @@ def check(args):
                                            NATIVE / "mag_render_dxc.cpp",validator,image_validator,stencil_validator,raster,sampler,sampler_registry]))
         fixtures.append(("scene_preflight", [FIXTURES / "test_d3d12_scene_preflight.cpp",NATIVE / "mag_render_dxc.cpp",validator,image_validator,stencil_validator,raster,sampler,sampler_registry]))
         fixtures.append(("image_import", [FIXTURES / "test_d3d12_image_import.cpp", NATIVE / "mag_render_dxc.cpp",validator,image_validator,stencil_validator,raster,sampler,sampler_registry]))
-    for name in (() if args.sdk_only else ("vertex_layout", "bgra_scene", "binding_scene", "scene_capacity", "raster_state", "sampler_lifetime", "sampler_scene", "image_format", "image_layout", "viewport", "extended_scene", "stencil", "scene_imports")):
+    for name in (() if args.sdk_only else ("vertex_layout", "bgra_scene", "binding_scene", "scene_capacity", "scene_resource_index", "raster_state", "sampler_lifetime", "sampler_scene", "image_format", "image_layout", "viewport", "extended_scene", "stencil", "scene_imports")):
         fixtures.append((name, [FIXTURES / f"test_{name}.c", NATIVE / "mag_render_scene_validate.c", NATIVE / "mag_render_stencil_validate.c", NATIVE / "mag_render_image_validate.c", NATIVE / "mag_render_raster_validate.c", NATIVE / "mag_render_sampler_validate.c", NATIVE / "mag_render_sampler_registry.c"]))
     if args.vulkan_include and not args.sdk_only:
         if not (args.vulkan_include / "vulkan/vulkan.h").is_file():
