@@ -244,11 +244,15 @@ illegal instruction), rebuild with `MAG_X86_LEVEL=baseline` (or `v3`, to rule ou
 installer, set the environment variable `MAG_X86_LEVEL=baseline` before starting it and build
 into a new installation folder.
 
-### Native Edge geometry job (opt-in)
+### Native Edge geometry job
+
+Linux installer builds link and enable this job by default, applying its lift hook after the
+streamed-job lift and enabling only the engine target. Manual builds keep the CMake default off.
 
 `-DMAG_NATIVE_EDGEGEOM=ON` links a native replacement for the streamed Edge geometry job. Before
-configuring, apply `tools/payload_override_hooks.py` to the engine SPU lift. Enable it per run with
-`MAG_NATIVE_EDGEGEOM=1`. Default builds and runs are unchanged. See
+configuring, apply `tools/payload_override_hooks.py` to the engine SPU lift. Linked Linux builds
+enable it by default; on macOS and Windows enable it per run with `MAG_NATIVE_EDGEGEOM=1`.
+Set `MAG_NATIVE_EDGEGEOM=0` for the lifted path on any host. macOS and Windows remain opt-in. See
 [docs/native-edgegeom.md](docs/native-edgegeom.md).
 
 ## 7. Run

@@ -69,6 +69,8 @@ class NativeEdgeGeomBuild(unittest.TestCase):
         self.assertRegex(module, r'option\(MAG_NATIVE_EDGEGEOM "[^"]*" OFF\)')
         self.assertIn('payload_override_hooks', module)
         self.assertIn('native-edgegeom-sources=', module)
+        self.assertIn('target_compile_definitions(${target} PRIVATE MAG_HAS_NATIVE_EDGEGEOM=1)', module)
+        self.assertLess(module.index('if(_missing)'), module.index('MAG_HAS_NATIVE_EDGEGEOM=1'))
         top = (ROOT / 'CMakeLists.txt').read_text()
         self.assertEqual(len(re.findall(r'mag_enable_native_edgegeom\(', top)), 1)
         self.assertIn('${MAG_NATIVE_EDGEGEOM_RECEIPT_EXTRA}', top)

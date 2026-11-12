@@ -39,8 +39,8 @@ inline std::size_t mag_thread_stack_overhead()
 }
 
 // Apply before SDK initialization. The pinned runtime leaves these switches off
-// unless selected explicitly. Every host gets them, and any variable already set
-// (an explicit 0 included) wins, so each can be turned off for comparison.
+// unless selected explicitly. Platform-specific defaults are guarded below. Any
+// variable already set (an explicit 0 included) wins for comparison.
 //
 // The RSX, PPU and SPU switches below are the set every accepted hosted run used.
 // On Linux they took an installer build from 4.6 to 21.5 guest fps.
@@ -88,6 +88,11 @@ inline int mag_apply_runtime_defaults()
              // Per-line coherence versions avoid scanning every registered SPU
              // context on ordinary writes; explicit 0 keeps the earlier scheme.
              Setting{"PS3RECOMP_COH_VERSIONS", "1"},
+#if defined(__linux__) && defined(MAG_HAS_NATIVE_EDGEGEOM)
+             // Native Edge geometry reduced Linux guest flip-request intervals in a
+             // matched normal-path run; refused invocations keep the lifted job.
+             Setting{"MAG_NATIVE_EDGEGEOM", "1"},
+#endif
 #if defined(__linux__)
              // Linux renders with the SDK's Vulkan backend: batch its engine work.
              Setting{"PS3RECOMP_VK_BATCHED_ENGINE", "1"},

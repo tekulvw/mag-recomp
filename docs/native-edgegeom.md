@@ -1,4 +1,4 @@
-# Native Edge geometry job (opt-in)
+# Native Edge geometry job
 
 The streamed Edge geometry job is the largest SPU cost in a frame. It turns one mesh partition
 into an RSX index list, any produced vertices, and the draw commands in the parent's command
@@ -6,10 +6,15 @@ hole. `src/native_edgegeom/` reimplements it natively from
 [render-frontend/behavior/edge-geometry-job.md](render-frontend/behavior/edge-geometry-job.md),
 under [the clean-room method](native-graphics-reimplementation-method.md).
 
-It is off by default, and it changes nothing unless both the build and the run opt in. An
-invocation it does not handle runs the lifted job unchanged.
+Linux installer builds link and enable the implementation by default. Manual builds must link
+it explicitly. Linked Linux builds enable it by default; macOS and Windows still require a
+run-time opt-in. An explicit `MAG_NATIVE_EDGEGEOM=0` disables it on any host. An invocation it does not handle runs the lifted job unchanged.
 
 ## Building with it
+
+The Linux installer runs the payload-override hook after the streamed-job lift and sets
+`-DMAG_NATIVE_EDGEGEOM=ON` only for the engine. The launcher and other platforms retain their
+existing build defaults. For a manual build:
 
 1. Apply the payload-override lift step to the engine SPU lift. Run it after
    `tools/wws_job_lift.py`; if you also use `tools/graphics_payload_hooks.py`, run this step after
@@ -25,13 +30,16 @@ invocation it does not handle runs the lifted job unchanged.
    the step, because the native path could never run. The receipt lists the implementation's
    sources under `extensions` (`native-edgegeom-sources`, `native-edgegeom-build`).
 
-The same binary runs the lifted job unless the run opts in, so one build serves an A/B.
+The same binary supports both paths: set `MAG_NATIVE_EDGEGEOM=0` for the lifted job and `1` for
+the native job, so one build serves an A/B. Linux supplies `1` before C++ static initialization
+when the variable is absent. See the [Linux interval comparison](development/performance-findings.md#native-edge-geometry-on-linux-november-2026)
+for the measured benefit and its limits.
 
 ## Running
 
 | Variable | Effect |
 | --- | --- |
-| `MAG_NATIVE_EDGEGEOM=1` | Registers the payload override at start (`[native-edgegeom] enabled` on stderr). Any other value, or none, leaves the job lifted. Set it for the whole run; never toggle it within a run (the Depth and Main passes must take positions from the same producer). |
+| `MAG_NATIVE_EDGEGEOM=1` | Registers the payload override at start (`[native-edgegeom] enabled` on stderr). Any other value leaves the job lifted; an unset variable defaults to `1` on Linux and stays unset on other hosts. Set it for the whole run; never toggle it within a run (the Depth and Main passes must take positions from the same producer). |
 | `MAG_NATIVE_EDGEGEOM_TRACE=N` | Prints the first N job-manager service calls: slot, entry, arguments, context state before the call (status, interrupt enable, interrupt save and frame, pending transfer, host depth, policy mode, image, stack) and the result after it. Diagnostic only. |
 | `MAG_NATIVE_EDGEGEOM_FORCE_REFUSE=1` | Diagnostic: refuses every invocation at the latest refusal point (buffers acquired, ring line reserved), reason `forced`, so the fallback to the lifted job can be exercised in game. |
 | `MAG_NATIVE_EDGEGEOM_STATS=1` | Every 5 seconds and at exit, prints the number of invocations, handled and refused, the mean native time per handled invocation, and the counts per kind and reason. |

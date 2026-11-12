@@ -201,7 +201,7 @@ REQUIRED_SOURCE_FILES = (
     'tools/prepare_inputs.py', 'tools/inventory.py', 'tools/lift.py',
     'tools/spu_lift.py', 'tools/engine_spu_lift.py', 'tools/firmware_lift.py',
     'tools/spu_programs_lift.py', 'tools/provenance.py',
-    'tools/wws_job_lift.py', 'tools/verified_spu_jobs.py',
+    'tools/wws_job_lift.py', 'tools/verified_spu_jobs.py', 'tools/payload_override_hooks.py',
     'tools/movie_picture_hooks.py', 'tools/graphics_trace_hooks.py',
     'tools/installer_ppu_splice.py', 'tools/ppu_function_splice.py',
     'profiles/retail-v1.0-ppu-jumptable-splice.json', 'profiles/retail-v1.0-ppu-ctr64-splice.json',
@@ -297,6 +297,8 @@ def build_plan(config, workspace):
            '--baseline', engine_spu_base, '--output', paths['engine-spu'],
            '--merge-chunks', '--require-complete', '--static-indirect',
            *('--lifter-arg=' + a for a in STREAMED_JOB_LIFTER_ARGS[config_host(config)]))
+    if config_host(config) == 'linux-x86_64':
+        script('native-edgegeom', 'payload_override_hooks.py', '--directory', paths['engine-spu'])
     script('firmware', 'firmware_lift.py', '--output', paths['firmware'])
     script('spu-programs', 'spu_programs_lift.py', '--sdk', sdk['spu-programs'],
            '--sdk-revision', pins['spu-programs']['commit'], '--output', paths['spu-programs'])
@@ -339,6 +341,8 @@ def build_plan(config, workspace):
     for name, image, spu, build in [('launcher', 'EBOOT', 'worker-spu', 'build'),
                                     ('engine', 'mage_g', 'engine-spu', 'build-engine')]:
         extra = ['-DMAG_SPU_PROGRAMS_DIR=' + cmake_path(paths['spu-programs'])] if name == 'engine' else []
+        if name == 'engine' and config_host(config) == 'linux-x86_64':
+            extra += ['-DMAG_NATIVE_EDGEGEOM=ON']
         if name == 'engine' and controls:
             extra += ['-DMAG_GAME_CONTROLS=ON', '-DMAG_INPUT_RUST=ON',
                       '-DMAG_INPUT_CARGO=' + cmake_path(controls['cargo']), '-DMAG_INPUT_RUSTC=' + cmake_path(controls['rustc'])]
