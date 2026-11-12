@@ -1,8 +1,8 @@
 # Native Edge geometry job
 
-The streamed Edge geometry job is the largest SPU cost in a frame. It turns one mesh partition
-into an RSX index list, any produced vertices, and the draw commands in the parent's command
-hole. `src/native_edgegeom/` reimplements it natively from
+The streamed Edge geometry job turns one mesh partition into an RSX index list, any produced
+vertices, and the draw commands in the parent's command hole. `src/native_edgegeom/` reimplements
+it natively from
 [render-frontend/behavior/edge-geometry-job.md](render-frontend/behavior/edge-geometry-job.md),
 under [the clean-room method](native-graphics-reimplementation-method.md).
 
