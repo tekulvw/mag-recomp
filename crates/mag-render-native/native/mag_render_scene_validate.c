@@ -1,3 +1,7 @@
+#if defined(_WIN32) && !defined(_CRT_SECURE_NO_WARNINGS)
+/* Match the Vulkan backend's CRT policy for its exact-value getenv switches. */
+#define _CRT_SECURE_NO_WARNINGS
+#endif
 #include "mag_render_scene_validate.h"
 #include "mag_render_stencil_validate.h"
 #include "mag_render_image_validate.h"
