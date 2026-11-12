@@ -523,8 +523,7 @@ static int scene_graphics_create_layout(void *opaque, const mag_native_scene_gra
     p->scene_desc.vertex.entry = NULL;
     p->scene_desc.fragment.source = NULL;
     p->scene_desc.fragment.entry = NULL;
-    p->next = c->pipelines;
-    c->pipelines = p;
+    pipeline_publish(c, p);
     *out = (mag_native_pipeline){c->generation, p->id};
     p = NULL;
     status = MAG_NATIVE_OK;
@@ -1141,6 +1140,7 @@ static int submit_scene_owned(frontend_vk *c, const mag_native_scene *scene, mag
                 (unsigned long long)c->resident_identity_hits, (unsigned long long)c->resident_misses,
                 c->resident_entries, (unsigned long long)c->resident_bytes, (unsigned long long)c->resident_evictions);
     memory_report(c);
+    lookup_report(c, 0);
     return MAG_NATIVE_OK;
 fail:
     free(draw_sets);

@@ -1,4 +1,7 @@
 /* Actual Vulkan encoder through injected CPU dispatch. No GPU device/driver calls. */
+#if !defined(_WIN32) && !defined(_POSIX_C_SOURCE)
+#define _POSIX_C_SOURCE 200809L
+#endif
 #ifdef NDEBUG
 #undef NDEBUG
 #endif
@@ -70,7 +73,9 @@ static frontend_vk *context(void){
     mag_native_sampler_registry_init(&c->samplers,1,c,sampler_payload_destroy);return c;
 }
 #include "test_vulkan_import_cpu.inc"
+#include "test_vulkan_lookup_cpu.inc"
 int main(void){
+    test_vulkan_lookup_cpu();
     const VkFormat expected[]={VK_FORMAT_UNDEFINED,VK_FORMAT_R8G8B8A8_UNORM,VK_FORMAT_D32_SFLOAT,VK_FORMAT_B8G8R8A8_UNORM,VK_FORMAT_R8_UNORM,VK_FORMAT_R8G8_UNORM,VK_FORMAT_BC1_RGBA_UNORM_BLOCK,VK_FORMAT_BC2_UNORM_BLOCK,VK_FORMAT_BC3_UNORM_BLOCK,VK_FORMAT_R16_UNORM,VK_FORMAT_R16G16_UNORM,VK_FORMAT_R16G16B16A16_SFLOAT,VK_FORMAT_R32G32B32A32_SFLOAT,VK_FORMAT_R32_SFLOAT,VK_FORMAT_R16G16_SFLOAT};
     frontend_vk *c=context();
     for(uint32_t i=1;i<15;++i) {
