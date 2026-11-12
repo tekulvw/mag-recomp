@@ -41,7 +41,7 @@ Radeon RX 7900 XTX and RADV changed exactly the two index switches together:
 | `MAG_RENDER_SCENE_RESOURCE_INDEX` | `0` | `1` |
 | Backend lookup probes | `0` | `0` |
 | Busy diagnostics | `0` | `0` |
-| Owner-span diagnostics | `0` | `0` |
+| Register-span optimization | `0` | `0` |
 | Focused measurement window | 55 seconds | 55 seconds |
 
 All other controls and the executable were held constant. Each arm retained
@@ -131,5 +131,6 @@ Windows or macOS application performance.
 
 Backend probe reports are cumulative scalar diagnostics: first two accepted
 scenes, every 120th scene and close. Keep probes off in both timing arms.
-Hash collisions retain bounded worst cases; family bookkeeping and disposal-list
-unlinking retain their original costs.
+Backend hash collisions retain a worst-case linear search in the bucket; local
+validator table probes have an explicit bound. Family bookkeeping and
+disposal-list unlinking retain their original costs.
