@@ -57,7 +57,7 @@ static int sampler_create(void *opaque, const mag_native_sampler_desc *desc, mag
     VkResult result=c->vkCreateSampler(c->owner.device,&info,NULL,&p->gpu);
     if(result!=VK_SUCCESS){
         free(p);
-        if(result==VK_ERROR_DEVICE_LOST){c->failed=1;return MAG_NATIVE_DEVICE_FAILED;}
+        if(result==VK_ERROR_DEVICE_LOST){mark_device_failed(c);return MAG_NATIVE_DEVICE_FAILED;}
         return MAG_NATIVE_ALLOCATION_FAILED;
     }
     status = mag_native_sampler_registry_insert(&c->samplers, s, p, out);

@@ -559,7 +559,7 @@ static int submit_batch_owned(frontend_vk *c, const mag_native_batch *batch, mag
     }
     *out = slot->ticket;
     if (result != VK_SUCCESS) {
-        c->failed = 1;
+        mark_device_failed(c);
         return MAG_NATIVE_INDETERMINATE;
     }
     return MAG_NATIVE_OK;
