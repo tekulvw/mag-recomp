@@ -471,6 +471,20 @@ else()
         COMPILE_OPTIONS "-w;-ffp-contract=off;-O${MAG_GENERATED_PPU_OPT}")
 endif()
 
+# Cached getenv on Windows (src/mag_env_cache_win.cpp). The static CRT's getenv
+# locks and scans the whole environment on every call, and the runtime polls its
+# switches from hot paths. The force-included header routes getenv and the CRT's
+# environment writes through the cache in the runtime and in MAG's own sources.
+# Lifted PPU and firmware units call neither and keep their compile commands.
+if(WIN32 AND MSVC)
+    target_sources(${PROJECT_NAME} PRIVATE src/mag_env_cache_win.cpp)
+    set(MAG_ENV_CACHE_INCLUDE "/FI${CMAKE_CURRENT_SOURCE_DIR}/src/mag_env_cache_win.h")
+    target_compile_options(ps3recomp_runtime PRIVATE "${MAG_ENV_CACHE_INCLUDE}")
+    get_target_property(MAG_ENV_CACHE_SOURCES ${PROJECT_NAME} SOURCES)
+    list(REMOVE_ITEM MAG_ENV_CACHE_SOURCES ${RECOMP_SOURCES} ${MAG_FIRMWARE_SOURCES})
+    set_property(SOURCE ${MAG_ENV_CACHE_SOURCES} APPEND PROPERTY COMPILE_OPTIONS "${MAG_ENV_CACHE_INCLUDE}")
+endif()
+
 # ---------------------------------------------------------------------------
 # Install
 # ---------------------------------------------------------------------------
