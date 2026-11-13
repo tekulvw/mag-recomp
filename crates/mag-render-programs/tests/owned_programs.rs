@@ -124,6 +124,120 @@ fn texture_program_exposes_individual_unit_and_sampler_bindings() {
     assert!(!shader.source.contains("rsx_tex["));
 }
 
+// Authored instruction fixtures: source unit immediates, no captured programs.
+fn sampled_words(units: &[u32], opcode: u32) -> Vec<u32> {
+    let mut words = Vec::new();
+    for &unit in units {
+        words.extend([
+            (opcode << 24) | (unit << 17) | (15 << 9) | (4 << 13),
+            1 | 0x1c800 | (7 << 18),
+            0x1c800,
+            0x1c800,
+        ]);
+    }
+    if words.is_empty() {
+        words.extend([
+            (1 << 24) | (15 << 9),
+            1 | 0x1c800 | (7 << 18),
+            0x1c800,
+            0x1c800,
+        ]);
+    }
+    let last = words.len() - 4;
+    words[last] |= 1;
+    words
+}
+fn assert_sampled_declarations(shader: &HlslProgram, units: &[u32]) {
+    for slot in 0..16 {
+        assert_eq!(
+            shader
+                .source
+                .contains(&format!("rsx_tex{slot} : register(t{slot})")),
+            units.contains(&slot),
+            "texture declaration at slot{slot}, used={units:?}"
+        );
+        assert_eq!(
+            shader
+                .source
+                .contains(&format!("rsx_samp{slot} : register(s{slot})")),
+            units.contains(&slot),
+            "sampler declaration at slot{slot}, used={units:?}"
+        );
+    }
+    // Every emitted immediate reference has a declaration. Names ending in a
+    // unit are tokens, so unit1 cannot accidentally match unit10.
+    for token in shader
+        .source
+        .split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+    {
+        if let Some(unit) = token
+            .strip_prefix("rsx_tex")
+            .or_else(|| token.strip_prefix("rsx_samp"))
+            .and_then(|n| n.parse::<u32>().ok())
+        {
+            assert!(units.contains(&unit), "undeclared reference{token}");
+        }
+    }
+}
+#[test]
+fn fragment_declarations_follow_source_sampled_units() {
+    for units in [vec![], vec![0], vec![3], vec![15], vec![2, 13, 15]] {
+        let mut words = sampled_words(&units, 0x17);
+        // Bytes after the admitted end are not observable texture reads.
+        words.extend([(0x17 << 24) | (7 << 17) | (15 << 9) | 1, 0, 0, 0]);
+        let bytes = encoded(&words);
+        assert_sampled_declarations(&fragment(fragment_input(&bytes)).unwrap(), &units);
+    }
+}
+#[test]
+fn fragment_declarations_cover_supported_texture_operations_and_unused_controls() {
+    for opcode in [0x17, 0x18, 0x2f, 0x31] {
+        let bytes = encoded(&sampled_words(&[15], opcode));
+        assert_sampled_declarations(
+            &fragment(fragment_input(&bytes)).unwrap_or_else(|e| panic!("opcode={opcode:x} {e:?}")),
+            &[15],
+        );
+    }
+    // TXD/BEM forms already reach the emitter's explicit unsupported path.
+    // The mask still reports the source read; this change does not admit them.
+    for opcode in [0x19, 0x33, 0x34] {
+        let bytes = encoded(&sampled_words(&[15], opcode));
+        assert_eq!(fragment_texture_units(&bytes), Ok(1 << 15));
+        assert!(matches!(
+            fragment(fragment_input(&bytes)),
+            Err(ProgramError::Unsupported)
+        ));
+    }
+    for mode in 0..5 {
+        for units in [vec![], vec![3], vec![2, 13, 15]] {
+            let bytes = encoded(&sampled_words(&units, 0x17));
+            let mut input = fragment_input(&bytes);
+            // Controls on unused units cannot create a source resource read.
+            match mode {
+                0 => input.cube_mask = 0xffff,
+                1 => input.volume_mask = 0xffff,
+                2 => {
+                    input.unnormalized_mask = 0xffff;
+                    input.texture_dimensions = [[16, 32]; 16];
+                }
+                3 => {
+                    input.shadow = [ShadowTexture {
+                        enabled: 1,
+                        function: 2,
+                        linear: 0,
+                        unnormalized: 0,
+                    }; 16];
+                }
+                _ => {
+                    input.gamma = [15; 16];
+                    input.expand = [16; 16];
+                }
+            }
+            assert_sampled_declarations(&fragment(input).unwrap(), &units);
+        }
+    }
+}
+
 #[test]
 fn disabled_array_uses_explicit_current_attribute_uniform_without_fake_vertex_rows() {
     let words = mov();
