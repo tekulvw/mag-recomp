@@ -29,6 +29,8 @@ function(mag_enable_native_edgegeom target sdk spu_dir image)
     get_filename_component(_root "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/.." ABSOLUTE)
     set(_sources "${_root}/src/native_edgegeom/edgegeom_core.cpp" "${_root}/src/native_edgegeom/edgegeom_runtime.cpp")
     target_sources(${target} PRIVATE ${_sources})
+    # Only linked engines may select a native default before static initialization.
+    target_compile_definitions(${target} PRIVATE MAG_HAS_NATIVE_EDGEGEOM=1)
     set_source_files_properties(${_sources} TARGET_DIRECTORY ${target} PROPERTIES
         INCLUDE_DIRECTORIES "${_root}/src/native_edgegeom;${sdk}/runtime/spu;${sdk}/runtime;${sdk}")
     # The facing rule needs unfused area products; clang sources say so themselves.

@@ -77,6 +77,13 @@ applied before the constructors it reached 21.0.
 | `PS3RECOMP_VK_GUEST_PROGRAMS` | env | `1` | Linux players; Windows Vulkan builds | `src/main.cpp`, `installer/mag_installer/native_package_linux.py` | Draws with the register-file engine and the guest's own shader programs (through glslang) instead of the fixed-function path (#124). | Windows: `0`. Linux players: set by the supervisor |
 | `PS3RECOMP_METAL_FPS` | env | `1` | macOS | `src/main.cpp` | Native frame-rate diagnostics in the Metal window title. | `0` keeps the plain title |
 
+The MAG-owned native geometry switch is documented in [native-edgegeom.md](native-edgegeom.md).
+For builds that link it, `mag_runtime_defaults.h` selects `MAG_NATIVE_EDGEGEOM=1` on Linux before
+C++ static initializers cache the flag. Existing environment values, including `0`, win. macOS and
+Windows keep their existing opt-in behavior. The Linux installer applies the public payload hook
+after the streamed-job lift and links native Edge into the engine only; unlinked binaries do not
+set this variable by default.
+
 ## Packaged players and launchers
 
 The supervisors in `installer/mag_installer/native_package*.py` set these for both the launcher

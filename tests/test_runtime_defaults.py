@@ -18,7 +18,7 @@ DEFAULTS={'SPU_DISPATCH_CACHE':'1','SPU_MFC_LOOKUP_CACHE':'1','SPU_FLOAT_RZ':'1'
           'PS3RECOMP_COH_VERSIONS':'1'}
 LINUX_VULKAN={'PS3RECOMP_VK_BATCHED_ENGINE':'1','PS3RECOMP_VK_MERGE_PASSES':'1','PS3RECOMP_VK_DESCRIPTOR_REUSE':'1'}
 if sys.platform.startswith('linux'): DEFAULTS.update(LINUX_VULKAN)
-KEYS=tuple(DEFAULTS)+('RUST_MIN_STACK',)+tuple(LINUX_VULKAN)
+KEYS=tuple(DEFAULTS)+('RUST_MIN_STACK','MAG_NATIVE_EDGEGEOM')+tuple(LINUX_VULKAN)
 
 @unittest.skipUnless(shutil.which('clang++'),'clang++ required')
 class RuntimeDefaultsTests(unittest.TestCase):
@@ -69,6 +69,37 @@ for (auto k : {'''+','.join(f'"{k}"' for k in DEFAULTS)+'''}) { const char* v=st
                 self.assertEqual(result.stdout.splitlines(),[f'{k}={DEFAULTS[k]}' for k in keys],objects)
                 result=subprocess.run([str(tmp/f'game{i}')],env={**base,**{k:'0' for k in keys}},check=True,capture_output=True,text=True)
                 self.assertEqual(result.stdout.splitlines(),[f'{k}=0' for k in keys])  # explicit values still win
+
+    def test_native_edge_default_requires_linked_linux_and_precedes_static_flags(self):
+        """Exercise the Linux selection even on macOS; no runtime or game needed."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp=Path(tmp)
+            # Match the runtime's C++ static cached flag, before main() applies defaults.
+            (tmp/'edge.cpp').write_text('#include <cstdlib>\n#include <cstring>\n'
+                'const bool enabled = [] { const char* e = std::getenv("MAG_NATIVE_EDGEGEOM"); '
+                'return e && !std::strcmp(e, "1"); }();\n'
+                'extern "C" bool edge_enabled() { return enabled; }\n')
+            (tmp/'main.cpp').write_text('#include <cstdio>\nextern "C" bool edge_enabled();\n'
+                'int main() { std::printf("%d\\n", edge_enabled()); }\n')
+            base={k:v for k,v in os.environ.items() if k not in KEYS}
+            for linux in (False, True):
+                for linked in (False, True):
+                    with self.subTest(linux=linux, linked=linked):
+                        # Select only this header's platform branch; on macOS glibc stays off.
+                        flags=['-D__linux__=1' if linux else '-U__linux__']
+                        if linked: flags += ['-DMAG_HAS_NATIVE_EDGEGEOM=1']
+                        binary=tmp/f'flags-{int(linux)}-{int(linked)}'
+                        # Put edge.o before early.o: ELF must use priority, not link order.
+                        # Mach-O uses link order, so keep its early constructor first.
+                        sources=[ROOT/'src/mag_runtime_defaults_early.cpp', tmp/'edge.cpp', tmp/'main.cpp']
+                        if sys.platform.startswith('linux'): sources.reverse()
+                        subprocess.run(['clang++','-std=c++17','-Wall','-Wextra','-Werror',
+                            '-I'+str(ROOT/'src'),*flags,*map(str,sources),'-o',str(binary)],
+                            check=True,capture_output=True,text=True)
+                        for value, expected in ((None,int(linux and linked)),('0',0),('1',1),('',0)):
+                            env=base if value is None else {**base,'MAG_NATIVE_EDGEGEOM':value}
+                            result=subprocess.run([str(binary)],env=env,check=True,capture_output=True,text=True)
+                            self.assertEqual(result.stdout.strip(),str(expected),(linux,linked,value))
 
     @unittest.skipUnless(sys.platform.startswith('linux'),'glibc static TLS is carved from thread stacks only on Linux')
     def test_rust_threads_keep_their_stack_beside_static_tls(self):

@@ -64,6 +64,39 @@ Notes on these:
 On 24 October the normal build ran at about 21.7 unique guest frames/s over two 60-second windows,
 while the display showed about 33.7 presentations/s; the difference is repeated frames.
 
+## Native Edge geometry on Linux (November 2026)
+
+A matched pair of 55-second normal-rendering runs on Linux used the same binary with the public
+native Edge implementation linked. The only treatment was `MAG_NATIVE_EDGEGEOM=0` versus `1`;
+the Rust render frontend and other native rendering providers were disabled. Both runs used the
+same FIFO timing and native Edge counters, retained focus throughout, and completed bounded cleanup.
+The tested build used public source `214175fca49a2d51e71b6caf3c257c4725834952` and the
+source-bound runtime override `1124cb89f274f3dd797f77480d7a50f23948ef5a`. The public native Edge
+core, runtime shim and lift-hook implementation are unchanged between that source and the main
+baseline for this default change, `4f908f98a666fa8fbbb10fd0c3a521286c74d40d`. This pair is not a
+measurement of a newly rebuilt installer at the current SDK pin.
+
+| Measurement | Lifted Edge | Native Edge | Change |
+| --- | ---: | ---: | ---: |
+| Median of periodic mean host presentation intervals | 21.510 ms | 17.510 ms | -18.60% |
+| Mean guest flip-request interval | 34.119 ms | 31.147 ms | -8.71% |
+| Median guest flip-request interval | 33.633 ms | 30.906 ms | -8.11% |
+| 95th-percentile guest flip-request interval | 37.452 ms | 35.330 ms | -5.67% |
+
+The native run handled index-only, wind, instanced-wind and skinned geometry. One wind invocation
+refused because its output ring was full and used the lifted fallback. The original Main and Depth
+parent providers remained active in both runs; this does not prove their removal. Reviewed images
+showed the world, weapon and HUD without gross omissions, which is not pixel-equivalence or full
+real-match visual acceptance.
+
+Host presentations may repeat frames. Guest flip requests do not establish unique GPU-completed
+frames or physical display FPS, and a native handled counter advances before job completion. This
+pair establishes a narrower interval improvement, not sustained 60 FPS. It supports the Linux
+runtime default when the native Edge implementation is linked; macOS and Windows retain opt-in
+behavior pending their own measurements. An explicit `MAG_NATIVE_EDGEGEOM=0` restores the lifted
+Edge path for comparison. See [native-edgegeom.md](../native-edgegeom.md) for build prerequisites,
+admission and fallback behavior.
+
 ## Tried and not kept
 
 | Attempt | Result |

@@ -157,6 +157,37 @@ class NativeRecipeTests(unittest.TestCase):
             self.assertIn('-DCMAKE_PREFIX_PATH=' + prefix.resolve().as_posix(), configure)
             self.assertTrue(all('\\' not in argument for argument in configure if argument.startswith('-D')))
 
+    def test_linux_native_edge_hooks_after_streamed_lift_and_links_only_engine(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); data = self.config(root); workspace = self.workspace(root)
+            data.update(host='linux-x86_64', linux_toolchain={'cc': 'cmake', 'cxx': 'ninja'})
+            plan = build_plan(self.load(root, data), workspace)
+            commands = {stage['id']: stage['argv'] for stage in plan}
+            ids = list(commands)
+            self.assertEqual(ids.index('native-edgegeom'), ids.index('streamed-jobs') + 1)
+            self.assertLess(ids.index('native-edgegeom'), ids.index('configure-engine'))
+            self.assertEqual(commands['native-edgegeom'], [str((root / 'python').resolve()),
+                str(workspace / 'tools/payload_override_hooks.py'), '--directory',
+                str(workspace / 'generated/retail-v1.0/spu-engine-retained')])
+            self.assertIn('-DMAG_NATIVE_EDGEGEOM=ON', commands['configure-engine'])
+            self.assertFalse(any('MAG_NATIVE_EDGEGEOM' in arg for arg in commands['configure-launcher']))
+            # The unqualified configuration is macOS; Windows has an MSVC record.
+            for config in ({}, {'msvc': {'clang_cl': str(root / 'cmake')}}):
+                other = build_plan({**self.load(root, {k:v for k,v in data.items()
+                    if k not in ('host', 'linux_toolchain')}), **config}, workspace)
+                self.assertNotIn('native-edgegeom', [stage['id'] for stage in other])
+                self.assertFalse(any('MAG_NATIVE_EDGEGEOM' in arg for stage in other for arg in stage['argv']))
+
+    def test_native_source_validation_requires_payload_override_hook(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for name in native_recipe.REQUIRED_SOURCE_FILES:
+                if name == 'tools/payload_override_hooks.py': continue
+                path = root / name; path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text('synthetic source input')
+            with self.assertRaisesRegex(InstallerError, 'missing tools/payload_override_hooks.py'):
+                native_recipe.validate_source_tree(root)
+
     def test_streamed_job_lifter_args_are_chosen_per_host(self):
         self.assertEqual(native_recipe.config_host({'msvc': {}}), 'windows-x86_64')
         self.assertEqual(native_recipe.config_host({'host': 'linux-x86_64'}), 'linux-x86_64')
