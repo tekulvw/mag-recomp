@@ -72,7 +72,7 @@ static void reuse_failure_drains(void){
     frontend_vk_buffer *pending=buffer_find(c,live);
     frontend_vk_pipeline compute={.id=1,.public_ref=1,.count=1,.gpu=(VkPipeline)(uintptr_t)17,
         .bindings={{.slot=0,.access=MAG_NATIVE_READ,.minimum_bytes=4,.alignment_bytes=4}}};
-    c->pipelines=&compute;
+    pipeline_publish(c,&compute);
     for(unsigned k=0;k<3;++k)c->owner.properties.limits.maxComputeWorkGroupCount[k]=1;
     c->owner.properties.limits.maxStorageBufferRange=64;
     c->vkResetCommandPool=reset_pool;c->vkResetDescriptorPool=reset_descriptors;c->vkResetFences=reset_fences;
@@ -92,7 +92,7 @@ static void reuse_failure_drains(void){
     reuse_fence=VK_SUCCESS;mag_native_event event={0};uint32_t count=0;
     assert(!poll(c,&event,1,&count)&&count==1&&event.no_further_gpu_access);
     assert(reuse_frees==freed+2&&!c->allocated_bytes&&!compute.references);
-    c->slots[0].fence=VK_NULL_HANDLE;c->pipelines=NULL;assert(!close_context(c));
+    c->slots[0].fence=VK_NULL_HANDLE;pipeline_unindex(c,&compute);c->pipelines=NULL;assert(!close_context(c));
 }
 static void test_vulkan_buffer_reuse_cpu(void){
     const unsigned begin_allocates=reuse_allocates,begin_frees=reuse_frees;

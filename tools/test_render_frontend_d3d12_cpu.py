@@ -75,7 +75,7 @@ def check(args):
                                            NATIVE / "mag_render_dxc.cpp",validator,image_validator,stencil_validator,raster,sampler,sampler_registry]))
         fixtures.append(("scene_preflight", [FIXTURES / "test_d3d12_scene_preflight.cpp",NATIVE / "mag_render_dxc.cpp",validator,image_validator,stencil_validator,raster,sampler,sampler_registry]))
         fixtures.append(("image_import", [FIXTURES / "test_d3d12_image_import.cpp", NATIVE / "mag_render_dxc.cpp",validator,image_validator,stencil_validator,raster,sampler,sampler_registry]))
-    for name in (() if args.sdk_only else ("vertex_layout", "bgra_scene", "binding_scene", "scene_capacity", "raster_state", "sampler_lifetime", "sampler_scene", "image_format", "image_layout", "viewport", "extended_scene", "stencil", "scene_imports")):
+    for name in (() if args.sdk_only else ("vertex_layout", "bgra_scene", "binding_scene", "scene_capacity", "scene_resource_index", "raster_state", "sampler_lifetime", "sampler_scene", "image_format", "image_layout", "viewport", "extended_scene", "stencil", "scene_imports")):
         fixtures.append((name, [FIXTURES / f"test_{name}.c", NATIVE / "mag_render_scene_validate.c", NATIVE / "mag_render_stencil_validate.c", NATIVE / "mag_render_image_validate.c", NATIVE / "mag_render_raster_validate.c", NATIVE / "mag_render_sampler_validate.c", NATIVE / "mag_render_sampler_registry.c"]))
     if args.vulkan_include and not args.sdk_only:
         if not (args.vulkan_include / "vulkan/vulkan.h").is_file():
@@ -92,8 +92,9 @@ def check(args):
         sources.update(NATIVE / name for name in ("mag_render_native_internal.h", "mag_render_dxc.h", "mag_render_scene.h", "mag_render_scene_validate.h", "mag_render_scene_validate.c", "mag_render_d3d12_scene.inc", "mag_render_d3d12_sampler.inc", "mag_render_d3d12_import.inc", "mag_render_d3d12_image.h", "mag_render_host_image.h", "mag_render_host_frame.h"))
     if args.vulkan_include and not args.sdk_only:
         sources.add(FIXTURES / "test_vulkan_import_cpu.inc")
+        sources.add(FIXTURES / "test_vulkan_lookup_cpu.inc")
         sources.add(FIXTURES / "test_vulkan_buffer_reuse_cpu.inc")
-        sources.update(NATIVE / name for name in ("mag_render_vulkan.c", "mag_render_vulkan_scene.inc",
+        sources.update(NATIVE / name for name in ("mag_render_vulkan.c", "mag_render_vulkan_scene.inc", "mag_render_vulkan_lookup.inc",
             "mag_render_vulkan_sampler.inc", "mag_render_vulkan_batch.inc", "mag_render_vulkan.h", "mag_render_native_internal.h",
             "mag_render_vulkan_import.inc", "mag_render_vulkan_resident.inc", "mag_render_vulkan_image.h", "mag_render_vulkan_image_validate.h"))
     for name, inputs in fixtures:

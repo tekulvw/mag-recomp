@@ -195,8 +195,7 @@ static int graphics_create(void *opaque, const mag_native_graphics_desc *desc, m
     p->id = ++c->next_pipeline;
     p->public_ref = 1;
     p->graphics = 1;
-    p->next = c->pipelines;
-    c->pipelines = p;
+    pipeline_publish(c, p);
     *out = (mag_native_pipeline){c->generation, p->id};
     p = NULL;
     status = MAG_NATIVE_OK;

@@ -27,6 +27,7 @@
     X(vkCmdBindVertexBuffers) X(vkCmdBindIndexBuffer) X(vkCmdDrawIndexed) X(vkCmdCopyImageToBuffer) \
     X(vkCreateSampler) X(vkDestroySampler) X(vkCmdCopyBufferToImage) X(vkCmdSetDepthBounds)
 
+#define FRONTEND_VK_LOOKUP_BUCKETS 1024u
 /* All physical buffers here have this one creation contract. Pool matches
  * exact logical size and usage; no rounded capacity or cross-owner reuse. */
 #define FRONTEND_VK_BUFFER_USAGE (VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT)
@@ -37,7 +38,7 @@ typedef struct frontend_vk_family {
 } frontend_vk_family;
 typedef struct frontend_vk_buffer {
     uint64_t id, version, length; uint32_t public_ref, readers, writers; int seed_zero,gpu_written;
-    VkBuffer gpu; VkDeviceMemory memory; VkDeviceSize memory_bytes; void *mapped; VkBufferUsageFlags usage; struct frontend_vk_buffer *next;
+    VkBuffer gpu; VkDeviceMemory memory; VkDeviceSize memory_bytes; void *mapped; VkBufferUsageFlags usage; struct frontend_vk_buffer *next, *lookup_next;
 } frontend_vk_buffer;
 typedef struct frontend_vk_imported_image {
     uint64_t id;uint32_t public_ref,references;
@@ -53,8 +54,18 @@ typedef struct frontend_vk_pipeline {
     VkDescriptorSetLayout descriptors; VkPipelineLayout layout; VkPipeline gpu;
     int explicit_raster;mag_native_raster_state raster;int scene;uint32_t scene_binding_model;mag_native_scene_graphics_desc scene_desc;
     mag_native_scene_buffer_layout scene_buffers[32];mag_native_scene_texture_layout scene_textures[32];VkDescriptorSetLayout scene_sets[2];
-    struct frontend_vk_pipeline *next;
+    struct frontend_vk_pipeline *next, *lookup_next;
 } frontend_vk_pipeline;
+typedef struct frontend_vk_lookup_counts {
+    uint64_t calls, probes, maximum, misses;
+} frontend_vk_lookup_counts;
+typedef struct frontend_vk_lookup {
+    frontend_vk_buffer *buffers[FRONTEND_VK_LOOKUP_BUCKETS];
+    frontend_vk_pipeline *pipelines[FRONTEND_VK_LOOKUP_BUCKETS];
+    frontend_vk_lookup_counts buffer_counts, pipeline_counts;
+    uint64_t submissions;
+    int configured, index_enabled, probes_enabled;
+} frontend_vk_lookup;
 typedef struct frontend_vk_slot {
     VkCommandPool pool; VkCommandBuffer command; VkFence fence; VkDescriptorPool descriptors;
     uint32_t descriptor_sets,descriptor_counts[4];
@@ -77,6 +88,7 @@ typedef struct frontend_vk {
     int failed;
     frontend_vk_family *families; frontend_vk_buffer *buffers; frontend_vk_pipeline *pipelines;
     frontend_vk_imported_image *images;
+    frontend_vk_lookup lookup;
     /* Physical storage only. Entries have no logical id/version/public owner
      * and reached here only after all GPU readers/writers retired. */
     frontend_vk_buffer *buffer_pool;
@@ -132,6 +144,7 @@ static void native_memory_free(frontend_vk *c,VkDeviceMemory memory,VkDeviceSize
     c->allocated_bytes-=*bytes<=c->allocated_bytes?*bytes:c->allocated_bytes;*bytes=0;
 }
 
+#include "mag_render_vulkan_lookup.inc"
 static void buffer_physical_destroy(frontend_vk *c,frontend_vk_buffer *b){
     if(b->mapped)c->vkUnmapMemory(c->owner.device,b->memory);
     if(b->gpu)c->vkDestroyBuffer(c->owner.device,b->gpu,NULL);
@@ -173,19 +186,8 @@ static frontend_vk_buffer *buffer_pool_take(frontend_vk *c,uint64_t length){
             c->buffer_pool_entries,(unsigned long long)c->buffer_pool_bytes,(unsigned long long)c->buffer_pool_evictions);
     return b;
 }
-static frontend_vk_buffer *buffer_find(frontend_vk *c, mag_native_buffer ref) {
-    if (ref.device_generation != c->generation || !ref.id || !ref.version) return NULL;
-    for (frontend_vk_buffer *b = c->buffers; b; b = b->next)
-        if (b->id == ref.id && b->version == ref.version && b->public_ref) return b;
-    return NULL;
-}
-static frontend_vk_pipeline *pipeline_find(frontend_vk *c, mag_native_pipeline ref) {
-    if (ref.device_generation != c->generation || !ref.id) return NULL;
-    for (frontend_vk_pipeline *p = c->pipelines; p; p = p->next)
-        if (p->id == ref.id && p->public_ref) return p;
-    return NULL;
-}
 static void buffer_dispose(frontend_vk *c, frontend_vk_buffer *b) {
+    buffer_unindex(c, b);
     frontend_vk_buffer **link = &c->buffers;
     while (*link && *link != b) link = &(*link)->next;
     if (*link) *link = b->next;
@@ -205,6 +207,7 @@ static void buffer_dispose(frontend_vk *c, frontend_vk_buffer *b) {
     buffer_physical_destroy(c,b);
 }
 static void pipeline_dispose(frontend_vk *c, frontend_vk_pipeline *p) {
+    pipeline_unindex(c, p);
     frontend_vk_pipeline **link = &c->pipelines;
     while (*link && *link != p) link = &(*link)->next;
     if (*link) *link = p->next;
@@ -296,7 +299,7 @@ static int buffer_create(void *opaque, mag_native_buffer previous,
         family->id = ++c->next_buffer; family->next = c->families; c->families = family;
     }
     b->id = family->id; b->version = ++family->last_version; ++family->public_versions;
-    b->public_ref = 1; b->next = c->buffers; c->buffers = b;
+    b->public_ref = 1; buffer_publish(c, b);
     *out = (mag_native_buffer){c->generation, b->id, b->version}; return MAG_NATIVE_OK;
 fail:
     buffer_pool_disable(c);buffer_dispose(c,b);return MAG_NATIVE_ALLOCATION_FAILED;
@@ -442,7 +445,7 @@ static int pipeline_create(void *opaque, const mag_native_pipeline_desc *desc, m
     if (result != VK_SUCCESS || c->next_pipeline == UINT64_MAX) { pipeline_dispose(c, p); return MAG_NATIVE_UNSUPPORTED; }
     p->id = ++c->next_pipeline; p->public_ref = 1; p->count = desc->binding_count;
     memcpy(p->bindings, desc->bindings, sizeof(*desc->bindings) * p->count);
-    p->next = c->pipelines; c->pipelines = p;
+    pipeline_publish(c, p);
     *out = (mag_native_pipeline){c->generation, p->id}; return MAG_NATIVE_OK;
 }
 static int pipeline_release(void *opaque, mag_native_pipeline ref) {
@@ -566,6 +569,7 @@ static int close_context(void *opaque) {
     while (c->images) imported_image_dispose(c,c->images);
     resident_close(c);
     while (c->families) { frontend_vk_family *old = c->families; c->families = old->next; free(old); }
+    lookup_report(c, 1);
     MagRenderHostOwner host=c->owner.host;free(c);
     host.release(host.userdata,host.lifetime);return MAG_NATIVE_OK;
 }
@@ -687,6 +691,7 @@ static int vulkan_create(const MagRenderHostOwner *host,uint64_t known,uint64_t 
     PFN_vkGetPhysicalDeviceMemoryProperties memory=(PFN_vkGetPhysicalDeviceMemoryProperties)host->get_instance_proc(host->instance,"vkGetPhysicalDeviceMemoryProperties");
     if (!properties || !memory) {host->release(host->userdata,host->lifetime);return MAG_NATIVE_UNSUPPORTED;}
     frontend_vk *c=calloc(1,sizeof(*c));if (!c) {host->release(host->userdata,host->lifetime);return MAG_NATIVE_ALLOCATION_FAILED;}
+    lookup_configure(c);
     c->known_features=known;c->enabled_features=enabled;
     { const char *memory=getenv("MAG_RENDER_GPU_MEMORY_REPORT"); c->memory_report_every=memory&&!strcmp(memory,"0")?0u:120u; }
     /* Opt-in (MAG_RENDER_VULKAN_RESERVED_COMMIT=1) while it is measured:
