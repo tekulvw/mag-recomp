@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.5.1](https://github.com/tekulvw/mag-recomp/compare/v0.5.0...v0.5.1) (2026-11-13)
+
+
+### Bug Fixes
+
+* **release:** require releasable titles for SDK updates ([#182](https://github.com/tekulvw/mag-recomp/issues/182)) ([4f908f9](https://github.com/tekulvw/mag-recomp/commit/4f908f98a666fa8fbbb10fd0c3a521286c74d40d))
+* **render:** declare only sampled fragment texture units ([#183](https://github.com/tekulvw/mag-recomp/issues/183)) ([46cd235](https://github.com/tekulvw/mag-recomp/commit/46cd23574e89e30c6bd4132e9733774a5237c175))
+* **sdk:** refresh reviewed runtime pin and coherence defaults ([59775de](https://github.com/tekulvw/mag-recomp/commit/59775deab94ac7f4c47cfb2bd899c2f1af28f54a))
+
+
+### Performance
+
+* **linux:** enable validated native geometry jobs by default ([#187](https://github.com/tekulvw/mag-recomp/issues/187)) ([fde31af](https://github.com/tekulvw/mag-recomp/commit/fde31aff45800dd18e0aaf0a344b3199c01329d2))
+* **render:** index native scene and Vulkan resource lookups ([#186](https://github.com/tekulvw/mag-recomp/issues/186)) ([a05e05a](https://github.com/tekulvw/mag-recomp/commit/a05e05ac1e3497390b181ed7e64b21f2dedbb1a9))
+* **render:** reuse retired Vulkan buffer allocations ([#184](https://github.com/tekulvw/mag-recomp/issues/184)) ([ba59663](https://github.com/tekulvw/mag-recomp/commit/ba596639c72cfdbef305ee898545802a965a5362))
+* **windows:** cache getenv for the runtime and MAG sources ([#140](https://github.com/tekulvw/mag-recomp/issues/140)) ([f529e06](https://github.com/tekulvw/mag-recomp/commit/f529e062f968022ab9e91c1c2e06bc94ec421e2e))
+
 ## [0.5.0](https://github.com/tekulvw/mag-recomp/compare/v0.4.0...v0.5.0) (2026-11-10)
 
 
