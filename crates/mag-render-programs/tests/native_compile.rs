@@ -88,6 +88,107 @@ fn in_process_fragment_preserves_independent_uniform_texture_sampler_slots() {
     assert!(p.msl.contains("[[sampler(0)]]"));
     assert!(p.hlsl.contains("register(b1, space1)"));
 }
+// Authored TEXs write independent temporaries; ADDs keep every sample live.
+fn fragment_with_live_units(units: &[u32], mode: u32) -> HlslProgram {
+    let swizzle = 0x1c800;
+    let mut words = Vec::<u32>::new();
+    for (destination, &unit) in units.iter().enumerate() {
+        words.extend([
+            (0x17 << 24) | ((destination as u32) << 1) | (unit << 17) | (15 << 9) | (4 << 13),
+            1 | swizzle | (7 << 18),
+            swizzle,
+            swizzle,
+        ]);
+    }
+    if units.is_empty() {
+        words.extend([
+            (1 << 24) | (15 << 9),
+            1 | swizzle | (7 << 18),
+            swizzle,
+            swizzle,
+        ]);
+    }
+    for source in 1..units.len() {
+        words.extend([
+            (3 << 24) | (15 << 9),
+            swizzle | (7 << 18),
+            swizzle | ((source as u32) << 2),
+            swizzle,
+        ]);
+    }
+    let end = words.len() - 4;
+    words[end] |= 1;
+    let bytes = words
+        .iter()
+        .flat_map(|w| w.rotate_left(16).to_be_bytes())
+        .collect::<Vec<_>>();
+    let mut input = FragmentProgram {
+        bytes: &bytes,
+        shader_control: 0x40,
+        cube_mask: 0,
+        volume_mask: 0,
+        shadow: [ShadowTexture::default(); 16],
+        gamma: [0; 16],
+        expand: [0; 16],
+        alpha_function: None,
+        srgb_output: false,
+        sample_grid: [1, 1],
+        unnormalized_mask: 0,
+        texture_dimensions: [[16, 32]; 16],
+    };
+    // Include unused controls so neither declarations nor reflection depend on
+    // their presence, including when the source has no texture instruction.
+    match mode {
+        1 => input.cube_mask = 0xffff,
+        2 => input.volume_mask = 0xffff,
+        3 => input.unnormalized_mask = 0xffff,
+        4 => {
+            input.shadow = [ShadowTexture {
+                enabled: 1,
+                function: 2,
+                linear: 1,
+                unnormalized: 0,
+            }; 16]
+        }
+        _ => {}
+    }
+    fragment(input).unwrap()
+}
+#[test]
+fn native_reflection_matches_only_live_source_units_across_texture_controls() {
+    for mode in 0..5 {
+        for units in [vec![], vec![3], vec![15], vec![2, 13, 15]] {
+            let source = fragment_with_live_units(&units, mode);
+            let program = lower(&source, Stage::Fragment)
+                .unwrap_or_else(|error| panic!("mode={mode} units={units:?}: {error}"));
+            assert_eq!(program.textures, units, "mode={mode}");
+            assert_eq!(program.samplers, units, "mode={mode}");
+            assert_eq!(
+                program
+                    .texture_bindings
+                    .iter()
+                    .map(|t| t.slot)
+                    .collect::<Vec<_>>(),
+                units
+            );
+            assert_eq!(
+                program
+                    .sampler_bindings
+                    .iter()
+                    .map(|s| s.slot)
+                    .collect::<Vec<_>>(),
+                units
+            );
+            assert!(!program.msl.is_empty());
+            assert!(!program.hlsl.is_empty());
+            assert_eq!(program.spirv[0], 0x07230203);
+            if mode == 4 && !units.is_empty() {
+                assert!(source.source.contains("GetDimensions"));
+            }
+        }
+    }
+}
+
 #[test]
 fn compiler_rejects_nul_and_wrong_stage() {
     let mut p = vertex_program();
