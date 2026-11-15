@@ -72,7 +72,7 @@ versus `1`; the Rust render frontend and other native rendering providers were d
 
 | Guest flip-request interval | Lifted Edge | Native Edge | Change |
 | --- | ---: | ---: | ---: |
-| **Pinned runtime** `30dd3ea9`, public source `4f908f98`: mean | 33.908 ms | 31.431 ms | -7.30% |
+| **Runtime** `30dd3ea9` (the pin then), public source `4f908f98`: mean | 33.908 ms | 31.431 ms | -7.30% |
 | Median | 33.509 ms | 31.214 ms | -6.85% |
 | 95th percentile | 37.087 ms | 35.721 ms | -3.68% |
 | **Runtime override** `1124cb89`, public source `214175fc`: mean | 34.119 ms | 31.147 ms | -8.71% |

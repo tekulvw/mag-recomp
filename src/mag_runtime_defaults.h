@@ -88,6 +88,10 @@ inline int mag_apply_runtime_defaults()
              // Per-line coherence versions avoid scanning every registered SPU
              // context on ordinary writes; explicit 0 keeps the earlier scheme.
              Setting{"PS3RECOMP_COH_VERSIONS", "1"},
+             // An SPU transfer that writes the FIFO put word wakes the walker, as a
+             // put store from the PPU already does; without it the walker slept out
+             // its 4 ms wait (Training +16.6% Windows, +6.5% Linux, p95 -5 to -7 ms).
+             Setting{"PS3RECOMP_GCM_SPU_PUT_KICK", "1"},
 #if defined(__linux__) && defined(MAG_HAS_NATIVE_EDGEGEOM)
              // Native Edge geometry reduced Linux guest flip-request intervals in a
              // matched normal-path run; refused invocations keep the lifted job.
