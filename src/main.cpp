@@ -409,6 +409,24 @@ int main(int argc, char** argv)
      * inflates every shorter wait the title makes and throttles the whole
      * thing. POSIX timers are already fine-grained. */
     timeBeginPeriod(1);
+    {
+        /* Windows 11 may ignore that request while the process is minimized,
+         * occluded or silent (a muted player), so every short wait would round
+         * up to the 15.6 ms tick again. Ask for it to be honoured regardless.
+         * Older Windows lacks the setting and refuses the call harmlessly. */
+#ifndef PROCESS_POWER_THROTTLING_CURRENT_VERSION
+#define PROCESS_POWER_THROTTLING_CURRENT_VERSION 1
+#endif
+#ifndef PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION
+#define PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION 0x4
+#endif
+        PROCESS_POWER_THROTTLING_STATE throttling = {};
+        throttling.Version = PROCESS_POWER_THROTTLING_CURRENT_VERSION;
+        throttling.ControlMask = PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION;
+        throttling.StateMask = 0;   /* 0: do not ignore the resolution request */
+        SetProcessInformation(GetCurrentProcess(), ProcessPowerThrottling,
+                              &throttling, sizeof(throttling));
+    }
     setvbuf(stdout, NULL, _IONBF, 0);   /* unbuffered: do not lose prints on a kill */
 #endif
 #if defined(_WIN32) && defined(PS3RECOMP_RSX_VULKAN)
