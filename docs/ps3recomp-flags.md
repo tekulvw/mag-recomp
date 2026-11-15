@@ -4,7 +4,7 @@ The ps3recomp runtime keeps most of its behaviour behind opt-in switches: enviro
 it reads at run time and CMake options it reads at configure time. This page lists every one
 mag-recomp sets, with the value, the platforms, the file that sets it, the reason and how to turn
 it off for a comparison. It applies to the runtime pinned in
-[`profiles/framework.json`](../profiles/framework.json) (`mag-recomp/runtime-2026.11.10-reviewed`, `30dd3ea9`).
+[`profiles/framework.json`](../profiles/framework.json) (`mag-recomp/runtime-2026.11.15-spukick`, `76d62d5f`).
 
 `tools/check_ps3recomp_flags.py` extracts the switches from the sources and fails when this page
 is missing one, lists one nothing sets any more, or gives a value or file the sources no longer
@@ -54,6 +54,7 @@ applied before the constructors it reached 21.0.
 | `SPU_DISPATCH_CACHE` | env | `1` | all | `src/mag_runtime_defaults.h` | Per-thread cache of lifted SPU function lookups for indirect dispatch (#15). | `0`; `shadow` checks every hit against the full resolver |
 | `SPU_MFC_LOOKUP_CACHE` | env | `1` | all | `src/mag_runtime_defaults.h` | Per-thread cache of the last MFC engine lookup (#15). | `0` |
 | `PS3RECOMP_COH_VERSIONS` | env | `1` | all | `src/mag_runtime_defaults.h` | Per-line coherence versions replace global context scans on ordinary writes. Training fps rose 12.6% on Linux (with a clean 15-minute soak), 10.2% on macOS and 8.3% on Windows (fork #78); the pinned runtime tests the guest-visible coherence contract under both schemes. | `0` restores the earlier scheme |
+| `PS3RECOMP_GCM_SPU_PUT_KICK` | env | `1` | all | `src/mag_runtime_defaults.h` | An SPU transfer that writes the FIFO put word wakes the FIFO walker, as a PPU put store already does. Without it the walker slept out its 4 ms wait while new commands waited, 170–210 ms a second in Training. Training guest fps rose 16.6% on Windows (36.56 to 42.62) and 6.5% on Linux (33.95 to 36.15), and p95 frame time fell about 5 ms and 7 ms, over three interleaved rounds each (fork #107). macOS is not yet measured. | `0` |
 | `SPU_FLOAT_RZ` | env | `1` | all (takes effect on arm64 only) | `src/mag_runtime_defaults.h` | SPU code runs with round-toward-zero and flush-to-zero, so the single-precision helpers take their native form (#15). | `0` |
 | `PS3_VERBOSE` | env | `0` | all | `src/mag_runtime_defaults.h` | Quiet per-event logging. Without it a redirected stderr turns logging on, and one shared log lock changes the title's timing (#15). | `1` |
 | `PS3RECOMP_GCM_INLINE_NO_GPU_WAIT` | env | `1` | all | `src/mag_runtime_defaults.h` | MAG patches fragment-program constants through NV308A inline data about 1,100 times per menu frame; draining the GPU before each held the menu near 10 fps. Report ordering is kept. macOS only before #136. | `0` |
@@ -161,6 +162,7 @@ starts being set here; move its row up when that happens.
 | `PS3RECOMP_NATIVE_OSK_WINDOWS` | CMake | `ON` | Windows | Native Windows text input for the on-screen keyboard. The opt-in controls adapter's Win32 keyboard/mouse capture runs from the window pump calls this host shares, so `MAG_GAME_CONTROLS` refuses to configure with it off (`cmake/MagControls.cmake`). | `-DPS3RECOMP_NATIVE_OSK_WINDOWS=OFF` |
 | `PS3RECOMP_SPURS_STORE_WAKE` | env | `1` | all | A store to a SPURS instance's request line wakes the scheduler at once instead of on its next 1 ms pass. Synthetically, a PPU store reaches the policy module start in about 10 µs instead of about 1 ms at the median under both coherence schemes (fork #81). | `0` |
 | `PS3RECOMP_SPU_SMC_TRACE` | env | `1` | all | The SPU micro-interpreter replays decoded runs while their words are unchanged. On Linux Training it took 6 decodes in 6.5 million entries, halved the cost per entry (336 to 168 ns) and raised guest fps 2.8% (33.13 against 32.23, three rounds each; fork #85). | `0` |
+| `PS3RECOMP_VK_ACQUIRE_BOUND_MS` | env | `100` | Linux, Windows | The Vulkan presenter leaves the window out while it is minimized or hidden or the display is off, bounds its swapchain waits at 100 ms, and paces skipped frames at 60 Hz. With the display asleep, an unbounded wait slowed the Windows launcher to about 4 fps and its login timed out; with the window visible it measured no fps change (fork #104). | `0` |
 
 No runtime switch is documented in mag-recomp's code as one that must stay off. Diagnostics stay
 off by default (#136). Other opt-in runtime switches become defaults here only after an A/B run
