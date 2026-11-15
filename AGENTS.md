@@ -40,7 +40,10 @@ callbacks (BUILDING.md, "Extending a build") must stay inert by default: with no
 build, its outputs and its receipts are unchanged. Keep them generic. They name no particular
 extension. Code that uses them lives outside this repository, except in-repository code that is
 off by default (such as the opt-in render adapter), which may register through them; with it
-disabled, the extension points stay unused and inert.
+disabled, the extension points stay unused and inert. In-repository code may register by default
+only after a documented A/B run shows a gain on the platforms where it is on (as native Edge
+geometry does on Linux), with an explicit switch that restores the original path; record the
+measurement and the switch in docs/ps3recomp-flags.md or the code's own documentation.
 
 ## Testing
 

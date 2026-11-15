@@ -5,8 +5,8 @@ Wraps the policy's one payload call (call 0x325C, continuation 0x3260) in a guar
 branch and the lifted job runs exactly as before; a registered override that handles the payload
 skips the call. Nothing else in the policy changes.
 
-The step is never part of a default build: a policy lift without it is byte-identical to before
-and its receipt is unchanged. When applied, the lift directory's provenance.json records it under
+Only builds that link the native Edge geometry job apply it; the Linux installer does so for its
+engine. A policy lift without it is byte-identical to before and its receipt is unchanged. When applied, the lift directory's provenance.json records it under
 `payload_override_hooks`. Run it after tools/graphics_payload_hooks.py when both are used."""
 import argparse
 import hashlib
