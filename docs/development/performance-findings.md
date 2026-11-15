@@ -66,36 +66,37 @@ while the display showed about 33.7 presentations/s; the difference is repeated 
 
 ## Native Edge geometry on Linux (November 2026)
 
-A matched pair of 55-second normal-rendering runs on Linux used the same binary with the public
-native Edge implementation linked. The only treatment was `MAG_NATIVE_EDGEGEOM=0` versus `1`;
-the Rust render frontend and other native rendering providers were disabled. Both runs used the
-same FIFO timing and native Edge counters, retained focus throughout, and completed bounded cleanup.
-The tested build used public source `214175fca49a2d51e71b6caf3c257c4725834952` and the
-source-bound runtime override `1124cb89f274f3dd797f77480d7a50f23948ef5a`. The public native Edge
-core, runtime shim and lift-hook implementation are unchanged between that source and the main
-baseline for this default change, `4f908f98a666fa8fbbb10fd0c3a521286c74d40d`. This pair is not a
-measurement of a newly rebuilt installer at the current SDK pin.
+Two OFF/ON pairs of 55-second normal-rendering Training runs on Linux each used one binary with
+the public native Edge implementation linked. The only treatment was `MAG_NATIVE_EDGEGEOM=0`
+versus `1`; the Rust render frontend and other native rendering providers were disabled.
 
-| Measurement | Lifted Edge | Native Edge | Change |
+| Guest flip-request interval | Lifted Edge | Native Edge | Change |
 | --- | ---: | ---: | ---: |
-| Median of periodic mean host presentation intervals | 21.510 ms | 17.510 ms | -18.60% |
-| Mean guest flip-request interval | 34.119 ms | 31.147 ms | -8.71% |
-| Median guest flip-request interval | 33.633 ms | 30.906 ms | -8.11% |
-| 95th-percentile guest flip-request interval | 37.452 ms | 35.330 ms | -5.67% |
+| **Pinned runtime** `30dd3ea9`, public source `4f908f98`: mean | 33.908 ms | 31.431 ms | -7.30% |
+| Median | 33.509 ms | 31.214 ms | -6.85% |
+| 95th percentile | 37.087 ms | 35.721 ms | -3.68% |
+| **Runtime override** `1124cb89`, public source `214175fc`: mean | 34.119 ms | 31.147 ms | -8.71% |
+| Median | 33.633 ms | 30.906 ms | -8.11% |
+| 95th percentile | 37.452 ms | 35.330 ms | -5.67% |
 
-The native run handled index-only, wind, instanced-wind and skinned geometry. One wind invocation
-refused because its output ring was full and used the lifted fallback. The original Main and Depth
-parent providers remained active in both runs; this does not prove their removal. Reviewed images
-showed the world, weapon and HUD without gross omissions, which is not pixel-equivalence or full
-real-match visual acceptance.
+On the pinned runtime the ON arm made 796 flip requests in a 25-second trace window against 737
+for OFF (+8.0%). Each request started exactly one Main and one Depth job in both arms, so the
+flip-request rate is the unique guest frame rate here. Host presentation intervals are left out:
+the runtime presents some guest frames twice, so they overstate the change.
 
-Host presentations may repeat frames. Guest flip requests do not establish unique GPU-completed
-frames or physical display FPS, and a native handled counter advances before job completion. This
-pair establishes a narrower interval improvement, not sustained 60 FPS. It supports the Linux
-runtime default when the native Edge implementation is linked; macOS and Windows retain opt-in
-behavior pending their own measurements. An explicit `MAG_NATIVE_EDGEGEOM=0` restores the lifted
-Edge path for comparison. See [native-edgegeom.md](../native-edgegeom.md) for build prerequisites,
-admission and fallback behavior.
+The evidence is limited. Each configuration is a single OFF/ON pair, run one after the other on a
+shared host, with a slightly different camera position between arms. Repeated runs of one
+configuration varied by about 2%. The direction agrees with an earlier independent measurement in
+which native Edge cut the job's Linux CPU time from about 70 to about 5 ms per frame. Native Edge
+handled index-only, wind, instanced-wind and skinned geometry; one wind invocation found its
+output ring full and used the lifted fallback. Reviewed images showed the world, weapon and HUD
+without gross omissions, which is not pixel-equivalence.
+
+The change supports the Linux runtime default when the native Edge implementation is linked;
+macOS (+4.7% Training in an earlier run) and Windows (+2.4%) keep it opt-in. An explicit
+`MAG_NATIVE_EDGEGEOM=0` restores the lifted Edge path for comparison. See
+[native-edgegeom.md](../native-edgegeom.md) for build prerequisites, admission and fallback
+behavior.
 
 ## Tried and not kept
 
