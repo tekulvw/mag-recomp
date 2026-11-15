@@ -105,6 +105,11 @@ inline int mag_apply_runtime_defaults()
              Setting{"PS3RECOMP_VK_MERGE_PASSES", "1"},
              Setting{"PS3RECOMP_VK_DESCRIPTOR_REUSE", "1"},
 #endif
+#if defined(__APPLE__)
+             // Metal records draws on a second thread while the FIFO walker keeps
+             // walking (macOS Training +9.8%).
+             Setting{"PS3RECOMP_RSX_ENCODE_THREAD", "1"},
+#endif
          }) {
         if (std::getenv(setting.name)) continue;
 #ifdef _WIN32

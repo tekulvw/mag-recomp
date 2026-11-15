@@ -18,7 +18,9 @@ DEFAULTS={'SPU_DISPATCH_CACHE':'1','SPU_MFC_LOOKUP_CACHE':'1','SPU_FLOAT_RZ':'1'
           'PS3RECOMP_COH_VERSIONS':'1','PS3RECOMP_GCM_SPU_PUT_KICK':'1'}
 LINUX_VULKAN={'PS3RECOMP_VK_BATCHED_ENGINE':'1','PS3RECOMP_VK_MERGE_PASSES':'1','PS3RECOMP_VK_DESCRIPTOR_REUSE':'1'}
 if sys.platform.startswith('linux'): DEFAULTS.update(LINUX_VULKAN)
-KEYS=tuple(DEFAULTS)+('RUST_MIN_STACK','MAG_NATIVE_EDGEGEOM')+tuple(LINUX_VULKAN)
+MACOS_METAL={'PS3RECOMP_RSX_ENCODE_THREAD':'1'}
+if sys.platform=='darwin': DEFAULTS.update(MACOS_METAL)
+KEYS=tuple(DEFAULTS)+('RUST_MIN_STACK','MAG_NATIVE_EDGEGEOM')+tuple(LINUX_VULKAN)+tuple(MACOS_METAL)
 
 @unittest.skipUnless(shutil.which('clang++'),'clang++ required')
 class RuntimeDefaultsTests(unittest.TestCase):
