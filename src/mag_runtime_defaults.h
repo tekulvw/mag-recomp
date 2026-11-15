@@ -92,9 +92,9 @@ inline int mag_apply_runtime_defaults()
              // put store from the PPU already does; without it the walker slept out
              // its 4 ms wait (Training +16.6% Windows, +6.5% Linux, p95 -5 to -7 ms).
              Setting{"PS3RECOMP_GCM_SPU_PUT_KICK", "1"},
-#if defined(__linux__) && defined(MAG_HAS_NATIVE_EDGEGEOM)
-             // Native Edge geometry reduced Linux guest flip-request intervals in a
-             // matched normal-path run; refused invocations keep the lifted job.
+#if defined(MAG_HAS_NATIVE_EDGEGEOM)
+             // Native Edge geometry, wherever it is linked: Linux guest fps +8%, macOS
+             // +12.4% online and +4.7% Training; refused invocations keep the lifted job.
              Setting{"MAG_NATIVE_EDGEGEOM", "1"},
 #endif
 #if defined(__linux__)
