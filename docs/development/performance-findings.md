@@ -92,8 +92,10 @@ handled index-only, wind, instanced-wind and skinned geometry; one wind invocati
 output ring full and used the lifted fallback. Reviewed images showed the world, weapon and HUD
 without gross omissions, which is not pixel-equivalence.
 
-The change supports the Linux runtime default when the native Edge implementation is linked;
-macOS (+4.7% Training in an earlier run) and Windows (+2.4%) keep it opt-in. An explicit
+The change supports the Linux runtime default when the native Edge implementation is linked.
+macOS measured +12.4% guest fps in a hosted online match at spawn (79.93 to 89.81, one 60-second
+pair, 99.98% of invocations handled) and +4.7% in Training; Windows measured +2.4% on an older
+build. Native Edge became the default on every host in November 2026. An explicit
 `MAG_NATIVE_EDGEGEOM=0` restores the lifted Edge path for comparison. See
 [native-edgegeom.md](../native-edgegeom.md) for build prerequisites, admission and fallback
 behavior.

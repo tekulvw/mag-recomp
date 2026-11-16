@@ -72,8 +72,8 @@ for (auto k : {'''+','.join(f'"{k}"' for k in DEFAULTS)+'''}) { const char* v=st
                 result=subprocess.run([str(tmp/f'game{i}')],env={**base,**{k:'0' for k in keys}},check=True,capture_output=True,text=True)
                 self.assertEqual(result.stdout.splitlines(),[f'{k}=0' for k in keys])  # explicit values still win
 
-    def test_native_edge_default_requires_linked_linux_and_precedes_static_flags(self):
-        """Exercise the Linux selection even on macOS; no runtime or game needed."""
+    def test_native_edge_default_requires_linked_build_and_precedes_static_flags(self):
+        """The default follows the link on every platform; no runtime or game needed."""
         with tempfile.TemporaryDirectory() as tmp:
             tmp=Path(tmp)
             # Match the runtime's C++ static cached flag, before main() applies defaults.
@@ -98,7 +98,7 @@ for (auto k : {'''+','.join(f'"{k}"' for k in DEFAULTS)+'''}) { const char* v=st
                         subprocess.run(['clang++','-std=c++17','-Wall','-Wextra','-Werror',
                             '-I'+str(ROOT/'src'),*flags,*map(str,sources),'-o',str(binary)],
                             check=True,capture_output=True,text=True)
-                        for value, expected in ((None,int(linux and linked)),('0',0),('1',1),('',0)):
+                        for value, expected in ((None,int(linked)),('0',0),('1',1),('',0)):
                             env=base if value is None else {**base,'MAG_NATIVE_EDGEGEOM':value}
                             result=subprocess.run([str(binary)],env=env,check=True,capture_output=True,text=True)
                             self.assertEqual(result.stdout.strip(),str(expected),(linux,linked,value))

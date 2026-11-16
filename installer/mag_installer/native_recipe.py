@@ -297,8 +297,7 @@ def build_plan(config, workspace):
            '--baseline', engine_spu_base, '--output', paths['engine-spu'],
            '--merge-chunks', '--require-complete', '--static-indirect',
            *('--lifter-arg=' + a for a in STREAMED_JOB_LIFTER_ARGS[config_host(config)]))
-    if config_host(config) == 'linux-x86_64':
-        script('native-edgegeom', 'payload_override_hooks.py', '--directory', paths['engine-spu'])
+    script('native-edgegeom', 'payload_override_hooks.py', '--directory', paths['engine-spu'])
     script('firmware', 'firmware_lift.py', '--output', paths['firmware'])
     script('spu-programs', 'spu_programs_lift.py', '--sdk', sdk['spu-programs'],
            '--sdk-revision', pins['spu-programs']['commit'], '--output', paths['spu-programs'])
@@ -341,7 +340,7 @@ def build_plan(config, workspace):
     for name, image, spu, build in [('launcher', 'EBOOT', 'worker-spu', 'build'),
                                     ('engine', 'mage_g', 'engine-spu', 'build-engine')]:
         extra = ['-DMAG_SPU_PROGRAMS_DIR=' + cmake_path(paths['spu-programs'])] if name == 'engine' else []
-        if name == 'engine' and config_host(config) == 'linux-x86_64':
+        if name == 'engine':
             extra += ['-DMAG_NATIVE_EDGEGEOM=ON']
         if name == 'engine' and controls:
             extra += ['-DMAG_GAME_CONTROLS=ON', '-DMAG_INPUT_RUST=ON',

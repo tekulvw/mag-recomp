@@ -85,7 +85,7 @@ class NativeRecipeTests(unittest.TestCase):
             root = Path(tmp); config = self.load(root, self.config(root)); workspace = self.workspace(root)
             plan = build_plan(config, workspace); commands = {p['id']: p['argv'] for p in plan}
             self.assertEqual(list(commands), ['prepare-inputs', 'inventory', 'lift-launcher', 'lift-engine', 'splice-engine-dispatcher', 'splice-engine-ctr64', 'worker-spu',
-                                              'engine-spu', 'streamed-jobs', 'firmware', 'spu-programs', 'configure-launcher',
+                                              'engine-spu', 'streamed-jobs', 'native-edgegeom', 'firmware', 'spu-programs', 'configure-launcher',
                                               'build-launcher', 'configure-engine', 'build-engine'])
             self.assertIn(str(workspace / 'local/ps3recomp-lifter-spu'), commands['inventory'])
             self.assertIn(str(workspace / 'local/ps3recomp-lifter-ppu'), commands['lift-engine'])
@@ -157,7 +157,7 @@ class NativeRecipeTests(unittest.TestCase):
             self.assertIn('-DCMAKE_PREFIX_PATH=' + prefix.resolve().as_posix(), configure)
             self.assertTrue(all('\\' not in argument for argument in configure if argument.startswith('-D')))
 
-    def test_linux_native_edge_hooks_after_streamed_lift_and_links_only_engine(self):
+    def test_native_edge_hooks_after_streamed_lift_and_links_only_engine(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp); data = self.config(root); workspace = self.workspace(root)
             data.update(host='linux-x86_64', linux_toolchain={'cc': 'cmake', 'cxx': 'ninja'})
@@ -171,12 +171,17 @@ class NativeRecipeTests(unittest.TestCase):
                 str(workspace / 'generated/retail-v1.0/spu-engine-retained')])
             self.assertIn('-DMAG_NATIVE_EDGEGEOM=ON', commands['configure-engine'])
             self.assertFalse(any('MAG_NATIVE_EDGEGEOM' in arg for arg in commands['configure-launcher']))
-            # The unqualified configuration is macOS; Windows has an MSVC record.
+            # The unqualified configuration is macOS; Windows has an MSVC record. Both
+            # hook the streamed lift and link the native job into the engine only.
             for config in ({}, {'msvc': {'clang_cl': str(root / 'cmake')}}):
                 other = build_plan({**self.load(root, {k:v for k,v in data.items()
                     if k not in ('host', 'linux_toolchain')}), **config}, workspace)
-                self.assertNotIn('native-edgegeom', [stage['id'] for stage in other])
-                self.assertFalse(any('MAG_NATIVE_EDGEGEOM' in arg for stage in other for arg in stage['argv']))
+                stages = {stage['id']: stage['argv'] for stage in other}
+                order = list(stages)
+                self.assertEqual(order.index('native-edgegeom'), order.index('streamed-jobs') + 1)
+                self.assertLess(order.index('native-edgegeom'), order.index('configure-engine'))
+                self.assertIn('-DMAG_NATIVE_EDGEGEOM=ON', stages['configure-engine'])
+                self.assertFalse(any('MAG_NATIVE_EDGEGEOM' in arg for arg in stages['configure-launcher']))
 
     def test_native_source_validation_requires_payload_override_hook(self):
         with tempfile.TemporaryDirectory() as tmp:
