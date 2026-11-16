@@ -4,7 +4,7 @@ The ps3recomp runtime keeps most of its behaviour behind opt-in switches: enviro
 it reads at run time and CMake options it reads at configure time. This page lists every one
 mag-recomp sets, with the value, the platforms, the file that sets it, the reason and how to turn
 it off for a comparison. It applies to the runtime pinned in
-[`profiles/framework.json`](../profiles/framework.json) (`mag-recomp/runtime-2026.11.15-spukick`, `76d62d5f`).
+[`profiles/framework.json`](../profiles/framework.json) (`mag-recomp/runtime-2026.11.16-guards`, `30e21522`).
 
 `tools/check_ps3recomp_flags.py` extracts the switches from the sources and fails when this page
 is missing one, lists one nothing sets any more, or gives a value or file the sources no longer
@@ -163,6 +163,7 @@ starts being set here; move its row up when that happens.
 | `PS3RECOMP_SPURS_STORE_WAKE` | env | `1` | all | A store to a SPURS instance's request line wakes the scheduler at once instead of on its next 1 ms pass. Synthetically, a PPU store reaches the policy module start in about 10 µs instead of about 1 ms at the median under both coherence schemes (fork #81). | `0` |
 | `PS3RECOMP_SPU_SMC_TRACE` | env | `1` | all | The SPU micro-interpreter replays decoded runs while their words are unchanged. On Linux Training it took 6 decodes in 6.5 million entries, halved the cost per entry (336 to 168 ns) and raised guest fps 2.8% (33.13 against 32.23, three rounds each; fork #85). | `0` |
 | `PS3RECOMP_VK_ACQUIRE_BOUND_MS` | env | `100` | Linux, Windows | The Vulkan presenter leaves the window out while it is minimized or hidden or the display is off, bounds its swapchain waits at 100 ms, and paces skipped frames at 60 Hz. With the display asleep, an unbounded wait slowed the Windows launcher to about 4 fps and its login timed out; with the window visible it measured no fps change (fork #104). | `0` |
+| `PS3RECOMP_METAL_DRAWABLE_BOUND_MS` | env | `100` | macOS | The Metal presenter leaves the window out while it is occluded or minimized, skips the window after a `nextDrawable` call slower than 100 ms (probing every 2 s), and paces skipped frames at 60 Hz. Verified on macOS: hidden and covered windows kept the game running at a paced rate, and the window came back within about 1 s (fork #105). | `0` |
 
 No runtime switch is documented in mag-recomp's code as one that must stay off. Diagnostics stay
 off by default (#136). Other opt-in runtime switches become defaults here only after an A/B run
