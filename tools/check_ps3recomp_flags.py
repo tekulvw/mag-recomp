@@ -233,8 +233,9 @@ def scan_cmake_text(text: str, rel: str) -> set[Setting]:
     for m in re.finditer(r'\bset\s*\(\s*(' + NAME + r')\s+("[^"]*"|\S+)\s+CACHE\s+(?:BOOL|STRING|PATH|FILEPATH)\b', text, re.I):
         if runtime_cmake_name(m.group(1)):
             found.add(Setting('CMake', m.group(1), m.group(2).strip('"'), rel))
-    for m in re.finditer(r'\b(?:COMPILE_DEFINITIONS|target_compile_definitions\s*\([^)]*?(?:PRIVATE|PUBLIC|INTERFACE))'
-                         r'\s+([^)]*)', text, re.I):
+    for m in re.finditer(r'\b(?:COMPILE_DEFINITIONS|add_compile_definitions\s*\(|'
+                         r'target_compile_definitions\s*\([^)]*?(?:PRIVATE|PUBLIC|INTERFACE))'
+                         r'\s*([^)]*)', text, re.I):
         for token in m.group(1).split():
             name, _, value = token.strip('"').partition('=')
             if re.fullmatch(NAME, name) and (runtime_cmake_name(name) or runtime_env_name(name)):
