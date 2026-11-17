@@ -145,6 +145,7 @@ message(STATUS "Retail image:   ${MAG_IMAGE}")
 # every C and C++ unit of the runtime and of the game executable alike.
 mag_x86_level_apply()
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/MagLinuxRuntime.cmake")
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/MagRuntimeOptions.cmake")
 add_subdirectory("${PS3RECOMP_DIR}" "${CMAKE_BINARY_DIR}/ps3recomp_sdk"
                  EXCLUDE_FROM_ALL)
 if(WIN32)
