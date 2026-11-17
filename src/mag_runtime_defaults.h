@@ -104,6 +104,10 @@ inline int mag_apply_runtime_defaults()
              // GPU 74% -> 24% in Training), and descriptor sets are reused across draws.
              Setting{"PS3RECOMP_VK_MERGE_PASSES", "1"},
              Setting{"PS3RECOMP_VK_DESCRIPTOR_REUSE", "1"},
+             // Acquire and present run on their own thread: the FIFO vsync waits no
+             // longer hold up the walker, which publishes the labels the SPU jobs wait
+             // on (Training +12.8%, p95 25.4 -> 17.0 ms).
+             Setting{"PS3RECOMP_RSX_PRESENT_THREAD", "1"},
 #endif
 #if defined(__APPLE__)
              // Metal records draws on a second thread while the FIFO walker keeps
