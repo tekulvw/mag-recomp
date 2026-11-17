@@ -32,6 +32,17 @@ class PayloadOverrideHooks(unittest.TestCase):
         self.assertGreater(new.index('mag_graphics_payload_end'), new.index(hooks.GUARD_CLOSE + ' '))
         self.assertEqual(hooks.original_body(new[new.index('void '):].rstrip('\n')), ORIGINAL.rstrip('\n'))
 
+    def test_guards_a_promoted_call_site_after_its_register_stores(self):
+        promoted = ("void mag_wws_policy_spu_func_00003190(spu_context* ctx) {\n"
+                    " ctx->host_depth++; ctx->gpr[0] = SPU_PR_U(rg0); spu_indirect_branch(ctx); "
+                    "spu_drain_call(ctx, 0x3260); ctx->host_depth--; rg78 = SPU_PR_V(ctx->gpr[78]);\n}\n")
+        pin = hashlib.sha256(promoted.rstrip('\n').encode()).hexdigest()
+        new = hooks.instrument_source(trace_instrument(promoted, pin), pin)
+        self.assertLess(new.index('ctx->gpr[0] = SPU_PR_U(rg0);'), new.index('mag_graphics_payload_begin'))
+        self.assertLess(new.index('mag_graphics_payload_begin'), new.index(hooks.GUARD_OPEN))
+        self.assertLess(new.index(hooks.GUARD_CLOSE), new.index('rg78 = SPU_PR_V(ctx->gpr[78]);'))
+        self.assertEqual(hooks.original_body(new[new.index('void '):].rstrip('\n')), promoted.rstrip('\n'))
+
     def test_mismatch_closed(self):
         with self.assertRaises(ValueError):
             hooks.instrument_source(ORIGINAL.replace('0x3260', '0x3264'), PIN)

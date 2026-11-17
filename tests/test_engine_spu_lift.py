@@ -66,6 +66,47 @@ class EngineSpuLiftTests(unittest.TestCase):
 
 
 
+class PolicyLifterTests(unittest.TestCase):
+    """policy.lifter / policy.lifter_args select the SDK and options of the WWS policy lift."""
+    def repo(self, root):
+        subprocess.run(['git','init','-q',str(root)],check=True)
+        (root/'f').write_text('x')
+        env=dict(GIT_AUTHOR_NAME='t',GIT_AUTHOR_EMAIL='t@t',GIT_COMMITTER_NAME='t',GIT_COMMITTER_EMAIL='t@t')
+        import os
+        subprocess.run(['git','-C',str(root),'add','f'],check=True)
+        subprocess.run(['git','-C',str(root),'commit','-qm','x'],check=True,env={**os.environ,**env})
+        return subprocess.check_output(['git','-C',str(root),'rev-parse','HEAD'],text=True).strip()
+
+    def test_default_is_the_engine_lifter_without_options(self):
+        from tools import engine_spu_lift as mod
+        self.assertEqual(mod.policy_lifter({},Path('/sdk'),{}),(Path('/sdk'),None,[]))
+
+    def test_runtime_lifter_is_the_pinned_clean_runtime_checkout(self):
+        from tools import engine_spu_lift as mod
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)/'runtime';root.mkdir();commit=self.repo(root)
+            framework={'ps3recomp':{'runtime':{'path':str(root),'commit':commit}}}
+            policy=dict(lifter='runtime',lifter_args=['--promote-regs'])
+            with mock.patch.object(mod,'data_path',lambda p:Path(p)):
+                self.assertEqual(mod.policy_lifter(policy,Path('/sdk'),framework),(root,commit,['--promote-regs']))
+                bad=dict(framework);bad['ps3recomp']={'runtime':{'path':str(root),'commit':'0'*40}}
+                with self.assertRaisesRegex(ValueError,'revision'):mod.policy_lifter(policy,Path('/sdk'),bad)
+                (root/'f').write_text('dirty')
+                with self.assertRaisesRegex(ValueError,'clean'):mod.policy_lifter(policy,Path('/sdk'),framework)
+
+    def test_unknown_lifters_and_options_are_refused(self):
+        from tools import engine_spu_lift as mod
+        for policy in (dict(lifter='other'),dict(lifter_args=['--trace']),dict(lifter_args='--promote-regs')):
+            with self.subTest(policy=policy),self.assertRaises(ValueError):
+                mod.policy_lifter(policy,Path('/sdk'),{})
+
+    def test_reviewed_profile_lifts_the_policy_promoted_with_the_runtime_pin(self):
+        root=Path(__file__).resolve().parents[1]
+        policy=json.loads((root/'profiles/retail-v1.0-engine-spu.json').read_text())['policy']
+        self.assertEqual((policy['lifter'],policy['lifter_args']),('runtime',['--promote-regs']))
+
+
 class TrainingSpuLiftTests(unittest.TestCase):
     def fixture(self):
         from tools import engine_spu_lift

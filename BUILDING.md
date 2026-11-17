@@ -161,6 +161,15 @@ requires `--static-indirect` and adds a validated heuristic for function pointer
 job data. Without either flag the output is unchanged, so builds that pin job sources by hash
 keep working.
 
+`engine_spu_lift.py` lifts the WWS policy module with the runtime checkout's lifter
+(`ps3recomp.runtime` in `profiles/framework.json`, the same one as the streamed jobs), with
+`--promote-regs`. `policy.lifter` and `policy.lifter_args` in
+`profiles/retail-v1.0-engine-spu.json` name that lifter and its options;
+`MAG_POLICY_LIFTER_REPOSITORY` points it at another checkout of the same revision. The two
+training tasks and the EDGE worker still use the `lifter-spu` pin. The policy then spends about a
+quarter less CPU (see `docs/development/performance-findings.md`); payload hooks and trace hooks
+are pinned to the promoted policy text.
+
 `--lifter-arg ARG` passes `ARG` to the SDK lifter for every job module. The installer passes
 `--promote-regs` on every host (`STREAMED_JOB_LIFTER_ARGS` in
 `installer/mag_installer/native_recipe.py` lists the options per host). Each lifted function then
