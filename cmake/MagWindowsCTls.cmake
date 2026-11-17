@@ -8,8 +8,8 @@
 # function carried 13 such guards.
 #
 # For C units, MAG_WINDOWS_C_TLS_GUARDS=OFF (the default) selects the 19.24 compatibility level,
-# which has no guard, and puts _MSC_VER and _MSC_FULL_VER back to the real compiler's values, so
-# code that tests them sees no difference. C++ units are untouched: C++ thread_local can need
+# which has no guard, and puts _MSC_VER and _MSC_FULL_VER back to the values the compiler itself
+# reports (read at configure time), so code that tests them sees no difference. C++ units are untouched: C++ thread_local can need
 # dynamic initialisation, and there the guard is required.
 #
 # Measured on Windows Training with fast accessors: 45.17 to 46.70 guest flips/s (+3.4%) and p95
@@ -20,17 +20,48 @@
 option(MAG_WINDOWS_C_TLS_GUARDS
     "Keep clang-cl's thread-local access guards in C units (OFF removes them; C needs none)" OFF)
 
+# The _MSC_VER / _MSC_FULL_VER to restore. Preferred source: the compiler itself, preprocessing
+# a probe (`probe_text` is its output). Otherwise a three-part simulated version
+# (major.minor.build) gives both. A two-part one ("19.44", as CMake 4.4 reports for clang-cl 19)
+# has no build number, so _MSC_FULL_VER cannot be derived and both come back empty.
+function(mag_windows_c_tls_versions simulate probe_text out_ver out_full)
+    set(ver "")
+    set(full "")
+    if(probe_text MATCHES "MAG_MSC_VERSION[ \t]+([0-9]+)[ \t]+([0-9]+)")
+        set(ver "${CMAKE_MATCH_1}")
+        set(full "${CMAKE_MATCH_2}")
+    elseif(simulate MATCHES "^([0-9]+)\\.([0-9]+)\\.([0-9]+)")
+        math(EXPR ver "${CMAKE_MATCH_1} * 100 + ${CMAKE_MATCH_2}")
+        math(EXPR full "${CMAKE_MATCH_1} * 10000000 + ${CMAKE_MATCH_2} * 100000 + ${CMAKE_MATCH_3}")
+    endif()
+    set(${out_ver} "${ver}" PARENT_SCOPE)
+    set(${out_full} "${full}" PARENT_SCOPE)
+endfunction()
+
+# Preprocess a probe with the C compiler; returns its output (empty on failure).
+function(mag_windows_c_tls_probe out_text)
+    set(probe "${CMAKE_BINARY_DIR}/mag_msc_version_probe.c")
+    file(WRITE "${probe}" "MAG_MSC_VERSION _MSC_VER _MSC_FULL_VER\n")
+    execute_process(COMMAND "${CMAKE_C_COMPILER}" /nologo /EP "${probe}"
+                    OUTPUT_VARIABLE text RESULT_VARIABLE result ERROR_QUIET)
+    if(NOT result EQUAL 0)
+        set(text "")
+    endif()
+    set(${out_text} "${text}" PARENT_SCOPE)
+endfunction()
+
 function(mag_windows_c_tls_apply)
     if(MAG_WINDOWS_C_TLS_GUARDS OR NOT MSVC OR NOT CMAKE_C_COMPILER_ID STREQUAL "Clang")
         return()
     endif()
-    if(NOT CMAKE_C_SIMULATE_VERSION MATCHES "^([0-9]+)\\.([0-9]+)\\.([0-9]+)")
-        message(WARNING "clang-cl simulates no MSVC version (CMAKE_C_SIMULATE_VERSION="
-                        "'${CMAKE_C_SIMULATE_VERSION}'); thread-local guards are left in C units")
+    mag_windows_c_tls_probe(probe_text)
+    mag_windows_c_tls_versions("${CMAKE_C_SIMULATE_VERSION}" "${probe_text}" msc_ver msc_full_ver)
+    if(NOT msc_ver OR NOT msc_full_ver)
+        message(WARNING "Could not determine _MSC_VER/_MSC_FULL_VER (compiler probe failed, "
+                        "CMAKE_C_SIMULATE_VERSION='${CMAKE_C_SIMULATE_VERSION}'); "
+                        "thread-local guards are left in C units")
         return()
     endif()
-    math(EXPR msc_ver "${CMAKE_MATCH_1} * 100 + ${CMAKE_MATCH_2}")
-    math(EXPR msc_full_ver "${CMAKE_MATCH_1} * 10000000 + ${CMAKE_MATCH_2} * 100000 + ${CMAKE_MATCH_3}")
     if(msc_ver LESS 1925)
         return()   # no guards at this level anyway
     endif()
@@ -40,5 +71,5 @@ function(mag_windows_c_tls_apply)
         "$<$<COMPILE_LANGUAGE:C>:-D_MSC_VER=${msc_ver}>"
         "$<$<COMPILE_LANGUAGE:C>:-U_MSC_FULL_VER>"
         "$<$<COMPILE_LANGUAGE:C>:-D_MSC_FULL_VER=${msc_full_ver}>")
-    message(STATUS "C thread-local guards: removed (clang-cl, _MSC_VER ${msc_ver} kept)")
+    message(STATUS "C thread-local guards: removed (clang-cl, _MSC_VER ${msc_ver} / ${msc_full_ver} kept)")
 endfunction()
