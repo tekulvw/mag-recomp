@@ -10,7 +10,7 @@ import subprocess
 import sys
 if __package__ in (None, ''):
     sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
-from tools.prepare_inputs import ROOT, sha256_file, verify_hash, data_path
+from tools.prepare_inputs import ROOT, sha256_file, verify_hash, data_path, load_framework
 from tools.spu_lift import generate as generate_edge
 
 
@@ -96,14 +96,44 @@ def guard_policy_source(source: str, label: str = 'policy') -> tuple[str,int]:
     return '#include <stdio.h>\n#include <stdlib.h>\n'+source,count
 
 
+# Lifter options the policy profile may name (profiles/retail-v1.0-engine-spu.json, policy.lifter_args).
+POLICY_LIFTER_ARGS={'--promote-regs'}
+
+
+def git_identity(sdk: Path, expected: str, label: str) -> str:
+    revision=subprocess.check_output(['git','-C',str(sdk),'rev-parse','HEAD'],text=True).strip()
+    if revision != expected:
+        raise ValueError('Unexpected '+label+' revision')
+    if subprocess.check_output(['git','-C',str(sdk),'status','--porcelain','--untracked-files=no'],text=True):
+        raise ValueError(label[0].upper()+label[1:]+' repository must be clean')
+    return revision
+
+
+def policy_lifter(policy: dict, sdk: Path, framework: dict) -> tuple[Path, str | None, list]:
+    """The SDK checkout, revision and extra lifter options for the WWS policy lift.
+
+    By default the policy uses the engine SPU lifter (the profile's lifter_repository).
+    policy.lifter = "runtime" lifts it with the pinned runtime checkout's lifter instead --
+    the one tools/wws_job_lift.py uses for the streamed jobs -- with policy.lifter_args
+    (only options in POLICY_LIFTER_ARGS). Returns (sdk, revision or None for the default, args)."""
+    args=policy.get('lifter_args',[])
+    if not isinstance(args,list) or any(a not in POLICY_LIFTER_ARGS for a in args):
+        raise ValueError('Policy lifter options must be a list from '+', '.join(sorted(POLICY_LIFTER_ARGS)))
+    kind=policy.get('lifter','engine')
+    if kind == 'engine':
+        return sdk,None,args
+    if kind != 'runtime':
+        raise ValueError('Policy lifter must be "engine" or "runtime"')
+    pin=framework['ps3recomp']['runtime']
+    path=data_path(os.environ.get('MAG_POLICY_LIFTER_REPOSITORY',pin['path']))
+    return path,git_identity(path,pin['commit'],'policy lifter'),args
+
+
 def generate(output: Path) -> dict:
     profile=json.loads((ROOT/'profiles/retail-v1.0-engine-spu.json').read_text())
     sdk=data_path(os.environ.get('MAG_SPU_LIFTER_REPOSITORY', profile['lifter_repository']))
-    revision=subprocess.check_output(['git','-C',str(sdk),'rev-parse','HEAD'],text=True).strip()
-    if revision != profile['lifter_revision']:
-        raise ValueError('Unexpected engine SPU lifter revision')
-    if subprocess.check_output(['git','-C',str(sdk),'status','--porcelain','--untracked-files=no'],text=True):
-        raise ValueError('Engine SPU lifter repository must be clean')
+    git_identity(sdk,profile['lifter_revision'],'engine SPU lifter')
+    policy_sdk,policy_revision,policy_args=policy_lifter(profile['policy'],sdk,load_framework()[0])
     worker_profile=ROOT/'profiles/retail-v1.0-spu.json'
     verify_hash(worker_profile,profile['worker_profile_sha256'])
     image=json.loads((data_path('profiles/retail-v1.0.json')).read_text())['images']['mage_g']
@@ -129,10 +159,10 @@ def generate(output: Path) -> dict:
     commands=[[sys.executable,str(sdk/'tools/wrap_spu_elf.py'),str(raw_path),
                '--base',hex(policy['base']),'--entry',hex(policy['entry']),'--out',str(wrapped)]]
     target=output/'mag_wws_policy'
-    commands.append([sys.executable,str(sdk/'tools/spu_lifter.py'),str(wrapped),
+    commands.append([sys.executable,str(policy_sdk/'tools/spu_lifter.py'),str(wrapped),
         '--auto-functions',str(wrapped),'--code-end',hex(policy['code_end']),
         '--extra-funcs',','.join(hex(x) for x in policy['extra_functions']),
-        '--symbol-prefix','mag_wws_policy_','-o',str(target)])
+        '--symbol-prefix','mag_wws_policy_','-o',str(target),*policy_args])
     training_path=inputs/'training-task.elf';training_path.write_bytes(training)
     training_target=output/'mag_training';task=profile['training_task']
     commands.append([sys.executable,str(sdk/'tools/spu_lifter.py'),'--auto-functions',str(training_path),
@@ -152,6 +182,8 @@ def generate(output: Path) -> dict:
             code=re.sub(r'#include "(?:\.\./)+runtime/spu/([^\"]+)"',r'#include "\1"',path.read_text())
             path.write_text(code)
     path=target/'spu_recomp.c';original=path.read_text()
+    if '--promote-regs' in policy_args and 'spu_pr_v rg' not in original:
+        raise ValueError('Policy lift was asked for --promote-regs but is not register-promoted')
     guarded,count=guard_policy_source(original);path.write_text(guarded)
     if count != policy.get('expected_unsupported_count',profile['expected_unsupported_count']):
         raise ValueError('Policy unsupported census changed; review the generated sites')
@@ -178,6 +210,7 @@ def generate(output: Path) -> dict:
         raise ValueError('Combined engine SPU unsupported census changed')
     (output/'engine_policy_workload.c').write_text(render_engine_registration(profile))
     record=dict(status='complete',profile=profile,commands=commands,
+        policy_lifter_revision=policy_revision or profile['lifter_revision'],
         generator_sha256=sha256_file(Path(__file__)),elf_sha256=profile['elf_sha256'],
         training_sha256=hashlib.sha256(training).hexdigest(),
         queued_training_sha256=hashlib.sha256(queued_training).hexdigest(),

@@ -100,6 +100,48 @@ build. Native Edge became the default on every host in November 2026. An explici
 [native-edgegeom.md](../native-edgegeom.md) for build prerequisites, admission and fallback
 behavior.
 
+## Register-promoted WWS policy (November 2026)
+
+The streamed job modules have been lifted with `--promote-regs` since early November. The WWS
+policy module, which picks and dispatches every job, was not: it was still lifted by the older
+`lifter-spu` pin with every SPU register kept in `ctx->gpr`. Profiles on Windows and Linux put the
+policy at 8–9 ms of SPU-worker CPU per frame, the largest single lifted image. Its hottest
+instructions were failed store-to-load forwards, where a register slot was written in 4- or 8-byte
+pieces and read back 16 bytes wide. The policy is now lifted by the runtime pin's lifter (the
+streamed jobs' lifter) with `--promote-regs`. Without that option, the runtime lifter's output
+for the policy matches the old lift up to one equivalent `bisl` statement order and the
+unsupported-site guard text.
+
+| Host, Training, 3 interleaved rounds | Before | After | Change |
+| --- | ---: | ---: | ---: |
+| Windows (Ryzen 9950X3D), guest flips/s | 45.32 | 46.40 | +2.4%, every round |
+| Windows, WWS policy CPU per frame | 7.51 ms | 5.82 ms | -23% |
+| Linux (Ryzen 7800X3D), guest flips/s | 40.33–40.99 | 40.39–41.31 | 0 to +0.8% |
+| Linux, policy share of SPU-worker samples | 15.3% | 10.8% | |
+| Linux, main thread's wait for SPU work per frame (FTRACE) | 19.12 ms | 18.50 ms | |
+
+macOS showed no change.
+
+**One unexplained failure.** On Linux, the very first launch of the first promoted-policy binary
+stopped before reaching Training. The RSX command stream held a word the checker did not recognize
+(`unknown word 0x80078020`), a surface of an implausible size (8512×1024) was rejected, deferred
+report publication stopped (`issue-zero`), and the game then hung. No SPU-side diagnostic
+preceded it, and the baseline engine has never shown that signature (about 100 runs on the same
+runtime pin).
+
+The same binary then booted cleanly every time. That was 2 more A/B rounds, an FTRACE run and 10
+consecutive Training boots, then a cold-start control: 10 interleaved boots, 5 baseline and 5
+promoted, with the shader and pipeline caches and the binaries' page cache cleared before each
+boot. Neither arm failed in the control. All 10 Windows runs, including profiles, were clean. In
+total that is 1 failure in about 33 promoted boots.
+
+All hosts compiled byte-identical promoted policy sources. A review of the promoted code found no
+defect: register stores and reloads around every call, the payload-override seam, the
+interrupt-window transfers and the loops without calls. The same promotion has run on every
+streamed job module since early November. Whether the failure is a defect of the promotion or a
+pre-existing race that the faster policy exposed is not known. It was shipped with that record
+known.
+
 ## Tried and not kept
 
 | Attempt | Result |

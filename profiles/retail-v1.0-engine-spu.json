@@ -20,7 +20,11 @@
     "extra_functions": [
       2604
     ],
-    "expected_unsupported_count": 4
+    "expected_unsupported_count": 4,
+    "lifter": "runtime",
+    "lifter_args": [
+      "--promote-regs"
+    ]
   },
   "executed_todo_policy": "halt",
   "expected_unsupported_count": 4,
