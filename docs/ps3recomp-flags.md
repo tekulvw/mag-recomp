@@ -4,7 +4,7 @@ The ps3recomp runtime keeps most of its behaviour behind opt-in switches: enviro
 it reads at run time and CMake options it reads at configure time. This page lists every one
 mag-recomp sets, with the value, the platforms, the file that sets it, the reason and how to turn
 it off for a comparison. It applies to the runtime pinned in
-[`profiles/framework.json`](../profiles/framework.json) (`mag-recomp/runtime-2026.11.16-guards`, `30e21522`).
+[`profiles/framework.json`](../profiles/framework.json) (`mag-recomp/runtime-2026.11.17-rz`, `feae4e5e`).
 
 `tools/check_ps3recomp_flags.py` extracts the switches from the sources and fails when this page
 is missing one, lists one nothing sets any more, or gives a value or file the sources no longer
@@ -129,6 +129,7 @@ see [player-settings.md](player-settings.md).
 | `PS3RECOMP_FFMPEG_SWSCALE_LIBRARY` | CMake | the FFmpeg library | all with FFmpeg | `installer/mag_installer/native_recipe.py` | As above. | with `PS3RECOMP_SAIL_FFMPEG` |
 | `PS3RECOMP_SPU_DECODE_CACHE_HEAP` | CMake | `ON` | Linux | `cmake/MagLinuxRuntime.cmake` | glibc carves static TLS out of each thread's stack. The 2 MiB thread-local SPU decode cache made SPURS workers with 1 MiB stacks fail to start, so the launcher could not decompress its archive; the cache is allocated per thread on first use instead (#134). | `-DPS3RECOMP_SPU_DECODE_CACHE_HEAP=OFF` |
 | `PS3RECOMP_VM_FAST_ACCESSORS` | CMake | `ON` | Windows | `cmake/MagRuntimeOptions.cmake` | PPU guest loads and stores that need no probe, coherence or MMIO work take a plain big-endian path; side-effect addresses and coherence-marked lines keep the full path. Windows Training: main PPU thread running time 6.15 to 4.70 ms per frame, guest fps +3.6% (44.29 to 45.91, three interleaved rounds). Off elsewhere: on Linux it cut main-thread CPU about 30% but guest fps fell 3.8% over six rounds; macOS was flat. | `-DPS3RECOMP_VM_FAST_ACCESSORS=OFF` |
+| `SPU_FLOAT_X86_RZ` | define | `1` | x86-64 (takes effect only on AVX-512 builds) | `cmake/MagRuntimeOptions.cmake` | SPU single-precision add, subtract, multiply and fused ops run as one native AVX-512 instruction with embedded round-toward-zero instead of the exact double-precision emulation; extended-range operands and possible overflows take the exact path, and results are bit-identical (447M-lane exhaustive test plus mutants on AVX-512 hardware). Builds without AVX-512 (x86-64-v3) keep the exact forms. Training guest fps: Windows +1.5% (45.75 to 46.44), Linux +0.8% (40.99 to 41.30), three interleaved rounds each; the float-heavy job image's CPU fell 21% on Windows. | remove the definition |
 | `SPU_USE_DISPATCH_MT` | define | defined | all | `CMakeLists.txt` | The lifted SPU sources and `spu_dispatch_mt.c` take the musttail indirect-branch path. It must be built by clang in this project, or the tail call becomes a plain call and a guest loop walks the thread stack off its guard page. | none |
 
 ## Developer tools

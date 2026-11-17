@@ -14,3 +14,14 @@ if(WIN32)
     set(PS3RECOMP_VM_FAST_ACCESSORS ON CACHE BOOL
         "Plain big-endian PPU guest accesses when no probe, coherence or MMIO work is needed")
 endif()
+
+# SPU_FLOAT_X86_RZ: on x86 builds that target AVX-512 F/VL/DQ (x86-64-v4, chosen automatically
+# where the CPU has AVX-512), SPU single-precision add, subtract, multiply and fused ops run as one
+# native instruction with AVX-512 embedded round-toward-zero instead of the exact double-precision
+# emulation; extended-range operands and possible overflows still take the exact path, and the
+# results are bit-identical (447M-lane exhaustive test). Builds without AVX-512 keep the exact
+# forms whatever the define says. Training guest fps: Windows +1.5% (45.75 to 46.44), Linux
+# +0.8% (40.99 to 41.30), three interleaved rounds each.
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64)$")
+    add_compile_definitions(SPU_FLOAT_X86_RZ=1)
+endif()
