@@ -92,6 +92,15 @@ inline int mag_apply_runtime_defaults()
              // put store from the PPU already does; without it the walker slept out
              // its 4 ms wait (Training +16.6% Windows, +6.5% Linux, p95 -5 to -7 ms).
              Setting{"PS3RECOMP_GCM_SPU_PUT_KICK", "1"},
+#if defined(_WIN32) || defined(__APPLE__)
+             // Compact SPU MFC command and channel paths: the environment-armed
+             // diagnostic blocks and the channel entries' large frame leave a path that
+             // runs about 170k DMA commands and 1.08M channel writes a Training frame.
+             // Training guest fps +5.6% on Windows (48.31 to 51.01) and +4.1% on macOS
+             // (81.60 to 84.96), interleaved rounds. Linux stays off: level there (41.00
+             // to 41.00), its frame limited by the RSX walker thread.
+             Setting{"PS3RECOMP_MFC_FAST", "1"},
+#endif
 #if defined(MAG_HAS_NATIVE_EDGEGEOM)
              // Native Edge geometry, wherever it is linked: Linux guest fps +8%, macOS
              // +12.4% online and +4.7% Training; refused invocations keep the lifted job.
