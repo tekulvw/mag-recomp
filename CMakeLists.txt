@@ -144,6 +144,9 @@ message(STATUS "Retail image:   ${MAG_IMAGE}")
 # The x86-64 code generation level (cmake/MagX86Level.cmake) is chosen first: its options reach
 # every C and C++ unit of the runtime and of the game executable alike.
 mag_x86_level_apply()
+# Windows clang-cl: no thread-local access guards in C units (cmake/MagWindowsCTls.cmake).
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/MagWindowsCTls.cmake")
+mag_windows_c_tls_apply()
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/MagLinuxRuntime.cmake")
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/MagRuntimeOptions.cmake")
 add_subdirectory("${PS3RECOMP_DIR}" "${CMAKE_BINARY_DIR}/ps3recomp_sdk"
