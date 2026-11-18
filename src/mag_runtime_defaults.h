@@ -113,6 +113,19 @@ inline int mag_apply_runtime_defaults()
              Setting{"PS3RECOMP_RSX_PIPELINE_REUSE", "1"},
              Setting{"PS3RECOMP_RSX_VERTEX_SIMD", "1"},
 #endif
+#if defined(_WIN32) || defined(__linux__)
+             // The draw engine hands the Vulkan backend only the vertex-constant rows
+             // the program reads (fork #79) instead of the whole 8 KiB block every
+             // draw: MAG Training copied 8,140 B of constants per draw, 62% of the
+             // 58 MB a frame the walker wrote into write-combined memory; with the
+             // rows it copies 160 B. Three interleaved Training rounds against the
+             // switch off on the same build, every run clean. Linux: medians 41.99 vs
+             // 40.00, 42.00 vs 40.33, 41.00 vs 41.00 (+4.1% on the median of medians,
+             // +2.9% on the in-match means). Windows: in-match means 51.81 vs 50.97,
+             // 51.78 vs 51.81, 52.78 vs 51.51 (+1.35% on the means, +0.7% on the
+             // medians, best p95 in every round). macOS: not yet measured, so off there.
+             Setting{"PS3RECOMP_RSX_VS_CONSTANT_ROWS", "1"},
+#endif
 #if defined(MAG_HAS_NATIVE_EDGEGEOM)
              // Native Edge geometry, wherever it is linked: Linux guest fps +8%, macOS
              // +12.4% online and +4.7% Training; refused invocations keep the lifted job.
@@ -129,16 +142,6 @@ inline int mag_apply_runtime_defaults()
              // longer hold up the walker, which publishes the labels the SPU jobs wait
              // on (Training +12.8%, p95 25.4 -> 17.0 ms).
              Setting{"PS3RECOMP_RSX_PRESENT_THREAD", "1"},
-             // The draw engine hands the Vulkan backend only the vertex-constant rows
-             // the program reads (fork #79) instead of the whole 8 KiB block every
-             // draw: MAG Training copied 8,140 B of constants per draw, 62% of the
-             // 58 MB a frame the walker wrote into write-combined memory; with the
-             // rows it copies 160 B. Linux Training, three interleaved rounds against
-             // the switch off on the same build: medians 41.99 vs 40.00, 42.00 vs
-             // 40.33, 41.00 vs 41.00 (+4.1% on the median of medians, +2.9% on the
-             // in-match means), every run clean. Windows and macOS: not yet measured,
-             // so off there.
-             Setting{"PS3RECOMP_RSX_VS_CONSTANT_ROWS", "1"},
 #endif
 #if defined(__APPLE__)
              // Metal records draws on a second thread while the FIFO walker keeps
