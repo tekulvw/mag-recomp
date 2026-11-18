@@ -87,9 +87,9 @@ class PolicyLifterTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp)/'runtime';root.mkdir();commit=self.repo(root)
             framework={'ps3recomp':{'runtime':{'path':str(root),'commit':commit}}}
-            policy=dict(lifter='runtime',lifter_args=['--promote-regs'])
+            policy=dict(lifter='runtime',lifter_args=['--promote-regs','--inline-channels'])
             with mock.patch.object(mod,'data_path',lambda p:Path(p)):
-                self.assertEqual(mod.policy_lifter(policy,Path('/sdk'),framework),(root,commit,['--promote-regs']))
+                self.assertEqual(mod.policy_lifter(policy,Path('/sdk'),framework),(root,commit,['--promote-regs','--inline-channels']))
                 bad=dict(framework);bad['ps3recomp']={'runtime':{'path':str(root),'commit':'0'*40}}
                 with self.assertRaisesRegex(ValueError,'revision'):mod.policy_lifter(policy,Path('/sdk'),bad)
                 (root/'f').write_text('dirty')
@@ -104,7 +104,7 @@ class PolicyLifterTests(unittest.TestCase):
     def test_reviewed_profile_lifts_the_policy_promoted_with_the_runtime_pin(self):
         root=Path(__file__).resolve().parents[1]
         policy=json.loads((root/'profiles/retail-v1.0-engine-spu.json').read_text())['policy']
-        self.assertEqual((policy['lifter'],policy['lifter_args']),('runtime',['--promote-regs']))
+        self.assertEqual((policy['lifter'],policy['lifter_args']),('runtime',['--promote-regs','--inline-channels']))
 
 
 class TrainingSpuLiftTests(unittest.TestCase):

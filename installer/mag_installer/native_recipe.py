@@ -41,10 +41,14 @@ def config_host(config):
 # SDK lifter options for the streamed job modules, per host. --promote-regs keeps
 # SPU registers in C locals between sync points: Training flips +6.8% on Windows
 # x86-64, +1.4% on macOS arm64 (no regression in 6 alternating rounds).
+# --inline-channels lets the lifted code perform the MFC parameter latches and
+# the latched status reads itself, without the runtime call and its register
+# sync, when PS3RECOMP_SPU_CHANNEL_INLINE=1 is set (src/mag_runtime_defaults.h);
+# with the switch unset the lifted code calls the runtime as before.
 STREAMED_JOB_LIFTER_ARGS = {
-    'windows-x86_64': ('--promote-regs',),
-    'linux-x86_64': ('--promote-regs',),
-    'macos-arm64': ('--promote-regs',),
+    'windows-x86_64': ('--promote-regs', '--inline-channels'),
+    'linux-x86_64': ('--promote-regs', '--inline-channels'),
+    'macos-arm64': ('--promote-regs', '--inline-channels'),
 }
 
 

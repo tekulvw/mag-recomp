@@ -12,7 +12,7 @@
   "image_profiles": {
     "spu": {
       "path": "profiles/retail-v1.0-engine-spu.json",
-      "sha256": "fa4060ca0ce2aade08cd8912fd5ab1f657ffa7688b7039dfb806ea4fdd4352c9"
+      "sha256": "a16e2e8328370d9e5b908c348339cf7c099ef7fa68c386f7466df959b140c84d"
     }
   },
   "evidence": {

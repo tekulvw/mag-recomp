@@ -97,7 +97,7 @@ def guard_policy_source(source: str, label: str = 'policy') -> tuple[str,int]:
 
 
 # Lifter options the policy profile may name (profiles/retail-v1.0-engine-spu.json, policy.lifter_args).
-POLICY_LIFTER_ARGS={'--promote-regs'}
+POLICY_LIFTER_ARGS={'--promote-regs','--inline-channels'}
 
 
 def git_identity(sdk: Path, expected: str, label: str) -> str:
