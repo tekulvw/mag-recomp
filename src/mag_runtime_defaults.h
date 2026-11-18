@@ -134,10 +134,10 @@ inline int mag_apply_runtime_defaults()
              // draw: MAG Training copied 8,140 B of constants per draw, 62% of the
              // 58 MB a frame the walker wrote into write-combined memory; with the
              // rows it copies 160 B. Linux Training, three interleaved rounds against
-             // the switch off on the same build: medians 41.99 vs 40.00, 42.00 vs 40.33, 41.00 vs 41.00
-             // (+4.1% on the median of medians, +2.9% on the in-match means), every run
-             // clean. Windows and macOS: not
-             // yet measured, so off there.
+             // the switch off on the same build: medians 41.99 vs 40.00, 42.00 vs
+             // 40.33, 41.00 vs 41.00 (+4.1% on the median of medians, +2.9% on the
+             // in-match means), every run clean. Windows and macOS: not yet measured,
+             // so off there.
              Setting{"PS3RECOMP_RSX_VS_CONSTANT_ROWS", "1"},
 #endif
 #if defined(__APPLE__)
