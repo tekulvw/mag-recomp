@@ -22,7 +22,9 @@ MACOS_METAL={'PS3RECOMP_RSX_ENCODE_THREAD':'1'}
 if sys.platform=='darwin': DEFAULTS.update(MACOS_METAL)
 MFC_FAST={'PS3RECOMP_MFC_FAST':'1'}
 if sys.platform in ('darwin','win32'): DEFAULTS.update(MFC_FAST)
-KEYS=tuple(DEFAULTS)+('RUST_MIN_STACK','MAG_NATIVE_EDGEGEOM')+tuple(LINUX_VULKAN)+tuple(MACOS_METAL)+tuple(MFC_FAST)
+WALKER={'PS3RECOMP_RSX_PIPELINE_REUSE':'1','PS3RECOMP_RSX_VERTEX_SIMD':'1'}
+if sys.platform=='win32' or sys.platform.startswith('linux'): DEFAULTS.update(WALKER)
+KEYS=tuple(DEFAULTS)+('RUST_MIN_STACK','MAG_NATIVE_EDGEGEOM')+tuple(LINUX_VULKAN)+tuple(MACOS_METAL)+tuple(MFC_FAST)+tuple(WALKER)
 
 @unittest.skipUnless(shutil.which('clang++'),'clang++ required')
 class RuntimeDefaultsTests(unittest.TestCase):

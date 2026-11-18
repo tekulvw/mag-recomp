@@ -101,6 +101,18 @@ inline int mag_apply_runtime_defaults()
              // to 41.00), its frame limited by the RSX walker thread.
              Setting{"PS3RECOMP_MFC_FAST", "1"},
 #endif
+#if defined(_WIN32) || defined(__linux__)
+             // RSX walker thread, at 93% of the frame on both hosts in Training: a
+             // draw whose pipeline inputs cannot have changed keeps the previous
+             // draw's pipeline instead of regathering its key (fork #114), and the
+             // stable-range vertex fetch decodes one vertex per 128-bit operation,
+             // same bytes out (fork #129). Together, interleaved rounds against main:
+             // Windows +2.7% (50.42 to 51.79), Linux +2.9% (40.82 to 41.99); each
+             // switch off is within noise of main (+0.5% / -0.9%). macOS: not yet
+             // measured, so off there.
+             Setting{"PS3RECOMP_RSX_PIPELINE_REUSE", "1"},
+             Setting{"PS3RECOMP_RSX_VERTEX_SIMD", "1"},
+#endif
 #if defined(MAG_HAS_NATIVE_EDGEGEOM)
              // Native Edge geometry, wherever it is linked: Linux guest fps +8%, macOS
              // +12.4% online and +4.7% Training; refused invocations keep the lifted job.
