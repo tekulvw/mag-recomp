@@ -92,15 +92,16 @@ inline int mag_apply_runtime_defaults()
              // put store from the PPU already does; without it the walker slept out
              // its 4 ms wait (Training +16.6% Windows, +6.5% Linux, p95 -5 to -7 ms).
              Setting{"PS3RECOMP_GCM_SPU_PUT_KICK", "1"},
-#if defined(_WIN32) || defined(__APPLE__)
              // Compact SPU MFC command and channel paths: the environment-armed
              // diagnostic blocks and the channel entries' large frame leave a path that
              // runs about 170k DMA commands and 1.08M channel writes a Training frame.
              // Training guest fps +5.6% on Windows (48.31 to 51.01) and +4.1% on macOS
-             // (81.60 to 84.96), interleaved rounds. Linux stays off: level there (41.00
-             // to 41.00), its frame limited by the RSX walker thread.
+             // (81.60 to 84.96), interleaved rounds. Linux was level while the RSX
+             // walker thread set the frame (41.00 to 41.00); with the walker trimmed
+             // (fork #134, #135, #136) it pays there too: +2.3% in each of three
+             // interleaved rounds (42.99 to 43.98, 42.99 to 43.995, 42.635 to 43.99),
+             // every run clean.
              Setting{"PS3RECOMP_MFC_FAST", "1"},
-#endif
 #if defined(_WIN32) || defined(__linux__)
              // RSX walker thread, at 93% of the frame on both hosts in Training: a
              // draw whose pipeline inputs cannot have changed keeps the previous
