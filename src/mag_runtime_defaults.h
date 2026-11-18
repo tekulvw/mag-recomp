@@ -107,7 +107,7 @@ inline int mag_apply_runtime_defaults()
              // draw's pipeline instead of regathering its key (fork #114), and the
              // stable-range vertex fetch decodes one vertex per 128-bit operation,
              // same bytes out (fork #129). Together, interleaved rounds against main:
-             // Windows +2.7% (50.42 to 51.79), Linux +2.9% (40.82 to 41.99); each
+             // Windows +1.9% (50.50 to 51.44), Linux +2.7% (41.01 to 42.10); each
              // switch off is within noise of main (+0.5% / -0.9%). macOS: not yet
              // measured, so off there.
              Setting{"PS3RECOMP_RSX_PIPELINE_REUSE", "1"},
