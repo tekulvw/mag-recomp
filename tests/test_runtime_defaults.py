@@ -21,7 +21,7 @@ if sys.platform.startswith('linux'): DEFAULTS.update(LINUX_VULKAN)
 MACOS_METAL={'PS3RECOMP_RSX_ENCODE_THREAD':'1'}
 if sys.platform=='darwin': DEFAULTS.update(MACOS_METAL)
 MFC_FAST={'PS3RECOMP_MFC_FAST':'1'}
-if sys.platform in ('darwin','win32'): DEFAULTS.update(MFC_FAST)
+DEFAULTS.update(MFC_FAST)   # Windows, Linux and macOS
 WALKER={'PS3RECOMP_RSX_PIPELINE_REUSE':'1','PS3RECOMP_RSX_VERTEX_SIMD':'1','PS3RECOMP_RSX_VS_CONSTANT_ROWS':'1'}
 if sys.platform=='win32' or sys.platform.startswith('linux'): DEFAULTS.update(WALKER)
 KEYS=tuple(DEFAULTS)+('RUST_MIN_STACK','MAG_NATIVE_EDGEGEOM')+tuple(LINUX_VULKAN)+tuple(MACOS_METAL)+tuple(MFC_FAST)+tuple(WALKER)
