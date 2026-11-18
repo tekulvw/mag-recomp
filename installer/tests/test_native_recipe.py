@@ -113,7 +113,7 @@ class NativeRecipeTests(unittest.TestCase):
             self.assertIn('--require-complete', streamed)
             self.assertIn('--static-indirect', streamed)
             # The default configuration is macOS arm64.
-            self.assertEqual([a for a in streamed if a.startswith('--lifter-arg')], ['--lifter-arg=--promote-regs'])
+            self.assertEqual([a for a in streamed if a.startswith('--lifter-arg')], ['--lifter-arg=--promote-regs', '--lifter-arg=--inline-channels'])
             self.assertIn('--engine-profile', streamed)
             self.assertIn('-DSPU_DIR='+str(workspace/'generated/retail-v1.0/spu-engine-retained'), commands['configure-engine'])
             self.assertIn('-DSPU_DIR='+str(workspace/'generated/retail-v1.0/spu-eboot'), commands['configure-launcher'])
@@ -134,7 +134,7 @@ class NativeRecipeTests(unittest.TestCase):
             self.assertEqual(config['msvc']['clang_cl'], str((root / 'clang-cl.exe').resolve()))
             plan = {stage['id']: stage['argv'] for stage in build_plan(config, self.workspace(root))}
             configure = plan['configure-engine']
-            self.assertEqual(plan['streamed-jobs'][-1], '--lifter-arg=--promote-regs')
+            self.assertEqual(plan['streamed-jobs'][-2:], ['--lifter-arg=--promote-regs', '--lifter-arg=--inline-channels'])
             self.assertIn('-DCMAKE_C_COMPILER=' + Path(config['msvc']['clang_cl']).as_posix(), configure)
             self.assertIn('-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded', configure)
             self.assertFalse(any('FFMPEG' in argument for argument in configure))
@@ -199,9 +199,9 @@ class NativeRecipeTests(unittest.TestCase):
         self.assertEqual(native_recipe.config_host({}), 'macos-arm64')
         table = native_recipe.STREAMED_JOB_LIFTER_ARGS
         self.assertEqual(set(table), {'windows-x86_64', 'linux-x86_64', 'macos-arm64'})
-        self.assertEqual(table['windows-x86_64'], ('--promote-regs',))
-        self.assertEqual(table['linux-x86_64'], ('--promote-regs',))
-        self.assertEqual(table['macos-arm64'], ('--promote-regs',))
+        self.assertEqual(table['windows-x86_64'], ('--promote-regs', '--inline-channels'))
+        self.assertEqual(table['linux-x86_64'], ('--promote-regs', '--inline-channels'))
+        self.assertEqual(table['macos-arm64'], ('--promote-regs', '--inline-channels'))
 
     def test_game_controls_are_opt_in_and_prepare_their_own_engine_lift(self):
         with tempfile.TemporaryDirectory() as tmp:

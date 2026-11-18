@@ -23,7 +23,8 @@
     "expected_unsupported_count": 4,
     "lifter": "runtime",
     "lifter_args": [
-      "--promote-regs"
+      "--promote-regs",
+      "--inline-channels"
     ]
   },
   "executed_todo_policy": "halt",

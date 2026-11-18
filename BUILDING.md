@@ -131,7 +131,7 @@ done
   --sdk local/ps3recomp-runtime --sdk-revision RUNTIME_COMMIT_FROM_FRAMEWORK_JSON \
   --baseline generated/retail-v1.0/spu-engine \
   --output generated/retail-v1.0/spu-engine-retained --merge-chunks --require-complete \
-  --static-indirect --lifter-arg=--promote-regs
+  --static-indirect --lifter-arg=--promote-regs --lifter-arg=--inline-channels
 .venv/bin/python tools/firmware_lift.py --output generated/retail-v1.0/libsre
 .venv/bin/python tools/spu_programs_lift.py --sdk local/ps3recomp-spu-programs \
   --sdk-revision 4c5c05f60a6ae428b16e5ff7075c24a5e4d282ab --output local/spu-programs
@@ -171,12 +171,18 @@ quarter less CPU (see `docs/development/performance-findings.md`); payload hooks
 are pinned to the promoted policy text.
 
 `--lifter-arg ARG` passes `ARG` to the SDK lifter for every job module. The installer passes
-`--promote-regs` on every host (`STREAMED_JOB_LIFTER_ARGS` in
+`--promote-regs` and `--inline-channels` on every host (`STREAMED_JOB_LIFTER_ARGS` in
 `installer/mag_installer/native_recipe.py` lists the options per host). Each lifted function then
 keeps the SPU registers it uses in C locals and stores them to the register file only before host
 returns and out-of-line calls, re-reading them after. Execution is unchanged; the generated code
 is faster. Its local-store diagnostics (`SPU_LS_WATCH` and related) then need the job sources
-compiled with `-DSPU_LS_DIAG=1`.
+compiled with `-DSPU_LS_DIAG=1`. With `--inline-channels` (the policy lift takes it too, through
+`policy.lifter_args`) a lifted MFC parameter-latch write or latched status read stores to or reads
+the context directly, with no runtime call and no register sync around it, while the runtime switch
+`PS3RECOMP_SPU_CHANNEL_INLINE=1` is set and no SPU channel diagnostic is armed; otherwise it calls
+the runtime entry exactly as a lift without the option (`runtime/spu/spu_channel_inline.h` in the
+runtime pin). The lifted sources change shape either way, so the pinned policy function hash and
+the engine SPU profile hash move with the option.
 
 `spu_programs_lift.py` lifts every SPU program embedded in the engine and checks the result against
 `profiles/retail-v1.0-spu-coverage.json`; the engine build re-runs that check and refuses to configure
