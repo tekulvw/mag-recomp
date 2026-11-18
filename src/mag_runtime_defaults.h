@@ -101,6 +101,15 @@ inline int mag_apply_runtime_defaults()
              // to 41.00), its frame limited by the RSX walker thread.
              Setting{"PS3RECOMP_MFC_FAST", "1"},
 #endif
+#if defined(_WIN32)
+             // The lifted SPU code (policy and streamed jobs, lifted with
+             // --inline-channels) performs the MFC parameter latches and the latched
+             // status reads itself, with no runtime call and no promoted-register store
+             // and reload around it, while no channel diagnostic is armed. Training
+             // guest fps +2.0% on Windows (51.88 to 52.90 means, 3/3 rounds, p95 20.6 to
+             // 20.2 ms); every SPU lane 0.6-1.2 ms/frame lighter, main's wait -1.0 ms.
+             Setting{"PS3RECOMP_SPU_CHANNEL_INLINE", "1"},
+#endif
 #if defined(_WIN32) || defined(__linux__)
              // RSX walker thread, at 93% of the frame on both hosts in Training: a
              // draw whose pipeline inputs cannot have changed keeps the previous
