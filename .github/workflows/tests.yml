@@ -67,6 +67,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
+      - uses: ./.github/actions/windows-llvm
       - name: Pinned ps3recomp runtime
         run: python tools/fetch_ps3recomp.py --role runtime
       - name: Native Edge geometry tests
