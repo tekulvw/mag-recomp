@@ -131,17 +131,63 @@ def _environment(config, home):
             'GIT_OPTIONAL_LOCKS': '0', 'GIT_TERMINAL_PROMPT': '0', 'CMAKE_BUILD_PARALLEL_LEVEL': str(config.get('jobs', 2))}
 
 
-def _verify_hash(path, expected, token=None):
+# Where firmware/libsre.prx comes from. Shown in the installer's folder help, when the file is missing
+# and when it fails its identity check; BUILDING.md and installer/README.md repeat it. The steps were
+# verified: RPCS3 0.0.43-20623 on Windows produced the reviewed 4.93 module, and a Linux build with it
+# played a Training match normally (2026-11-19).
+FIRMWARE_PUP_URL = 'https://www.playstation.com/en-us/get-help/ps3-system-software/'
+FIRMWARE_PUP_RELEASE = '4.93'
+FIRMWARE_PUP_SHA256 = '158471fd834f8ea8036136b6aab43cd86c7ba73d79ca30e0af3c0fe0001cf365'
+# Decrypted libsre.prx identities from identified releases that the reviewed profile does not accept.
+FIRMWARE_KNOWN_RELEASES = {
+    '9ca6200d05891a356ca795030084a27d444d272c200a4f0c8124698f69c73b7f': 'system software 4.92',
+}
+FIRMWARE_SOURCE_HINT = (f'firmware/libsre.prx is dev_flash/sys/external/libsre.sprx from PS3 system software '
+                        f'{FIRMWARE_PUP_RELEASE}, decrypted with RPCS3. If it is missing or refused, the error '
+                        'explains how to make it.')
+FIRMWARE_SOURCE_STEPS = (
+    f'Where to get firmware/libsre.prx (system software {FIRMWARE_PUP_RELEASE}; verified with RPCS3 0.0.43):\n'
+    f'1. Download PS3UPDAT.PUP from Sony: {FIRMWARE_PUP_URL}\n'
+    f'   The {FIRMWARE_PUP_RELEASE} file has SHA-256 {FIRMWARE_PUP_SHA256}.\n'
+    '2. Install it: rpcs3 --installfw PS3UPDAT.PUP\n'
+    '3. Decrypt RPCS3\'s dev_flash/sys/external/libsre.sprx: rpcs3 --decrypt libsre.sprx (it writes '
+    'libsre.prx beside it)\n'
+    '4. Place the result as firmware/libsre.prx next to PS3_GAME.\n'
+    'What is checked is the decrypted module\'s SHA-256, not the release. Sony only hosts the latest '
+    f'release; if it is newer than {FIRMWARE_PUP_RELEASE}, its module may be refused until it is reviewed.')
+
+
+def _verify_hash(path, expected, token=None, decrypted=False, advice=None, known=None):
+    size = 0
+    head = b''
     with Path(path).open('rb') as stream:
         digest = hashlib.sha256()
         while True:
             if token: token.check()
             chunk = stream.read(1024 * 1024)
             if not chunk: break
+            if not head: head = chunk[:4]
+            size += len(chunk)
             digest.update(chunk)
         actual = digest.hexdigest()
-    if actual != expected:
-        raise InstallerError(f'Input identity does not match the reviewed native profile: {path}')
+    accepted = {expected} if isinstance(expected, str) else set(expected)
+    if actual not in accepted:
+        message = f'Input identity does not match the reviewed native profile: {path}'
+        if decrypted and head == b'SCE\x00':
+            message += ('\nThis file is still an encrypted SELF/SPRX container. Supply the decrypted ELF of the '
+                        'same file instead.')
+        elif decrypted and head != b'\x7fELF':
+            message += '\nThis file is not an ELF, so it is not a decrypted executable or firmware module.'
+        elif decrypted and known and actual in known:
+            message += (f'\nThis is the module from {known[actual]}, decrypted correctly, but this build is not '
+                        'reviewed for it yet.')
+        elif decrypted:
+            message += ('\nThis is a decrypted ELF, but not the reviewed one: it comes from a different game or '
+                        'firmware release, or it was modified.')
+        wanted = ' or '.join(sorted(accepted))
+        message += f'\nFound SHA-256 {actual} ({size} bytes); expected SHA-256 {wanted}.'
+        if advice: message += '\n' + advice
+        raise InstallerError(message)
 
 
 def _verify_identities_unwrapped(source, disc, config, token=None):
@@ -152,9 +198,12 @@ def _verify_identities_unwrapped(source, disc, config, token=None):
     for name, key in (('EBOOT.BIN', 'eboot_elf'), ('bin/mage_g.self', 'engine_elf')):
         original, decrypted = retail[name]
         _verify_hash(disc / 'USRDIR' / name, original, token)
-        _verify_hash(config[key], decrypted, token)
+        _verify_hash(config[key], decrypted, token, decrypted=True)
     firmware = json.loads((source / 'profiles/retail-v1.0-firmware.json').read_text(encoding='utf-8'))
-    _verify_hash(config['firmware'], firmware['image_sha256'], token)
+    # Older kits record one identity; current kits list each reviewed release's module.
+    accepted = [image['sha256'] for image in firmware['images']] if 'images' in firmware else firmware['image_sha256']
+    _verify_hash(config['firmware'], accepted, token, decrypted=True,
+                 advice=FIRMWARE_SOURCE_STEPS, known=FIRMWARE_KNOWN_RELEASES)
     # The server overlay rewrites one member of this archive at launch; a copy an
     # earlier tool already changed would only fail there, after the whole build.
     literal = {node.targets[0].id: ast.literal_eval(node.value) for node in module.body

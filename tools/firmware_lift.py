@@ -8,7 +8,7 @@ import subprocess
 import sys
 if __package__ in (None,''):
     sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
-from tools.prepare_inputs import ROOT, verify_hash, sha256_file, data_path
+from tools.prepare_inputs import ROOT, sha256_file, data_path
 from tools.lift import guard_generated_source
 from tools.inventory import check_sdk
 
@@ -37,6 +37,15 @@ def validate_placement(profile: dict, image_size: int | None = None) -> None:
         raise ValueError('Firmware bridge addresses do not match relocation')
 
 
+def accepted_image(profile: dict, path: Path) -> dict:
+    """Return the reviewed image record whose SHA-256 the module at path has; refuse any other."""
+    actual=sha256_file(path)
+    for image in profile.get('images',[]):
+        if image['sha256'] == actual:
+            return image
+    raise ValueError(f'Firmware identity mismatch: {path}: {actual} is not a reviewed libsre module')
+
+
 def bridge_function(source: str, address: str, nid: str) -> str:
     # Internal firmware functions are not a contiguous import-stub island.
     # Replace only the selected, hash-pinned function definition, preserving
@@ -57,7 +66,7 @@ def generate(output: Path) -> dict:
     if revision != profile['lifter_revision']:
         raise ValueError('Unexpected firmware lifter revision')
     validate_placement(profile)
-    source=data_path(profile['image']);verify_hash(source,profile['image_sha256'])
+    source=data_path(profile['image']);image_record=accepted_image(profile,source)
     output.mkdir(parents=True,exist_ok=False)
     inputs=output/'inputs';inputs.mkdir()
     base=profile['base'];toc=profile['toc']
@@ -113,7 +122,7 @@ extern "C" void mag_load_queue_firmware(void) {{
     }}
 }}
 ''')
-    record=dict(status='complete',profile=profile,commands=commands,
+    record=dict(status='complete',profile=profile,image=image_record,commands=commands,
                 generator_sha256=sha256_file(Path(__file__)),executed_todo_policy='halt',
                 guarded_todo_count=todo_count,outputs={p.name:sha256_file(p) for p in sorted(output.iterdir())
                    if p.is_file() and p.suffix in ('.c','.cpp','.h')})

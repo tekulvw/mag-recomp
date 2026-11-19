@@ -7,7 +7,7 @@
     "sha256": "4f12813b7e3d47392f0ea2014c139b20cf9935ac7ca7562cdbf2fbd19ad450f4"
   },
   "shared_profiles": {
-    "firmware": "c60168282fd18b6f79f9c7dee5bf56057a82a62ef5b467c88d712fb113db7a9f"
+    "firmware": "907fac8db2f2e46eb291750de7c23ff1f1e0e90af898ce24c56ce1e5ea245c64"
   },
   "image_profiles": {
     "spu": {

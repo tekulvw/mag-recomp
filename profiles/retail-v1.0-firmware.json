@@ -1,6 +1,20 @@
 {
   "image": "local/firmware/libsre.prx",
-  "image_sha256": "115f9df9596dd0b358e5a8c4eaaf77ee44c1f3ec16f9056b3abc517b739140c9",
+  "images": [
+    {
+      "release": "4.93",
+      "sha256": "9e7ee6edc99b1d372686cf927b883b18f19ed4d32d1faf35e214cca4ae0737b6",
+      "bytes": 239344,
+      "source": "dev_flash/sys/external/libsre.sprx from Sony's PS3UPDAT.PUP 4.93 (SHA-256 158471fd834f8ea8036136b6aab43cd86c7ba73d79ca30e0af3c0fe0001cf365), decrypted by RPCS3 0.0.43-20623 --decrypt"
+    },
+    {
+      "release": "4.86",
+      "sha256": "115f9df9596dd0b358e5a8c4eaaf77ee44c1f3ec16f9056b3abc517b739140c9",
+      "bytes": 239344,
+      "source": "Original reviewed module; release identified by the version constant 0x00486000 it loads"
+    }
+  ],
+  "image_equivalence": "The accepted modules differ only in the system software version constant (0x00493000 or 0x00486000) that 86 lis/ori pairs in code build. ELF and program headers, data, relocations, exports, imports, the function list, the TOC, the code end and the bridged stubs are identical, so the addresses below apply to each.",
   "base": 553648128,
   "toc": 553884336,
   "code_end": 553769752,

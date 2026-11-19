@@ -26,6 +26,10 @@
       "scope": "selected_firmware",
       "bytes": 239344,
       "sha256": "115f9df9596dd0b358e5a8c4eaaf77ee44c1f3ec16f9056b3abc517b739140c9",
+      "equivalent_sha256": [
+        "9e7ee6edc99b1d372686cf927b883b18f19ed4d32d1faf35e214cca4ae0737b6"
+      ],
+      "equivalence": "System software 4.93 module: identical embedded SPU programs; it differs only in a version constant in PPU code (profiles/retail-v1.0-firmware.json).",
       "hash_pinned": true,
       "embedded_spu_count": 2,
       "independent_magic_scan_agrees": true

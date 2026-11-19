@@ -12,6 +12,7 @@ from pathlib import Path
 from contextlib import nullcontext
 
 from .model import InstallerError, host_key
+from .native_build import FIRMWARE_SOURCE_STEPS
 from .native_recipe import x86_level_override
 from .pipeline import _exclusive_lock, _write_json, _separate
 from .safety import Cancellation, contained, file_digest
@@ -72,7 +73,8 @@ def locate_inputs(source):
                for path in required if not path.is_file() or path.is_symlink()]
     if missing:
         raise InstallerError('Your game folder is missing required prepared files: ' + ', '.join(missing) +
-                             '. The installer needs the original game plus separately decrypted executables and firmware; it cannot decrypt retail files yet.')
+                             '. The installer needs the original game plus separately decrypted executables and firmware; it cannot decrypt retail files yet.' +
+                             ('\n' + FIRMWARE_SOURCE_STEPS if 'firmware/libsre.prx' in missing else ''))
     return {key: str(value) for key, value in selected.items()}
 
 

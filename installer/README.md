@@ -28,7 +28,16 @@ workflow artifacts.
 1. Prepare one folder holding the complete `PS3_GAME` tree of your disc copy, with the decrypted
    `USRDIR/EBOOT.elf` and `USRDIR/bin/mage_g.elf` beside their originals (see BUILDING.md step 3),
    and the decrypted queue firmware at `firmware/libsre.prx` next to `PS3_GAME`. Selecting the
-   `PS3_GAME` folder itself also works. Every identity is checked before anything is downloaded.
+   `PS3_GAME` folder itself also works. Every identity is checked before anything is downloaded. A
+   file that fails the check is reported as still encrypted (an `.sprx`/`.self` container renamed),
+   not an ELF, a decrypted module from a known but unreviewed system software release, or a
+   decrypted ELF from a different release, with its SHA-256 and size.
+
+   `firmware/libsre.prx` is `dev_flash/sys/external/libsre.sprx` from PS3 system software 4.93,
+   decrypted with RPCS3 (`rpcs3 --installfw PS3UPDAT.PUP`, then `rpcs3 --decrypt libsre.sprx`; see
+   BUILDING.md step 3). What is checked is the module's SHA-256, not the release; the 4.93 and 4.86
+   modules are accepted, and the 4.93 steps are verified end to end. Sony only hosts the latest release. The installer shows the same steps when
+   the file is missing or refused.
 2. Start the installer, choose that folder and a new installation folder, then click **Build MAG**.
 3. Keep the installation folder together: the app reads its game files from the private workspace
    beside it.

@@ -108,6 +108,47 @@ class NativeBuildTests(unittest.TestCase):
             (root/'tools').mkdir(); (root/'tools/prepare_inputs.py').write_text('RETAIL = [syntax')
             with self.assertRaisesRegex(InstallerError,'metadata is malformed'): native._verify_identities(root,root,{})
 
+    def test_identity_mismatch_says_what_was_supplied(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp).resolve(); file=root/'libsre.prx'
+            expected=hashlib.sha256(b'reviewed').hexdigest()
+            cases=((b'SCE\x00'+b'\x00'*28,'still an encrypted SELF/SPRX'),
+                   (b'not an executable','is not an ELF'),
+                   (b'\x7fELF'+b'\x02'*28,'different game or firmware release'))
+            for content,hint in cases:
+                file.write_bytes(content)
+                with self.assertRaises(InstallerError) as raised: native._verify_hash(file,expected,decrypted=True)
+                text=str(raised.exception)
+                self.assertIn('does not match the reviewed native profile',text); self.assertIn(hint,text)
+                self.assertIn(f'Found SHA-256 {hashlib.sha256(content).hexdigest()} ({len(content)} bytes)',text)
+                self.assertIn(f'expected SHA-256 {expected}',text)
+            # Originals are SCE containers by design, so no decrypted-file advice is given for them.
+            file.write_bytes(b'SCE\x00 original')
+            with self.assertRaises(InstallerError) as raised: native._verify_hash(file,expected)
+            self.assertNotIn('encrypted',str(raised.exception)); self.assertIn('Found SHA-256',str(raised.exception))
+            file.write_bytes(b'reviewed'); native._verify_hash(file,expected,decrypted=True)
+
+    def test_firmware_source_steps_name_the_download_commands_and_checked_identity(self):
+        steps=native.FIRMWARE_SOURCE_STEPS
+        for text in ('PS3UPDAT.PUP','https://www.playstation.com/en-us/get-help/ps3-system-software/',
+                     '158471fd834f8ea8036136b6aab43cd86c7ba73d79ca30e0af3c0fe0001cf365','rpcs3 --installfw',
+                     'rpcs3 --decrypt','dev_flash/sys/external/libsre.sprx','firmware/libsre.prx',
+                     'only hosts the latest',"decrypted module's SHA-256",'system software 4.93'):
+            self.assertIn(text,steps)
+        self.assertIn('libsre.sprx',native.FIRMWARE_SOURCE_HINT)
+
+    def test_known_unreviewed_firmware_release_is_named(self):
+        with tempfile.TemporaryDirectory() as temp:
+            file=Path(temp).resolve()/'libsre.prx'; content=b'\x7fELF synthetic release'
+            file.write_bytes(content); known={hashlib.sha256(content).hexdigest():'system software 9.99'}
+            with self.assertRaises(InstallerError) as raised:
+                native._verify_hash(file,'0'*64,decrypted=True,advice='steps',known=known)
+            text=str(raised.exception)
+            self.assertIn('module from system software 9.99, decrypted correctly',text)
+            self.assertNotIn('different game',text); self.assertTrue(text.endswith('\nsteps'))
+        for digest,release in native.FIRMWARE_KNOWN_RELEASES.items():
+            self.assertRegex(digest,'^[0-9a-f]{64}$'); self.assertIn('system software',release)
+
     def test_copy_is_independent(self):
         with tempfile.TemporaryDirectory() as temp:
             root=Path(temp).resolve(); source=root/'source'; source.write_bytes(b'original'); target=root/'new/copied'
@@ -127,14 +168,30 @@ class NativeBuildTests(unittest.TestCase):
             settings=hashlib.sha256(b'retail settings').hexdigest()
             (source/'tools/prepare_inputs.py').write_text('RETAIL = '+repr({'EBOOT.BIN':(a,b),'bin/mage_g.self':(a,b)})
                 +"\nRETAIL_SETTINGS_ARCHIVE = 'run/settings.sdat'\nRETAIL_SETTINGS_ARCHIVE_SHA256 = "+repr((settings,)))
-            (source/'profiles/retail-v1.0-firmware.json').write_text(json.dumps({'image_sha256':b}))
+            (source/'profiles/retail-v1.0-firmware.json').write_text(json.dumps({'images':[{'release':'x','sha256':b}]}))
             for name in ('EBOOT.BIN','bin/mage_g.self'): (disc/'USRDIR'/name).write_bytes(b'original')
             (disc/'USRDIR/run').mkdir(); (disc/'USRDIR/run/settings.sdat').write_bytes(b'retail settings')
             config={}
             for key in ('eboot_elf','engine_elf','firmware'):
                 p=root/key; p.write_bytes(b'decrypted'); config[key]=str(p)
             native._verify_identities(source,disc,config); Path(config['engine_elf']).write_bytes(b'wrong')
-            with self.assertRaisesRegex(InstallerError,'identity'): native._verify_identities(source,disc,config)
+            with self.assertRaises(InstallerError) as raised: native._verify_identities(source,disc,config)
+            # Where-to-get-it steps belong to the firmware module only, not to the game executables.
+            self.assertIn('identity',str(raised.exception)); self.assertNotIn('Where to get firmware/libsre.prx',str(raised.exception))
+            Path(config['engine_elf']).write_bytes(b'decrypted'); Path(config['firmware']).write_bytes(b'\x7fELF other release')
+            with self.assertRaises(InstallerError) as raised: native._verify_identities(source,disc,config)
+            text=str(raised.exception)
+            self.assertIn('different game or firmware release',text); self.assertIn(native.FIRMWARE_SOURCE_STEPS,text)
+    def test_any_reviewed_firmware_image_is_accepted(self):
+        with tempfile.TemporaryDirectory() as temp:
+            file=Path(temp).resolve()/'libsre.prx'
+            digests=[hashlib.sha256(x).hexdigest() for x in (b'release a',b'release b')]
+            for content in (b'release a',b'release b'):
+                file.write_bytes(content); native._verify_hash(file,digests,decrypted=True)
+            file.write_bytes(b'release c')
+            with self.assertRaises(InstallerError) as raised: native._verify_hash(file,digests,decrypted=True)
+            self.assertIn(f'expected SHA-256 {" or ".join(sorted(digests))}',str(raised.exception))
+
     def test_changed_settings_archive_refused_before_build(self):
         with tempfile.TemporaryDirectory() as temp:
             root=Path(temp).resolve(); source=root/'source'; disc=root/'disc'

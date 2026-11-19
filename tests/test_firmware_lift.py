@@ -1,3 +1,4 @@
+import hashlib
 import json
 import tempfile
 import unittest
@@ -10,13 +11,37 @@ class FirmwareLiftTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);(root/'profiles').mkdir()
             (root/'profiles/retail-v1.0-firmware.json').write_text(json.dumps(dict(
-                lifter_repository='/unused/sdk',lifter_revision='expected',image='input',image_sha256='hash')))
+                lifter_repository='/unused/sdk',lifter_revision='expected',image='input',images=[dict(release='x',sha256='hash')])))
             with patch.object(firmware_lift,'ROOT',root), patch('tools.prepare_inputs.ROOT',root), patch('tools.prepare_inputs.WORKSPACE',root), patch.object(firmware_lift,'check_sdk'), \
                  patch.object(firmware_lift.subprocess,'check_output',return_value='different\n'), \
-                 patch.object(firmware_lift,'verify_hash',side_effect=AssertionError('input processing reached')):
+                 patch.object(firmware_lift,'accepted_image',side_effect=AssertionError('input processing reached')):
                 with self.assertRaisesRegex(ValueError,'revision'):
                     firmware_lift.generate(root/'out')
             self.assertFalse((root/'out').exists())
+
+class FirmwareIdentityTests(unittest.TestCase):
+    def test_each_reviewed_image_is_accepted_and_any_other_refused(self):
+        profile={'images':[dict(release='a',sha256=hashlib.sha256(b'first').hexdigest()),
+                           dict(release='b',sha256=hashlib.sha256(b'second').hexdigest())]}
+        with tempfile.TemporaryDirectory() as tmp:
+            path=Path(tmp)/'libsre.prx'
+            for content,release in ((b'first','a'),(b'second','b')):
+                path.write_bytes(content)
+                self.assertEqual(firmware_lift.accepted_image(profile,path)['release'],release)
+            path.write_bytes(b'other release')
+            with self.assertRaisesRegex(ValueError,'not a reviewed libsre module'):
+                firmware_lift.accepted_image(profile,path)
+            with self.assertRaisesRegex(ValueError,'not a reviewed libsre module'):
+                firmware_lift.accepted_image({},path)
+
+    def test_reviewed_profile_accepts_the_493_and_486_modules_only(self):
+        profile=json.loads((firmware_lift.ROOT/'profiles/retail-v1.0-firmware.json').read_text())
+        self.assertNotIn('image_sha256',profile)
+        self.assertEqual({i['release']:i['sha256'] for i in profile['images']},
+            {'4.93':'9e7ee6edc99b1d372686cf927b883b18f19ed4d32d1faf35e214cca4ae0737b6',
+             '4.86':'115f9df9596dd0b358e5a8c4eaaf77ee44c1f3ec16f9056b3abc517b739140c9'})
+        self.assertTrue(all(i['bytes']==239344 for i in profile['images']))
+
 
 class FirmwareGeneratorPinTests(unittest.TestCase):
     def test_clean_reviewed_revision_is_allowed_but_foreign_or_dirty_is_not(self):

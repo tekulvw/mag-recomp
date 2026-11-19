@@ -12,6 +12,7 @@ import threading
 from .model import InstallerError, Profile
 from .safety import Cancellation, Cancelled
 from . import ux
+from .native_build import FIRMWARE_SOURCE_HINT
 
 
 class WizardController:
@@ -231,7 +232,7 @@ def launch(root: Path, synthetic: bool = False) -> int:
     ttk.Label(frame,text='Installer demonstration' if synthetic else 'Build MAG',font=('TkDefaultFont',22,'bold')).grid(row=0,column=0,columnspan=3,sticky='w',pady=(0,12))
     intro=('SYNTHETIC ONLY. Uses sample text; no game is built or playable.' if synthetic else 'Choose your game files and installation location. Build MAG handles the required tools and build steps automatically.')
     ttk.Label(frame,text=intro,wraplength=760).grid(row=1,column=0,columnspan=3,sticky='w',pady=(0,12))
-    notice=controller.blocked or ('Input needs SYNTHETIC-INPUT.txt containing “This is synthetic installer input.” followed by one LF newline.' if synthetic else 'Select the folder containing PS3_GAME, prepared game executables and firmware. Required tools download automatically.')
+    notice=controller.blocked or ('Input needs SYNTHETIC-INPUT.txt containing “This is synthetic installer input.” followed by one LF newline.' if synthetic else 'Select the folder containing PS3_GAME, prepared game executables and firmware. Required tools download automatically. '+FIRMWARE_SOURCE_HINT)
     ttk.Label(frame,text=notice,wraplength=760).grid(row=2,column=0,columnspan=3,sticky='w',pady=(0,12))
     source=tk.StringVar();parent=tk.StringVar(value=str(ux.default_parent()))
     controls=[]
