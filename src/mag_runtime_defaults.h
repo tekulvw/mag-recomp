@@ -113,6 +113,18 @@ inline int mag_apply_runtime_defaults()
              // medians within 0.02; the relift with the switch off at parity with main).
              Setting{"PS3RECOMP_SPU_CHANNEL_INLINE", "1"},
 #endif
+#if defined(_WIN32)
+             // Short SPU indirect-dispatch entry (fork #142): a computed branch, indirect
+             // call, iret or depth-zero return whose target this thread resolved plainly
+             // under the same key (the dispatch cache's key, SPU_DISPATCH_CACHE=1 above)
+             // is called from a small per-thread table ahead of the full resolver. The
+             // job manager and its ~1,000 jobs a frame cross that entry ~100k times a
+             // frame. Training guest fps, 3 interleaved rounds against main: +3.6% means
+             // / +3.4% medians (51.99 to 53.86), the switch above main in every round and
+             // every switch-on run above every main run; mean frame 10.6 to 10.1 ms, p95
+             // 20.5 to 19.8 ms. Linux and macOS: not yet measured, so off there.
+             Setting{"PS3RECOMP_SPU_IB_FAST", "1"},
+#endif
 #if defined(_WIN32) || defined(__linux__)
              // RSX walker thread, at 93% of the frame on both hosts in Training: a
              // draw whose pipeline inputs cannot have changed keeps the previous
