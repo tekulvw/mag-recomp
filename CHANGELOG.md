@@ -1,5 +1,42 @@
 # Changelog
 
+## [0.5.2](https://github.com/tekulvw/mag-recomp/compare/v0.5.1...v0.5.2) (2026-11-19)
+
+
+### Bug Fixes
+
+* **firmware:** accept the system software 4.93 libsre module ([#211](https://github.com/tekulvw/mag-recomp/issues/211)) ([19e04cb](https://github.com/tekulvw/mag-recomp/commit/19e04cb2a2eb9e7128f97b098a9ae626b827e433))
+* **runtime:** pin runtime-2026.11.16-guards ([#194](https://github.com/tekulvw/mag-recomp/issues/194)) ([b63d5e4](https://github.com/tekulvw/mag-recomp/commit/b63d5e4986e3151cf1daae10c82f7fc72f73bba7))
+* **windows:** keep the 1 ms timer resolution when minimized, occluded or muted ([#190](https://github.com/tekulvw/mag-recomp/issues/190)) ([69a862d](https://github.com/tekulvw/mag-recomp/commit/69a862dd9b10c403ea5a8a6a41fffc20763c8602))
+
+
+### Performance
+
+* **installer:** link and enable native Edge geometry on macOS and Windows too ([#193](https://github.com/tekulvw/mag-recomp/issues/193)) ([3aa8b40](https://github.com/tekulvw/mag-recomp/commit/3aa8b402e6409efeea057566dd65b7eb0622dabd))
+* **linux:** acquire and present on the present thread by default ([#196](https://github.com/tekulvw/mag-recomp/issues/196)) ([652e30c](https://github.com/tekulvw/mag-recomp/commit/652e30ca198832b044f3af53b14221943eeb6ae3))
+* **linux:** hand the Vulkan backend only the vertex-constant rows a program reads ([#205](https://github.com/tekulvw/mag-recomp/issues/205)) ([06b7e50](https://github.com/tekulvw/mag-recomp/commit/06b7e509dd599f63b9179bf16e12d11c03d1985a))
+* **macos:** record Metal draws on the encode thread by default ([#192](https://github.com/tekulvw/mag-recomp/issues/192)) ([914ab4b](https://github.com/tekulvw/mag-recomp/commit/914ab4b32b4c33c31922fb9945b01e1b5a4885cf))
+* **macos:** turn on the fast PPU guest accessors on macOS too ([#198](https://github.com/tekulvw/mag-recomp/issues/198)) ([3f0f8fc](https://github.com/tekulvw/mag-recomp/commit/3f0f8fce22323a72074ee3cbcd62eb7480a19296))
+* **runtime:** pin runtime-2026.11.15-spukick and wake the FIFO walker on SPU put writes ([#191](https://github.com/tekulvw/mag-recomp/issues/191)) ([73737f5](https://github.com/tekulvw/mag-recomp/commit/73737f5f1f1e2c437be9a3710072ae51d4be96c6))
+* **runtime:** pin runtime-2026.11.17-rz and run SPU float ops natively on AVX-512 ([#199](https://github.com/tekulvw/mag-recomp/issues/199)) ([eb8c1af](https://github.com/tekulvw/mag-recomp/commit/eb8c1afd725448fda3b7f8ca9148d97f9b03a894))
+* **sdk:** pin runtime-2026.11.17-mfcfast and run the compact SPU MFC paths on Windows and macOS ([#202](https://github.com/tekulvw/mag-recomp/issues/202)) ([6a79bb2](https://github.com/tekulvw/mag-recomp/commit/6a79bb283e5fd4296e13cab8f6a16e72d515a90f))
+* **sdk:** pin runtime-2026.11.18-chaninline and run the lifted SPU channel latches and status reads inline on Windows and Linux ([#209](https://github.com/tekulvw/mag-recomp/issues/209)) ([1b6c48c](https://github.com/tekulvw/mag-recomp/commit/1b6c48cb024b637a1c0123eac3208c82a447f2c0))
+* **sdk:** pin runtime-2026.11.18-dispatch and run the compact SPU MFC paths on Linux ([#208](https://github.com/tekulvw/mag-recomp/issues/208)) ([84df29a](https://github.com/tekulvw/mag-recomp/commit/84df29a78cf989c3cbf7bdd6a187516140b90e91))
+* **sdk:** pin runtime-2026.11.18-fifolean ([#206](https://github.com/tekulvw/mag-recomp/issues/206)) ([15278f9](https://github.com/tekulvw/mag-recomp/commit/15278f9678e1a6f82410b12578f52b67e39da9a5))
+* **sdk:** pin runtime-2026.11.18-walker and keep the previous draw's pipeline and the vector vertex fetch on Windows and Linux ([#203](https://github.com/tekulvw/mag-recomp/issues/203)) ([1888e09](https://github.com/tekulvw/mag-recomp/commit/1888e098bf61c75b630f677a4e4df9801021b36e))
+* **sdk:** pin runtime-2026.11.18-walkerlean ([#204](https://github.com/tekulvw/mag-recomp/issues/204)) ([abebc4d](https://github.com/tekulvw/mag-recomp/commit/abebc4d97e94935fc399ce0e37afaee70640f233))
+* **sdk:** pin runtime-2026.11.19-cmp32 and take the short SPU indirect-dispatch entry on Linux ([#213](https://github.com/tekulvw/mag-recomp/issues/213)) ([19b28ea](https://github.com/tekulvw/mag-recomp/commit/19b28ea7ff77eb39d050a2bf2344cbaf41352f40))
+* **sdk:** pin runtime-2026.11.19-ibfast and take the short SPU indirect-dispatch entry on Windows ([#212](https://github.com/tekulvw/mag-recomp/issues/212)) ([eac143b](https://github.com/tekulvw/mag-recomp/commit/eac143b51f769629f8497246623bef7ee211cefc))
+* **spu:** lift the WWS policy with the runtime lifter and --promote-regs ([#200](https://github.com/tekulvw/mag-recomp/issues/200)) ([c67f0f3](https://github.com/tekulvw/mag-recomp/commit/c67f0f3fda20099addebb47f6909733bc9f9ded7))
+* **windows:** drop clang-cl thread-local access guards in C units ([#197](https://github.com/tekulvw/mag-recomp/issues/197)) ([af7f1ba](https://github.com/tekulvw/mag-recomp/commit/af7f1ba35617d919113b1db9da2e7b1b273ef4b8))
+* **windows:** hand the Vulkan backend only the vertex-constant rows a program reads ([#207](https://github.com/tekulvw/mag-recomp/issues/207)) ([131bcb8](https://github.com/tekulvw/mag-recomp/commit/131bcb84c676759d3f3d69b4f6503486bda5aec4))
+* **windows:** turn on the runtime's fast PPU guest accessors ([#195](https://github.com/tekulvw/mag-recomp/issues/195)) ([4e2fc31](https://github.com/tekulvw/mag-recomp/commit/4e2fc318e89282b806fd60167475b682e7e60d5d))
+
+
+### Documentation
+
+* correct the native Edge evidence and list runtime defaults the pin turns on ([#188](https://github.com/tekulvw/mag-recomp/issues/188)) ([9e39a63](https://github.com/tekulvw/mag-recomp/commit/9e39a63c635107df81c275ddee2b77086e54a622))
+
 ## [0.5.1](https://github.com/tekulvw/mag-recomp/compare/v0.5.0...v0.5.1) (2026-11-13)
 
 
