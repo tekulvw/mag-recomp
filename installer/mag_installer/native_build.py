@@ -133,7 +133,8 @@ def _environment(config, home):
 
 # Where firmware/libsre.prx comes from. Shown in the installer's folder help, when the file is missing
 # and when it fails its identity check; BUILDING.md and installer/README.md repeat it. The steps were
-# checked on Windows with RPCS3 0.0.43-20623: they produce the reviewed 4.93 module.
+# verified: RPCS3 0.0.43-20623 on Windows produced the reviewed 4.93 module, and a Linux build with it
+# played a Training match normally (2026-11-19).
 FIRMWARE_PUP_URL = 'https://www.playstation.com/en-us/get-help/ps3-system-software/'
 FIRMWARE_PUP_RELEASE = '4.93'
 FIRMWARE_PUP_SHA256 = '158471fd834f8ea8036136b6aab43cd86c7ba73d79ca30e0af3c0fe0001cf365'
@@ -145,7 +146,7 @@ FIRMWARE_SOURCE_HINT = (f'firmware/libsre.prx is dev_flash/sys/external/libsre.s
                         f'{FIRMWARE_PUP_RELEASE}, decrypted with RPCS3. If it is missing or refused, the error '
                         'explains how to make it.')
 FIRMWARE_SOURCE_STEPS = (
-    f'Where to get firmware/libsre.prx (system software {FIRMWARE_PUP_RELEASE}, with RPCS3 0.0.43 or later):\n'
+    f'Where to get firmware/libsre.prx (system software {FIRMWARE_PUP_RELEASE}; verified with RPCS3 0.0.43):\n'
     f'1. Download PS3UPDAT.PUP from Sony: {FIRMWARE_PUP_URL}\n'
     f'   The {FIRMWARE_PUP_RELEASE} file has SHA-256 {FIRMWARE_PUP_SHA256}.\n'
     '2. Install it: rpcs3 --installfw PS3UPDAT.PUP\n'

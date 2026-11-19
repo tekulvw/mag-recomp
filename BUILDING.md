@@ -92,7 +92,8 @@ release or a modified file is refused.
 The engine also needs the console's decrypted SPURS queue firmware module at
 `local/firmware/libsre.prx`; the accepted SHA-256 identities are recorded in
 `profiles/retail-v1.0-firmware.json`. It is `dev_flash/sys/external/libsre.sprx` from PS3 system
-software 4.93, decrypted to a plain ELF. With RPCS3 (checked with 0.0.43-20623 on Windows):
+software 4.93, decrypted to a plain ELF. These steps are verified: RPCS3 0.0.43-20623 on Windows produced
+the accepted module, and a Linux build with it reached and played a Training match normally:
 
 1. Download `PS3UPDAT.PUP` from Sony: <https://www.playstation.com/en-us/get-help/ps3-system-software/>.
    The 4.93 file has SHA-256 `158471fd834f8ea8036136b6aab43cd86c7ba73d79ca30e0af3c0fe0001cf365`.
