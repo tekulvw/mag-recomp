@@ -27,7 +27,7 @@ if sys.platform=='win32' or sys.platform.startswith('linux'): DEFAULTS.update(CH
 WALKER={'PS3RECOMP_RSX_PIPELINE_REUSE':'1','PS3RECOMP_RSX_VERTEX_SIMD':'1','PS3RECOMP_RSX_VS_CONSTANT_ROWS':'1'}
 if sys.platform=='win32' or sys.platform.startswith('linux'): DEFAULTS.update(WALKER)
 IB_FAST={'PS3RECOMP_SPU_IB_FAST':'1'}
-if sys.platform=='win32': DEFAULTS.update(IB_FAST)
+if sys.platform=='win32' or sys.platform.startswith('linux'): DEFAULTS.update(IB_FAST)
 KEYS=tuple(DEFAULTS)+('RUST_MIN_STACK','MAG_NATIVE_EDGEGEOM')+tuple(LINUX_VULKAN)+tuple(MACOS_METAL)+tuple(MFC_FAST)+tuple(CHANNEL_INLINE)+tuple(WALKER)+tuple(IB_FAST)
 
 @unittest.skipUnless(shutil.which('clang++'),'clang++ required')
