@@ -48,6 +48,7 @@ jobs:
       - name: MSVC host environment
         if: runner.os == 'Windows'
         uses: ilammy/msvc-dev-cmd@v1
+      - uses: ./.github/actions/windows-llvm
       - name: Build tools
         run: python -m pip install cmake ninja
       - name: Pinned Rust toolchain
@@ -248,6 +249,7 @@ jobs:
         uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: x64
+      - uses: ./.github/actions/windows-llvm
       - name: Select supported Windows C11 compiler
         if: runner.os == 'Windows'
         shell: pwsh
