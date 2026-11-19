@@ -33,12 +33,11 @@ workflow artifacts.
    not an ELF, a decrypted module from a known but unreviewed system software release, or a
    decrypted ELF from a different release, with its SHA-256 and size.
 
-   `firmware/libsre.prx` is `dev_flash/sys/external/libsre.sprx` from PS3 system software,
+   `firmware/libsre.prx` is `dev_flash/sys/external/libsre.sprx` from PS3 system software 4.93,
    decrypted with RPCS3 (`rpcs3 --installfw PS3UPDAT.PUP`, then `rpcs3 --decrypt libsre.sprx`; see
-   BUILDING.md step 3). What is checked is the module's SHA-256, not the release. Sony only hosts the
-   latest release, 4.93, and its module is not the reviewed one yet, so these steps currently produce
-   a file the installer refuses. The installer shows the same steps when the file is missing or
-   refused.
+   BUILDING.md step 3). What is checked is the module's SHA-256, not the release; the 4.93 and 4.86
+   modules are accepted. Sony only hosts the latest release. The installer shows the same steps when
+   the file is missing or refused.
 2. Start the installer, choose that folder and a new installation folder, then click **Build MAG**.
 3. Keep the installation folder together: the app reads its game files from the private workspace
    beside it.

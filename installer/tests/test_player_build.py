@@ -43,7 +43,7 @@ class PlayerBuildTests(unittest.TestCase):
             root = Path(temp).resolve(); self.inputs(root)
             (root / 'PS3_GAME/USRDIR/EBOOT.elf').unlink()
             with self.assertRaises(InstallerError) as raised: player_build.locate_inputs(root)
-            self.assertNotIn('Where firmware/libsre.prx comes from', str(raised.exception))
+            self.assertNotIn('Where to get firmware/libsre.prx', str(raised.exception))
             (root / 'firmware/libsre.prx').unlink()
             with self.assertRaises(InstallerError) as raised: player_build.locate_inputs(root)
             self.assertIn('firmware/libsre.prx', str(raised.exception))
@@ -138,7 +138,7 @@ class PlayerBuildTests(unittest.TestCase):
                  patch('mag_installer.managed_tools.bootstrap') as bootstrap:
                 with self.assertRaisesRegex(InstallerError, 'missing required prepared files') as raised:
                     player_build.install(root, source, root / 'MAG', root / 'cache')
-                self.assertIn('Where firmware/libsre.prx comes from', str(raised.exception))
+                self.assertIn('Where to get firmware/libsre.prx', str(raised.exception))
                 bootstrap.assert_not_called()
                 self.assertFalse((root / 'MAG').exists())
 

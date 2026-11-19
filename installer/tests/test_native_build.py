@@ -133,7 +133,7 @@ class NativeBuildTests(unittest.TestCase):
         for text in ('PS3UPDAT.PUP','https://www.playstation.com/en-us/get-help/ps3-system-software/',
                      '158471fd834f8ea8036136b6aab43cd86c7ba73d79ca30e0af3c0fe0001cf365','rpcs3 --installfw',
                      'rpcs3 --decrypt','dev_flash/sys/external/libsre.sprx','firmware/libsre.prx',
-                     'only hosts the latest',"decrypted module's SHA-256",'not been identified'):
+                     'only hosts the latest',"decrypted module's SHA-256",'system software 4.93'):
             self.assertIn(text,steps)
         self.assertIn('libsre.sprx',native.FIRMWARE_SOURCE_HINT)
 
@@ -168,7 +168,7 @@ class NativeBuildTests(unittest.TestCase):
             settings=hashlib.sha256(b'retail settings').hexdigest()
             (source/'tools/prepare_inputs.py').write_text('RETAIL = '+repr({'EBOOT.BIN':(a,b),'bin/mage_g.self':(a,b)})
                 +"\nRETAIL_SETTINGS_ARCHIVE = 'run/settings.sdat'\nRETAIL_SETTINGS_ARCHIVE_SHA256 = "+repr((settings,)))
-            (source/'profiles/retail-v1.0-firmware.json').write_text(json.dumps({'image_sha256':b}))
+            (source/'profiles/retail-v1.0-firmware.json').write_text(json.dumps({'images':[{'release':'x','sha256':b}]}))
             for name in ('EBOOT.BIN','bin/mage_g.self'): (disc/'USRDIR'/name).write_bytes(b'original')
             (disc/'USRDIR/run').mkdir(); (disc/'USRDIR/run/settings.sdat').write_bytes(b'retail settings')
             config={}
@@ -177,11 +177,21 @@ class NativeBuildTests(unittest.TestCase):
             native._verify_identities(source,disc,config); Path(config['engine_elf']).write_bytes(b'wrong')
             with self.assertRaises(InstallerError) as raised: native._verify_identities(source,disc,config)
             # Where-to-get-it steps belong to the firmware module only, not to the game executables.
-            self.assertIn('identity',str(raised.exception)); self.assertNotIn('Where firmware/libsre.prx comes from',str(raised.exception))
+            self.assertIn('identity',str(raised.exception)); self.assertNotIn('Where to get firmware/libsre.prx',str(raised.exception))
             Path(config['engine_elf']).write_bytes(b'decrypted'); Path(config['firmware']).write_bytes(b'\x7fELF other release')
             with self.assertRaises(InstallerError) as raised: native._verify_identities(source,disc,config)
             text=str(raised.exception)
             self.assertIn('different game or firmware release',text); self.assertIn(native.FIRMWARE_SOURCE_STEPS,text)
+    def test_any_reviewed_firmware_image_is_accepted(self):
+        with tempfile.TemporaryDirectory() as temp:
+            file=Path(temp).resolve()/'libsre.prx'
+            digests=[hashlib.sha256(x).hexdigest() for x in (b'release a',b'release b')]
+            for content in (b'release a',b'release b'):
+                file.write_bytes(content); native._verify_hash(file,digests,decrypted=True)
+            file.write_bytes(b'release c')
+            with self.assertRaises(InstallerError) as raised: native._verify_hash(file,digests,decrypted=True)
+            self.assertIn(f'expected SHA-256 {" or ".join(sorted(digests))}',str(raised.exception))
+
     def test_changed_settings_archive_refused_before_build(self):
         with tempfile.TemporaryDirectory() as temp:
             root=Path(temp).resolve(); source=root/'source'; disc=root/'disc'

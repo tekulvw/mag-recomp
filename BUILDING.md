@@ -90,11 +90,12 @@ writes `profiles/retail-v1.0.json` (Git-ignored) with the local paths the later 
 release or a modified file is refused.
 
 The engine also needs the console's decrypted SPURS queue firmware module at
-`local/firmware/libsre.prx`; its expected SHA-256 is recorded in `profiles/retail-v1.0-firmware.json`.
-It is `dev_flash/sys/external/libsre.sprx` from PS3 system software, decrypted to a plain ELF. With
-RPCS3 (checked with 0.0.43-20623 on Windows):
+`local/firmware/libsre.prx`; the accepted SHA-256 identities are recorded in
+`profiles/retail-v1.0-firmware.json`. It is `dev_flash/sys/external/libsre.sprx` from PS3 system
+software 4.93, decrypted to a plain ELF. With RPCS3 (checked with 0.0.43-20623 on Windows):
 
 1. Download `PS3UPDAT.PUP` from Sony: <https://www.playstation.com/en-us/get-help/ps3-system-software/>.
+   The 4.93 file has SHA-256 `158471fd834f8ea8036136b6aab43cd86c7ba73d79ca30e0af3c0fe0001cf365`.
 2. Install it: `rpcs3 --installfw PS3UPDAT.PUP`.
 3. Decrypt RPCS3's `dev_flash/sys/external/libsre.sprx`: `rpcs3 --decrypt libsre.sprx` writes
    `libsre.prx` beside it.
@@ -102,20 +103,20 @@ RPCS3 (checked with 0.0.43-20623 on Windows):
    installer).
 
 What is checked is the decrypted module's SHA-256, not the release: the firmware lift relies on
-offsets inside this exact module (its TOC, code end and the two bridged cellSpurs stubs), so a module
-whose bytes differ is refused. **These steps do not yet produce the reviewed module.** Sony only hosts
-the latest release, 4.93 (`PS3UPDAT.PUP` SHA-256
-`158471fd834f8ea8036136b6aab43cd86c7ba73d79ca30e0af3c0fe0001cf365`, build of 2026-01-08), and the
-modules decrypted from it and from 4.92 are refused:
+offsets inside the module (its TOC, code end and the two bridged cellSpurs stubs), so only reviewed
+modules are accepted:
 
-| Release | Decrypted `libsre.prx` SHA-256 |
-| --- | --- |
-| 4.93 (build of 2026-01-08) | `9e7ee6edc99b1d372686cf927b883b18f19ed4d32d1faf35e214cca4ae0737b6` |
-| 4.92 | `9ca6200d05891a356ca795030084a27d444d272c200a4f0c8124698f69c73b7f` |
+| Release | Decrypted `libsre.prx` SHA-256 | Accepted |
+| --- | --- | --- |
+| 4.93 (Sony's current download, build of 2026-01-08) | `9e7ee6edc99b1d372686cf927b883b18f19ed4d32d1faf35e214cca4ae0737b6` | yes |
+| 4.86 (the original reviewed module) | `115f9df9596dd0b358e5a8c4eaaf77ee44c1f3ec16f9056b3abc517b739140c9` | yes |
+| 4.92 | `9ca6200d05891a356ca795030084a27d444d272c200a4f0c8124698f69c73b7f` | no (not reviewed) |
 
-Both have the same size and segment layout as the reviewed module and differ from it only in
-immediate operands of code; the release the reviewed module comes from has not been identified. The
-installer names these releases when it refuses one of them.
+These modules are the same size and differ only in the system software version constant that 86
+`lis`/`ori` pairs in code build (0x00493000, 0x00486000 or 0x00492000). Headers, segments, data,
+relocations, exports, imports, functions, TOC, code end and bridged stubs are identical, so one set
+of addresses serves every accepted module. Sony only hosts the latest release; a newer one is refused
+until its module is reviewed.
 
 ## 4. Inventory
 
