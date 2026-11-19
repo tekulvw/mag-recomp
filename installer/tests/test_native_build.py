@@ -108,6 +108,25 @@ class NativeBuildTests(unittest.TestCase):
             (root/'tools').mkdir(); (root/'tools/prepare_inputs.py').write_text('RETAIL = [syntax')
             with self.assertRaisesRegex(InstallerError,'metadata is malformed'): native._verify_identities(root,root,{})
 
+    def test_identity_mismatch_says_what_was_supplied(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp).resolve(); file=root/'libsre.prx'
+            expected=hashlib.sha256(b'reviewed').hexdigest()
+            cases=((b'SCE\x00'+b'\x00'*28,'still an encrypted SELF/SPRX'),
+                   (b'not an executable','is not an ELF'),
+                   (b'\x7fELF'+b'\x02'*28,'different game or firmware release'))
+            for content,hint in cases:
+                file.write_bytes(content)
+                with self.assertRaises(InstallerError) as raised: native._verify_hash(file,expected,decrypted=True)
+                text=str(raised.exception)
+                self.assertIn('does not match the reviewed native profile',text); self.assertIn(hint,text)
+                self.assertIn(f'Found SHA-256 {hashlib.sha256(content).hexdigest()} ({len(content)} bytes)',text)
+                self.assertIn(f'expected SHA-256 {expected}',text)
+            # Originals are SCE containers by design, so no decrypted-file advice is given for them.
+            file.write_bytes(b'SCE\x00 original')
+            with self.assertRaises(InstallerError) as raised: native._verify_hash(file,expected)
+            self.assertNotIn('encrypted',str(raised.exception)); self.assertIn('Found SHA-256',str(raised.exception))
+            file.write_bytes(b'reviewed'); native._verify_hash(file,expected,decrypted=True)
     def test_copy_is_independent(self):
         with tempfile.TemporaryDirectory() as temp:
             root=Path(temp).resolve(); source=root/'source'; source.write_bytes(b'original'); target=root/'new/copied'

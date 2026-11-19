@@ -131,17 +131,31 @@ def _environment(config, home):
             'GIT_OPTIONAL_LOCKS': '0', 'GIT_TERMINAL_PROMPT': '0', 'CMAKE_BUILD_PARALLEL_LEVEL': str(config.get('jobs', 2))}
 
 
-def _verify_hash(path, expected, token=None):
+def _verify_hash(path, expected, token=None, decrypted=False):
+    size = 0
+    head = b''
     with Path(path).open('rb') as stream:
         digest = hashlib.sha256()
         while True:
             if token: token.check()
             chunk = stream.read(1024 * 1024)
             if not chunk: break
+            if not head: head = chunk[:4]
+            size += len(chunk)
             digest.update(chunk)
         actual = digest.hexdigest()
     if actual != expected:
-        raise InstallerError(f'Input identity does not match the reviewed native profile: {path}')
+        message = f'Input identity does not match the reviewed native profile: {path}'
+        if decrypted and head == b'SCE\x00':
+            message += ('\nThis file is still an encrypted SELF/SPRX container. Supply the decrypted ELF of the '
+                        'same file instead.')
+        elif decrypted and head != b'\x7fELF':
+            message += '\nThis file is not an ELF, so it is not a decrypted executable or firmware module.'
+        elif decrypted:
+            message += ('\nThis is a decrypted ELF, but not the reviewed one: it comes from a different game or '
+                        'firmware release, or it was modified.')
+        message += f'\nFound SHA-256 {actual} ({size} bytes); expected SHA-256 {expected}.'
+        raise InstallerError(message)
 
 
 def _verify_identities_unwrapped(source, disc, config, token=None):
@@ -152,9 +166,9 @@ def _verify_identities_unwrapped(source, disc, config, token=None):
     for name, key in (('EBOOT.BIN', 'eboot_elf'), ('bin/mage_g.self', 'engine_elf')):
         original, decrypted = retail[name]
         _verify_hash(disc / 'USRDIR' / name, original, token)
-        _verify_hash(config[key], decrypted, token)
+        _verify_hash(config[key], decrypted, token, decrypted=True)
     firmware = json.loads((source / 'profiles/retail-v1.0-firmware.json').read_text(encoding='utf-8'))
-    _verify_hash(config['firmware'], firmware['image_sha256'], token)
+    _verify_hash(config['firmware'], firmware['image_sha256'], token, decrypted=True)
     # The server overlay rewrites one member of this archive at launch; a copy an
     # earlier tool already changed would only fail there, after the whole build.
     literal = {node.targets[0].id: ast.literal_eval(node.value) for node in module.body
