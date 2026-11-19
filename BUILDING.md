@@ -91,6 +91,9 @@ release or a modified file is refused.
 
 The engine also needs the console's decrypted SPURS queue firmware module at
 `local/firmware/libsre.prx`; its expected SHA-256 is recorded in `profiles/retail-v1.0-firmware.json`.
+It is `dev_flash/sys/external/libsre.sprx` from PS3 system software 4.93 (`PS3UPDAT.PUP`, SHA-256
+`158471fd834f8ea8036136b6aab43cd86c7ba73d79ca30e0af3c0fe0001cf365`), decrypted to a plain ELF. A
+module from another system software release has a different identity and is refused.
 
 ## 4. Inventory
 

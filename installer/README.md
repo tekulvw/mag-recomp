@@ -27,7 +27,8 @@ workflow artifacts.
 
 1. Prepare one folder holding the complete `PS3_GAME` tree of your disc copy, with the decrypted
    `USRDIR/EBOOT.elf` and `USRDIR/bin/mage_g.elf` beside their originals (see BUILDING.md step 3),
-   and the decrypted queue firmware at `firmware/libsre.prx` next to `PS3_GAME`. Selecting the
+   and the decrypted queue firmware at `firmware/libsre.prx` next to `PS3_GAME` (`libsre.sprx` from
+   PS3 system software 4.93, decrypted; see BUILDING.md step 3). Selecting the
    `PS3_GAME` folder itself also works. Every identity is checked before anything is downloaded. A
    file that fails the check is reported as still encrypted (an `.sprx`/`.self` container renamed),
    not an ELF, or a decrypted ELF from a different release, with its SHA-256 and size.
