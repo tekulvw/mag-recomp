@@ -131,7 +131,36 @@ def _environment(config, home):
             'GIT_OPTIONAL_LOCKS': '0', 'GIT_TERMINAL_PROMPT': '0', 'CMAKE_BUILD_PARALLEL_LEVEL': str(config.get('jobs', 2))}
 
 
-def _verify_hash(path, expected, token=None, decrypted=False):
+# Where firmware/libsre.prx comes from. Shown in the installer's folder help, when the file is missing
+# and when it fails its identity check; BUILDING.md and installer/README.md repeat it. The steps were
+# checked on Windows with RPCS3 0.0.43-20623 on 2026-11-19: they install Sony's current download and
+# decrypt the module, but that module is not the reviewed one (see FIRMWARE_KNOWN_RELEASES).
+FIRMWARE_PUP_URL = 'https://www.playstation.com/en-us/get-help/ps3-system-software/'
+FIRMWARE_PUP_RELEASE = '4.93'
+FIRMWARE_PUP_SHA256 = '158471fd834f8ea8036136b6aab43cd86c7ba73d79ca30e0af3c0fe0001cf365'
+# Decrypted libsre.prx identities from identified releases that the reviewed profile does not accept.
+FIRMWARE_KNOWN_RELEASES = {
+    '9e7ee6edc99b1d372686cf927b883b18f19ed4d32d1faf35e214cca4ae0737b6':
+        'system software 4.93 (build of 2026-01-08, the release Sony currently hosts)',
+    '9ca6200d05891a356ca795030084a27d444d272c200a4f0c8124698f69c73b7f': 'system software 4.92',
+}
+FIRMWARE_SOURCE_HINT = ('firmware/libsre.prx is dev_flash/sys/external/libsre.sprx from PS3 system software, '
+                        'decrypted with RPCS3. If it is missing or refused, the error explains where it comes from.')
+FIRMWARE_SOURCE_STEPS = (
+    'Where firmware/libsre.prx comes from: dev_flash/sys/external/libsre.sprx in PS3 system software, '
+    'decrypted to an ELF. With RPCS3 (checked with 0.0.43-20623):\n'
+    f'1. Download PS3UPDAT.PUP from Sony: {FIRMWARE_PUP_URL}\n'
+    '2. Install it: rpcs3 --installfw PS3UPDAT.PUP\n'
+    '3. Decrypt RPCS3\'s dev_flash/sys/external/libsre.sprx: rpcs3 --decrypt libsre.sprx (it writes '
+    'libsre.prx beside it)\n'
+    '4. Place the result as firmware/libsre.prx next to PS3_GAME.\n'
+    'What is checked is the decrypted module\'s SHA-256, not the release. Sony only hosts the latest '
+    f'release, {FIRMWARE_PUP_RELEASE} (PS3UPDAT.PUP SHA-256 {FIRMWARE_PUP_SHA256}), and its module is not '
+    'the reviewed one yet: these steps currently produce a file this build refuses. The release the '
+    'reviewed module comes from has not been identified.')
+
+
+def _verify_hash(path, expected, token=None, decrypted=False, advice=None, known=None):
     size = 0
     head = b''
     with Path(path).open('rb') as stream:
@@ -151,10 +180,14 @@ def _verify_hash(path, expected, token=None, decrypted=False):
                         'same file instead.')
         elif decrypted and head != b'\x7fELF':
             message += '\nThis file is not an ELF, so it is not a decrypted executable or firmware module.'
+        elif decrypted and known and actual in known:
+            message += (f'\nThis is the module from {known[actual]}, decrypted correctly, but this build is not '
+                        'reviewed for it yet.')
         elif decrypted:
             message += ('\nThis is a decrypted ELF, but not the reviewed one: it comes from a different game or '
                         'firmware release, or it was modified.')
         message += f'\nFound SHA-256 {actual} ({size} bytes); expected SHA-256 {expected}.'
+        if advice: message += '\n' + advice
         raise InstallerError(message)
 
 
@@ -168,7 +201,8 @@ def _verify_identities_unwrapped(source, disc, config, token=None):
         _verify_hash(disc / 'USRDIR' / name, original, token)
         _verify_hash(config[key], decrypted, token, decrypted=True)
     firmware = json.loads((source / 'profiles/retail-v1.0-firmware.json').read_text(encoding='utf-8'))
-    _verify_hash(config['firmware'], firmware['image_sha256'], token, decrypted=True)
+    _verify_hash(config['firmware'], firmware['image_sha256'], token, decrypted=True,
+                 advice=FIRMWARE_SOURCE_STEPS, known=FIRMWARE_KNOWN_RELEASES)
     # The server overlay rewrites one member of this archive at launch; a copy an
     # earlier tool already changed would only fail there, after the whole build.
     literal = {node.targets[0].id: ast.literal_eval(node.value) for node in module.body

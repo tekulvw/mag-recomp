@@ -127,6 +127,28 @@ class NativeBuildTests(unittest.TestCase):
             with self.assertRaises(InstallerError) as raised: native._verify_hash(file,expected)
             self.assertNotIn('encrypted',str(raised.exception)); self.assertIn('Found SHA-256',str(raised.exception))
             file.write_bytes(b'reviewed'); native._verify_hash(file,expected,decrypted=True)
+
+    def test_firmware_source_steps_name_the_download_commands_and_checked_identity(self):
+        steps=native.FIRMWARE_SOURCE_STEPS
+        for text in ('PS3UPDAT.PUP','https://www.playstation.com/en-us/get-help/ps3-system-software/',
+                     '158471fd834f8ea8036136b6aab43cd86c7ba73d79ca30e0af3c0fe0001cf365','rpcs3 --installfw',
+                     'rpcs3 --decrypt','dev_flash/sys/external/libsre.sprx','firmware/libsre.prx',
+                     'only hosts the latest',"decrypted module's SHA-256",'not been identified'):
+            self.assertIn(text,steps)
+        self.assertIn('libsre.sprx',native.FIRMWARE_SOURCE_HINT)
+
+    def test_known_unreviewed_firmware_release_is_named(self):
+        with tempfile.TemporaryDirectory() as temp:
+            file=Path(temp).resolve()/'libsre.prx'; content=b'\x7fELF synthetic release'
+            file.write_bytes(content); known={hashlib.sha256(content).hexdigest():'system software 9.99'}
+            with self.assertRaises(InstallerError) as raised:
+                native._verify_hash(file,'0'*64,decrypted=True,advice='steps',known=known)
+            text=str(raised.exception)
+            self.assertIn('module from system software 9.99, decrypted correctly',text)
+            self.assertNotIn('different game',text); self.assertTrue(text.endswith('\nsteps'))
+        for digest,release in native.FIRMWARE_KNOWN_RELEASES.items():
+            self.assertRegex(digest,'^[0-9a-f]{64}$'); self.assertIn('system software',release)
+
     def test_copy_is_independent(self):
         with tempfile.TemporaryDirectory() as temp:
             root=Path(temp).resolve(); source=root/'source'; source.write_bytes(b'original'); target=root/'new/copied'
@@ -153,7 +175,13 @@ class NativeBuildTests(unittest.TestCase):
             for key in ('eboot_elf','engine_elf','firmware'):
                 p=root/key; p.write_bytes(b'decrypted'); config[key]=str(p)
             native._verify_identities(source,disc,config); Path(config['engine_elf']).write_bytes(b'wrong')
-            with self.assertRaisesRegex(InstallerError,'identity'): native._verify_identities(source,disc,config)
+            with self.assertRaises(InstallerError) as raised: native._verify_identities(source,disc,config)
+            # Where-to-get-it steps belong to the firmware module only, not to the game executables.
+            self.assertIn('identity',str(raised.exception)); self.assertNotIn('Where firmware/libsre.prx comes from',str(raised.exception))
+            Path(config['engine_elf']).write_bytes(b'decrypted'); Path(config['firmware']).write_bytes(b'\x7fELF other release')
+            with self.assertRaises(InstallerError) as raised: native._verify_identities(source,disc,config)
+            text=str(raised.exception)
+            self.assertIn('different game or firmware release',text); self.assertIn(native.FIRMWARE_SOURCE_STEPS,text)
     def test_changed_settings_archive_refused_before_build(self):
         with tempfile.TemporaryDirectory() as temp:
             root=Path(temp).resolve(); source=root/'source'; disc=root/'disc'

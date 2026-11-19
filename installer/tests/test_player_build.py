@@ -38,6 +38,17 @@ class PlayerBuildTests(unittest.TestCase):
             with self.assertRaisesRegex(InstallerError, 'firmware/libsre.prx'):
                 player_build.locate_inputs(root)
 
+    def test_firmware_steps_shown_only_when_firmware_is_missing(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve(); self.inputs(root)
+            (root / 'PS3_GAME/USRDIR/EBOOT.elf').unlink()
+            with self.assertRaises(InstallerError) as raised: player_build.locate_inputs(root)
+            self.assertNotIn('Where firmware/libsre.prx comes from', str(raised.exception))
+            (root / 'firmware/libsre.prx').unlink()
+            with self.assertRaises(InstallerError) as raised: player_build.locate_inputs(root)
+            self.assertIn('firmware/libsre.prx', str(raised.exception))
+            self.assertIn('rpcs3 --installfw', str(raised.exception))
+
     def test_single_action_orders_tools_native_build_and_final_package(self):
         for fail_package in (False, True):
             with self.subTest(fail_package=fail_package), tempfile.TemporaryDirectory() as temp:
@@ -125,8 +136,9 @@ class PlayerBuildTests(unittest.TestCase):
             root = Path(temp).resolve(); source = root / 'inputs'; source.mkdir()
             with patch.object(player_build, 'readiness', return_value={'ready': True}), \
                  patch('mag_installer.managed_tools.bootstrap') as bootstrap:
-                with self.assertRaisesRegex(InstallerError, 'missing required prepared files'):
+                with self.assertRaisesRegex(InstallerError, 'missing required prepared files') as raised:
                     player_build.install(root, source, root / 'MAG', root / 'cache')
+                self.assertIn('Where firmware/libsre.prx comes from', str(raised.exception))
                 bootstrap.assert_not_called()
                 self.assertFalse((root / 'MAG').exists())
 
