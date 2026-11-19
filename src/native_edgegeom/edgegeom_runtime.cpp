@@ -11,6 +11,14 @@
 /* spu_lifted_lookup: the dispatcher's own resolver. For a resident verified streamed region it
  * compares the region's code once per load and returns NULL while it does not match. */
 #include "spu_interp.h"
+/* A runtime with native SPURS policy modules (spurs_native_pm.h, PS3RECOMP_SPURS_NATIVE_PM) enters
+ * jobs from host code instead of the lifted policy's payload call. Older runtimes lack the header. */
+#if defined(__has_include)
+#if __has_include("spurs_native_pm.h")
+#include "spurs_native_pm.h"
+#define MAG_EDGEGEOM_NATIVE_PM 1
+#endif
+#endif
 
 #include <algorithm>
 #include <atomic>
@@ -380,16 +388,35 @@ bool payload_override(void* opaque, uint32_t target) {
     return run(static_cast<spu_context*>(opaque));
 }
 
+#if MAG_EDGEGEOM_NATIVE_PM
+/* The native policy module offers each job entry to its payload hook before entering the job,
+ * with the job's registers in place and r0 at its job-return address: the same override, handed
+ * the same entry the lifted policy's payload call would hand it. */
+int native_pm_payload(spu_context* c, uint32_t entry) { return payload_override(c, entry) ? 1 : 0; }
+/* Inert unless the runtime's native policy modules are selected. */
+bool native_pm_selected() {
+    const char* e = std::getenv("PS3RECOMP_SPURS_NATIVE_PM");
+    return e && *e && std::strcmp(e, "0") != 0;
+}
+#endif
+
 struct Register {
     Register() {
         if (!enabled) return;
         MagExtensionCallbacks callbacks{};
         callbacks.payload_override = payload_override;
         if (stats) { callbacks.frame_poll = on_frame; callbacks.stop = on_stop; }
-        if (mag_extension_register(&callbacks) != 0)
+        if (mag_extension_register(&callbacks) != 0) {
             std::fprintf(stderr, "[native-edgegeom] could not register the payload override; the lifted job runs\n");
-        else
-            std::fprintf(stderr, "[native-edgegeom] enabled (requires the payload-override lift step)\n");
+            return;
+        }
+        std::fprintf(stderr, "[native-edgegeom] enabled (requires the payload-override lift step)\n");
+#if MAG_EDGEGEOM_NATIVE_PM
+        if (native_pm_selected()) {
+            spurs_native_pm_set_payload_hook(native_pm_payload);
+            std::fprintf(stderr, "[native-edgegeom] also offered to native SPURS policy modules (PS3RECOMP_SPURS_NATIVE_PM)\n");
+        }
+#endif
     }
 } registration;
 
