@@ -102,6 +102,19 @@ inline int mag_apply_runtime_defaults()
              // interleaved rounds (42.99 to 43.98, 42.99 to 43.995, 42.635 to 43.99),
              // every run clean.
              Setting{"PS3RECOMP_MFC_FAST", "1"},
+             // The runtime's native WWS job manager (fork #150, clean-room from a
+             // behavioural specification) runs MAG's Main-instance SPURS job lists in
+             // place of the lifted policy module: claims, staging, the job API context,
+             // services, retires, dependency wakes and ready counts in host code; the
+             // 1-SPU instance and workload 11 keep the lifted module. Native Edge
+             // geometry is offered to it through the payload hook. Training, 3
+             // interleaved rounds against the switch unset on the same build: Windows
+             // +1.8% flips/s (54.11 to 55.11, the switch ahead in every round), SPU
+             // worker CPU -19% (40.7 to 33.1 ms/frame); Linux at parity with SPU worker
+             // CPU -9%; macOS TBD. 40 minutes of chained Windows Training soak and a
+             // 2,098,807-run shadow comparison against the lifted module: 0 halts,
+             // 0 mismatches.
+             Setting{"PS3RECOMP_SPURS_NATIVE_PM", "1"},
 #if defined(_WIN32) || defined(__linux__)
              // The lifted SPU code (policy and streamed jobs, lifted with
              // --inline-channels) performs the MFC parameter latches and the latched
