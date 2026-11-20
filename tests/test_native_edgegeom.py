@@ -50,10 +50,13 @@ class NativeEdgeGeomShim(unittest.TestCase):
         sdk = runtime_checkout()
         with tempfile.TemporaryDirectory() as tmp:
             binary = Path(tmp) / ('shim.exe' if sys.platform == 'win32' else 'shim')
+            # the runtime's native policy-module header, or the stand-in when the SDK predates it
+            stub = [] if (sdk / 'runtime/spu/spurs_native_pm.h').is_file() else [FIXTURES / 'native_pm_stub']
             build(binary, [ROOT / 'src/mag_extension.cpp', SOURCES / 'edgegeom_core.cpp', SOURCES / 'edgegeom_runtime.cpp',
                            FIXTURES / 'native_edgegeom_shim.cpp'],
-                  [ROOT / 'src', SOURCES, FIXTURES, sdk / 'runtime/spu', sdk / 'runtime', sdk])
-            env = {k: v for k, v in os.environ.items() if not k.startswith('MAG_NATIVE_EDGEGEOM')}
+                  [ROOT / 'src', SOURCES, FIXTURES, *stub, sdk / 'runtime/spu', sdk / 'runtime', sdk])
+            env = {k: v for k, v in os.environ.items()
+                   if not k.startswith('MAG_NATIVE_EDGEGEOM') and k != 'PS3RECOMP_SPURS_NATIVE_PM'}
             off = subprocess.run([str(binary), 'disabled'], capture_output=True, text=True, env=env)
             self.assertEqual(off.returncode, 0, off.stdout + off.stderr)
             self.assertIn('PASS native edgegeom shim disabled', off.stdout)
@@ -61,6 +64,24 @@ class NativeEdgeGeomShim(unittest.TestCase):
             on = subprocess.run([str(binary)], capture_output=True, text=True, env=dict(env, MAG_NATIVE_EDGEGEOM='1'))
             self.assertEqual(on.returncode, 0, on.stdout + on.stderr)
             self.assertIn('PASS native edgegeom shim', on.stdout)
+            self.assertNotIn('native SPURS policy modules', on.stderr)
+            # PS3RECOMP_SPURS_NATIVE_PM selects the runtime's native policy modules: the job manager
+            # then enters jobs from host code, and the same override is offered there.
+            npm = subprocess.run([str(binary), 'native-pm'], capture_output=True, text=True,
+                                 env=dict(env, MAG_NATIVE_EDGEGEOM='1', PS3RECOMP_SPURS_NATIVE_PM='1'))
+            self.assertEqual(npm.returncode, 0, npm.stdout + npm.stderr)
+            self.assertIn('PASS native edgegeom shim native-pm', npm.stdout)
+            self.assertIn('also offered to native SPURS policy modules', npm.stderr)
+            for value in ('0', ''):
+                zero = subprocess.run([str(binary)], capture_output=True, text=True,
+                                      env=dict(env, MAG_NATIVE_EDGEGEOM='1', PS3RECOMP_SPURS_NATIVE_PM=value))
+                self.assertEqual(zero.returncode, 0, zero.stdout + zero.stderr)
+                self.assertNotIn('native SPURS policy modules', zero.stderr)
+            # without the native job itself nothing is offered, whatever the policy module
+            off_npm = subprocess.run([str(binary), 'disabled'], capture_output=True, text=True,
+                                     env=dict(env, PS3RECOMP_SPURS_NATIVE_PM='1'))
+            self.assertEqual(off_npm.returncode, 0, off_npm.stdout + off_npm.stderr)
+            self.assertIn('PASS native edgegeom shim disabled', off_npm.stdout)
 
 
 class NativeEdgeGeomBuild(unittest.TestCase):
@@ -102,6 +123,18 @@ class NativeEdgeGeomBuild(unittest.TestCase):
         shim = (SOURCES / 'edgegeom_runtime.cpp').read_text()
         self.assertIn('getenv("MAG_NATIVE_EDGEGEOM")', shim)
         self.assertIn('!std::strcmp(e, "1")', shim)
+
+    def test_native_pm_hook_is_opt_in(self):
+        # The native policy-module hook is set only from Register(), after the override registered,
+        # and only when PS3RECOMP_SPURS_NATIVE_PM selects native policy modules; it compiles out
+        # against a runtime without the seam.
+        shim = (SOURCES / 'edgegeom_runtime.cpp').read_text()
+        self.assertEqual(shim.count('spurs_native_pm_set_payload_hook('), 1)
+        register = shim[shim.index('struct Register {'):]
+        self.assertIn('if (native_pm_selected())', register)
+        self.assertLess(register.index('if (!enabled) return;'), register.index('spurs_native_pm_set_payload_hook('))
+        self.assertIn('__has_include("spurs_native_pm.h")', shim)
+        self.assertIn('getenv("PS3RECOMP_SPURS_NATIVE_PM")', shim)
 
 
 if __name__ == '__main__':

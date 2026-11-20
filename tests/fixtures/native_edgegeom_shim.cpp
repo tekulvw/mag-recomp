@@ -7,6 +7,7 @@
 #include "native_edgegeom_cases.h"
 #include "spu_context.h"
 #include "spu_interp.h"
+#include "spurs_native_pm.h"   /* the runtime's, or tests/fixtures/native_pm_stub's */
 
 #include <algorithm>
 #include <cstdio>
@@ -164,6 +165,11 @@ spu_lifted_fn spu_lifted_lookup(const spu_context* ctx, uint32_t lsa) {
     return nullptr;
 }
 }
+
+/* The native policy-module seam's payload-hook setter (runtime/spu/spurs_native_pm.h). */
+static spurs_native_pm_payload_fn npm_hook;
+static int npm_sets;
+extern "C" void spurs_native_pm_set_payload_hook(spurs_native_pm_payload_fn fn) { npm_hook = fn; ++npm_sets; }
 
 /* ---- an invocation in local store ------------------------------------------------------- */
 static spu_context* make_context(const Case& in, bool resident = true) {
@@ -396,16 +402,42 @@ static void nothing_drawn() {
     CHECK(guest32(0x70000000u) == 0x00041710u && guest32(0x70000000u + 4 * 8) == 0);
 }
 
+/* A native SPURS policy module enters the job from host code: it sets the job's registers, r0 =
+ * its job-return address, and offers the entry to its payload hook first. */
+static void native_pm_entry() {
+    reset();
+    const Case c = triangle_case();
+    ring(0xCF000000u, 0xCF010000u, 0xCF000100u, 0xCF000000u, 0xB00005D0u);
+    spu_context* ctx = make_context(c);
+    for (auto& w : ctx->gpr[0]._u32) w = 0x9B0;          /* the seam's job-return slot */
+    CHECK(npm_sets == 1 && npm_hook);
+    if (!npm_hook) return;
+    CHECK(npm_hook(ctx, 0x4000) == 0 && services.empty() && ctx->pc == 0x15898);   /* another job: not ours */
+    CHECK(npm_hook(ctx, 0x15898) == 1);
+    CHECK((services == std::vector<std::string>{"get1", "get3", "release3", "finish"}));
+    CHECK(ctx->pc == 0x9B0 && ctx->gpr[3]._u32[0] == 9);
+    CHECK(guest32(0x10000180u + 0x0C) == 0xCF000180u);   /* the ring advanced as in handled_invocation */
+}
+
 int main(int argc, char** argv) {
     if (argc > 1 && !std::strcmp(argv[1], "disabled")) {
         /* Without MAG_NATIVE_EDGEGEOM=1 nothing registers: the seam stays inert. */
         Case c = triangle_case();
         spu_context* ctx = make_context(c);
         CHECK(!mag_extension()->payload_override && mag_payload_override(ctx, 0x15898) == 0 && services.empty());
+        CHECK(npm_sets == 0 && !npm_hook);
         if (failures) return 1;
         std::puts("PASS native edgegeom shim disabled");
         return 0;
     }
+    if (argc > 1 && !std::strcmp(argv[1], "native-pm")) {
+        native_pm_entry();
+        if (failures) { std::printf("%d failures\n", failures); return 1; }
+        std::puts("PASS native edgegeom shim native-pm");
+        return 0;
+    }
+    /* Without PS3RECOMP_SPURS_NATIVE_PM the native policy module's hook stays unset. */
+    CHECK(npm_sets == 0 && !npm_hook);
     residency();
     handled_invocation();
     small_buffers();

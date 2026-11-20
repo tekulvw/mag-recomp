@@ -45,6 +45,17 @@ for the measured benefit and its limits.
 
 Example report line: `[native-edgegeom]   kind=index_only handled=48211`.
 
+### Under a native SPURS job manager
+
+With the runtime's native policy modules selected (`PS3RECOMP_SPURS_NATIVE_PM`, any value other
+than `0`; ps3recomp `docs/SPURS_NATIVE_PM.md`), the WWS job manager is host code and enters each
+job itself instead of through the lifted policy's payload call. The same payload override is then
+also registered as the native policy modules' payload hook (`spurs_native_pm_set_payload_hook`):
+the job manager offers it every job entry, with the job's registers set and r0 at its job-return
+address, and runs the lifted job when it declines. Startup prints `[native-edgegeom] also offered
+to native SPURS policy modules`. Unset, or with a runtime that predates native policy modules,
+nothing is set and the override is reached only through the lifted policy's payload call.
+
 ### Kinds and refusal reasons
 
 Admitted kinds: `index_only` (an empty output layout, any group), `instanced_wind` (group 0),
