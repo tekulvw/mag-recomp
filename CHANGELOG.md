@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.3](https://github.com/tekulvw/mag-recomp/compare/v0.5.2...v0.5.3) (2026-11-20)
+
+
+### Performance
+
+* **sdk:** pin runtime-2026.11.20-wwsjm and run the native WWS job manager by default on Windows and Linux ([#216](https://github.com/tekulvw/mag-recomp/issues/216)) ([39aac78](https://github.com/tekulvw/mag-recomp/commit/39aac78eb47ea81598c610137adf4b4705e72acd))
+
 ## [0.5.2](https://github.com/tekulvw/mag-recomp/compare/v0.5.1...v0.5.2) (2026-11-19)
 
 
