@@ -246,6 +246,8 @@ jobs:
         run: |
           mkdir "$RUNNER_TEMP/unpacked" && cd "$RUNNER_TEMP/unpacked"
           unzip -q "$GITHUB_WORKSPACE"/installer-out/*.zip
+          # An app whose bundle signature does not verify is reported as damaged once downloaded.
+          codesign --verify --deep --strict --verbose=2 ./*/"MAG Installer.app"
           ./*/"MAG Installer.app/Contents/MacOS/mag-installer" status > status.json
           python -c "import json,sys; s=json.load(open('status.json')); print(json.dumps(s['player_build'])); sys.exit(0 if s['player_build'].get('ready') else 1)"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

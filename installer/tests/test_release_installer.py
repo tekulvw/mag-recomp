@@ -3,6 +3,8 @@ import json
 import os
 from pathlib import Path
 import shutil
+import subprocess
+import sys
 import tempfile
 import unittest
 import zipfile
@@ -143,6 +145,31 @@ class ReleaseTests(unittest.TestCase):
             (payload / MAC_PLIST).write_bytes(b'<plist>wrong identity</plist>')
             with self.assertRaisesRegex(InstallerError, 'metadata'):
                 package_payload(payload, root / 'bad', 'preview-test', 'macos-arm64', 'preview', REVISION, ROOT)
+
+    @unittest.skipUnless(sys.platform == 'darwin', 'codesign is macOS-only')
+    def test_macos_app_bundle_signature_survives_the_archive(self):
+        # A downloaded app whose bundle is unsigned (only the executable's own linker
+        # signature) is reported by macOS as damaged. The packager signs the bundle and
+        # the archive must carry the seal so the extracted app still verifies.
+        from mag_installer.releasing import _prepare_launcher, _sign_mac_app, MAC_APP, MAC_CODE_RESOURCES
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / 'launcher'
+            shutil.copyfile('/usr/bin/true', source)
+            payload = root / 'payload'
+            _prepare_launcher(source, payload, 'macos-arm64', 'preview-test')
+            _sign_mac_app(payload / MAC_APP)
+            self.assertTrue((payload / MAC_CODE_RESOURCES).is_file())
+            licenses = payload / 'licenses'
+            licenses.mkdir()
+            for name in ('PYTHON-LICENSE.txt', 'PYINSTALLER-COPYING.txt'):
+                (licenses / name).write_text('Fixture notice')
+            artifact = package_payload(payload, root / 'out', 'preview-test', 'macos-arm64', 'preview', REVISION, ROOT)
+            verify_artifact(artifact, ROOT)
+            unpacked = root / 'unpacked'
+            subprocess.run(['ditto', '-x', '-k', str(artifact), str(unpacked)], check=True)
+            app = next(unpacked.glob('*/' + MAC_APP))
+            subprocess.run(['codesign', '--verify', '--strict', str(app)], check=True)
 
     def payload(self, root, target='macos-arm64'):
         payload = root / ('payload-' + target)

@@ -23,6 +23,10 @@ installation folder, and must not be shared.
 Release builds are attached to each GitHub release by CI. Builds of pull requests and of `main` are
 workflow artifacts.
 
+The macOS app is ad-hoc signed, not notarized by Apple. The first time you open it, macOS says it
+cannot verify the developer. Open System Settings → Privacy & Security, click **Open Anyway** next to
+"MAG Installer", and confirm. macOS remembers the choice.
+
 ## Using it
 
 1. Prepare one folder holding the complete `PS3_GAME` tree of your disc copy, with the decrypted
