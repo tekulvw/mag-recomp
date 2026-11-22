@@ -23,6 +23,8 @@ installation folder, and must not be shared.
 Release builds are attached to each GitHub release by CI. Builds of pull requests and of `main` are
 workflow artifacts.
 
+Need help installing? Ask in the [MAG Recomp Discord](https://discord.gg/HBB95hUQ5f).
+
 ## Using it
 
 1. Prepare one folder holding the complete `PS3_GAME` tree of your disc copy, with the decrypted

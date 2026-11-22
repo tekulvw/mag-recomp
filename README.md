@@ -10,6 +10,11 @@ target; Windows x86_64 and Linux x86_64 builds use Vulkan.
 > copy, and everything generated from them stays on your machine. Read the full [legal notice](NOTICE.md)
 > before using this project.
 
+## Support
+
+Questions, install problems and play sessions: join the [MAG Recomp Discord](https://discord.gg/HBB95hUQ5f).
+Report reproducible bugs as [GitHub issues](https://github.com/tekulvw/mag-recomp/issues).
+
 ## What is here
 
 | Path | Contents |
