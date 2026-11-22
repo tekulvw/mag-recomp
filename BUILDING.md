@@ -100,6 +100,11 @@ the accepted module, and a Linux build with it reached and played a Training mat
 2. Install it: `rpcs3 --installfw PS3UPDAT.PUP`.
 3. Decrypt RPCS3's `dev_flash/sys/external/libsre.sprx`: `rpcs3 --decrypt libsre.sprx` writes
    `libsre.prx` beside it.
+   RPCS3 installs it at:
+   - macOS: `~/Library/Application Support/rpcs3/dev_flash/sys/external/libsre.sprx`
+   - Linux: `~/.config/rpcs3/dev_flash/sys/external/libsre.sprx` (Flatpak:
+     `~/.var/app/net.rpcs3.RPCS3/config/rpcs3/dev_flash/sys/external/libsre.sprx`)
+   - Windows: `dev_flash\sys\external\libsre.sprx` inside the RPCS3 folder, next to `rpcs3.exe`
 4. Copy the result to `local/firmware/libsre.prx` (or `firmware/libsre.prx` next to `PS3_GAME` for the
    installer).
 
