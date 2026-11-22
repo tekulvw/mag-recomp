@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Support Discord
+    url: https://discord.gg/HBB95hUQ5f
+    about: Install help, questions and play sessions. Use issues for reproducible bugs.

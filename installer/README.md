@@ -27,6 +27,8 @@ The macOS app is ad-hoc signed, not notarized by Apple. The first time you open 
 cannot verify the developer. Open System Settings → Privacy & Security, click **Open Anyway** next to
 "MAG Installer", and confirm. macOS remembers the choice.
 
+Need help installing? Ask in the [MAG Recomp Discord](https://discord.gg/HBB95hUQ5f).
+
 ## Using it
 
 1. Prepare one folder holding the complete `PS3_GAME` tree of your disc copy, with the decrypted
