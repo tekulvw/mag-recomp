@@ -151,7 +151,11 @@ FIRMWARE_SOURCE_STEPS = (
     f'   The {FIRMWARE_PUP_RELEASE} file has SHA-256 {FIRMWARE_PUP_SHA256}.\n'
     '2. Install it: rpcs3 --installfw PS3UPDAT.PUP\n'
     '3. Decrypt RPCS3\'s dev_flash/sys/external/libsre.sprx: rpcs3 --decrypt libsre.sprx (it writes '
-    'libsre.prx beside it)\n'
+    'libsre.prx beside it). RPCS3 installs it at:\n'
+    '   macOS:   ~/Library/Application Support/rpcs3/dev_flash/sys/external/libsre.sprx\n'
+    '   Linux:   ~/.config/rpcs3/dev_flash/sys/external/libsre.sprx\n'
+    '            (Flatpak: ~/.var/app/net.rpcs3.RPCS3/config/rpcs3/dev_flash/sys/external/libsre.sprx)\n'
+    '   Windows: dev_flash\\sys\\external\\libsre.sprx inside the RPCS3 folder (next to rpcs3.exe)\n'
     '4. Place the result as firmware/libsre.prx next to PS3_GAME.\n'
     'What is checked is the decrypted module\'s SHA-256, not the release. Sony only hosts the latest '
     f'release; if it is newer than {FIRMWARE_PUP_RELEASE}, its module may be refused until it is reviewed.')

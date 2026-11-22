@@ -133,7 +133,9 @@ class NativeBuildTests(unittest.TestCase):
         for text in ('PS3UPDAT.PUP','https://www.playstation.com/en-us/get-help/ps3-system-software/',
                      '158471fd834f8ea8036136b6aab43cd86c7ba73d79ca30e0af3c0fe0001cf365','rpcs3 --installfw',
                      'rpcs3 --decrypt','dev_flash/sys/external/libsre.sprx','firmware/libsre.prx',
-                     'only hosts the latest',"decrypted module's SHA-256",'system software 4.93'):
+                     'only hosts the latest',"decrypted module's SHA-256",'system software 4.93',
+                     '~/Library/Application Support/rpcs3/dev_flash','~/.config/rpcs3/dev_flash',
+                     'next to rpcs3.exe'):
             self.assertIn(text,steps)
         self.assertIn('libsre.sprx',native.FIRMWARE_SOURCE_HINT)
 
