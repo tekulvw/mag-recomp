@@ -212,6 +212,10 @@ def _same_or_new(path, data):
 
 MAC_APP = 'MAG Installer.app'
 MAC_PLIST = MAC_APP + '/Contents/Info.plist'
+# Written by `codesign` when the bundle is signed; without it the executable's own
+# linker signature claims sealed resources the bundle lacks, and macOS reports a
+# downloaded app as damaged.
+MAC_CODE_RESOURCES = MAC_APP + '/Contents/_CodeSignature/CodeResources'
 
 
 def _binary_path(target):
@@ -245,6 +249,15 @@ def _prepare_launcher(source, payload, target, version):
     return binary
 
 
+def _sign_mac_app(app):
+    """Ad-hoc sign the whole bundle so the signature binds Info.plist and seals
+    its resources. This needs macOS's codesign; the app is only built on macOS."""
+    if sys.platform != 'darwin':
+        raise InstallerError('The macOS application can only be signed on macOS')
+    subprocess.run(['codesign', '--force', '--sign', '-', '--timestamp=none', str(app)], check=True, timeout=300)
+    subprocess.run(['codesign', '--verify', '--strict', '--verbose=2', str(app)], check=True, timeout=300)
+
+
 def package_payload(payload, output, version, target, kind, source_revision, root, smoke_verified=False):
     """Archive an installer-owned native payload; source resources are allowlisted.
 
@@ -271,7 +284,7 @@ def package_payload(payload, output, version, target, kind, source_revision, roo
         _ordinary(path)
         relative = path.relative_to(payload).as_posix()
         relative_path(relative)
-        if relative != binary and not (target.startswith('macos-') and relative == MAC_PLIST) and not relative.startswith('licenses/'):
+        if relative != binary and not (target.startswith('macos-') and relative in (MAC_PLIST, MAC_CODE_RESOURCES)) and not relative.startswith('licenses/'):
             raise InstallerError('Unexpected file in the installer-owned payload')
         if relative != binary and path.stat().st_size > 2 * 1024 * 1024:
             raise InstallerError('Oversized license notice')
@@ -280,6 +293,8 @@ def package_payload(payload, output, version, target, kind, source_revision, roo
     if binary not in files or not files[binary]: raise InstallerError('Native launcher is absent')
     if target.startswith('macos-') and files.get(MAC_PLIST) != _app_plist(version):
         raise InstallerError('macOS application metadata differs from the required launcher identity')
+    if target.startswith('macos-') and not preview and not files.get(MAC_CODE_RESOURCES):
+        raise InstallerError('A macOS release must carry a signed application bundle')
     for required in ('licenses/PYTHON-LICENSE.txt', 'licenses/PYINSTALLER-COPYING.txt'):
         if required not in files or not files[required]: raise InstallerError('Required Python/PyInstaller redistribution notice is absent')
     registry = _registry(root)
@@ -464,6 +479,7 @@ def verify_artifact(artifact, root):
         raise InstallerError('A release installer must carry its source kit')
     if provenance['target'].startswith('macos-'):
         allowed.add(MAC_PLIST)
+        if MAC_CODE_RESOURCES in actual or not preview: allowed.add(MAC_CODE_RESOURCES)
         if data.get(prefix + '/' + MAC_PLIST) != _app_plist(provenance['version']):
             raise InstallerError('macOS application metadata differs from the required launcher identity')
     if not allowed.issubset(actual) or any(name not in allowed and not name.startswith('licenses/') for name in actual):
@@ -658,6 +674,7 @@ def build(root, output, version, preview=False):
         payload.mkdir()
         binary_name = 'mag-installer.exe' if target.startswith('windows-') else 'mag-installer'
         binary = _prepare_launcher(scratch / 'dist' / binary_name, payload, target, version)
+        if target.startswith('macos-'): _sign_mac_app(payload / MAC_APP)
         _licenses(payload, lock, target)
         _smoke(binary, scratch / 'smoke')
         artifact = package_payload(payload, output, version, target, 'preview' if preview else 'release', revision, clean, smoke_verified=True)
