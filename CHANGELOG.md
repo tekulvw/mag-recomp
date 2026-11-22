@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.5](https://github.com/tekulvw/mag-recomp/compare/v0.5.4...v0.5.5) (2026-11-22)
+
+
+### Documentation
+
+* link the support Discord server ([#219](https://github.com/tekulvw/mag-recomp/issues/219)) ([f006b18](https://github.com/tekulvw/mag-recomp/commit/f006b1891f0e1ab48c82da5253cbf0e6e93bd907))
+
 ## [0.5.4](https://github.com/tekulvw/mag-recomp/compare/v0.5.3...v0.5.4) (2026-11-22)
 
 
