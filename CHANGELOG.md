@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.6](https://github.com/tekulvw/mag-recomp/compare/v0.5.5...v0.5.6) (2026-11-22)
+
+
+### Documentation
+
+* **installer:** name where RPCS3 installs libsre.sprx on each platform ([#222](https://github.com/tekulvw/mag-recomp/issues/222)) ([738c8e1](https://github.com/tekulvw/mag-recomp/commit/738c8e15a10ab9881ae8131e13e31770b9e906aa))
+
 ## [0.5.5](https://github.com/tekulvw/mag-recomp/compare/v0.5.4...v0.5.5) (2026-11-22)
 
 
