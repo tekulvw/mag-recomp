@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.4](https://github.com/tekulvw/mag-recomp/compare/v0.5.3...v0.5.4) (2026-11-22)
+
+
+### Bug Fixes
+
+* **installer:** sign the whole macOS app bundle so downloads are not reported as damaged ([#218](https://github.com/tekulvw/mag-recomp/issues/218)) ([834d7dd](https://github.com/tekulvw/mag-recomp/commit/834d7dd13fde7c75bb41620039c2528e2c05033e))
+
 ## [0.5.3](https://github.com/tekulvw/mag-recomp/compare/v0.5.2...v0.5.3) (2026-11-20)
 
 
