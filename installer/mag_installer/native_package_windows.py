@@ -481,9 +481,13 @@ def _compile(clang_cl, environment, source_dir, output, token):
     portable = [name for name in SUPERVISOR_SOURCES if name.endswith('.cpp')]
     tool([clang_cl, '/nologo', '/O2', '/MT', '/W3', '/EHsc', '/std:c++20', '/DUNICODE', '/D_UNICODE', '/c',
           *[str(source_dir / name) for name in portable], f'/Fo{source_dir}\\'])
-    tool([clang_cl, '/nologo', '/O2', '/MT', '/W3', '/DUNICODE', '/D_UNICODE', str(source_dir / 'supervisor.c'),
+    # clang-cl refuses a named /Fo when the command line holds more than one input, so the C
+    # supervisor compiles on its own and a separate step links every object.
+    tool([clang_cl, '/nologo', '/O2', '/MT', '/W3', '/DUNICODE', '/D_UNICODE', '/c', str(source_dir / 'supervisor.c'),
+          f'/Fo{source_dir / "supervisor.obj"}'])
+    tool([clang_cl, '/nologo', '/MT', str(source_dir / 'supervisor.obj'),
           *[str(source_dir / name.replace('.cpp', '.obj')) for name in portable],
-          f'/Fe{output}', f'/Fo{source_dir / "supervisor.obj"}', '/link', '/SUBSYSTEM:WINDOWS',
+          f'/Fe{output}', '/link', '/SUBSYSTEM:WINDOWS',
           'bcrypt.lib', 'user32.lib', 'shell32.lib', 'gdi32.lib', 'winhttp.lib'])
     if not Path(output).is_file():
         raise InstallerError('MAG supervisor compilation produced no MAG.exe')
