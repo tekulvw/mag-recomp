@@ -52,9 +52,10 @@ static std::atomic<int> failures{0};
 
 static HWND wait_window(const wchar_t* type, const wchar_t* title) {
     for (int i = 0; i < 500; ++i) {
-        if (HWND h = FindWindowW(type, title)) return h;
+        if (HWND h = FindWindowW(type, title); h && (GetWindowLongPtrW(h, GWL_STYLE) & WS_VISIBLE)) return h;
         Sleep(10);
     }
+    std::printf("[driver] no visible window (found %p)\n", static_cast<void*>(FindWindowW(type, title)));
     return nullptr;
 }
 static void settle(HWND window) {
@@ -83,7 +84,9 @@ static bool wait_text(HWND window, int id, const char* wanted) {
     std::printf("[driver] waiting for \"%s\" in %d, found \"%s\"\n", wanted, id, item(window, id).c_str());
     return false;
 }
-static bool visible(HWND window, int id) { return IsWindowVisible(GetDlgItem(window, id)) != FALSE; }
+// The control's own WS_VISIBLE: IsWindowVisible is always false in a non-interactive session.
+static bool shown(HWND h) { return h && (GetWindowLongPtrW(h, GWL_STYLE) & WS_VISIBLE) != 0; }
+static bool visible(HWND window, int id) { return shown(GetDlgItem(window, id)); }
 static bool enabled(HWND window, int id) { return IsWindowEnabled(GetDlgItem(window, id)) != FALSE; }
 static void click(HWND window, int id) { SendMessageW(window, WM_COMMAND, MAKEWPARAM(id, BN_CLICKED), 0); }
 // For what opens a question (a modal dialog): the driver must not wait inside it.
@@ -105,7 +108,7 @@ static bool answer(HWND owner, int button) {
         EnumThreadWindows(GetWindowThreadProcessId(owner, nullptr), [](HWND h, LPARAM found) -> BOOL {
             wchar_t type[32] = {};
             GetClassNameW(h, type, 32);
-            if (!std::wcscmp(type, L"#32770") && IsWindowVisible(h)) { *reinterpret_cast<HWND*>(found) = h; return FALSE; }
+            if (!std::wcscmp(type, L"#32770") && shown(h)) { *reinterpret_cast<HWND*>(found) = h; return FALSE; }
             return TRUE;
         }, LPARAM(&dialog));
         return dialog != nullptr;
@@ -154,17 +157,21 @@ static void in_game(const fs::path& folder) {
         if (!window) return;
         settle(window);
         // The macOS panel's General page: no file yet, so Apply is on.
-        CHECK(visible(window, IdGeneral) && visible(window, IdControls) && !visible(window, IdPlay));
+        CHECK(visible(window, IdGeneral));
+        CHECK(visible(window, IdControls));
+        CHECK(!visible(window, IdPlay));
         CHECK(item(window, IdApply) == "Apply" && enabled(window, IdApply) && contains(window, IdStatus, "Unsaved changes"));
         CHECK(!enabled(window, IdRendering) && !enabled(window, IdAntiAliasing));  // the Metal renderer's
         CHECK(!visible(window, IdTcp));
         click(window, IdAdvanced);
-        CHECK(visible(window, IdTcp) && contains(window, IdAdvanced, "\xE2\x96\xBE"));
+        CHECK(visible(window, IdTcp));
+        CHECK(contains(window, IdAdvanced, "\xE2\x96\xBE"));
         type(window, IdServer, L"Example.org");
         type(window, IdTcp, L"12a");
         type(window, IdName, L"ab");
         click(window, IdApply);
-        CHECK(visible(window, IdError) && contains(window, IdError, "Ports must contain digits"));
+        CHECK(visible(window, IdError));
+        CHECK(contains(window, IdError, "Ports must contain digits"));
         type(window, IdTcp, L"12345");
         click(window, IdApply);
         CHECK(contains(window, IdError, "player name") && !fs::exists(settings));
@@ -335,6 +342,7 @@ static void setup(const fs::path& folder) {
 
 int main(int argc, char** argv) {
     if (argc != 2) return 2;
+    std::setvbuf(stdout, nullptr, _IONBF, 0);  // a hang still shows how far it got
     const fs::path folder = argv[1];
     fs::create_directories(folder);
     ControlsSettingsRegistration registration;

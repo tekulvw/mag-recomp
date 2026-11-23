@@ -228,9 +228,15 @@ std::wstring text_of(HWND h) {
     return out;
 }
 void set_text(HWND h, const std::string& text) { SetWindowTextW(h, shown(text).c_str()); }
+// Children are shown and hidden with SetWindowPos: the process's first ShowWindow may take the
+// launcher's STARTUPINFO show state instead of the one asked for.
 void show(HWND h, bool visible) {
-    if (h) ShowWindow(h, visible ? SW_SHOWNA : SW_HIDE);
+    if (h) SetWindowPos(h, nullptr, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE |
+                                                 (visible ? SWP_SHOWWINDOW : SWP_HIDEWINDOW));
 }
+// A window's own WS_VISIBLE. IsWindowVisible also asks the desktop, which a non-interactive
+// session (a service, or SSH) never shows.
+bool has_visible_style(HWND h) { return h && (GetWindowLongPtrW(h, GWL_STYLE) & WS_VISIBLE) != 0; }
 // The height, in points, of `h`'s text wrapped at `width` points.
 int text_height(HWND h, int width) {
     const std::wstring text = text_of(h);
@@ -440,7 +446,7 @@ void layout() {
         place(s->controls_note, left, y, width, note);
         y += note + spacing;
     }
-    if (IsWindowVisible(s->error)) {
+    if (has_visible_style(s->error)) {
         const int error = text_height(s->error, width);
         place(s->error, left, y, width, error);
         y += error + spacing;
@@ -937,14 +943,17 @@ void apply() {
     s->old_place.length = sizeof s->old_place;
     physical_pixels([] { GetWindowPlacement(s->target, &s->old_place); });
     s->old_style = GetWindowLongPtrW(target, GWL_STYLE);
-    if (target == s->preview && !IsWindowVisible(target)) {
+    if (target == s->preview && !has_visible_style(target)) {
         s->old_style = (s->old_style & ~LONG_PTR(WS_VISIBLE));
     }
     s->pending = true;
     s->pending_draft = draft;
     show(s->error, false);
     set_display(target, draft);
-    if (target == s->preview) ShowWindow(target, SW_SHOWNA);
+    if (target == s->preview) {
+        ShowWindow(target, SW_SHOWNA);
+        if (!has_visible_style(target)) ShowWindow(target, SW_SHOWNA);
+    }
     set_editing_enabled(false);
     s->deadline = GetTickCount64() + MAG_SETTINGS_CONFIRM_SECONDS * 1000;
     tick();
@@ -1328,12 +1337,7 @@ void build() {
     w.apply = button(MAG_SETTINGS_APPLY, IdApply, w.options.setup ? BS_PUSHBUTTON : BS_DEFPUSHBUTTON);
     w.play = button(MAG_SETTINGS_PLAY, IdPlay, BS_DEFPUSHBUTTON);
     EnableWindow(w.play, !w.form->recovery);
-    for (HWND h : {w.heading_connection, w.server, w.name, w.account_button, w.advanced_link, w.connection_note, w.heading_graphics,
-                   w.display, w.output, w.rendering, w.anti_aliasing, w.graphics_note, w.cancel, w.apply})
-        ShowWindow(h, SW_SHOWNA);
-    for (const auto& r : w.connection_rows) { ShowWindow(r.title, SW_SHOWNA); if (r.hint) ShowWindow(r.hint, SW_SHOWNA); }
-    for (const auto& r : w.graphics_rows) { ShowWindow(r.title, SW_SHOWNA); if (r.hint) ShowWindow(r.hint, SW_SHOWNA); }
-    ShowWindow(w.status, SW_SHOWNA);
+    for (HWND h : {w.cancel, w.apply, w.status}) show(h, true);
     fill_general();
     show(w.error, false);
 }
@@ -1397,6 +1401,7 @@ SettingsWindowResult settings_window_run(SettingsForm& form, const std::filesyst
                      area.top + std::max(0L, (area.bottom - area.top - (r.bottom - r.top)) / 2), 0, 0, SWP_NOSIZE | SWP_NOZORDER);
     });
     ShowWindow(window.hwnd, SW_SHOWNORMAL);
+    if (!has_visible_style(window.hwnd)) ShowWindow(window.hwnd, SW_SHOWNORMAL);  // the first call may take STARTUPINFO's
     SetForegroundWindow(window.hwnd);
     SetFocus(window.server);
     MSG msg;
