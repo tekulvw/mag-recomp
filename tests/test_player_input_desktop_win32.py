@@ -117,6 +117,9 @@ class Win32TranslationTests(unittest.TestCase):
     def test_unfocused_presses_and_motion_are_ignored_releases_pass(self):
         self.run_case('focus')
 
+    def test_menu_mode_messages_are_withheld_and_alt_f4_passes(self):
+        self.run_case('menu')
+
 
 class Win32SeamTests(unittest.TestCase):
     @classmethod

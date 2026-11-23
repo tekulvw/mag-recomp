@@ -109,8 +109,8 @@ You build MAG on your own computer from your own copy; nothing game-derived is e
    `--unlink` (or **Unlink** on macOS) undoes it. See [Account link](docs/player-settings.md#account-link).
 6. **Use a controller, or the keyboard.** A standard USB or Bluetooth gamepad works on every system
    and is the recommended way to play. On Windows and Linux the keyboard also works as a controller
-   while the game window has focus and no controller is connected (set `PAD_NO_KEYBOARD=1` to turn
-   it off). Keys are physical positions, so they are the same on any keyboard layout:
+   while the game window has focus, alongside any connected controller (set `PAD_NO_KEYBOARD=1` to
+   turn it off). Keys are physical positions, so they are the same on any keyboard layout:
 
    | Keys | Controller |
    | --- | --- |
@@ -120,8 +120,9 @@ You build MAG on your own computer from your own copy; nothing game-derived is e
    | Arrow keys | D-pad |
    | WASD / IJKL | Left / right stick |
 
-   Any controller turns this keyboard layout off, including virtual gamepads that Steam Input or
-   remote-desktop and streaming software create. macOS uses the same keys in its game window.
+   A connected controller keeps working beside it, including virtual gamepads that Steam Input or
+   remote-desktop and streaming software create: keyboard buttons add to the controller's, and a
+   stick follows its keys while one is held. macOS uses the same keys in its game window.
 
    **Keyboard and mouse** play is built in on every system, beside any controller. In a match, on
    foot, these bindings replace the layout above: WASD moves, the mouse aims, left button fires,
