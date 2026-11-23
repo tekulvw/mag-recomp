@@ -117,6 +117,95 @@ Display changes have a 15-second confirmation. Choose **Keep changes**, or the p
 Settings are stored in the user's `Library/Application Support/MAG/settings.json`, outside the installation, and survive a rebuild or update. A damaged or unsupported settings file opens recovery before guest startup; it is replaced only after an explicit save.
 Existing schema-version-1 preferences without `render_scale` load at 100% and preserve their other saved choices. Migration stays in memory until settings are saved. New saves include the integer percentage (100, 150, 200 or 300).
 
+## Reports
+
+MAG can send a performance and error report after a session. A report covers frame-rate dips, slow frames, audio timing problems, crashes and failed launches, so the problems players meet can be found and fixed.
+
+### The setting
+
+- **MAG Settings → General → Reports → Send performance and error reports** is **on by default**. Turn it off and MAG creates no automatic reports and drops any it has not sent yet.
+  - The setting is `send_reports` in the settings file. A missing field means on, so existing files keep working. The file holds `"send_reports": false` only when the setting is off.
+- **Send report** (in the same group) asks for a report of the current session. The report is sent when MAG closes. It works even with automatic reports off, because the player asked.
+  - It needs a linked account. Without one the button is disabled and says so.
+- Reports go only to the **account portal your account is linked to** (magtest.online for `play.magtest.online`). They are sent under that account and kept privately on the portal's server for 30 days. The server stores no IP addresses.
+- An unlinked MAG sends nothing.
+
+### What a report contains
+
+- **Session summary:** the engine's own measurements for the launcher and the engine (`session-launcher.json`, `session-engine.json`, below). These are:
+  - frame times as a histogram, with p50, p95 and p99, the longest frame and mean fps;
+  - counts of frames over 33, 50, 100 and 250 ms;
+  - fps and percentiles for each minute of the last hour;
+  - the 16 worst hitches, each with its time and phase (front end, menu or match);
+  - time spent in each phase;
+  - the audio path's counters, when the runtime provides them: mix periods, underruns, starved frames, late and dropped periods, device errors, and drift against the 48 kHz clock.
+- **The session:** how the launcher and the engine exited, why the report was made, and the first line of a halt (an unresolved import or syscall). If the launch stopped with an error, its message is included.
+- **The client:** the MAG version and platform, operating system and version, CPU, thread count, memory, GPU, renderer, the game server's address, the display settings, and the build identities from the package receipts (runtime revision and SHA-256 digests).
+- **Logs:** the ends of this launch's `launcher.log`, `engine.log`, `supervisor.log` and `settings.log`, gzip-compressed, at most 2 MiB compressed in total.
+
+Never in a report:
+- the device token or any bearer credential;
+- ticket bytes or `portal-link.json`;
+- your home folder or other profile folders, which become `~`;
+- the MAG folder's location, which becomes `<MAG folder>`;
+- game files or anything read from them.
+
+Your player name is not added. The account the token identifies is the only identity.
+
+### When a report is made
+
+The packaged supervisor decides after each session. The thresholds are named constants in `src/player_reports.h`.
+
+| Trigger | When |
+| --- | --- |
+| `crash` | The launcher exited with anything but 0 or 90 (its handoff), or the engine exited non-zero. This includes a signal on macOS and Linux, and an exception status on Windows. |
+| `halt` | The runtime stopped on an unresolved import or syscall (exit 88 or 87, `UNRESOLVED` in the log). |
+| `launch_error` | The supervisor stopped the launch with an error, such as missing game files or a changed executable. A launch that only asks you for a player name is not an error. |
+| `slow_frames` | Judged after at least 120 s and 3,600 frames: more than 5% of frames took 50 ms or more, or 30 frames took 250 ms or more. |
+| `audio` | At least 20 underruns plus one for every 30 s of audio, any audio device error, or drift of 2 s or more against the 48 kHz clock over at least 120 s. |
+| `manual` | You pressed **Send report**. |
+
+Each rolling 24 hours, MAG creates at most:
+- 6 crash, halt and launch-error reports;
+- 2 slow-frame and audio reports;
+- 10 requested reports.
+
+Further reports are not created.
+
+### Sending
+
+Sending never delays play and never shows an error.
+
+When a session ends, the supervisor writes the report to a small queue in the MAG folder: `home/reports`, at most 5 reports and 8 MiB, oldest dropped first. It then starts a detached `MAG --send-reports` process and exits. That process posts each report to `<portal>/api/v1/reports` with the linked device token:
+
+| Reply | What MAG does |
+| --- | --- |
+| 200 or 201 | The report was received; it is removed from the queue. |
+| 429 | Retried after the reply's `Retry-After` (an hour without it), with the same `report_id`. |
+| 5xx, or no connection | Retried with backoff from 1 minute up to 6 hours, with the same `report_id`, and dropped after 8 attempts. |
+| 400, 401, 403, 409 or 413 | Dropped. |
+
+The next launch retries what is left. A launch with queued reports starts the sender at once. The sender writes one line to the launch's `supervisor.log`, such as `reports: sent 1, kept 0, dropped 0`.
+
+### Where the measurements come from
+
+The engine's frame clock calls the session monitor (`src/mag_session_monitor.h`) once per presented guest frame. That call reads the clock and updates a few relaxed counters, about 20 ns. Nothing is logged per frame.
+
+A background thread writes `session-<role>.json` in the folder named by `MAG_SESSION_DIR`. The supervisors set that variable to the launch's log folder. The thread writes the file every 10 s and again at exit, including when the window is closed. A crash leaves the latest periodic summary, with `"state": "running"`. The audio counters come from the runtime's `ps3emu/audio_host_stats.h` when the pinned runtime has it; until then the summary says `"audio": {"available": false}`.
+
+The settings window's **Send report** writes `report-requested` in the launch folder, at the path the supervisor passes as `MAG_REPORT_REQUEST`.
+
+### For automation and tests
+
+- `MAG_REPORTS=0`, set in the environment that starts the supervisor, turns reports off completely. The installer's supervisor tests set it.
+- On macOS, a caller's absolute `MAG_PLAYER_SETTINGS_PATH` replaces the settings file in the player's Library, as `XDG_CONFIG_HOME` and `APPDATA` do on Linux and Windows. The account link is then read from beside that file.
+- Service accounts send reports like person accounts. The portal allows 200 a day for a service account and 20 for a person account.
+
+Tests:
+- `tests.test_session_monitor`: the monitor's counters, percentiles and per-minute series, the summary JSON, and its overhead.
+- `tests.test_player_reports`: the triggers and thresholds, redaction, payload caps, the queue and retries, and an upload through the platform transport to a fake portal that checks the portal's rules.
+- `installer/tests/test_native_package.py` and `installer/tests/test_native_package_linux.py`: the real macOS and Linux supervisors send a crash report end to end.
+
 ## Development and verification
 
 The feature is opt-in at the runner boundary: the packaged macOS supervisor supplies `MAG_PLAYER_SETTINGS_PATH`, `MAG_PLAYER_OVERLAY_ROOT` and the launcher-only `MAG_PLAYER_SETUP` flag. Ordinary development launches without those variables retain their existing behavior. The setup flag is removed for engine handoff, which reads the private launch snapshot.
@@ -167,7 +256,7 @@ MAG --server play.example.org --name Rook_7        # Linux, from the MAG folder
 MAG.exe --server play.example.org --name Rook_7    # Windows
 ```
 
-A server needs a player name. MAG Settings asks for it before the game starts and remembers it (`--no-prompt` turns the window off for automation). Without the window, the launch stops and says to add `--name`, or to link your account (`--link`), which supplies the name. You can also edit the file. It uses the macOS file's fields: `server_address`, `tcp_port`, `udp_port` (0 for the game default), `player_name`, `display_mode` (`windowed` or `borderless`), `output_width` and `output_height` (one of the four sizes), `render_scale` and `anti_aliasing` (kept for the Metal renderer), and the optional `ticket_file` and `portal_url`. Each optional or display field is written only when it is not the default. Other keys are ignored, and the same validation rules apply. A damaged file is never overwritten. It is reported in `logs/launch-*/launcher.log`, and that launch plays offline.
+A server needs a player name. MAG Settings asks for it before the game starts and remembers it (`--no-prompt` turns the window off for automation). Without the window, the launch stops and says to add `--name`, or to link your account (`--link`), which supplies the name. You can also edit the file. It uses the macOS file's fields: `server_address`, `tcp_port`, `udp_port` (0 for the game default), `player_name`, `display_mode` (`windowed` or `borderless`), `output_width` and `output_height` (one of the four sizes), `render_scale` and `anti_aliasing` (kept for the Metal renderer), the optional `ticket_file` and `portal_url`, and `send_reports` (`false` turns reports off; see [Reports](#reports)). Each optional or display field is written only when it is not the default. Other keys are ignored, and the same validation rules apply. A damaged file is never overwritten. It is reported in `logs/launch-*/launcher.log`, and that launch plays offline.
 
 The game builds the same connection override as macOS (`src/player_settings_portable.cpp`, `src/player_server_overlay_portable.cpp`). The private view of the game files lives in `home/player/server/vfs`, inside the installation. It holds real folders and hard links to the original files, plus the one rewritten archive, so it costs no copy and it is rebuilt whenever the server changes. MAG and its game files must be on the same drive, which an installer-built folder always is.
 
