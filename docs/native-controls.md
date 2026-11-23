@@ -619,6 +619,10 @@ Returns false (the game recognizes the control itself) unless every step below a
      (`mag_controls_seed_recognizer`), without events.
 9. Recognize (`mag_controls_recognize`) with the current handler as consumer, the entry's id, the
    value, blocked = r5 nonzero or the starting block, the configuration and the native contribution.
+   The engine may report that the frame is gone: another thread (the window's) began a new capture
+   generation since step 1, for example when the mouse lock follows a menu or the window loses
+   focus. That is not an error: forget the entry and return false (the game recognizes the
+   control). Receipts, acceptance and mouse acceptance on a withdrawn frame likewise do nothing.
 10. Publish the result as the tuple (value, elapsed seconds, phase number, event bits) in one
     16-byte write at `n+0x0C` (failure is an error). Set r3 to the event bits, r11 to 0, and make
     `n` the current control.
