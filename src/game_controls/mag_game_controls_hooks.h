@@ -16,6 +16,7 @@ enum class MagControlsHook : uint8_t {
     BasicYaw, BasicPitch, SprintYaw, SprintPitch,
     AssistEligibility, AssistAdhesion, AssistFrictionYaw, AssistFrictionPitch,
     AssistCleanupEnter, AssistCleanupExit,
+    PromptText, PromptTextDone,
 };
 // Null by default. Installing a callback does not by itself admit any context: the adapter
 // validates ownership, phase, sample and UI eligibility at every event.

@@ -159,6 +159,22 @@ function(mag_enable_game_controls target)
     elseif(NOT _desktop STREQUAL "macos")
         message(FATAL_ERROR "MAG_GAME_CONTROLS_DESKTOP must be macos, win32, sdl or none")
     endif()
+    # Keyboard and mouse button prompts (docs/native-controls.md, section 12), with the key names of
+    # the host's keyboard layout: AppKit's text input sources on macOS, Win32 on Windows, SDL on Linux.
+    list(APPEND _sources "${_controls}/mag_game_controls_prompts.cpp"
+        "${_controls}/mag_game_controls_prompts_runtime.cpp" "${_src}/player_prompt_labels.cpp")
+    if(_desktop STREQUAL "macos")
+        list(APPEND _sources "${_src}/player_prompt_labels_macos.mm")
+        set_source_files_properties("${_src}/player_prompt_labels_macos.mm" TARGET_DIRECTORY ${target}
+            PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+        target_link_libraries(${target} PRIVATE "-framework Carbon" "-framework Foundation")
+    elseif(_desktop STREQUAL "win32")
+        list(APPEND _sources "${_src}/player_prompt_labels_win32.cpp")
+    elseif(_desktop STREQUAL "sdl")
+        list(APPEND _sources "${_src}/player_prompt_labels_sdl.cpp")
+    else()
+        list(APPEND _sources "${_src}/player_prompt_labels_none.cpp")
+    endif()
     if(NOT APPLE)
         # The Windows/Linux settings window gets the Controls pages, holds gameplay input while it
         # is open, and opens on F10 from the pump seams below (src/player_settings_session.h).
