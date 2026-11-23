@@ -1157,6 +1157,36 @@ void prompt_queries() {
     require(mag_controls_last_device() == InputDevice::Controller, "a release changed the device");
 }
 
+// 7.4: during a handler update, gameplay availability is the one read when the update began; a
+// pause that starts inside the update is seen at the next handler update, and outside handler
+// updates (the actor update) it is read anew.
+void update_snapshot() {
+    Harness h;
+    h.idle_tick();
+    mag_controls_push_event({{InputSource::Keyboard, 44}, true, time_ns()});
+    h.begin_tick();
+    h.enter_handler();
+    h.m.put32(Pause + 0x9C0, 1);  // the game pauses while the owner's handler updates
+    require(h.recognize(Jump), "a pause inside the update revoked gameplay before the next update");
+    h.fire(Hook::HandlerExit);
+    h.enter_handler();
+    require(!h.recognize(Jump), "the next handler update kept gameplay while paused");
+    h.end_poll();
+    h.enter_actor();
+    h.end_tick();
+    // Gameplay again; a pause after the poll is caught by the actor update itself.
+    h.m.put32(Pause + 0x9C0, 0);
+    h.idle_tick();
+    h.begin_tick();
+    h.enter_handler();
+    h.end_poll();
+    h.m.put32(Pause + 0x9C0, 1);
+    h.enter_actor();
+    require(h.status() == std::string("native control map changed; waiting for fresh input"),
+            "the actor update used a handler update's gameplay snapshot");
+    h.end_tick();
+}
+
 // Another thread (the window's) may withdraw the attached frame at any moment: a focus or mouse
 // capture change starts a new capture generation. Mid-recognition that is not an error: the game
 // recognizes the control, nothing is published, and the next poll attaches as usual.
@@ -1195,7 +1225,8 @@ int main(int argc, char** argv) {
         {"owner", owner_resolution}, {"lists", malformed_lists}, {"routes", routes}, {"tick", full_tick},
         {"route", route_recognition},
         {"mouse", mouse_look},       {"assist", aim_assist},     {"lifecycle", lifecycle},
-        {"threads", threads_and_errors}, {"menu", menu_holds_look}, {"withdrawn", withdrawn_frame},
+        {"threads", threads_and_errors}, {"snapshot", update_snapshot}, {"menu", menu_holds_look},
+        {"withdrawn", withdrawn_frame},
         {"menu-pad", menu_keyboard_pad}, {"situational", situational_actions}, {"census", census},
         {"prompt-queries", prompt_queries}};
     try {

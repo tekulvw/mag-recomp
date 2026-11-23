@@ -648,7 +648,11 @@ when the profile remaps the controller). Every token in the list must be unique.
 required mask; all four must be present. Each token that is (after aliases) a catalog action or a
 bound action is removed from the needed set and adds its channel to the mask. The contract exists
 when the needed set ends empty and the mask is nonzero. It is *current* while the owner's watched
-list still equals it exactly and gameplay routes are available.
+list still equals it exactly and gameplay routes are available. During a handler update the
+availability of gameplay routes is the one read at the start of that update (7.2 step 2), which a
+menu opened by the handler's own controls changes only at the next handler update; outside a
+handler update (the actor update) it is read anew each time. (Reading the UI tree again at every
+recognition was most of the adapter's per-frame cost, section 10.)
 
 ### 7.5 Actor update and mouse look
 
@@ -951,6 +955,26 @@ Evidence for the default (the rule for in-repository code on by default, AGENTS.
   turned the camera only while walking. A wake input of one millionth did not wake the soldier.
   Before the attach fix (7.2) the lock was taken and released every frame while the pause menu
   was open.
+- *Where the adapter's frame time goes (Windows, 2026-11-23, `MAG_GAME_CONTROLS_TRACE=1` "trace
+  cost", local Training):* about 0.37 ms per update tick in the hooks, the ~2% that the on/off
+  comparison shows. About 0.16 ms was the handler updates, each reading the system and gameplay
+  routes (two walks of the active UI elements, about 17 updates per tick). About 0.15 ms was the
+  recognitions, each re-reading gameplay availability through a third walk (about 35 per tick).
+  Since then a recognition uses the availability read at the start of its handler update (7.4).
+  Frame rate, main `4a662b0` against main plus that change (same workspace, controls on, three
+  interleaved rounds of 90 s Training holds, server `play.magtest.online` with name sign-in; two
+  runs that hung at sign-in were discarded and rerun):
+
+  | Round | Main: flips/s mean / median | With the change: flips/s mean / median |
+  | --- | --- | --- |
+  | 1 | 53.99 / 54.02 | 54.85 / 54.84 |
+  | 2 | 53.70 / 53.77 | 54.82 / 55.23 |
+  | 3 | 54.02 / 54.24 | 54.32 / 54.57 |
+  | Mean of means | 53.90 | 54.66 (+1.4%) |
+
+  The change was faster in every round (+0.30 to +1.12 flips/s); p95 frame time 19.2-19.6 ms
+  against 19.7-20.0 ms. This recovers most of the ~2% the controls cost against
+  `MAG_GAME_CONTROLS=0`.
 - *Correctness:* the synthetic suites in section 11 (adapter, capture core, SDL and Win32 backends,
   settings registration, catalog) and the installer's synthetic toolchain and switch tests
   (`installer/tests/test_managed_tools.py`, `installer/tests/test_player_build.py`). On macOS the
