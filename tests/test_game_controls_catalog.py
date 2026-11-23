@@ -28,8 +28,11 @@ class GameControlsCatalogTests(unittest.TestCase):
     def test_defaults_validate_and_unsupported_bindings_are_refused(self):
         subprocess.run([str(self.binary), 'defaults'], check=True)
 
-    def test_upgrade_adds_system_buttons_once_without_displacing_custom_bindings(self):
+    def test_upgrade_adds_newer_defaults_once_without_displacing_custom_bindings(self):
         subprocess.run([str(self.binary), 'upgrade'], check=True)
+
+    def test_prompt_names_resolve_to_catalog_actions(self):
+        subprocess.run([str(self.binary), 'prompts'], check=True)
 
 
 if __name__ == '__main__':
