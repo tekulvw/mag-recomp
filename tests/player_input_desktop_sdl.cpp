@@ -63,10 +63,10 @@ void button(Uint8 index, bool down, Uint32 which = 0) {
     event.button.state = down ? SDL_PRESSED : SDL_RELEASED;
     SDL_PushEvent(&event);
 }
-void motion(int dx, int dy) {
+void motion(int dx, int dy, Uint32 id = 0) {
     SDL_Event event{};
     event.type = SDL_MOUSEMOTION;
-    event.motion.windowID = SDL_GetWindowID(window);
+    event.motion.windowID = id ? id : SDL_GetWindowID(window);
     event.motion.xrel = dx;
     event.motion.yrel = dy;
     SDL_PushEvent(&event);
@@ -204,6 +204,23 @@ void run() {
     require(!mag::sdl_desktop_lock_held(probe), "without the grab the lock is gone");
     probe.grabbed = true, probe.relative = false;
     require(!mag::sdl_desktop_lock_held(probe), "without relative mode the lock is gone");
+
+    // About once a second the trace sums up what became of the motion, as on Windows; any value
+    // but empty or 0 turns it on, and a running game picks the variable up within a second.
+    setenv("MAG_GAME_CONTROLS_TRACE", "yes", 1);
+    SDL_Delay(1100);
+    pump();  // the next second is traced
+    motion(1, 1);
+    motion(1, 1, SDL_GetWindowID(window) + 100);
+    mag_input_desktop_set_mouse_enabled(0);
+    pump();
+    mag_input_desktop_set_mouse_enabled(1);
+    pump();
+    SDL_Delay(1100);
+    pump();  // prints the summary (checked by the Python test)
+    unsetenv("MAG_GAME_CONTROLS_TRACE");
+    SDL_Delay(1100);
+    pump();  // the trace stops with the variable
 
     mag_input_desktop_set_enabled(0);
     pump();

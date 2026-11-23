@@ -111,7 +111,16 @@ class SdlDesktopCaptureTests(unittest.TestCase):
             # MAG_GAME_CONTROLS_TRACE=1 (set by the fixture around one re-lock) traces motions after it.
             self.assertIn('[game-controls] trace mouse lock acquired; tracing the next 20 motions', result.stderr)
             self.assertIn('[game-controls] trace motion xrel=2 yrel=-1 accepted', result.stderr)
-            self.assertEqual(result.stderr.count('trace mouse lock acquired'), 1, 'the trace is off without the variable')
+            # Two traced re-locks: the lost lock above and the mouse-look request under "yes".
+            self.assertEqual(result.stderr.count('trace mouse lock acquired'), 2, 'the trace is off without the variable')
+            # The once-a-second summary (the Win32 backend's counts): one motion for the game window,
+            # one for another window, and the menu's release and re-request of mouse look.
+            self.assertIn('[game-controls] trace motion: reports=2 accepted=1 other_window=1 not_installed=0 not_ready=0 '
+                          'not_relative=0 stale_epoch=0 lock_lost=0 mouse_requests on/off=1/1 (ready=1 relative=1)',
+                          result.stderr)
+            self.assertEqual(result.stderr.count('trace motion: reports='), 1, 'one summary for the one traced second')
+            self.assertIn('[game-controls] trace lock released', result.stderr)
+            self.assertIn('[game-controls] trace lock acquired: window 64x64 at 0,0 (driver dummy) grab=1', result.stderr)
 
 
 if __name__ == '__main__':

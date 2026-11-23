@@ -304,7 +304,8 @@ the session; events from every other thread are ignored entirely.
 
 **Census.** With `MAG_GAME_CONTROLS_TRACE=1`, or when a file named `controls-trace` exists next to the
 controls preferences (the packaged players pass no `MAG_` variables to the engine; on macOS that is
-`~/Library/Application Support/MAG/controls-trace`), the runtime prints, once per distinct description, each
+`~/Library/Application Support/MAG/controls-trace`, on Windows `%APPDATA%\MAG\controls-trace`, on
+Linux `$XDG_CONFIG_HOME/MAG/controls-trace` or `~/.config/MAG/controls-trace`), the runtime prints, once per distinct description, each
 handler the game updates: its role (the local player's handler, a gameplay route, another system
 route or other), the attached context, whether it is enabled, the local player's movement state id
 and vtable, and every watched token with its channel (`[game-controls] census ...`). It reads guest
@@ -786,9 +787,15 @@ or above that made-up position: always on a second display, and in a centred win
 to the left or up. Re-applying moves the pointer to the centre, so the core
 discards motion observed before or during a re-acquisition (only the motion epoch advances; held
 keys and buttons stay), and the event filter also drops motion SDL reports for the centring warp. With
-`MAG_GAME_CONTROLS_TRACE=1` the backend logs, after each acquisition of the lock, the next 20
-motion events with their SDL deltas, whether each reached the controls (accepted, or dropped as
-warp, other window or stale) and the event's and the current motion epoch. Focus loss, a window change and a menu release the lock
+`MAG_GAME_CONTROLS_TRACE=1` (any value but empty or `0`, as on Windows) the backend logs each
+acquisition of the lock with the window's size and position, the video driver and the grab, each
+release or failure, and after each acquisition the next 20 motion events with their SDL deltas,
+whether each reached the controls (accepted, or dropped as warp, other window or stale) and the
+event's and the current motion epoch. About once a second it also gives the Win32 backend's
+summary of what became of the motion SDL reported: accepted, or dropped as for another window,
+capture not installed, not ready, not relative or stale (an older motion epoch), with the lock
+losses found and the mouse-look requests the adapter made; the variable is read again each second,
+so a running game can start or stop the summary. Focus loss, a window change and a menu release the lock
 and the grab. Every change of capture state is logged once (`desktop_capture_transition`):
 capture engaged or released, and the mouse locked or released. Installing the filter is SDL's
 `SDL_SetEventFilter`, which discards events still queued at that moment; the backend installs it
