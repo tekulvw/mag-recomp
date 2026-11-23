@@ -59,6 +59,7 @@ class SdlSettingsPanelTests(unittest.TestCase):
                         '-I' + str(ROOT / 'src'), '-I' + str(SDK), '-I' + str(cls.root),
                         *[f for f in cls.sdl if not f.startswith('-l') and not f.startswith('-L') and f != '-framework'],
                         str(ROOT / 'tests/player_settings_window.cpp'), str(ROOT / 'src/player_settings_sdl.cpp'),
+                        str(ROOT / 'src/player_settings_account.cpp'),
                         *[str(ROOT / s) for s in FORM], str(cls.root / 'cargo/release/libmag_input.a'),
                         *[f for f in cls.sdl if f.startswith(('-l', '-L', '-Wl'))], *link, '-o', str(cls.binary)],
                        check=True, timeout=300)

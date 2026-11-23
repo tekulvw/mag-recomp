@@ -364,7 +364,11 @@ else()
             PROPERTIES COMPILE_DEFINITIONS "UNICODE;_UNICODE")
         target_link_libraries(${PROJECT_NAME} PRIVATE user32 gdi32 comctl32 xinput shell32 winhttp)
     else()
-        target_sources(${PROJECT_NAME} PRIVATE src/player_settings_sdl.cpp)
+        # The window's Account row links through the portal over OpenSSL, as ./MAG --link does.
+        target_sources(${PROJECT_NAME} PRIVATE src/player_settings_sdl.cpp src/player_settings_account.cpp
+            src/player_portal_openssl.cpp)
+        find_package(OpenSSL REQUIRED COMPONENTS SSL Crypto)
+        target_link_libraries(${PROJECT_NAME} PRIVATE OpenSSL::SSL OpenSSL::Crypto)
         # The panel draws with the SDK's public-domain bitmap font (libs/misc/osk_font8x8.h).
         set_source_files_properties(src/player_settings_sdl.cpp TARGET_DIRECTORY ${PROJECT_NAME}
             PROPERTIES INCLUDE_DIRECTORIES "${PS3RECOMP_DIR}")
