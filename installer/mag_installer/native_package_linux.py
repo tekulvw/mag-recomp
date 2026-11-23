@@ -171,6 +171,23 @@ static int unlink_account(const fs::path& link_file) {
 }
 // Before each phase: a fresh ticket from the linked account, or the name sign-in when unlinked.
 // The launcher phase also takes the ticket's player name, which the game then saves.
+// The IBus address SDL would find in this session with the player's own HOME, which the game's
+// private HOME hides: SDL's IBus lookup reads IBUS_ADDRESS= from
+// <XDG_CONFIG_HOME or ~/.config>/ibus/bus/<D-Bus machine id>-<display host>-<display number>.
+static std::string ibus_address(){
+ std::string config;const char* c=getenv("XDG_CONFIG_HOME");const char* h=getenv("HOME");
+ if(c&&*c)config=c;else if(h&&*h)config=std::string(h)+"/.config";else return "";
+ const char* d=getenv("DISPLAY");std::string display=d&&*d?d:":0.0";
+ auto colon=display.rfind(':');if(colon==std::string::npos)return "";
+ std::string host=display.substr(0,colon),number=display.substr(colon+1);auto dot=display.rfind('.');
+ if(dot!=std::string::npos){if(dot>colon)number=display.substr(colon+1,dot-colon-1);else host=display.substr(0,dot);}
+ if(host.empty()){const char* s=getenv("XDG_SESSION_TYPE");host=s&&std::string(s)=="wayland"?"unix-wayland":"unix";}
+ std::string id;for(auto path:{"/var/lib/dbus/machine-id","/etc/machine-id"}){std::ifstream f(path);if(std::getline(f,id)&&!id.empty())break;id.clear();}
+ if(id.empty())return "";
+ std::ifstream f(config+"/ibus/bus/"+id+"-"+host+"-"+number);
+ for(std::string line;std::getline(f,line);)if(line.rfind("IBUS_ADDRESS=",0)==0){if(!line.empty()&&line.back()=='\r')line.pop_back();return line.substr(13);}
+ return "";
+}
 static void portal_ticket(std::map<std::string,std::string>& env,const fs::path& link_file,const fs::path& ticket,
                           const mag::PortableSettings& settings,bool launcher) {
  env.erase("MAG_PLAYER_PORTAL_TICKET");
@@ -236,6 +253,11 @@ int main(int argc,char** argv) {
  for(auto& d:std::map<std::string,std::string>MAG_RUNTIME_DEFAULTS)env[d.first]=d.second;
  // Preserve only desktop transport/session variables, never inherited game diagnostics.
  for(auto name:{"DISPLAY","WAYLAND_DISPLAY","XDG_RUNTIME_DIR","DBUS_SESSION_BUS_ADDRESS","XAUTHORITY","PULSE_SERVER","PIPEWIRE_REMOTE"})if(auto value=getenv(name))env[name]=value;
+ // And the desktop's input method, for text the game and the settings window take through SDL
+ // (the on-screen keyboard dialog, names): its choice (XMODIFIERS, SDL_IM_MODULE, the session
+ // type) and IBus's address, which SDL would look up under the private HOME and not find.
+ for(auto name:{"XMODIFIERS","SDL_IM_MODULE","XDG_SESSION_TYPE","IBUS_ADDRESS"})if(auto value=getenv(name);value&&*value)env[name]=value;
+ if(!env.count("IBUS_ADDRESS"))if(auto address=ibus_address();!address.empty())env["IBUS_ADDRESS"]=address;
  const fs::path ticket=root/"home/player/portal-ticket.bin";
  // Setup at every launch: the settings window, filled with the saved settings, so Play MAG is one
  // click. Command-line choices, --no-prompt, MAG_SKIP_SETUP and a session without a desktop go
