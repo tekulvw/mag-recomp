@@ -8,6 +8,7 @@
 #include <commctrl.h>
 #include <atomic>
 #include <cstdio>
+#include <cstring>
 #include <fstream>
 #include <sstream>
 #include <thread>
@@ -19,7 +20,8 @@ extern "C" int mag_player_settings_setup_wanted(int) { return 0; }
 extern "C" int mag_player_settings_setup(void) { return 0; }
 
 // Control identifiers of player_settings_win32.cpp.
-enum { IdTabs = 100, IdServer, IdTcp, IdUdp, IdName, IdDisplay, IdList = 202, IdSetPrimary, IdSetSecondary };
+enum { IdTabs = 100, IdServer, IdTcp, IdUdp, IdName, IdDisplay, IdList = 202, IdSetPrimary, IdSetSecondary,
+       IdStatus = 300, IdConfirm = 302 };
 
 static std::atomic<int> failures{0};
 #define CHECK(condition) do { if (!(condition)) { std::printf("FAIL %s:%d %s\n", __FILE__, __LINE__, #condition); ++failures; } } while (0)
@@ -30,16 +32,6 @@ static HWND wait_window(const wchar_t* type, const wchar_t* title) {
         Sleep(10);
     }
     return nullptr;
-}
-// Presses a message box's button and waits until the box is gone, so the window's own loop runs again.
-static bool answer(HWND box, int button) {
-    for (int i = 0; i < 500 && IsWindow(box); ++i) {
-        HWND control = GetDlgItem(box, button);
-        if (i % 2 == 0) PostMessageW(box, WM_COMMAND, MAKEWPARAM(button, BN_CLICKED), LPARAM(control));
-        else if (control) PostMessageW(control, BM_CLICK, 0, 0);
-        Sleep(20);
-    }
-    return !IsWindow(box);
 }
 static void settle(HWND window) {
     // Round trip through the window's thread so everything posted before has been handled.
@@ -58,14 +50,27 @@ static void show_tab(HWND window, int tab) {
     NMHDR header{tabs, UINT_PTR(IdTabs), UINT(TCN_SELCHANGE)};
     SendMessageW(window, WM_NOTIFY, IdTabs, LPARAM(&header));
 }
-static void press_key(HWND window, UINT vk, UINT scan) {
-    PostMessageW(window, WM_KEYDOWN, vk, LPARAM(1 | (scan << 16)));
-    settle(window);
+static void note(HWND window, const char* step);
+static void note_status(HWND window, const char* wanted) { note(window, wanted); }
+static bool status_contains(HWND window, const char* text) {
+    wchar_t status[512] = {};
+    GetWindowTextW(GetDlgItem(window, IdStatus), status, 512);
+    char narrow[512] = {};
+    WideCharToMultiByte(CP_UTF8, 0, status, -1, narrow, sizeof narrow, nullptr, nullptr);
+    return std::strstr(narrow, text) != nullptr;
+}
+static bool wait_status(HWND window, const char* text) {
+    for (int i = 0; i < 300; ++i) {
+        if (status_contains(window, text)) return true;
+        Sleep(10);
+    }
+    note_status(window, text);
+    return false;
 }
 // What the window's status line says, for the log when a check fails.
 static void note(HWND window, const char* step) {
     wchar_t text[512] = {};
-    GetWindowTextW(GetDlgItem(window, 300), text, 512);
+    GetWindowTextW(GetDlgItem(window, IdStatus), text, 512);
     const LRESULT row = SendMessageW(GetDlgItem(window, IdList), LVM_GETNEXTITEM, WPARAM(-1), LVNI_SELECTED);
     std::printf("[driver] %s: status \"%ls\", selected row %d, foreground %d\n", step, text, int(row),
                 GetForegroundWindow() == window);
@@ -102,43 +107,36 @@ int main(int argc, char** argv) {
         SetWindowTextW(GetDlgItem(window, IdTcp), L"12345");
         SetWindowTextW(GetDlgItem(window, IdName), L"ab");
         SendMessageW(GetDlgItem(window, IdDisplay), CB_SETCURSEL, 1, 0);
-        // A name that breaks the rule: Save refuses with a message box, and nothing is written.
-        PostMessageW(window, WM_COMMAND, IDOK, 0);
-        HWND warning = wait_window(L"#32770", L"MAG Settings");
-        CHECK(warning != nullptr);
-        CHECK(warning && answer(warning, IDOK));
-        settle(window);
+        // A name that breaks the rule: Save refuses, says why, and writes nothing.
+        SendMessageW(window, WM_COMMAND, IDOK, 0);
+        CHECK(status_contains(window, "player name"));
         CHECK(!fs::exists(settings));
         SetWindowTextW(GetDlgItem(window, IdName), L"Rook_7");
         // Keyboard and mouse page: Fire secondary is Q, then Move forward takes Q after a confirmation.
         show_tab(window, 1);
-        settle(window);
         CHECK(SendMessageW(GetDlgItem(window, IdList), LVM_GETITEMCOUNT, 0, 0) == 3);
         select_row(window, 1);
-        PostMessageW(window, WM_COMMAND, IdSetSecondary, 0);
-        settle(window);
-        press_key(window, 'Q', 0x10);
-        note(window, "fire secondary Q");
-        select_row(window, 0);
-        PostMessageW(window, WM_COMMAND, IdSetPrimary, 0);
-        settle(window);
-        note(window, "forward primary capture");
+        SendMessageW(window, WM_COMMAND, IdSetSecondary, 0);
+        CHECK(status_contains(window, "Press a key"));
+        // Keys and mouse buttons go through the window's own message loop, so they are posted.
         PostMessageW(window, WM_KEYDOWN, 'Q', LPARAM(1 | (0x10 << 16)));
-        HWND question = wait_window(L"#32770", L"Replace binding?");
-        CHECK(question != nullptr);
-        if (!question) note(window, "no conflict question");
-        CHECK(question && answer(question, IDYES));
-        settle(window);
+        CHECK(wait_status(window, "Bound Q"));
+        select_row(window, 0);
+        SendMessageW(window, WM_COMMAND, IdSetPrimary, 0);
+        PostMessageW(window, WM_KEYDOWN, 'Q', LPARAM(1 | (0x10 << 16)));
+        CHECK(wait_status(window, "is assigned to Fire"));
+        CHECK(IsWindowVisible(GetDlgItem(window, IdConfirm)));
+        SendMessageW(window, WM_COMMAND, IdConfirm, 0);
+        CHECK(status_contains(window, "Bound Q") && !IsWindowVisible(GetDlgItem(window, IdConfirm)));
         // A mouse button, and Escape cancelling a capture.
         select_row(window, 1);
-        PostMessageW(window, WM_COMMAND, IdSetSecondary, 0);
-        settle(window);
+        SendMessageW(window, WM_COMMAND, IdSetSecondary, 0);
         PostMessageW(window, WM_RBUTTONDOWN, MK_RBUTTON, 0);
-        settle(window);
-        note(window, "fire secondary right mouse");
-        PostMessageW(window, WM_COMMAND, IdSetPrimary, 0);
-        settle(window);
-        press_key(window, VK_ESCAPE, 0x01);
+        CHECK(wait_status(window, "Bound Right mouse"));
+        SendMessageW(window, WM_COMMAND, IdSetPrimary, 0);
+        PostMessageW(window, WM_KEYDOWN, VK_ESCAPE, LPARAM(1 | (0x01 << 16)));
+        CHECK(wait_status(window, "cancelled"));
+        note(window, "before save");
         PostMessageW(window, WM_COMMAND, IDOK, 0);
     });
     CHECK(settings_window_run(form, settings, false, "") == SettingsWindowResult::Saved);

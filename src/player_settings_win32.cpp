@@ -19,7 +19,7 @@ enum : int {
     IdTabs = 100, IdServer, IdTcp, IdUdp, IdName, IdDisplay,
     IdScope = 200, IdMode, IdList, IdSetPrimary, IdSetSecondary, IdClearPrimary, IdClearSecondary, IdReset,
     IdSensitivity, IdSensitivityValue, IdInvert,
-    IdStatus = 300, IdGeneralNote,
+    IdStatus = 300, IdGeneralNote, IdConfirm, IdKeep,
 };
 constexpr UINT_PTR CaptureTimer = 1;
 constexpr const wchar_t* WindowClass = L"MAGSettingsWindow";
@@ -61,6 +61,11 @@ struct Window {
     std::vector<SettingsBindingRow> rows;
     Capture capture;
     std::vector<HWND> general, controls, kbm_only;
+    // A question waiting for Confirm or Keep, shown beside the status line rather than in a modal
+    // box: a nested modal loop would hand key and mouse messages past the binding capture.
+    enum class Question { None, Replace, Reset } question = Question::None;
+    Capture pending;
+    PhysicalControl pending_control{};
 };
 Window* s_window = nullptr;
 
@@ -134,32 +139,57 @@ void end_capture(const char* why) {
     if (why) status(why);
 }
 
+void ask(Window::Question question, const std::string& text, const wchar_t* confirm) {
+    s_window->question = question;
+    status(text);
+    SetWindowTextW(item(IdConfirm), confirm);
+    ShowWindow(item(IdConfirm), SW_SHOW);
+    ShowWindow(item(IdKeep), SW_SHOW);
+    MessageBeep(MB_ICONQUESTION);
+}
+void close_question() {
+    s_window->question = Window::Question::None;
+    ShowWindow(item(IdConfirm), SW_HIDE);
+    ShowWindow(item(IdKeep), SW_HIDE);
+}
+
 void accept(PhysicalControl control) {
     Capture capture = s_window->capture;
     end_capture(nullptr);
     std::string conflict, error;
-    if (!settings_form_bind(*s_window->form, capture.scope, capture.action, capture.slot, control, false, conflict, error)) {
-        if (!conflict.empty()) {
-            const std::wstring question = wide(settings_form_control_name(control) + " is assigned to " + conflict +
-                                               ". Replace that binding?");
-            if (MessageBoxW(s_window->hwnd, question.c_str(), L"Replace binding?", MB_YESNO | MB_ICONQUESTION) != IDYES) {
-                status("Binding unchanged.");
-                return;
-            }
-            if (!settings_form_bind(*s_window->form, capture.scope, capture.action, capture.slot, control, true, conflict, error)) {
-                status(error);
-                return;
-            }
-        } else {
-            status(error);
-            return;
-        }
+    if (settings_form_bind(*s_window->form, capture.scope, capture.action, capture.slot, control, false, conflict, error)) {
+        status("Bound " + settings_form_control_name(control) + ". Save to keep it.");
+    } else if (!conflict.empty()) {
+        s_window->pending = capture;
+        s_window->pending_control = control;
+        ask(Window::Question::Replace, settings_form_control_name(control) + " is assigned to " + conflict +
+            ". Replace that binding?", L"Replace");
+        return;
+    } else {
+        status(error);
     }
-    status("Bound " + settings_form_control_name(control) + ". Save to keep it.");
+    fill_rows();
+}
+
+void answer(bool confirmed) {
+    const Window::Question question = s_window->question;
+    close_question();
+    std::string conflict, error;
+    if (question == Window::Question::Replace) {
+        const Capture& c = s_window->pending;
+        if (!confirmed) status("Binding unchanged.");
+        else if (settings_form_bind(*s_window->form, c.scope, c.action, c.slot, s_window->pending_control, true, conflict, error))
+            status("Bound " + settings_form_control_name(s_window->pending_control) + ". Save to keep it.");
+        else status(error);
+    } else if (question == Window::Question::Reset) {
+        if (!confirmed) status("Bindings unchanged.");
+        else status(settings_form_reset(*s_window->form, page_device(), error) ? "Defaults restored. Save to keep them." : error);
+    }
     fill_rows();
 }
 
 void begin_capture(unsigned slot) {
+    if (s_window->question != Window::Question::None) answer(false);
     const int row = selected_row();
     if (row < 0 || size_t(row) >= s_window->rows.size()) { status("Choose an action first."); return; }
     Capture& capture = s_window->capture;
@@ -259,7 +289,7 @@ void save() {
     std::string error;
     if (!settings_form_save(s_window->path, form, error)) {
         status(error);
-        MessageBoxW(s_window->hwnd, wide(error).c_str(), L"MAG Settings", MB_OK | MB_ICONWARNING);
+        MessageBeep(MB_ICONWARNING);
         return;
     }
     s_window->result = SettingsWindowResult::Saved;
@@ -286,18 +316,14 @@ void command(int id, int code) {
         fill_rows();
         return;
     }
-    case IdReset: {
+    case IdReset:
         end_capture(nullptr);
-        const bool controller = page_device() == SettingsDevice::Controller;
-        if (MessageBoxW(s_window->hwnd, controller ? L"Reset the controller bindings? The keyboard and mouse settings are kept."
-                                                   : L"Reset the keyboard and mouse bindings? The controller settings are kept.",
-                        L"Reset bindings?", MB_YESNO | MB_ICONQUESTION) != IDYES)
-            return;
-        std::string error;
-        status(settings_form_reset(*s_window->form, page_device(), error) ? "Defaults restored. Save to keep them." : error);
-        fill_rows();
+        ask(Window::Question::Reset, page_device() == SettingsDevice::Controller
+                ? "Reset the controller bindings? The keyboard and mouse settings are kept."
+                : "Reset the keyboard and mouse bindings? The controller settings are kept.", L"Reset");
         return;
-    }
+    case IdConfirm: answer(true); return;
+    case IdKeep: answer(false); return;
     case IdScope:
         if (code == CBN_SELCHANGE) { end_capture(nullptr); fill_rows(); }
         return;
@@ -324,6 +350,7 @@ LRESULT CALLBACK procedure(HWND hwnd, UINT message, WPARAM w, LPARAM l) {
         const auto* header = reinterpret_cast<const NMHDR*>(l);
         if (header->idFrom == IdTabs && header->code == TCN_SELCHANGE) {
             end_capture(nullptr);
+            if (s_window->question != Window::Question::None) answer(false);
             show_page(TabCtrl_GetCurSel(s_window->tabs));
         }
         return 0;
@@ -434,7 +461,9 @@ void build() {
     make(L"STATIC", L"", WS_VISIBLE, 375, y + 4, 60, 20, IdSensitivityValue, &win.kbm_only);
     make(L"BUTTON", L"Invert Y", WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX, 450, y, 120, 26, IdInvert, &win.kbm_only);
 
-    make(L"STATIC", L"", WS_VISIBLE, 10, 440, width - 20, 40, IdStatus, nullptr);
+    make(L"STATIC", L"", WS_VISIBLE, 10, 440, width - 250, 40, IdStatus, nullptr);
+    make(L"BUTTON", L"Replace", WS_TABSTOP | BS_PUSHBUTTON, width - 230, 442, 105, 28, IdConfirm, nullptr);
+    make(L"BUTTON", L"Keep", WS_TABSTOP | BS_PUSHBUTTON, width - 115, 442, 105, 28, IdKeep, nullptr);
     make(L"BUTTON", win.setup ? L"Save and play" : L"Save", WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
          width - 250, 485, 115, 28, IDOK, nullptr);
     make(L"BUTTON", L"Cancel", WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON, width - 125, 485, 115, 28, IDCANCEL, nullptr);
