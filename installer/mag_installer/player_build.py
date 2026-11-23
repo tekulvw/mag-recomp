@@ -442,6 +442,9 @@ def install(root, source, output, cache, token=None, events=None, retry=False):
     name = app_name(host)
     # A troubleshooting override of the x86-64 code generation level; checked before any download.
     x86_level = x86_level_override(os.environ, host)
+    # Keyboard and mouse controls (mouse aim) unless MAG_GAME_CONTROLS=0; also checked before downloads.
+    from .native_recipe import game_controls_enabled
+    controls = game_controls_enabled(os.environ)
     binding = _binding(inputs, record, token)
     # The OS vendor owns the compiler/SDK installation; settle it before downloads.
     from .managed_tools import bootstrap, ensure_apple_sdk, ensure_windows_build_tools
@@ -513,6 +516,10 @@ def install(root, source, output, cache, token=None, events=None, retry=False):
                                for role, item in kit['sdks'].items()}}
             if managed.get('prefix'):
                 config['managed_prefix'] = str(managed['prefix'])
+            if controls:
+                # The pinned Rust toolchain, beside the other managed tools.
+                from .managed_tools import rust_toolchain
+                config['game_controls'] = rust_toolchain(managed['root'], cache=cache, token=token, events=events)
             if x86_level:
                 config['cmake_args'] = x86_level
             config_path = build / 'build-settings.json'

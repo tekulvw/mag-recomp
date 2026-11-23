@@ -182,3 +182,77 @@ class ManagedBytecodeTests(unittest.TestCase):
             env = native_build._environment({'python': '/t/python', 'cmake': '/t/cmake', 'ninja': '/t/ninja', 'git': '/t/git'}, home)
             self.assertEqual(Path(env['PYTHONPYCACHEPREFIX']), home / 'pycache')
 
+
+
+class RustToolchainTests(unittest.TestCase):
+    """The pinned Rust components for the game controls adapter, from synthetic archives."""
+
+    def test_pins_follow_rust_toolchain_and_cover_every_host(self):
+        import re
+        from mag_installer import managed_tools
+        toolchain = (Path(__file__).resolve().parents[2] / 'rust-toolchain.toml').read_text()
+        self.assertEqual(re.search(r'channel\s*=\s*"([^"]+)"', toolchain)[1], managed_tools.RUST_CHANNEL)
+        self.assertEqual(set(managed_tools.RUST_LOCKS), set(managed_tools.LOCKS))
+        for host, specs in managed_tools.RUST_LOCKS.items():
+            self.assertEqual(set(specs), {'rustc', 'cargo', 'rust-std'})
+            for spec in specs.values():
+                self.assertTrue(spec['url'].startswith('https://static.rust-lang.org/dist/'))
+                self.assertIn('-' + managed_tools.RUST_CHANNEL + '-' + managed_tools.RUST_TARGETS[host], spec['url'])
+                self.assertEqual(len(spec['sha256']), 64); self.assertGreater(spec['size'], 0)
+        # The managed tool lists (and so the dependency-prefix identities) do not include it.
+        for lock in managed_tools.LOCKS.values():
+            self.assertFalse(any('rust' in key for key in lock))
+
+    def component(self, root, name, inner, files):
+        archive = root / (name + '.tar.xz')
+        with tarfile.open(archive, 'w:xz') as package:
+            for relative, data, mode in [('install.sh', '#!/bin/sh\n', 0o755), (inner + '/manifest.in', 'file:x\n', 0o644),
+                                         *((inner + '/' + path, text, 0o755 if path.startswith('bin/') else 0o644)
+                                           for path, text in files.items())]:
+                info = tarfile.TarInfo(name + '/' + relative); payload = data.encode()
+                info.size = len(payload); info.mode = mode; package.addfile(info, io.BytesIO(payload))
+        return archive
+
+    def toolchain(self, root, host, extra_std=None):
+        from mag_installer import managed_tools
+        target = managed_tools.RUST_TARGETS[host]; suffix = '.exe' if host == 'windows-x86_64' else ''
+        archives = {
+            'rustc': self.component(root, f'rustc-1.99.0-{target}', 'rustc',
+                                    {'bin/rustc' + suffix: 'rustc', 'lib/librustc_driver.so': 'driver'}),
+            'cargo': self.component(root, f'cargo-1.99.0-{target}', 'cargo', {'bin/cargo' + suffix: 'cargo'}),
+            'rust-std': self.component(root, f'rust-std-1.99.0-{target}', 'rust-std-' + target,
+                                       {f'lib/rustlib/{target}/lib/libstd.rlib': 'std', **(extra_std or {})})}
+        def acquire(spec, cache, token, events):
+            return next(path for key, path in archives.items() if spec['id'] == f'rust-{key}-{target}')
+        return acquire
+
+    def test_rustc_and_its_standard_library_share_one_verified_tree(self):
+        from mag_installer import managed_tools
+        for host in managed_tools.RUST_TARGETS:
+            with self.subTest(host=host), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp); target = managed_tools.RUST_TARGETS[host]
+                with patch('mag_installer.managed_tools.acquire', side_effect=self.toolchain(root, host)), \
+                     patch('mag_installer.managed_tools.host_key', return_value=host):
+                    paths = managed_tools.rust_toolchain(root / 'managed', cache=root / 'cache', host=host)
+                    rustc, cargo = Path(paths['rustc']), Path(paths['cargo'])
+                    self.assertEqual(rustc.read_text(), 'rustc'); self.assertEqual(cargo.read_text(), 'cargo')
+                    self.assertTrue(rustc.name.endswith('.exe') == (host == 'windows-x86_64'))
+                    self.assertEqual((rustc.parent.parent / f'lib/rustlib/{target}/lib/libstd.rlib').read_text(), 'std')
+                    self.assertFalse((rustc.parent.parent / 'manifest.in').exists())
+                    if os.name != 'nt': self.assertTrue(rustc.stat().st_mode & 0o111)
+                    # A retry reuses the verified tree; a changed file is refused.
+                    self.assertEqual(managed_tools.rust_toolchain(root / 'managed', cache=root / 'cache', host=host), paths)
+                    (rustc.parent.parent / f'lib/rustlib/{target}/lib/libstd.rlib').write_text('changed')
+                    with self.assertRaisesRegex(InstallerError, 'Rust toolchain changed'):
+                        managed_tools.rust_toolchain(root / 'managed', cache=root / 'cache', host=host)
+
+    def test_overlapping_components_are_refused(self):
+        from mag_installer import managed_tools
+        host = 'linux-x86_64'
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            with patch('mag_installer.managed_tools.acquire', side_effect=self.toolchain(root, host, {'bin/rustc': 'other'})), \
+                 patch('mag_installer.managed_tools.host_key', return_value=host):
+                with self.assertRaisesRegex(InstallerError, 'overlap'):
+                    managed_tools.rust_toolchain(root / 'managed', cache=root / 'cache', host=host)
+            self.assertFalse(any(p.name.startswith('rust-toolchain-') for p in (root / 'managed/artifacts').iterdir()))

@@ -93,6 +93,13 @@ before C++ static initializers cache the flag. Existing environment values, incl
 The installer applies the public payload hook after the streamed-job lift on every host and links
 native Edge into the engine only; unlinked binaries do not set this variable by default.
 
+The MAG-owned game controls adapter (keyboard and mouse play with mouse aim,
+[native-controls.md](native-controls.md)) is built into the engine of installer player builds on
+every host: the installer passes `-DMAG_GAME_CONTROLS=ON -DMAG_INPUT_RUST=ON` with a pinned Rust
+toolchain. It sets no runtime switch. `MAG_GAME_CONTROLS=0` in the installer's environment builds
+without it; in the engine's environment it turns a built adapter off. Its evidence and what is not
+yet measured are recorded in native-controls.md, section 10.
+
 ## Packaged players and launchers
 
 The supervisors in `installer/mag_installer/native_package*.py` set these for both the launcher
@@ -111,7 +118,7 @@ and the engine. `tools/boot.py` and `tools/handoff.py` set the same ones for dia
 
 ## Player settings
 
-The settings window (macOS) and settings file (all platforms) turn into these at launch;
+The settings window and settings file (all platforms) turn into these at launch;
 see [player-settings.md](player-settings.md).
 
 | Switch | Kind | Value | Platforms | Set in | Why | Opt out |
@@ -121,6 +128,7 @@ see [player-settings.md](player-settings.md).
 | `PS3_NET_ONLINE` | env | `1` | all | `src/player_sign_in.h`, `src/player_settings_runtime.mm`, `tools/boot.py` | The network reports a live connection, so the title takes its online path; set only when the server overlay is ready, otherwise the game plays offline (#11, #125). | choose no server |
 | `PS3RECOMP_NP_LOCAL_TICKET` | env | `1` | all | `src/player_sign_in.h`, `src/player_settings_runtime.mm`, `tools/boot.py` | Only with the opt-in `ticket_file` setting on a server (the portal ticket profile), and for a `tools/boot.py` network profile that asks for it: the runtime's local NP ticket provider answers the game's own ticket request, so the game signs in with a ticket instead of the no-ticket profile's name. Without a ticket file the players never set it. | leave `ticket_file` empty |
 | `PS3RECOMP_NP_TICKET_FILE` | env | the `ticket_file` setting | all | `src/player_sign_in.h`, `src/player_settings_runtime.mm` | Only with the opt-in `ticket_file` setting on a server: the local NP ticket provider returns that file's exact bytes (1 to 4096), read at each ticket request, so a launcher can write a fresh portal ticket before every sign-in. A missing, empty or oversized file fails the sign-in visibly instead of falling back to the name (fork #153). | leave `ticket_file` empty |
+| `PS3RECOMP_VK_FULLSCREEN` | env | `1` when the display mode is borderless | Windows, Linux | `src/player_settings_portable.cpp` | The Vulkan game window opens borderless at the desktop size: the settings window's Display mode, `display_mode` in the settings file. | choose Windowed (the default) |
 | `PS3_AA` | env | the anti-aliasing setting (`fxaa` or off) | macOS | `src/player_settings_runtime.mm` | FXAA on the display buffer; only the Metal backend reads it (#11). | the setting |
 
 ## Build options
@@ -169,8 +177,8 @@ starts being set here; move its row up when that happens.
 | Switch | Kind | Runtime default | Platforms | Why mag-recomp relies on it | Opt out |
 |---|---|---|---|---|---|
 | `PS3RECOMP_NATIVE_OSK_SDL` | CMake | `ON` | Linux | The SDL2 text-entry dialog for the native on-screen keyboard: players sign in without automation (runtime pin of #128 and #134). | `-DPS3RECOMP_NATIVE_OSK_SDL=OFF` |
-| `PS3RECOMP_PAD_SDL_KEYBOARD` | CMake | `ON` | Linux | The game window's keyboard drives controller port 0 until a controller is connected (README, "For players"). The opt-in controls adapter's SDL keyboard/mouse capture runs from that keyboard's per-pump sample, so `MAG_GAME_CONTROLS` refuses to configure with it off (`cmake/MagControls.cmake`). | `PAD_NO_KEYBOARD=1` at run time, or `-DPS3RECOMP_PAD_SDL_KEYBOARD=OFF` |
-| `PS3RECOMP_NATIVE_OSK_WINDOWS` | CMake | `ON` | Windows | Native Windows text input for the on-screen keyboard. The opt-in controls adapter's Win32 keyboard/mouse capture runs from the window pump calls this host shares, so `MAG_GAME_CONTROLS` refuses to configure with it off (`cmake/MagControls.cmake`). | `-DPS3RECOMP_NATIVE_OSK_WINDOWS=OFF` |
+| `PS3RECOMP_PAD_SDL_KEYBOARD` | CMake | `ON` | Linux | The game window's keyboard drives controller port 0 until a controller is connected (README, "For players"). The controls adapter's SDL keyboard/mouse capture (on in player builds) runs from that keyboard's per-pump sample, so `MAG_GAME_CONTROLS` refuses to configure with it off (`cmake/MagControls.cmake`). | `PAD_NO_KEYBOARD=1` at run time, or `-DPS3RECOMP_PAD_SDL_KEYBOARD=OFF` |
+| `PS3RECOMP_NATIVE_OSK_WINDOWS` | CMake | `ON` | Windows | Native Windows text input for the on-screen keyboard. The controls adapter's Win32 keyboard/mouse capture (on in player builds) runs from the window pump calls this host shares, so `MAG_GAME_CONTROLS` refuses to configure with it off (`cmake/MagControls.cmake`). | `-DPS3RECOMP_NATIVE_OSK_WINDOWS=OFF` |
 | `PS3RECOMP_SPURS_STORE_WAKE` | env | `1` | all | A store to a SPURS instance's request line wakes the scheduler at once instead of on its next 1 ms pass. Synthetically, a PPU store reaches the policy module start in about 10 µs instead of about 1 ms at the median under both coherence schemes (fork #81). | `0` |
 | `PS3RECOMP_SPU_SMC_TRACE` | env | `1` | all | The SPU micro-interpreter replays decoded runs while their words are unchanged. On Linux Training it took 6 decodes in 6.5 million entries, halved the cost per entry (336 to 168 ns) and raised guest fps 2.8% (33.13 against 32.23, three rounds each; fork #85). | `0` |
 | `PS3RECOMP_VK_ACQUIRE_BOUND_MS` | env | `100` | Linux, Windows | The Vulkan presenter leaves the window out while it is minimized or hidden or the display is off, bounds its swapchain waits at 100 ms, and paces skipped frames at 60 Hz. With the display asleep, an unbounded wait slowed the Windows launcher to about 4 fps and its login timed out; with the window visible it measured no fps change (fork #104). | `0` |

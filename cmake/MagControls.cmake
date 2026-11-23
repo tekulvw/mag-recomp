@@ -159,6 +159,14 @@ function(mag_enable_game_controls target)
     elseif(NOT _desktop STREQUAL "macos")
         message(FATAL_ERROR "MAG_GAME_CONTROLS_DESKTOP must be macos, win32, sdl or none")
     endif()
+    if(NOT APPLE)
+        # The Windows/Linux settings window gets the Controls pages, holds gameplay input while it
+        # is open, and opens on F10 from the pump seams below (src/player_settings_session.h).
+        set_property(SOURCE "${_src}/player_settings_form.cpp" "${_src}/player_settings_session.cpp"
+            TARGET_DIRECTORY ${target} APPEND PROPERTY COMPILE_DEFINITIONS MAG_PLAYER_SETTINGS_CONTROLS=1)
+        set_property(SOURCE "${_src}/player_settings_session.cpp"
+            TARGET_DIRECTORY ${target} APPEND PROPERTY COMPILE_DEFINITIONS MAG_PLAYER_INPUT_HOLD=1)
+    endif()
     target_sources(${target} PRIVATE ${_sources})
     set_source_files_properties(${_sources} TARGET_DIRECTORY ${target} PROPERTIES
         INCLUDE_DIRECTORIES "${RECOMP_DIR};${PS3RECOMP_DIR}/runtime;${PS3RECOMP_DIR};${PS3RECOMP_DIR}/include;${_src};${_controls}")
