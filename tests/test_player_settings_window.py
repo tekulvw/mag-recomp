@@ -107,7 +107,7 @@ class Win32SettingsWindowTests(unittest.TestCase):
                             '/DMAG_PLAYER_ARCHIVE_NO_ZLIB=1', '/DMAG_PLAYER_SETTINGS_CONTROLS=1', '/D_CRT_SECURE_NO_WARNINGS', '/I' + str(ROOT / 'src'), '/I' + str(root),
                             str(ROOT / 'tests/player_settings_win32.cpp'), str(ROOT / 'src/player_settings_win32.cpp'),
                             str(root / 'map.obj'), *[str(ROOT / s) for s in FORM],
-                            '/Fo' + str(root) + '\\', '/Fe' + str(binary), '/link', str(root / 'cargo/release/mag_input.lib'),
+                            '/Fo' + str(root) + '\\', '/Fe' + str(binary), '/link', '/SUBSYSTEM:CONSOLE', str(root / 'cargo/release/mag_input.lib'),
                             'user32.lib', 'gdi32.lib', 'comctl32.lib', 'xinput.lib', 'userenv.lib', 'ws2_32.lib',
                             'bcrypt.lib', 'ntdll.lib', 'advapi32.lib', 'dbghelp.lib'], check=True, timeout=300)
             result = subprocess.run([str(binary), str(root / 'work')], capture_output=True, text=True, timeout=60)
