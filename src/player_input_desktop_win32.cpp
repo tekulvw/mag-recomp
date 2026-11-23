@@ -45,10 +45,15 @@
 #include <atomic>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <exception>
 
 static_assert(RI_KEY_BREAK == MAG_WIN32_KEY_BREAK && RI_KEY_E0 == MAG_WIN32_KEY_E0 && RI_KEY_E1 == MAG_WIN32_KEY_E1);
 static_assert(MOUSE_MOVE_ABSOLUTE == MAG_WIN32_MOUSE_MOVE_ABSOLUTE);
+static_assert(WM_SYSKEYDOWN == MAG_WIN32_WM_SYSKEYDOWN && WM_SYSKEYUP == MAG_WIN32_WM_SYSKEYUP &&
+              WM_SYSCHAR == MAG_WIN32_WM_SYSCHAR && VK_MENU == MAG_WIN32_VK_MENU && VK_F4 == MAG_WIN32_VK_F4 &&
+              VK_F10 == MAG_WIN32_VK_F10);
 static_assert(RI_MOUSE_LEFT_BUTTON_DOWN == MAG_WIN32_MOUSE_LEFT_DOWN && RI_MOUSE_LEFT_BUTTON_UP == MAG_WIN32_MOUSE_LEFT_UP &&
               RI_MOUSE_RIGHT_BUTTON_DOWN == MAG_WIN32_MOUSE_RIGHT_DOWN && RI_MOUSE_RIGHT_BUTTON_UP == MAG_WIN32_MOUSE_RIGHT_UP &&
               RI_MOUSE_MIDDLE_BUTTON_DOWN == MAG_WIN32_MOUSE_MIDDLE_DOWN &&
@@ -82,6 +87,21 @@ UINT keypad_virtual_key(uint32_t usage) {
 
 bool virtual_key_down(UINT key) { return key && (GetAsyncKeyState(int(key)) & 0x8000) != 0; }
 
+// Opt-in diagnostics (MAG_GAME_CONTROLS_TRACE=1): every acquisition or release of the mouse lock
+// with its confinement, and about once a second what became of the raw mouse motion.
+struct MotionTrace {
+    bool on = [] { const char* v = std::getenv("MAG_GAME_CONTROLS_TRACE"); return v && *v && std::strcmp(v, "0"); }();
+    std::chrono::steady_clock::time_point next{};
+    unsigned reports{}, motions{}, unfocused{}, accepted{}, not_installed{}, not_ready{}, not_relative{}, stale{},
+        lock_lost{}, mouse_requests_on{}, mouse_requests_off{};
+};
+// Mouse-look requests come from the adapter's thread.
+std::atomic<unsigned> g_mouse_requests_on{0}, g_mouse_requests_off{0};
+MotionTrace& motion_trace() {
+    static MotionTrace trace;
+    return trace;
+}
+
 class Win32Platform final : public DesktopCapturePlatform {
 public:
     HWND window = nullptr;
@@ -98,16 +118,22 @@ public:
     bool set_relative(bool on) override {
         if (!on) {
             release_cursor();
+            if (motion_trace().on) std::fprintf(stderr, "[game-controls] trace lock released\n");
             return true;
         }
         RECT rect;
         if (!client_rect(rect) || !ClipCursor(&rect)) {
+            if (motion_trace().on) std::fprintf(stderr, "[game-controls] trace lock failed (error %lu)\n", GetLastError());
             release_cursor();
             return false;
         }
         clipped_ = true;
         requested_clip_ = rect;
         if (!GetClipCursor(&applied_clip_)) applied_clip_ = rect;
+        if (motion_trace().on)
+            std::fprintf(stderr, "[game-controls] trace lock acquired: client %ld,%ld-%ld,%ld clip %ld,%ld-%ld,%ld\n",
+                         rect.left, rect.top, rect.right, rect.bottom, applied_clip_.left, applied_clip_.top,
+                         applied_clip_.right, applied_clip_.bottom);
         if (!hidden_) {
             // The cursor shows while the thread's display count is not negative.
             while (hides_ < 16) {
@@ -248,9 +274,17 @@ void raw_input(Backend& b, HRAWINPUT handle) {
             if (mag_win32_raw_input_admitted(focused, edges[i].down))
                 b.core.mouse_button(edges[i].index, kMouseDevice, edges[i].down != 0, time, stamp);
         double dx = 0, dy = 0;
-        if (mag_win32_raw_mouse_motion(mouse.usFlags, mouse.lLastX, mouse.lLastY, &dx, &dy) &&
-            mag_win32_raw_input_admitted(focused, 1))
-            b.core.mouse_motion(dx, dy, stamp);
+        auto& trace = motion_trace();
+        ++trace.reports;
+        if (mag_win32_raw_mouse_motion(mouse.usFlags, mouse.lLastX, mouse.lLastY, &dx, &dy)) {
+            ++trace.motions;
+            if (!mag_win32_raw_input_admitted(focused, 1)) ++trace.unfocused;
+            else if (b.core.mouse_motion(dx, dy, stamp)) ++trace.accepted;
+            else if (!b.core.installed()) ++trace.not_installed;
+            else if (!b.core.ready()) ++trace.not_ready;
+            else if (!b.core.relative()) ++trace.not_relative;
+            else ++trace.stale;
+        }
     }
 }
 
@@ -273,6 +307,7 @@ void pump(Backend& b, bool dialog) {
     // Something replaced or dropped the confinement (another window, a resize): re-apply it at
     // this refresh, logged once per loss.
     if (b.core.relative() && b.platform.clip_lost()) {
+        ++motion_trace().lock_lost;
         if (!b.lock_lost_reported) {
             std::fprintf(stderr, "[game-controls] mouse lock lost; re-applying\n");
             b.lock_lost_reported = true;
@@ -287,6 +322,23 @@ void pump(Backend& b, bool dialog) {
     // per change makes that visible.
     if (const char* change = desktop_capture_transition(was_ready, was_relative, b.core.ready(), b.core.relative()))
         std::fprintf(stderr, "[game-controls] %s\n", change);
+    auto& trace = motion_trace();
+    if (trace.on && std::chrono::steady_clock::now() >= trace.next) {
+        trace.mouse_requests_on = g_mouse_requests_on.exchange(0, std::memory_order_relaxed);
+        trace.mouse_requests_off = g_mouse_requests_off.exchange(0, std::memory_order_relaxed);
+        if (trace.reports || trace.lock_lost || trace.mouse_requests_on || trace.mouse_requests_off)
+            std::fprintf(stderr,
+                         "[game-controls] trace motion: reports=%u motions=%u accepted=%u unfocused=%u not_installed=%u "
+                         "not_ready=%u not_relative=%u stale_epoch=%u lock_lost=%u mouse_requests on/off=%u/%u "
+                         "(ready=%d relative=%d)\n",
+                         trace.reports, trace.motions, trace.accepted, trace.unfocused, trace.not_installed, trace.not_ready,
+                         trace.not_relative, trace.stale, trace.lock_lost, trace.mouse_requests_on, trace.mouse_requests_off,
+                         b.core.ready(), b.core.relative());
+        const bool keep = trace.on;
+        trace = MotionTrace{};
+        trace.on = keep;
+        trace.next = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+    }
     const int on = b.core.installed() ? 1 : 0;
     if (on != b.reported) {
         if (b.reported >= 0 || on)
@@ -307,6 +359,12 @@ int message(Backend& b, const MSG* msg, bool dialog) {
         // A click in the game window takes the cursor back (click-to-recapture) when it is free.
         b.core.recapture_after_click(!b.platform.clip_lost());
         return 0;
+    case WM_SYSKEYUP:
+    case WM_SYSCHAR:
+        // A lone Alt or F10 released, or Alt with a character key, would make the default window
+        // procedure enter the window's menu mode: its modal loop stops this pump, and the game with
+        // it, until another key or a click. The game window has no menu (player_input_win32_map.h).
+        return b.core.installed() && mag_win32_withholds_menu_message(msg->message, msg->wParam);
     case WM_KEYDOWN: {
         if (msg->wParam != VK_ESCAPE) return 0;
         DesktopQuitKeyContext context;
@@ -375,7 +433,10 @@ extern "C" void mag_input_desktop_set_enabled(int enabled) {
         !waiting_reported.exchange(true))
         std::fprintf(stderr, "[game-controls] desktop capture requested; waiting for the Win32 game window\n");
 }
-extern "C" void mag_input_desktop_set_mouse_enabled(int enabled) { backend().core.request_mouse(enabled != 0); }
+extern "C" void mag_input_desktop_set_mouse_enabled(int enabled) {
+    if (backend().core.request_mouse(enabled != 0))
+        (enabled ? g_mouse_requests_on : g_mouse_requests_off).fetch_add(1, std::memory_order_relaxed);
+}
 // Requests apply at the window's next pump, every frame.
 extern "C" void mag_input_desktop_refresh(void) {}
 extern "C" int mag_input_desktop_raw_mouse_available(void) { return backend().core.raw_mouse_available(); }

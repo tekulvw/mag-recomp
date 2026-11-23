@@ -13,6 +13,8 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <limits>
 #include <map>
 #include <mutex>
@@ -268,6 +270,34 @@ struct MagGameControlsAdapter::State {
 
     MagGameControlsMouseAim latch;
     std::optional<MagMouseAimIdentity> latch_identity;
+    bool wake_positive = false;  // sign of the last wake input (7.5); the first one is positive
+
+    // Opt-in diagnostics (MAG_GAME_CONTROLS_TRACE=1): about once a second, how far mouse look got
+    // through this adapter, so a camera that does not turn can be traced to the step that stopped it.
+    struct LookTrace {
+        bool on = [] { const char* v = std::getenv("MAG_GAME_CONTROLS_TRACE"); return v && *v && std::strcmp(v, "0"); }();
+        std::chrono::steady_clock::time_point next{};
+        unsigned routes{}, eligible{}, look_held{}, held_by_menu{}, mouse_eligible{}, motion_frames{}, prepares{},
+            prepare_motion{}, latched{}, consumer_seams{}, consumed{}, capture_on{}, capture_off{};
+        double dx{}, dy{};
+    } look_trace;
+    void trace_look() {
+        auto& t = look_trace;
+        if (!t.on) return;
+        const auto now = std::chrono::steady_clock::now();
+        if (now < t.next) return;
+        if (t.routes)
+            std::fprintf(stderr,
+                         "[game-controls] trace look: routes=%u gameplay=%u look_held=%u held_by_menu=%u mouse_eligible=%u "
+                         "motion_frames=%u (dx %.0f dy %.0f) prepared=%u with_motion=%u latched=%u consumer_seams=%u consumed=%u "
+                         "mouse lock requests on/off=%u/%u\n",
+                         t.routes, t.eligible, t.look_held, t.held_by_menu, t.mouse_eligible, t.motion_frames, t.dx, t.dy,
+                         t.prepares, t.prepare_motion, t.latched, t.consumer_seams, t.consumed, t.capture_on, t.capture_off);
+        const bool on = t.on;
+        t = LookTrace{};
+        t.on = on;
+        t.next = now + std::chrono::seconds(1);
+    }
     std::map<uint32_t, AssistEntry> assist;
     std::vector<std::optional<AssistScope>> cleanup_scopes;
     Lifecycle lifecycle;
@@ -781,7 +811,10 @@ struct MagGameControlsAdapter::State {
             reset_host_caches();
             gameplay_receipts.clear();
         }
-        if (mouse_capture) mouse_capture(gameplay_eligible && profile.mode != InputMode::Controller);
+        // The same request as each handler update makes (route): attaching happens every poll, and
+        // asking for the lock here while a menu holds look would take it back every poll for the
+        // handler update to release again, so the lock flapped for as long as the menu stayed.
+        if (mouse_capture) mouse_capture(gameplay_eligible && !look_held_by_menu && profile.mode != InputMode::Controller);
         attached_tick = tick;
         status = gameplay_eligible ? "on-foot Rust input attached" : "native menu buttons attached";
         return true;
@@ -820,8 +853,16 @@ struct MagGameControlsAdapter::State {
             if (gameplay_eligible)
                 status = look_held_by_menu ? "on-foot input attached; a menu holds look" : "on-foot Rust input attached";
         }
-        if (mouse_capture) mouse_capture(gameplay_eligible && !look_held_by_menu && profile.mode != InputMode::Controller);
+        const bool capture_mouse = gameplay_eligible && !look_held_by_menu && profile.mode != InputMode::Controller;
+        if (mouse_capture) mouse_capture(capture_mouse);
         if (mouse_eligible && mouse_motion()) mag_controls_accept_mouse(*sample_key);
+        if (look_trace.on) {
+            auto& t = look_trace;
+            ++t.routes; t.eligible += gameplay_eligible; t.look_held += look_held; t.held_by_menu += look_held_by_menu;
+            t.mouse_eligible += mouse_eligible; (capture_mouse ? t.capture_on : t.capture_off)++;
+            if (mouse_motion()) { ++t.motion_frames; t.dx += frame->mouse_dx; t.dy += frame->mouse_dy; }
+            trace_look();
+        }
         frame->policy = mag_controls_current_policy();
     }
 
@@ -1037,6 +1078,8 @@ struct MagGameControlsAdapter::State {
             return;
         }
         if (mouse_motion()) mag_controls_accept_mouse(*sample_key);
+        ++look_trace.prepares;
+        if (mouse_motion()) ++look_trace.prepare_motion;
         const auto look = mag_controls_mouse_look(frame->mouse_dx, frame->mouse_dy, profile.mouse, AimMode::Hip);
         const MagMouseAimIdentity identity{session, poll_number, tick, frame->capture_generation, current->handle(),
                                            current->actor, current->logic, current->controller, current->state, current->aim};
@@ -1046,9 +1089,16 @@ struct MagGameControlsAdapter::State {
             return;
         }
         latch_identity = identity;
+        ++look_trace.latched;
+        // 7.5: the wake input keeps a soldier at rest running the look consumer while the mouse moves.
+        float yaw_input = 0.0f;
+        if (look.yaw != 0 || look.pitch != 0) {
+            wake_positive = !wake_positive;
+            yaw_input = wake_positive ? MouseWakeYawInput : -MouseWakeYawInput;
+        }
         auto r = guest.reads();
-        if (!r.write_f32(uint64_t(current->actor) + ActorYawInput, 0.0f) || !r.write_f32(uint64_t(current->actor) + ActorPitchInput, 0.0f))
-            throw std::runtime_error("cannot clear the stick look rates");
+        if (!r.write_f32(uint64_t(current->actor) + ActorYawInput, yaw_input) || !r.write_f32(uint64_t(current->actor) + ActorPitchInput, 0.0f))
+            throw std::runtime_error("cannot write the stick look rates");
         status = "on-foot mouse prepared";
     }
 
@@ -1077,6 +1127,7 @@ struct MagGameControlsAdapter::State {
 
     // BasicYaw, BasicPitch, SprintYaw, SprintPitch: add the latched displacement once.
     void consume(Hook event, MagGameControlsCpu& cpu) {
+        ++look_trace.consumer_seams;
         if (!latch_identity || !actor_owner || !frame_valid()) return;
         const auto current = guest.resolve_owner(actor_owner->handler, true);
         if (!current || *current != *actor_owner) return;
@@ -1091,6 +1142,7 @@ struct MagGameControlsAdapter::State {
         if (address(cpu.gpr[actor_register]) != actor_owner->actor) return;
         const auto delta = latch.consume(*latch_identity, site, event == Hook::BasicPitch ? cpu.fpr[1] : 1.0);
         if (!delta) return;
+        if (*delta != 0) ++look_trace.consumed;
         if (event == Hook::BasicYaw) {
             auto r = guest.reads();
             const uint64_t request = uint64_t(actor_owner->actor) + ActorYawRequest;
