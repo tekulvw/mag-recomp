@@ -133,6 +133,12 @@ bool mag::check_player_name(const std::string &name, std::string &error) {
     return ok;
 }
 
+bool mag::check_display_mode(const std::string &mode, std::string &error) {
+    if (mode == "windowed" || mode == "borderless") return true;
+    error = "The display mode must be \"windowed\" or \"borderless\".";
+    return false;
+}
+
 bool mag::parse_portable_settings(const std::string &json, PortableSettings &settings, std::string &error) {
     std::map<std::string, Value> values;
     if (!parse_object(json, values, error)) return false;
@@ -155,10 +161,12 @@ bool mag::parse_portable_settings(const std::string &json, PortableSettings &set
     if (version != values.end() && (version->second.text || version->second.number != 1)) { error = "This settings version is not supported."; return false; }
     if (!text("server_address", parsed.server_address) || !text("player_name", parsed.player_name) ||
         !port("tcp_port", parsed.tcp_port) || !port("udp_port", parsed.udp_port) ||
-        !text("ticket_file", parsed.ticket_file) || !text("portal_url", parsed.portal_url))
+        !text("ticket_file", parsed.ticket_file) || !text("portal_url", parsed.portal_url) ||
+        !text("display_mode", parsed.display_mode))
         return false;
     if (!check_server_address(parsed.server_address, error) || !check_player_name(parsed.player_name, error) ||
-        !check_ticket_file(parsed.ticket_file, error) || !mag::portal::check_portal_url(parsed.portal_url, error))
+        !check_ticket_file(parsed.ticket_file, error) || !mag::portal::check_portal_url(parsed.portal_url, error) ||
+        !check_display_mode(parsed.display_mode, error))
         return false;
     settings = parsed;
     return true;
@@ -169,6 +177,7 @@ std::string mag::format_portable_settings(const PortableSettings &s) {
            ",\n  \"tcp_port\": " + std::to_string(s.tcp_port) + ",\n  \"udp_port\": " + std::to_string(s.udp_port) +
            ",\n  \"player_name\": " + quoted(s.player_name) +
            (s.ticket_file.empty() ? std::string() : ",\n  \"ticket_file\": " + quoted(s.ticket_file)) +
-           (s.portal_url.empty() ? std::string() : ",\n  \"portal_url\": " + quoted(s.portal_url)) + "\n}\n";
+           (s.portal_url.empty() ? std::string() : ",\n  \"portal_url\": " + quoted(s.portal_url)) +
+           (s.display_mode == "windowed" ? std::string() : ",\n  \"display_mode\": " + quoted(s.display_mode)) + "\n}\n";
 }
 
