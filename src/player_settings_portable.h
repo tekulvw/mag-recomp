@@ -20,6 +20,9 @@ struct PortableSettings {
     int output_width = 1280, output_height = 720;
     int render_scale = 100;
     std::string anti_aliasing = "off";
+    // Send performance and error reports (docs/player-settings.md, "Reports"). The file holds
+    // "send_reports": false only when the player turned them off; no field means on.
+    bool send_reports = true;
 };
 // Parse a settings file. On failure returns false and an explanation in `error`.
 bool parse_portable_settings(const std::string &json, PortableSettings &settings, std::string &error);

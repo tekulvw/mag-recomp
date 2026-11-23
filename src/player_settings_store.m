@@ -1,4 +1,5 @@
 #import "player_settings_store.h"
+#include "player_settings_text.h"
 #import <CoreFoundation/CoreFoundation.h>
 #include <arpa/inet.h>
 #include <errno.h>
@@ -6,6 +7,8 @@
 #include <sys/stat.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
+#include <time.h>
 #include <unistd.h>
 
 static id invalid(NSError **error, NSString *message) {
@@ -70,8 +73,14 @@ NSDictionary *MAGSettingsValidate(id value, NSError **error) {
                                          port ? [NSString stringWithFormat:@":%ld", (long)port] : @"", path];
         } else [normalized removeObjectForKey:@"portal_url"];
     }
+    // Optional, and written only when off: send performance and error reports (no field: on).
+    id reports = normalized[@"send_reports"];
+    if (reports && (![reports isKindOfClass:NSNumber.class] || CFGetTypeID((__bridge CFTypeRef)reports) != CFBooleanGetTypeID()))
+        return invalid(error, @"Setting \"send_reports\" must be true or false.");
+    if (reports && [reports boolValue]) [normalized removeObjectForKey:@"send_reports"];
+    else if (reports) normalized[@"send_reports"] = @NO;
     d = normalized;
-    if (d.count != MAGSettingsDefaults().count + (d[@"ticket_file"] ? 1 : 0) + (d[@"portal_url"] ? 1 : 0))
+    if (d.count != MAGSettingsDefaults().count + (d[@"ticket_file"] ? 1 : 0) + (d[@"portal_url"] ? 1 : 0) + (d[@"send_reports"] ? 1 : 0))
         return invalid(error, @"Settings contain missing or unsupported fields.");
     if (![d[@"server_address"] isKindOfClass:NSString.class]) return invalid(error, @"Enter a server hostname or IPv4 address.");
     NSString *host = [d[@"server_address"] stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet].lowercaseString;
@@ -171,4 +180,26 @@ BOOL MAGSettingsSave(NSString *path, NSDictionary *settings, NSError **error) {
     if (ok && rename(name,path.fileSystemRepresentation)) ok=NO;
     if (!ok) { unlink(name); invalid(error,@"Settings could not be saved. Your previous settings were kept."); }
     free(name); return ok;
+}
+
+NSString *MAGReportRequestBlocker(BOOL linked) {
+    const char *path = getenv("MAG_REPORT_REQUEST");
+    if (!path || !*path) return @MAG_SETTINGS_REPORT_UNAVAILABLE;
+    return linked ? nil : @MAG_SETTINGS_REPORT_NEEDS_LINK;
+}
+
+BOOL MAGReportRequestWrite(NSError **error) {
+    const char *path = getenv("MAG_REPORT_REQUEST");
+    if (!path || !*path) { invalid(error, @MAG_SETTINGS_REPORT_UNAVAILABLE); return NO; }
+    struct stat st;
+    if (!lstat(path, &st) && S_ISLNK(st.st_mode)) unlink(path);  // never follow a planted link
+    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW | O_CLOEXEC, 0600);
+    if (fd < 0) { invalid(error, @MAG_SETTINGS_REPORT_FAILED); return NO; }
+    fchmod(fd, 0600);
+    char line[64];
+    int n = snprintf(line, sizeof line, "{\"requested_at\":%lld}\n", (long long)time(NULL));
+    BOOL ok = n > 0 && write(fd, line, (size_t)n) == n;
+    if (close(fd)) ok = NO;
+    if (!ok) invalid(error, @MAG_SETTINGS_REPORT_FAILED);
+    return ok;
 }

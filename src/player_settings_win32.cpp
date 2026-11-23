@@ -1,7 +1,8 @@
 // The settings window on Windows (player_settings_window.h): the macOS MAG Settings panel's pages,
 // fields, wording and behaviour (player_settings_text.h) in standard Win32 controls, in one window
 // of the settings process.
-// - General: Connection (game server, player name, Account, advanced ports) and Graphics. Apply
+// - General: Connection (game server, player name, Account, advanced ports), Graphics and Reports
+//   (send_reports and Send report, src/player_report_request.h). Apply
 //   saves General; a display change is previewed on the game window (or, in setup, a preview
 //   window) and returns after 15 seconds unless the player keeps it.
 // - Controls: Keyboard & Mouse and Controller, two bindings per action, capture (Escape, focus
@@ -11,6 +12,7 @@
 #ifndef _WIN32_WINNT
 #define _WIN32_WINNT 0x0A00
 #endif
+#include "player_report_request.h"
 #include "player_settings_account.h"
 #include "player_settings_text.h"
 #include "player_settings_window.h"
@@ -39,9 +41,9 @@ void (*settings_window_open_page)(const std::string& url) = nullptr;
 namespace {
 enum : int {
     IdGeneral = 100, IdControls, IdServer, IdName, IdAccount, IdAdvanced, IdTcp, IdUdp,
-    IdDisplay, IdOutput, IdRendering, IdAntiAliasing,
+    IdDisplay, IdOutput, IdRendering, IdAntiAliasing, IdSendReports, IdReportNow,
     IdKeyboardMouse = 200, IdController, IdMode, IdScope, IdSensitivity, IdInvert, IdReset, IdRows, IdHint,
-    IdError = 300, IdRevert, IdKeep, IdCancel, IdApply, IdPlay, IdStatus, IdAccountStatus,
+    IdError = 300, IdRevert, IdKeep, IdCancel, IdApply, IdPlay, IdStatus, IdAccountStatus, IdReportStatus,
     IdBinding = 1000,  // + row * 4 + slot * 2, and + 1 for its clear button
 };
 constexpr UINT_PTR CaptureTimer = 1, ConfirmTimer = 2;
@@ -171,7 +173,9 @@ struct Window {
     HWND account_button = nullptr, account_status = nullptr, advanced_link = nullptr;
     HWND tcp = nullptr, udp = nullptr, tcp_label = nullptr, udp_label = nullptr, connection_note = nullptr, graphics_note = nullptr;
     HWND display = nullptr, output = nullptr, rendering = nullptr, anti_aliasing = nullptr;
-    std::vector<Row> connection_rows, graphics_rows;
+    HWND heading_reports = nullptr, send_reports = nullptr, report_button = nullptr, report_status = nullptr;
+    std::string report_requested;  // after Send report: requested, or why it failed
+    std::vector<Row> connection_rows, graphics_rows, reports_rows;
     std::vector<HWND> general;  // everything on General, for showing the page
     // Controls.
     HWND device[2]{}, mode_label = nullptr, mode = nullptr, scope_label = nullptr, scope = nullptr, assist = nullptr;
@@ -296,6 +300,7 @@ void read_general() {
     f.output = int(SendMessageW(s->output, CB_GETCURSEL, 0, 0));
     f.render_scale = int(SendMessageW(s->rendering, CB_GETCURSEL, 0, 0));
     f.anti_aliasing = int(SendMessageW(s->anti_aliasing, CB_GETCURSEL, 0, 0));
+    f.send_reports = SendMessageW(s->send_reports, BM_GETCHECK, 0, 0) == BST_CHECKED;
 }
 bool filling = false;  // EN_CHANGE from filling the fields is not an edit
 void fill_general() {
@@ -310,6 +315,7 @@ void fill_general() {
     SendMessageW(s->output, CB_SETCURSEL, f.output, 0);
     SendMessageW(s->rendering, CB_SETCURSEL, f.render_scale, 0);
     SendMessageW(s->anti_aliasing, CB_SETCURSEL, f.anti_aliasing, 0);
+    SendMessageW(s->send_reports, BM_SETCHECK, f.send_reports ? BST_CHECKED : BST_UNCHECKED, 0);
 }
 
 // The Account row: the link to the portal of the server being edited, or why there is none.
@@ -322,6 +328,21 @@ void refresh_account() {
     set_text(s->account_status, row.status);
 }
 
+// The Send report row: usable with a request path (a packaged launch) and a linked account.
+void refresh_report() {
+    const char* blocker = report_request_blocker(s->account->linked_name(account_portal()).has_value());
+    EnableWindow(s->report_button, !blocker && !s->pending);
+    set_text(s->report_status, !s->report_requested.empty() ? s->report_requested
+                               : blocker ? blocker : MAG_SETTINGS_SEND_REPORT_HINT);
+}
+void request_report_now() {
+    if (report_request_blocker(s->account->linked_name(account_portal()).has_value())) return;
+    std::string error;
+    s->report_requested = request_report(error) ? MAG_SETTINGS_REPORT_REQUESTED : MAG_SETTINGS_REPORT_FAILED;
+    refresh_report();
+    layout();
+}
+
 // After any edit (the macOS panel's changed:): Apply, the status line and the Account row.
 void changed() {
     if (s->pending) return;
@@ -331,6 +352,7 @@ void changed() {
     EnableWindow(s->output, !s->form->borderless);
     set_text(s->status, dirty ? MAG_SETTINGS_STATUS_DIRTY : MAG_SETTINGS_STATUS_CLEAN);
     refresh_account();
+    refresh_report();
 }
 
 // ---- Layout: top to bottom, as the macOS stack views place it (all in points) ----
@@ -402,7 +424,11 @@ void layout() {
         y += spacing;
         const int graphics = text_height(s->graphics_note, width);
         place(s->graphics_note, left, y, width, graphics);
-        y += graphics + spacing;
+        y += graphics + spacing + 6;
+        place(s->heading_reports, left, y, width, 20);
+        y += 20 + spacing;
+        layout_group(y, s->reports_rows, false);
+        y += spacing;
     }
     const bool controls = !general;
     for (HWND h : {s->device[0], s->device[1], s->mode_label, s->mode, s->assist, s->column[0], s->column[1], s->column[2], s->rows,
@@ -856,7 +882,7 @@ bool fits(HWND window, const PortableSettings& settings) {
 
 void set_editing_enabled(bool enabled) {
     for (HWND h : {s->segment[0], s->segment[1], s->server, s->name, s->tcp, s->udp, s->display, s->output, s->advanced_link,
-                   s->account_button, s->cancel, s->play})
+                   s->account_button, s->send_reports, s->report_button, s->cancel, s->play})
         EnableWindow(h, enabled);
     EnableWindow(s->apply, false);
     if (enabled) {
@@ -1080,6 +1106,8 @@ void command(int id, int code) {
     case IdDisplay: case IdOutput: case IdRendering: case IdAntiAliasing:
         if (code == CBN_SELCHANGE) changed();
         return;
+    case IdSendReports: changed(); return;
+    case IdReportNow: request_report_now(); return;
     case IdKeyboardMouse:
     case IdController:
         end_capture(nullptr);
@@ -1302,7 +1330,15 @@ void build() {
     EnableWindow(w.rendering, scale_supported());
     EnableWindow(w.anti_aliasing, scale_supported());
     w.graphics_note = small_label(scale_supported() ? MAG_SETTINGS_GRAPHICS_NOTE : MAG_SETTINGS_GRAPHICS_NOTE_NO_SCALE);
-    w.general.insert(w.general.end(), {w.heading_connection, w.advanced_link, w.connection_note, w.heading_graphics, w.graphics_note});
+    // General: Reports.
+    w.heading_reports = label(MAG_SETTINGS_HEADING_REPORTS, s->heading);
+    heading_text.push_back(w.heading_reports);
+    w.send_reports = button(MAG_SETTINGS_SEND_REPORTS_ON, IdSendReports, BS_AUTOCHECKBOX);
+    row(w.reports_rows, MAG_SETTINGS_SEND_REPORTS, MAG_SETTINGS_SEND_REPORTS_HINT, w.send_reports);
+    w.report_button = button(MAG_SETTINGS_SEND_REPORT_NOW, IdReportNow);
+    w.report_status = row(w.reports_rows, MAG_SETTINGS_SEND_REPORT_NOW, " ", w.report_button, IdReportStatus).hint;
+    w.general.insert(w.general.end(), {w.heading_connection, w.advanced_link, w.connection_note, w.heading_graphics, w.graphics_note,
+                                       w.heading_reports});
     // Controls.
     w.device[0] = button(MAG_CONTROLS_DEVICE_KBM, IdKeyboardMouse, segment | WS_GROUP);
     w.device[1] = button(MAG_CONTROLS_DEVICE_CONTROLLER, IdController, segment);

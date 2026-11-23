@@ -15,7 +15,8 @@ from .pipeline import _exclusive_lock, _write_json, run_command
 from .safety import Cancellation
 
 SOURCE_DIRS = ('src', 'tools', 'cmake')
-SOURCE_FILES = ('CMakeLists.txt', 'LICENSE', 'LICENSE.ps3recomp', 'NOTICE.md', 'rust-toolchain.toml')
+SOURCE_FILES = ('CMakeLists.txt', 'LICENSE', 'LICENSE.ps3recomp', 'NOTICE.md', 'rust-toolchain.toml',
+                '.release-please-manifest.json')  # the version, for the supervisor's reports
 EXCLUDED = {'.git', '__pycache__', 'target', 'node_modules', '.venv'}
 
 

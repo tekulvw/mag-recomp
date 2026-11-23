@@ -78,11 +78,13 @@ def _resolve_dependency(name, source, executable, inherited, token):
 
 
 # A small Foundation supervisor avoids any Python/cache dependency at game launch.
-# The contract mirrors src/retail_handoff.cpp and tools/handoff.py exactly.
+# The contract mirrors src/retail_handoff.cpp and tools/handoff.py exactly. It is Objective-C++ so
+# it can end each session with the shared performance and error reports (src/player_reports.h).
 _LAUNCHER = r'''
 #import <Foundation/Foundation.h>
 #import <AppKit/AppKit.h>
 #import <CommonCrypto/CommonDigest.h>
+#include "player_reports.h"
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -98,7 +100,7 @@ static void check(NSString *p, NSString *sha) { if(![hashData(readFile(p,0)) isE
 static NSDictionary *json(NSString *p,NSUInteger limit) { id o=[NSJSONSerialization JSONObjectWithData:readFile(p,limit) options:0 error:nil];if(![o isKindOfClass:NSDictionary.class])fail(@"Invalid local manifest");return o; }
 static uint64_t be(const unsigned char *p,int n) { uint64_t x=0;while(n--)x=(x<<8)|*p++;return x; }
 static NSString *keyHash(NSString *p) {
- NSData *d=readFile(p,0);const unsigned char *b=d.bytes;
+ NSData *d=readFile(p,0);const unsigned char *b=(const unsigned char *)d.bytes;
  if(d.length<64||memcmp(b,"\177ELF\2\2\1",7))fail(@"Invalid launcher ELF");
  uint64_t off=be(b+32,8),size=be(b+54,2),count=be(b+56,2);
  if(size!=56||off>d.length||count>(d.length-off)/size)fail(@"Invalid ELF program headers");
@@ -111,10 +113,26 @@ static int run(NSString *binary,NSString *elf,NSString *cwd,NSDictionary *env,NS
  NSFileHandle *f=[NSFileHandle fileHandleForWritingAtPath:log];NSTask *t=[NSTask new];t.executableURL=[NSURL fileURLWithPath:binary];t.arguments=@[elf];t.currentDirectoryURL=[NSURL fileURLWithPath:cwd];t.environment=env;t.standardOutput=f;t.standardError=f;
  NSError *e=nil;if(![t launchAndReturnError:&e])fail(e.localizedDescription);[t waitUntilExit];[f closeFile];return t.terminationReason==NSTaskTerminationReasonExit?t.terminationStatus:128+t.terminationStatus;
 }
+// The player's settings file. A caller's absolute MAG_PLAYER_SETTINGS_PATH (automation, tests)
+// replaces the one in the player's Library, as XDG_CONFIG_HOME and APPDATA do elsewhere.
+static NSString *settingsFile(void) {
+ const char *chosen=getenv("MAG_PLAYER_SETTINGS_PATH");
+ if(chosen&&*chosen=='/')return [NSString stringWithUTF8String:chosen];
+ return [NSHomeDirectory() stringByAppendingPathComponent:@"Library/Application Support/MAG/settings.json"];
+}
+// This launch's performance and error report session, ended when main returns (src/player_reports.h).
+struct ReportSession {
+ mag::reports::Session session;std::filesystem::path self;bool active=false;
+ ~ReportSession(){if(active)mag::reports::end_session(session,self);}
+};
 int main(int argc,char **argv) { @autoreleasepool {
  NSString *app=NSBundle.mainBundle.bundlePath.stringByResolvingSymlinksInPath;
  NSString *root=app.stringByDeletingLastPathComponent;
  NSString *ownedOverlay=nil;
+ ReportSession report;
+ // The detached report sender a session starts: MAG --send-reports <launch log folder>.
+ if(argc==3&&!strcmp(argv[1],"--send-reports"))
+  return mag::reports::run_sender(std::filesystem::path(root.fileSystemRepresentation)/"home/reports",settingsFile().fileSystemRepresentation,argv[2]);
  @try {
  NSDictionary *m=json([app stringByAppendingPathComponent:@"Contents/Resources/runtime.json"],2097152);
  NSString *(^inApp)(NSString *)=^NSString *(NSString *p){return [app stringByAppendingPathComponent:p].stringByStandardizingPath;};
@@ -148,7 +166,19 @@ int main(int argc,char **argv) { @autoreleasepool {
  char *created=mkdtemp(overlayTemplate);
  if(!created){free(overlayTemplate);fail(@"Cannot create the private launch settings folder");}
  ownedOverlay=[NSString stringWithUTF8String:created];free(overlayTemplate);
- env[@"MAG_PLAYER_SETTINGS_PATH"]=[NSHomeDirectory() stringByAppendingPathComponent:@"Library/Application Support/MAG/settings.json"];
+ env[@"MAG_PLAYER_SETTINGS_PATH"]=settingsFile();
+ // The session summary (src/mag_session_monitor.h) and the settings panel's Send report request go
+ // to this launch's log folder; the report is decided when the session ends.
+ env[@"MAG_SESSION_DIR"]=logs;env[@"MAG_REPORT_REQUEST"]=[logs stringByAppendingPathComponent:@"report-requested"];
+ {mag::reports::Session &s=report.session;s.platform="macos";
+  id version=m[@"version"];s.version=[version isKindOfClass:NSString.class]?[version UTF8String]:"unknown";
+  s.logs=logs.fileSystemRepresentation;s.settings=settingsFile().fileSystemRepresentation;
+  s.queue=std::filesystem::path(root.fileSystemRepresentation)/"home/reports";
+  s.receipts=inApp(@"Contents/Resources/package-receipts").fileSystemRepresentation;s.backend="Metal";
+  s.redaction.folders={{root.UTF8String,"<MAG folder>"}};s.redaction.homes={NSHomeDirectory().UTF8String};
+  if(const char *h=getenv("HOME");h&&*h=='/')s.redaction.homes.push_back(h);
+  report.self=NSBundle.mainBundle.executablePath.fileSystemRepresentation;report.active=true;
+  mag::reports::start_session(s,report.self);}
  env[@"MAG_PLAYER_OVERLAY_ROOT"]=ownedOverlay;env[@"MAG_PLAYER_SETUP"]=@"1";
  // Setup opens at every launch. --no-prompt, or MAG_SKIP_SETUP=1 from the caller, skips it (automation);
  // --settings (or Option, now redundant) still forces it.
@@ -157,6 +187,7 @@ int main(int argc,char **argv) { @autoreleasepool {
  const char *callerSkip=getenv("MAG_SKIP_SETUP");if(callerSkip&&*callerSkip&&strcmp(callerSkip,"0"))skipSetup=YES;
  if(showSettings)env[@"MAG_PLAYER_SHOW_SETTINGS"]=@"1";else if(skipSetup)env[@"MAG_SKIP_SETUP"]=@"1";
  int result=run(launcher,launcherElf,logs,env,[logs stringByAppendingPathComponent:@"launcher.log"]);
+ report.session.launcher_exit=result;
  if(result!=90)return result;
  NSDictionary *expected=@{@"version":@1,@"token":token,@"guest_path":@"/dev_bdvd/PS3_GAME/USRDIR/bin/mage_g.self",@"kind":@"mage_g"};
  if(![json(request,4096) isEqual:expected])fail(@"Engine handoff request identity mismatch");
@@ -164,8 +195,10 @@ int main(int argc,char **argv) { @autoreleasepool {
  for(NSString *k in env.allKeys.copy)if([k hasPrefix:@"MAG_HANDOFF_"]||[k hasPrefix:@"MAG_ENGINE_"])[env removeObjectForKey:k];
  [env removeObjectForKey:@"MAG_PLAYER_SETUP"];[env removeObjectForKey:@"MAG_PLAYER_SHOW_SETTINGS"];[env removeObjectForKey:@"MAG_SKIP_SETUP"];
  env[@"PS3_BOOT_PATH"]=@"/dev_bdvd/PS3_GAME/USRDIR/bin/mage_g.self";
- return run(engine,engineElf,logs,env,[logs stringByAppendingPathComponent:@"engine.log"]);
+ report.session.engine_exit=run(engine,engineElf,logs,env,[logs stringByAppendingPathComponent:@"engine.log"]);
+ return (int)report.session.engine_exit;
  } @catch(NSException *e) {
+ if(e.reason)report.session.launch_error=e.reason.UTF8String;
  NSString *message=[NSString stringWithFormat:@"MAG could not start: %@\n",e.reason];
  [message writeToFile:[root stringByAppendingPathComponent:@"launch-error.log"] atomically:YES encoding:NSUTF8StringEncoding error:nil];
  fprintf(stderr,"%s",message.UTF8String);return 1;
@@ -174,6 +207,13 @@ int main(int argc,char **argv) { @autoreleasepool {
  }
 } }
 '''
+
+
+# Sources the supervisor compiles with it: the reports (src/player_reports.h), their gzip, and the
+# portal transport that sends them with the linked account's token.
+SUPERVISOR_SOURCES = ('player_reports.h', 'player_reports.cpp', 'player_gzip.h', 'player_gzip.cpp', 'player_portal.h',
+                      'player_portal.cpp', 'player_portal_macos.h', 'player_portal_macos.mm', 'player_settings_macos.h',
+                      'player_settings_store.h')
 
 
 # The runtime's movie playback switches, as tools/boot.py applies them (MOVIE_PLAYBACK_ENV there).
@@ -187,6 +227,18 @@ def playback_environment(records):
     """The playback switches when either image's source receipt records the movie decoder."""
     decoder = [records[role].get('movie_playback') is True for role in ('launcher', 'engine')]
     return dict(MOVIE_PLAYBACK_ENV) if any(decoder) else {}
+
+
+def product_version(workspace):
+    """The release version the workspace's source was cut from (release-please's manifest), for
+    the reports the supervisor sends; "unknown" when the source carries none."""
+    try:
+        version = json.loads(contained(workspace, '.release-please-manifest.json').read_text(encoding='utf-8')).get('.')
+    except (OSError, ValueError, InstallerError, AttributeError):
+        return 'unknown'
+    if isinstance(version, str) and re.fullmatch(r'[0-9A-Za-z.+-]{1,64}', version):
+        return version
+    return 'unknown'
 
 
 # The game files' folder inside the MAG folder, and where the build workspace keeps them.
@@ -312,7 +364,7 @@ def package(config, workspace, destination, token=None, events=None):
                 if not rpath.startswith('@'):
                     _run_tool(['/usr/bin/install_name_tool', '-delete_rpath', rpath, str(target)], token)
             _run_tool(['/usr/bin/codesign', '--force', '--sign', '-', str(target)], token)
-        runtime = {'schema_version':2,'game':os.path.relpath(game,destination),
+        runtime = {'schema_version':2,'game':os.path.relpath(game,destination),'version':product_version(workspace),
                    'launcher':'Contents/MacOS/MagRecomp','engine':'Contents/MacOS/MagEngine',
                    'engine_self_sha256':manifest['images']['mage_g']['source_sha256'],
                    'signing':'local-ad-hoc','adjustments':adjustments,
@@ -323,11 +375,18 @@ def package(config, workspace, destination, token=None, events=None):
             record = package_receipt(records[role], macos/name, originals[role][1], token)
             (package_receipts/(role+'.json')).write_text(json.dumps(record,indent=2)+'\n')
         (resources/'runtime.json').write_text(json.dumps(runtime,indent=2)+'\n')
-        source=resources/'launcher.m'; source.write_text(_LAUNCHER)
+        # The supervisor and the report, portal and gzip sources it builds with, from the
+        # workspace's own source (removed again: the app carries only the binary).
+        scratch=resources/'supervisor-build'; scratch.mkdir()
+        source=scratch/'launcher.mm'; source.write_text(_LAUNCHER)
+        for name in SUPERVISOR_SOURCES:
+            shutil.copyfile(_ordinary(contained(workspace,'src/'+name)),scratch/name)
         supervisor=macos/'MAG'
-        _run_tool(['/usr/bin/xcrun','clang','-x','objective-c','-fobjc-arc','-framework','Foundation',
-                   '-framework','AppKit',str(source),'-o',str(supervisor)],token)
-        _ordinary(supervisor).chmod(0o755); source.unlink()
+        _run_tool(['/usr/bin/xcrun','clang++','-std=c++17','-O2','-fobjc-arc','-I'+str(scratch),
+                   '-x','objective-c++',str(source),*[str(scratch/n) for n in SUPERVISOR_SOURCES if n.endswith('.mm')],
+                   '-x','c++',*[str(scratch/n) for n in SUPERVISOR_SOURCES if n.endswith('.cpp')],
+                   '-framework','Foundation','-framework','AppKit','-o',str(supervisor)],token)
+        _ordinary(supervisor).chmod(0o755); shutil.rmtree(scratch)
         with (destination/'Contents/Info.plist').open('wb') as stream:
             plistlib.dump({'CFBundleExecutable':'MAG','CFBundleName':'MAG','CFBundleDisplayName':'MAG',
                            'CFBundleIdentifier':'local.mag.native','CFBundlePackageType':'APPL',

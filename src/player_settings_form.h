@@ -30,6 +30,7 @@ struct SettingsForm {
     int output = 0;          // index into mag_settings_output_* (player_settings_text.h)
     int render_scale = 0;    // index into mag_settings_render_scales
     int anti_aliasing = 0;   // index into mag_settings_anti_aliasing_values
+    bool send_reports = true;  // the Reports checkbox (send_reports)
     // What the file holds now (ticket_file and portal_url, which the window does not edit, are
     // kept from it), and whether Apply must write it even unchanged: no file yet, or a damaged one
     // (`recovery`, which also holds Play MAG back until the player has reviewed the defaults).

@@ -23,7 +23,7 @@ class WindowsSetupTests(unittest.TestCase):
         # Every launch: the settings window with Play MAG, before the launcher and its ticket.
         gate = 'if (prompt && !server && !player && !(skip[0] && wcscmp(skip, L"0"))) {'
         self.assertIn(gate, main)
-        self.assertIn('DWORD chosen = run_settings(job, engine, logs, NULL);\n        if (chosen == 3) return 0;', main)
+        self.assertIn('DWORD chosen = run_settings(job, engine, logs, NULL);\n        if (chosen == 3) { mag_reports_end(NULL); return 0; }', main)
         self.assertLess(main.index(gate), main.index('portal_phase(settings, server, ticket, 1, logs, prompt);'))
         self.assertLess(main.index('HANDLE job = CreateJobObjectW'), main.index(gate))
         self.assertLess(main.index('check(engine, MAG_ENGINE_SHA256)'), main.index(gate))  # a verified engine only
@@ -42,7 +42,7 @@ class WindowsSetupTests(unittest.TestCase):
         self.assertIn('result != 90 && prompt', loop)
         self.assertIn('GetFileAttributesW(marker) != INVALID_FILE_ATTRIBUTES', loop)
         self.assertIn('DWORD answer = run_settings(job, engine, logs, L"--notice=player-name");', loop)
-        self.assertIn('if (answer == 3) return 0;', loop)
+        self.assertIn('if (answer == 3) { mag_reports_end(NULL); return 0; }', loop)
         # A link made in the window supplies the ticket and the account's name for the next try.
         self.assertIn('portal_phase(settings, server, ticket, 1, logs, prompt);', loop)
         # The supervisor's own name prompt is gone: one window for every choice.
@@ -88,6 +88,21 @@ class WindowsSetupTests(unittest.TestCase):
                                     capture_output=True, text=True, timeout=120)
             self.assertEqual(result.returncode, 0, result.stderr)
 
+
+    def test_session_ends_with_a_report_decision_on_every_path(self):
+        """Performance and error reports (src/player_reports_win32.h): begun once the launch folder
+        exists, ended on every way out, with the caller's MAG_REPORTS read before MAG_ variables are cleared."""
+        source = windows._SUPERVISOR
+        main = source[source.index('int WINAPI wWinMain('):]
+        self.assertLess(main.index('GetEnvironmentVariableW(L"MAG_REPORTS", reports, 8);'), main.index('clear_inherited();'))
+        self.assertLess(main.index('clear_inherited();'), main.index('set_env(L"MAG_SESSION_DIR", logs);'))
+        self.assertLess(main.index('set_env(L"MAG_SESSION_DIR", logs);'), main.index('mag_reports_begin(self, g_root, logs, settings'))
+        self.assertIn('mag_reports_end(text);', source[source.index('static void fail('):source.index('static void join(')])
+        self.assertIn('mag_reports_player_stop(); fail(message, NULL);', main)
+        self.assertIn('DWORD code = run(job, engine, engine_elf, logs, log);\n    mag_reports_engine_exit(code);\n    mag_reports_end(NULL);', main)
+        self.assertEqual(main.count('mag_reports_launcher_exit(result);'), 2)
+        # The detached sender: before any game file is checked or a launch folder is made.
+        self.assertLess(main.index('return mag_reports_send(g_root, send_logs, settings);'), main.index('check(launcher, MAG_LAUNCHER_SHA256)'))
 
     def test_link_token_reads_standard_input_and_reports_for_automation(self):
         source = windows._SUPERVISOR

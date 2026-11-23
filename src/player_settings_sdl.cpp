@@ -241,7 +241,14 @@ SettingsPanel::Layout SettingsPanel::layout() const {
                {MAG_SETTINGS_ANTI_ALIASING, MAG_SETTINGS_METAL_ONLY_HINT, "choice:aa", Kind::Choice, "", false}},
               false);
         y += 6;
-        y += words(Margin, y, MAG_SETTINGS_GRAPHICS_NOTE_NO_SCALE, 1, Content) + 10;
+        y += words(Margin, y, MAG_SETTINGS_GRAPHICS_NOTE_NO_SCALE, 1, Content) + 14;
+        y += words(Margin, y, MAG_SETTINGS_HEADING_REPORTS, 0, Content, true) + 8;
+        const char* blocker = report_blocker();
+        group({{MAG_SETTINGS_SEND_REPORTS, MAG_SETTINGS_SEND_REPORTS_HINT, "check:reports", Kind::Check, MAG_SETTINGS_SEND_REPORTS_ON, true},
+               {MAG_SETTINGS_SEND_REPORT_NOW, !report_status_.empty() ? report_status_ : blocker ? blocker : MAG_SETTINGS_SEND_REPORT_HINT,
+                "button:report", Kind::Button, MAG_SETTINGS_SEND_REPORT_NOW, !blocker}},
+              false);
+        y += 10;
     } else {
         item("segment:kbm", Kind::Segment, {Margin, y, Content / 2, 22}, MAG_CONTROLS_DEVICE_KBM, true, !controller_);
         item("segment:controller", Kind::Segment, {Margin + Content / 2, y, Content - Content / 2, 22}, MAG_CONTROLS_DEVICE_CONTROLLER, true, controller_);
@@ -373,6 +380,18 @@ bool SettingsPanel::focus(const std::string& name) {
     return true;
 }
 std::string SettingsPanel::account_status() const { return account_status_; }
+std::string SettingsPanel::report_status() const { return report_status_; }
+
+// ---- Reports: Send report asks the supervisor for a report when MAG closes ----
+const char* SettingsPanel::report_blocker() const {
+    return report_request_blocker(account_->linked_name(account_portal()).has_value());
+}
+void SettingsPanel::request_report_now() {
+    if (report_blocker()) return;
+    std::string error;
+    if (!request_report(error)) { report_status_ = MAG_SETTINGS_REPORT_FAILED; return; }
+    report_status_ = MAG_SETTINGS_REPORT_REQUESTED;
+}
 
 void SettingsPanel::ensure_visible(const Layout& l) {
     const Item* i = find(l, focus_);
@@ -651,7 +670,8 @@ void SettingsPanel::activate(const Item& item, uint64_t now_ms, int x) {
     case Kind::Slot: begin_capture(size_t(item.row), item.slot, now_ms); break;
     case Kind::Clear: clear_binding(size_t(item.row), item.slot); break;
     case Kind::Check:
-        settings_form_set_invert_y(form_, !form_.profile.mouse.invert_y);
+        if (n == "check:reports") form_.send_reports = !form_.send_reports;
+        else settings_form_set_invert_y(form_, !form_.profile.mouse.invert_y);
         changed();
         break;
     case Kind::Slider:
@@ -666,6 +686,7 @@ void SettingsPanel::activate(const Item& item, uint64_t now_ms, int x) {
         else if (n == "button:revert") revert();
         else if (n == "button:account") account_clicked();
         else if (n == "button:reset") reset_device();
+        else if (n == "button:report") request_report_now();
         break;
     case Kind::Text: break;
     }
@@ -972,7 +993,7 @@ void SettingsPanel::draw(SDL_Renderer* r, SDL_Texture* font) const {
         case Kind::Check:
             fill(r, {b.x, b.y + 3, 10, 10}, GroupFill);
             outline(r, {b.x, b.y + 3, 10, 10}, focus ? Accent : Secondary);
-            if (form_.profile.mouse.invert_y) fill(r, {b.x + 3, b.y + 6, 4, 4}, Accent);
+            if (item.name == "check:reports" ? form_.send_reports : form_.profile.mouse.invert_y) fill(r, {b.x + 3, b.y + 6, 4, 4}, Accent);
             text(r, font, b.x + 16, b.y + 4, item.text, ink);
             break;
         case Kind::Button:
@@ -1133,8 +1154,9 @@ SettingsWindowResult settings_window_run(SettingsForm& form, const std::filesyst
     // A whole-number scale keeps the 8x8 glyphs sharp: twice where the screen holds the tallest page.
     SDL_Rect usable{0, 0, 1280, 720};
     SDL_GetDisplayUsableBounds(0, &usable);
-    const int scale = usable.w >= 2 * SettingsPanel::width && usable.h >= 2 * 560 ? 2 : 1;
+    // The General page (with Reports) is usually the tallest; the Controls page needs about 560.
     int height = panel.height();
+    const int scale = usable.w >= 2 * SettingsPanel::width && usable.h >= 2 * std::max(560, height) ? 2 : 1;
     SDL_Window* window = SDL_CreateWindow(MAG_SETTINGS_TITLE, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
                                           SettingsPanel::width * scale, height * scale, SDL_WINDOW_SHOWN);
     SDL_Renderer* renderer = window ? SDL_CreateRenderer(window, -1, 0) : nullptr;

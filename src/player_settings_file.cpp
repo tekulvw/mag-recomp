@@ -10,9 +10,9 @@
 #include <string>
 
 namespace {
-struct Value { bool text = false; std::string string; long long number = 0; };
+struct Value { bool text = false, boolean = false; std::string string; long long number = 0; };
 
-// A flat JSON object whose values are strings or integers: all the settings file holds.
+// A flat JSON object whose values are strings, integers or true/false: all the settings file holds.
 bool parse_object(const std::string &s, std::map<std::string, Value> &out, std::string &error) {
     size_t i = 0;
     auto space = [&] { while (i < s.size() && std::isspace((unsigned char)s[i])) ++i; };
@@ -68,7 +68,9 @@ bool parse_object(const std::string &s, std::map<std::string, Value> &out, std::
         if (i >= s.size() || s[i++] != ':') { error = "Malformed settings."; return false; }
         space(); Value value;
         if (i < s.size() && s[i] == '"') { value.text = true; if (!string(value.string)) { error = "Malformed settings text."; return false; } }
-        else {
+        else if (s.compare(i, 4, "true") == 0 || s.compare(i, 5, "false") == 0) {
+            value.boolean = true; value.number = s[i] == 't'; i += s[i] == 't' ? 4 : 5;
+        } else {
             size_t start = i;
             if (i < s.size() && s[i] == '-') ++i;
             while (i < s.size() && std::isdigit((unsigned char)s[i])) ++i;
@@ -173,7 +175,7 @@ bool mag::parse_portable_settings(const std::string &json, PortableSettings &set
     auto port = [&](const char *key, int &target) {
         auto it = values.find(key);
         if (it == values.end()) return true;
-        if (it->second.text || it->second.number < 0 || it->second.number > 65535) {
+        if (it->second.text || it->second.boolean || it->second.number < 0 || it->second.number > 65535) {
             error = "Ports must be between 1 and 65535, or 0 for the game default."; return false;
         }
         target = int(it->second.number); return true;
@@ -181,19 +183,25 @@ bool mag::parse_portable_settings(const std::string &json, PortableSettings &set
     auto number = [&](const char *key, int &target) {
         auto it = values.find(key);
         if (it == values.end()) return true;
-        if (it->second.text || it->second.number < 0 || it->second.number > 100000) {
+        if (it->second.text || it->second.boolean || it->second.number < 0 || it->second.number > 100000) {
             error = std::string("Setting \"") + key + "\" must be a whole number."; return false;
         }
         target = int(it->second.number); return true;
     };
+    auto flag = [&](const char *key, bool &target) {
+        auto it = values.find(key);
+        if (it == values.end()) return true;
+        if (!it->second.boolean) { error = std::string("Setting \"") + key + "\" must be true or false."; return false; }
+        target = it->second.number != 0; return true;
+    };
     auto version = values.find("schema_version");
-    if (version != values.end() && (version->second.text || version->second.number != 1)) { error = "This settings version is not supported."; return false; }
+    if (version != values.end() && (version->second.text || version->second.boolean || version->second.number != 1)) { error = "This settings version is not supported."; return false; }
     if (!text("server_address", parsed.server_address) || !text("player_name", parsed.player_name) ||
         !port("tcp_port", parsed.tcp_port) || !port("udp_port", parsed.udp_port) ||
         !text("ticket_file", parsed.ticket_file) || !text("portal_url", parsed.portal_url) ||
         !text("display_mode", parsed.display_mode) || !number("output_width", parsed.output_width) ||
         !number("output_height", parsed.output_height) || !number("render_scale", parsed.render_scale) ||
-        !text("anti_aliasing", parsed.anti_aliasing))
+        !text("anti_aliasing", parsed.anti_aliasing) || !flag("send_reports", parsed.send_reports))
         return false;
     if (!check_server_address(parsed.server_address, error) || !check_player_name(parsed.player_name, error) ||
         !check_ticket_file(parsed.ticket_file, error) || !mag::portal::check_portal_url(parsed.portal_url, error) ||
@@ -214,6 +222,7 @@ std::string mag::format_portable_settings(const PortableSettings &s) {
            (s.output_width == 1280 && s.output_height == 720 ? std::string()
                 : ",\n  \"output_width\": " + std::to_string(s.output_width) + ",\n  \"output_height\": " + std::to_string(s.output_height)) +
            (s.render_scale == 100 ? std::string() : ",\n  \"render_scale\": " + std::to_string(s.render_scale)) +
-           (s.anti_aliasing == "off" ? std::string() : ",\n  \"anti_aliasing\": " + quoted(s.anti_aliasing)) + "\n}\n";
+           (s.anti_aliasing == "off" ? std::string() : ",\n  \"anti_aliasing\": " + quoted(s.anti_aliasing)) +
+           (s.send_reports ? std::string() : ",\n  \"send_reports\": false") + "\n}\n";
 }
 

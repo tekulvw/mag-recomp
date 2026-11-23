@@ -37,14 +37,21 @@ _SUPERVISOR = r'''
 #include <thread>
 #include <unistd.h>
 #include "player_portal.h"
+#include "player_reports.h"
 #include "player_settings_portable.h"
 #include "supervisor_config.h"
 #ifndef MAG_RUNTIME_DEFAULTS  // a config written before packaged defaults existed: none
 #define MAG_RUNTIME_DEFAULTS {}
 #endif
+#ifndef MAG_VERSION
+#define MAG_VERSION "unknown"
+#endif
 namespace fs=std::filesystem;
 static fs::path root;
 static volatile sig_atomic_t child=0;
+// Performance and error reports (src/player_reports.h): this launch's session, ended once.
+static mag::reports::Session report;static bool reporting=false;static fs::path self_path;
+static void end_report(){if(reporting){reporting=false;mag::reports::end_session(report,self_path);}}
 static void interrupted(int sig) { if(child>0) kill(child,sig); }
 static void fail(const std::string& message) { throw std::runtime_error(message); }
 static std::string read_file(const fs::path& p,size_t limit=0) {
@@ -221,6 +228,8 @@ int main(int argc,char** argv) {
   if(a=="--help"||a=="-h"){std::cout<<usage<<"\n";return 0;}
   if(a=="--no-prompt"){prompt=false;continue;}
   if(a=="--link"||a=="--unlink"||a=="--link-token"){account=a;continue;}
+  // The detached report sender this supervisor starts (src/player_reports.h): MAG --send-reports <launch log folder>.
+  if(a=="--send-reports"&&i+1<argc){account=a;choices["send_reports_logs"]=argv[++i];continue;}
   std::string key=a.rfind("--server",0)==0?"MAG_PLAYER_SET_SERVER":a.rfind("--name",0)==0?"MAG_PLAYER_SET_NAME":a.rfind("--portal-url",0)==0?"portal_url":"";
   if(key.empty())fail(std::string(usage)+(a.rfind("-",0)==0?" (unknown option "+a+")":" (unexpected argument; a device token goes on standard input)"));
   auto eq=a.find('=');if(eq!=std::string::npos)choices[key]=a.substr(eq+1);else if(i+1<argc&&(a=="--server"||a=="--name"||a=="--portal-url"))choices[key]=argv[++i];else fail(usage);}
@@ -238,7 +247,8 @@ int main(int argc,char** argv) {
  if(account=="--link-token")return link_token(link_file,settings,choices);
  char self[65536];auto n=readlink("/proc/self/exe",self,sizeof self-1);if(n<=0||n==(ssize_t)sizeof self-1)fail("Cannot locate MAG executable");self[n]=0;
  // The game files are in the MAG folder, beside the folder that holds this executable.
- fs::path app=fs::path(self).parent_path();root=app.parent_path();auto vfs=(app/MAG_GAME_ROOT).lexically_normal();
+ fs::path app=fs::path(self).parent_path();root=app.parent_path();self_path=self;
+ if(account=="--send-reports")return mag::reports::run_sender(root/"home/reports",settings,choices["send_reports_logs"]);auto vfs=(app/MAG_GAME_ROOT).lexically_normal();
  {std::error_code none;if(!fs::is_directory(vfs/"PS3_GAME",none))fail("The game files are missing. Keep the game folder beside the folder that holds MAG: "+(vfs/"PS3_GAME").string());}
  auto launcher=app/"bin/MagRecomp",engine=app/"bin/MagEngine",le=vfs/"PS3_GAME/USRDIR/EBOOT.elf",ee=vfs/"PS3_GAME/USRDIR/bin/mage_g.elf",es=vfs/"PS3_GAME/USRDIR/bin/mage_g.self";
  check(launcher,MAG_LAUNCHER_SHA256);check(engine,MAG_ENGINE_SHA256);check(le,MAG_LAUNCHER_ELF_SHA256);check(ee,MAG_ENGINE_ELF_SHA256);check(es,MAG_ENGINE_SELF_SHA256);auto key=key_hash(le);
@@ -259,6 +269,13 @@ int main(int argc,char** argv) {
  for(auto name:{"XMODIFIERS","SDL_IM_MODULE","XDG_SESSION_TYPE","IBUS_ADDRESS"})if(auto value=getenv(name);value&&*value)env[name]=value;
  if(!env.count("IBUS_ADDRESS"))if(auto address=ibus_address();!address.empty())env["IBUS_ADDRESS"]=address;
  const fs::path ticket=root/"home/player/portal-ticket.bin";
+ // The session summary (src/mag_session_monitor.h) and the settings window's Send report request
+ // go to this launch's log folder; the report is decided when the session ends.
+ env["MAG_SESSION_DIR"]=logs.string();env["MAG_REPORT_REQUEST"]=(logs/"report-requested").string();
+ report.platform="linux";report.version=MAG_VERSION;report.logs=logs;report.settings=settings;report.queue=root/"home/reports";
+ report.receipts=app/"resources/package-receipts";report.backend="Vulkan";report.redaction.folders={{root.string(),"<MAG folder>"}};
+ if(const char* h=getenv("HOME");h&&*h=='/')report.redaction.homes.push_back(h);
+ reporting=true;mag::reports::start_session(report,self_path);
  // Setup at every launch: the settings window, filled with the saved settings, so Play MAG is one
  // click. Command-line choices, --no-prompt, MAG_SKIP_SETUP and a session without a desktop go
  // straight in.
@@ -268,28 +285,28 @@ int main(int argc,char** argv) {
  signal(SIGINT,interrupted);signal(SIGTERM,interrupted);signal(SIGHUP,interrupted);
  if(interactive&&choices.empty()){
   int chosen=run_settings(engine,logs,env,nullptr);
-  if(chosen==3)return 0;  // Cancel: the player chose not to play
+  if(chosen==3){end_report();return 0;}  // Cancel: the player chose not to play
   if(chosen)std::cerr<<"The settings window could not open; starting with the saved settings.\n";
  }
  auto launch_settings=player_settings(settings,choices,settings_usable);
  portal_ticket(env,link_file,ticket,launch_settings,true);
- int result=run(launcher,le,logs,env,"launcher.log");
+ int result=run(launcher,le,logs,env,"launcher.log");report.launcher_exit=result;
  // A server needs a player name. When the game reports none, the settings window asks for it (or
  // for the account link, which supplies it), then the launcher starts again.
  {std::error_code none;const auto marker=root/"home/player/needs-player-name";
   for(int attempt=2;result!=90&&interactive&&attempt<=4&&fs::exists(fs::symlink_status(marker,none));attempt++){
    int answer=run_settings(engine,logs,env,"--notice=player-name");
-   if(answer==3)return 0;
+   if(answer==3){end_report();return 0;}
    if(answer)break;  // no window: the launch message below explains
    fs::remove(marker,none);fs::remove(root/"home/player/launch-message.txt",none);
    portal_ticket(env,link_file,ticket,player_settings(settings,choices,settings_usable),true);  // linked meanwhile
-   result=run(launcher,le,logs,env,("launcher-"+std::to_string(attempt)+".log").c_str());
+   result=run(launcher,le,logs,env,("launcher-"+std::to_string(attempt)+".log").c_str());report.launcher_exit=result;
   }}
  if(result!=90){
   // A launch the player must correct (such as choosing a name) explains itself.
   std::error_code none;auto note=root/"home/player/launch-message.txt";
-  if(fs::is_regular_file(fs::symlink_status(note,none))){auto text=read_file(note,4096);fs::remove(note,none);fail(text);}
-  if(result)fail("The game stopped before it started (exit "+std::to_string(result)+"). Details: "+(logs/"launcher.log").string());return 0;}
+  if(fs::is_regular_file(fs::symlink_status(note,none))){auto text=read_file(note,4096);fs::remove(note,none);report.player_stop=true;fail(text);}
+  if(result)fail("The game stopped before it started (exit "+std::to_string(result)+"). Details: "+(logs/"launcher.log").string());end_report();return 0;}
  auto expected="{\"version\":1,\"token\":\""+token+"\",\"guest_path\":\"/dev_bdvd/PS3_GAME/USRDIR/bin/mage_g.self\",\"kind\":\"mage_g\"}\n";
  if(read_file(request,4096)!=expected)fail("Engine handoff request identity mismatch");
  check(engine,MAG_ENGINE_SHA256);check(ee,MAG_ENGINE_ELF_SHA256);check(es,MAG_ENGINE_SELF_SHA256);
@@ -297,15 +314,17 @@ int main(int argc,char** argv) {
  // The engine signs in again (MAS, statistics) and gets its own fresh ticket; it reads the name the
  // launcher saved, so the settings are read again here.
  {std::map<std::string,std::string> none;portal_ticket(env,link_file,ticket,player_settings(settings,none,settings_usable),false);}
- env["PS3_BOOT_PATH"]="/dev_bdvd/PS3_GAME/USRDIR/bin/mage_g.self";return run(engine,ee,logs,env,"engine.log");
- }catch(const std::exception& e){std::string msg="MAG could not start: "+std::string(e.what())+"\n";std::cerr<<msg;if(!root.empty()){int fd=open((root/"launch-error.log").c_str(),O_WRONLY|O_CREAT|O_TRUNC|O_NOFOLLOW,0600);if(fd>=0){write(fd,msg.data(),msg.size());close(fd);}}return 1;}
+ env["PS3_BOOT_PATH"]="/dev_bdvd/PS3_GAME/USRDIR/bin/mage_g.self";
+ report.engine_exit=run(engine,ee,logs,env,"engine.log");end_report();return int(report.engine_exit);
+ }catch(const std::exception& e){if(reporting&&report.launch_error.empty())report.launch_error=e.what();end_report();std::string msg="MAG could not start: "+std::string(e.what())+"\n";std::cerr<<msg;if(!root.empty()){int fd=open((root/"launch-error.log").c_str(),O_WRONLY|O_CREAT|O_TRUNC|O_NOFOLLOW,0600);if(fd>=0){write(fd,msg.data(),msg.size());close(fd);}}return 1;}
 }
 '''
 
 
 # Portable sources the supervisor compiles with it (HTTPS through OpenSSL's libssl).
 SUPERVISOR_SOURCES = ('player_portal.h', 'player_portal.cpp', 'player_portal_openssl.cpp', 'player_settings_portable.h',
-                      'player_settings_file.cpp', 'player_settings_text.h', 'player_sign_in.h')
+                      'player_settings_file.cpp', 'player_settings_text.h', 'player_sign_in.h',
+                      'player_reports.h', 'player_reports.cpp', 'player_gzip.h', 'player_gzip.cpp')
 
 
 def _copy_dependencies(binaries, destination, token, dynamic_libraries=()):
@@ -350,7 +369,7 @@ def _copy_dependencies(binaries, destination, token, dynamic_libraries=()):
 
 def package(config, workspace, destination, token=None, events=None):
     """Build the MAG folder's MAG and game subfolders from a finished workspace; launches nothing."""
-    from .native_package import _ordinary, _digest, check_workspace, stage_game, package_receipt, GAME_FOLDER, WORKSPACE_GAME
+    from .native_package import _ordinary, _digest, check_workspace, stage_game, package_receipt, product_version, GAME_FOLDER, WORKSPACE_GAME
     token = token or Cancellation(); events = events or (lambda event: None)
     workspace, destination = Path(workspace).absolute(), Path(destination).absolute()
     if destination.exists() or destination.is_symlink(): raise InstallerError('MAG folder destination already exists')
@@ -396,6 +415,7 @@ def package(config, workspace, destination, token=None, events=None):
             'MAG_LAUNCHER_ELF_SHA256': records['launcher']['elf_sha256'],
             'MAG_ENGINE_ELF_SHA256': records['engine']['elf_sha256'],
             'MAG_ENGINE_SELF_SHA256': engine_self,
+            'MAG_VERSION': product_version(workspace),
         }
         from .native_package import playback_environment
         defaults = playback_environment(records)

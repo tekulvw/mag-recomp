@@ -86,7 +86,23 @@ int main(int argc, char **argv) { @autoreleasepool {
         assert(!MAGSettingsValidate(s, &error));
     }
     assert(MAGSettingsSave(path, normalized, &error));
-    NSMutableDictionary *nameless = normalized.mutableCopy; [nameless removeObjectForKey:@"player_name"];
+    // Reports: no field means on, true is dropped (the default), false is kept and written; other
+    // types are refused. Older files without the field load unchanged.
+    assert(!normalized[@"send_reports"]);
+    assert(![[NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil] containsString:@"send_reports"]);
+    NSMutableDictionary *reporting = normalized.mutableCopy; reporting[@"send_reports"] = @YES;
+    assert([MAGSettingsValidate(reporting, &error) isEqual:normalized]);
+    reporting[@"send_reports"] = @NO;
+    NSDictionary *quiet = MAGSettingsValidate(reporting, &error);
+    assert(quiet && [quiet[@"send_reports"] isEqual:@NO]);
+    assert(MAGSettingsSave(path, quiet, &error) && [MAGSettingsLoad(path, &exists, &error) isEqual:quiet]);
+    assert([[NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil] containsString:@"\"send_reports\" : false"]);
+    for (id bad in @[@0, @1, @"yes", @"false", NSNull.null]) {
+        NSMutableDictionary *s = normalized.mutableCopy; s[@"send_reports"] = bad; error = nil;
+        assert(!MAGSettingsValidate(s, &error) && error);
+    }
+    assert(MAGSettingsSave(path, normalized, &error));
+    NSMutableDictionary *nameless =normalized.mutableCopy; [nameless removeObjectForKey:@"player_name"];
     assert([MAGSettingsValidate(nameless, &error)[@"player_name"] isEqual:@""]);
     NSMutableDictionary *unsupported = defaults.mutableCopy; unsupported[@"unknown"] = @100;
     [unsupported removeObjectForKey:@"render_scale"];

@@ -19,11 +19,15 @@ REPOSITORY = Path(__file__).resolve().parents[2]
 
 
 class LinuxPackageTests(unittest.TestCase):
+    def setUp(self):
+        # Supervisor runs here send no reports, except in the reports test.
+        environment = patch.dict(os.environ, {'MAG_REPORTS': '0'}); environment.start(); self.addCleanup(environment.stop)
+
     def fixture(self, root):
         workspace = fixtures.NativePackageTests().fixture(root)
         # The supervisor compiles the account link and settings rules from the workspace's source.
         from mag_installer.native_package_linux import SUPERVISOR_SOURCES
-        (workspace / 'src').mkdir()
+        (workspace / 'src').mkdir(exist_ok=True)
         for name in SUPERVISOR_SOURCES:
             (workspace / 'src' / name).write_bytes((REPOSITORY / 'src' / name).read_bytes())
         return workspace
@@ -478,3 +482,52 @@ int main(void) {
             state['audiences']={'test.example.org'};state['revoked']=True
             run=mag('--link-token',stdin=TOKEN)
             self.assertEqual(run.returncode,1);self.assertIn('does not accept this token',run.stderr);self.assertFalse(link.exists())
+
+    @unittest.skipUnless(sys.platform=='linux','requires Linux ELF loader and OpenSSL development headers')
+    def test_native_supervisor_reports_a_crash_to_the_linked_portal(self):
+        """The engine stand-in exits 23: a crash report is queued, and a detached sender posts it to
+        the linked account's (fake) portal; the supervisor never waits for it."""
+        import http.server, threading, time
+        TOKEN='mgd_'+'Report0123456789-_abcdefghijklmnopqrstuvw'
+        seen=[]
+        class Portal(http.server.BaseHTTPRequestHandler):
+            def log_message(self,*args): pass
+            def do_POST(self):
+                body=self.rfile.read(int(self.headers['Content-Length']));seen.append((self.path,self.headers.get('Authorization'),body))
+                reply=json.dumps({'report_id':json.loads(body).get('report_id'),'received_at':'2026-11-23T00:00:00Z'}).encode()
+                self.send_response(201);self.send_header('Content-Type','application/json');self.send_header('Content-Length',str(len(reply)))
+                self.end_headers();self.wfile.write(reply)
+        server=http.server.ThreadingHTTPServer(('127.0.0.1',0),Portal)
+        threading.Thread(target=server.serve_forever,daemon=True).start()
+        self.addCleanup(server.server_close);self.addCleanup(server.shutdown)
+        portal=f'http://127.0.0.1:{server.server_address[1]}'
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            install=self.install_fixture(root,self.PHASE_RECORDER)
+            config=root/'config/MAG';config.mkdir(parents=True,mode=0o700)
+            (config/'settings.json').write_text(json.dumps({'server_address':'example.org','player_name':'Rook_7','portal_url':portal}))
+            (config/'portal-link.json').write_text(json.dumps({'schema_version':1,'portal':portal,'device_token':TOKEN,'player_name':'Rook_7'}))
+            env={k:v for k,v in os.environ.items() if k not in ('DISPLAY','WAYLAND_DISPLAY','MAG_REPORTS')}
+            env['XDG_CONFIG_HOME']=str(root/'config')
+            run=subprocess.run([str(install/'MAG/MAG')],env=env,capture_output=True,text=True,timeout=60)
+            self.assertEqual(run.returncode,23,run.stderr)
+            logs=max((install/'logs').glob('launch-*'),key=lambda p:p.stat().st_mtime)
+            deadline=time.monotonic()+60
+            while time.monotonic()<deadline and 'reports: sent' not in ((logs/'supervisor.log').read_text() if (logs/'supervisor.log').exists() else ''):
+                time.sleep(.2)
+            log=(logs/'supervisor.log').read_text()
+            self.assertIn('reports: queued a crash report',log);self.assertIn('reports: sent 1',log);self.assertNotIn(TOKEN,log)
+            reports=[r for r in seen if r[0]=='/api/v1/reports']
+            self.assertEqual(len(reports),1)
+            self.assertEqual(reports[0][1],'Bearer '+TOKEN)
+            report=json.loads(reports[0][2])
+            self.assertEqual((report['trigger'],report['client']['platform']),('crash','linux'))
+            self.assertEqual((report['session']['launcher_exit'],report['session']['engine_exit']),(90,23))
+            self.assertNotIn(TOKEN.encode(),reports[0][2]);self.assertNotIn(str(root).encode(),reports[0][2])
+            self.assertEqual(list((install/'home/reports').glob('*.json')),[])
+            # MAG_REPORTS=0: no report at all.
+            env['MAG_REPORTS']='0'
+            run=subprocess.run([str(install/'MAG/MAG')],env=env,capture_output=True,text=True,timeout=60)
+            self.assertEqual(run.returncode,23,run.stderr)
+            logs=max((install/'logs').glob('launch-*'),key=lambda p:p.stat().st_mtime)
+            self.assertFalse((logs/'supervisor.log').exists())

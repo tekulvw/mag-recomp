@@ -16,7 +16,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 SDK = Path(os.environ.get('MAG_TEST_SDK') or ROOT / 'local/ps3recomp-runtime')
-FORM = ['src/player_settings_form.cpp', 'src/player_settings_portable.cpp', 'src/player_settings_file.cpp',
+FORM = ['src/player_settings_form.cpp', 'src/player_report_request.cpp', 'src/player_settings_portable.cpp', 'src/player_settings_file.cpp',
         'src/player_portal.cpp', 'src/player_server_overlay_portable.cpp',
         'src/player_archive.cpp', 'src/player_inflate.cpp', 'src/player_sha256.cpp',
         'src/player_controls_settings.cpp', 'src/player_controls_store.cpp', 'src/player_controls_rust.cpp',
@@ -151,7 +151,7 @@ class Win32SettingsWindowTests(unittest.TestCase):
             self.skipTest('MinGW-w64 cross compiler')
         with tempfile.TemporaryDirectory() as folder:
             sources = ('src/player_settings_win32.cpp', 'src/player_settings_session.cpp', 'src/player_settings_form.cpp',
-                       'src/player_settings_account.cpp', 'tests/player_settings_win32_driver.cpp')
+                       'src/player_settings_account.cpp', 'src/player_report_request.cpp', 'tests/player_settings_win32_driver.cpp')
             for source in sources:
                 for controls in ([], ['-DMAG_PLAYER_SETTINGS_CONTROLS=1', '-DMAG_PLAYER_INPUT_HOLD=1']):
                     result = subprocess.run([compiler, '-std=c++20', '-Wall', '-Wextra', '-Werror', '-Wno-unknown-pragmas',

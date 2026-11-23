@@ -43,8 +43,9 @@ std::unique_ptr<Transport> make_platform_transport() { return std::make_unique<F
 // Control identifiers of player_settings_win32.cpp.
 enum {
     IdGeneral = 100, IdControls, IdServer, IdName, IdAccount, IdAdvanced, IdTcp, IdUdp, IdDisplay, IdOutput, IdRendering, IdAntiAliasing,
+    IdSendReports, IdReportNow,
     IdKeyboardMouse = 200, IdController, IdMode, IdScope, IdSensitivity, IdInvert, IdReset, IdRows, IdHint,
-    IdError = 300, IdRevert, IdKeep, IdCancel, IdApply, IdPlay, IdStatus, IdAccountStatus,
+    IdError = 300, IdRevert, IdKeep, IdCancel, IdApply, IdPlay, IdStatus, IdAccountStatus, IdReportStatus,
     IdBinding = 1000,
 };
 
@@ -199,6 +200,36 @@ static void in_game(const fs::path& folder) {
         click(window, IdAccount);
         CHECK(contains(window, IdAccountStatus, "Unlinked here") && !fs::exists(folder / "portal-link.json"));
         type(window, IdName, L"Rook_7");
+        type(window, IdServer, L"example.org");
+        CHECK(!enabled(window, IdApply));
+        // Reports: on by default; unchecking is an edit Apply saves as send_reports: false. Send
+        // report needs MAG_REPORT_REQUEST (a packaged launch) and a linked account.
+        HWND reports = GetDlgItem(window, IdSendReports);
+        CHECK(visible(window, IdSendReports) && SendMessageW(reports, BM_GETCHECK, 0, 0) == BST_CHECKED);
+        CHECK(visible(window, IdReportNow) && !enabled(window, IdReportNow));
+        CHECK(contains(window, IdReportStatus, "Reports are sent only when MAG starts from its app"));
+        SendMessageW(reports, BM_CLICK, 0, 0);
+        settle(window);
+        CHECK(enabled(window, IdApply));
+        click(window, IdApply);
+        CHECK(read(settings).find("\"send_reports\": false") != std::string::npos);
+        SendMessageW(reports, BM_CLICK, 0, 0);
+        settle(window);
+        click(window, IdApply);
+        CHECK(read(settings).find("send_reports") == std::string::npos && !enabled(window, IdApply));
+        const fs::path marker = folder / "report-requested";
+        _putenv_s("MAG_REPORT_REQUEST", marker.string().c_str());
+        type(window, IdServer, L"play.magtest.online");
+        CHECK(!enabled(window, IdReportNow) && contains(window, IdReportStatus, "Link an account to send reports"));
+        std::string link_error;
+        CHECK(portal::save_link(folder / "portal-link.json", {"https://magtest.online", "mgd_synthetic_token", "Rook_9"}, link_error));
+        type(window, IdServer, L"play.magtest.online ");
+        CHECK(enabled(window, IdReportNow));
+        click(window, IdReportNow);
+        CHECK(contains(window, IdReportStatus, "A report will be sent when MAG closes."));
+        CHECK(read(marker).rfind("{\"requested_at\":", 0) == 0);
+        CHECK(portal::forget_link(folder / "portal-link.json", link_error));
+        _putenv_s("MAG_REPORT_REQUEST", "");
         type(window, IdServer, L"example.org");
         CHECK(!enabled(window, IdApply));
         // A display change previews on the game window: Revert, then Keep.

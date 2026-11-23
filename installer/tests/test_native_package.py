@@ -15,6 +15,11 @@ from mag_installer.native_package import package
 
 @unittest.skipIf(os.name == 'nt', 'macOS .app packaging (otool, install_name_tool, codesign)')
 class NativePackageTests(unittest.TestCase):
+    def setUp(self):
+        # Supervisor runs here never send reports: the existing tests run with the player's real
+        # settings path, and so with any real account link. The reports test turns them back on.
+        environment=patch.dict(os.environ,{'MAG_REPORTS':'0'});environment.start();self.addCleanup(environment.stop)
+
     def fixture(self, root):
         workspace=root/'workspace';(workspace/'profiles').mkdir(parents=True)
         disc=workspace/'local/retail-v1.0/PS3_GAME/USRDIR';(disc/'bin').mkdir(parents=True)
@@ -27,6 +32,12 @@ class NativePackageTests(unittest.TestCase):
             images[image]=dict(elf=str(elf),elf_sha256=digest(elf),source_sha256='b'*64)
         (workspace/'profiles/retail-v1.0.json').write_text(json.dumps(dict(images=images)))
         (workspace/'profiles/framework.json').write_text(json.dumps(dict(strict_runtime_revisions=['a'*40],strict_hle_runtime_revisions=['a'*40])))
+        (workspace/'.release-please-manifest.json').write_text('{".": "9.8.7"}')
+        # The supervisor compiles the reports and their transport from the workspace's source.
+        from mag_installer.native_package import SUPERVISOR_SOURCES
+        (workspace/'src').mkdir(exist_ok=True)
+        repository=Path(__file__).resolve().parents[2]
+        for name in SUPERVISOR_SOURCES:(workspace/'src'/name).write_bytes((repository/'src'/name).read_bytes())
         return workspace
 
     def tool(self, argv, token):
@@ -174,8 +185,10 @@ int main(int argc,char**argv) {
  if(!launcher){char save[4096];snprintf(save,sizeof save,"%s/save.txt",gamedata);
   FILE *s=fopen(save,"a");if(!s)return 65;fputs("x\n",s);fclose(s);
   s=fopen(save,"r");for(int c;(c=fgetc(s))!=EOF;)saves+=c=='\n';fclose(s);}
- fprintf(f,"{\"settings_path\":\"%s\",\"overlay_root\":\"%s\",\"setup\":%s,\"show\":%s,\"skip\":%s,\"movie\":\"%s\",\"gamedata\":\"%s\",\"saves\":%d}",
-  path,overlay,getenv("MAG_PLAYER_SETUP")?"true":"false",getenv("MAG_PLAYER_SHOW_SETTINGS")?"true":"false",getenv("MAG_SKIP_SETUP")?"true":"false",movie?movie:"",gamedata,saves);fclose(f);
+ const char *session=getenv("MAG_SESSION_DIR"),*request=getenv("MAG_REPORT_REQUEST");
+ fprintf(f,"{\"settings_path\":\"%s\",\"overlay_root\":\"%s\",\"setup\":%s,\"show\":%s,\"skip\":%s,\"movie\":\"%s\",\"gamedata\":\"%s\",\"saves\":%d,\"session_dir\":\"%s\",\"report_request\":\"%s\"}",
+  path,overlay,getenv("MAG_PLAYER_SETUP")?"true":"false",getenv("MAG_PLAYER_SHOW_SETTINGS")?"true":"false",getenv("MAG_SKIP_SETUP")?"true":"false",movie?movie:"",gamedata,saves,
+  session?session:"",request?request:"");fclose(f);
  if(!launcher)return 17;
  f=fopen(getenv("MAG_HANDOFF_REQUEST"),"w");if(!f)return 63;
  fprintf(f,"{\"version\":1,\"token\":\"%s\",\"guest_path\":\"/dev_bdvd/PS3_GAME/USRDIR/bin/mage_g.self\",\"kind\":\"mage_g\"}",getenv("MAG_HANDOFF_TOKEN"));fclose(f);
@@ -256,3 +269,49 @@ int main(int argc,char**argv) {
             missing=subprocess.run([str(moved/'MAG.app/Contents/MacOS/MAG')],capture_output=True,text=True,timeout=15)
             self.assertEqual(missing.returncode,1)
             self.assertIn('game files are missing',(moved/'launch-error.log').read_text())
+
+    @unittest.skipUnless(platform.system() == 'Darwin', 'native supervisor fixture')
+    def test_supervisor_reports_a_crash_to_the_linked_portal(self):
+        """The fixture engine exits 17: the supervisor queues a crash report and a detached sender posts
+        it to a fake portal with the linked token. A settings file of its own; no real account."""
+        import http.server,threading,time
+        token='mgd_FixtureReportToken0123456789'
+        seen=[]
+        class Portal(http.server.BaseHTTPRequestHandler):
+            def log_message(self,*args):pass
+            def do_POST(self):
+                body=self.rfile.read(int(self.headers['Content-Length']));seen.append((self.path,self.headers.get('Authorization'),body))
+                reply=json.dumps({'report_id':json.loads(body)['report_id'],'received_at':'2026-11-23T00:00:00Z'}).encode()
+                self.send_response(201);self.send_header('Content-Type','application/json');self.send_header('Content-Length',str(len(reply)))
+                self.end_headers();self.wfile.write(reply)
+        server=http.server.ThreadingHTTPServer(('127.0.0.1',0),Portal);threading.Thread(target=server.serve_forever,daemon=True).start()
+        self.addCleanup(server.server_close);self.addCleanup(server.shutdown)
+        portal=f'http://127.0.0.1:{server.server_address[1]}'
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp).resolve();workspace=self.supervisor_workspace(root);mag=self.mag_folder(root)
+            app=package({},workspace,mag/'MAG.app')
+            self.assertEqual(json.loads((app/'Contents/Resources/runtime.json').read_text())['version'],'9.8.7')
+            config=root/'config';config.mkdir(mode=0o700)
+            (config/'settings.json').write_text(json.dumps({'schema_version':1,'server_address':'example.org','portal_url':portal}))
+            (config/'portal-link.json').write_text(json.dumps({'schema_version':1,'portal':portal,'device_token':token,'player_name':'Rook_7'}))
+            env={k:v for k,v in os.environ.items() if k!='MAG_REPORTS'}
+            env.update(MAG_PLAYER_SETTINGS_PATH=str(config/'settings.json'),MAG_SKIP_SETUP='1')
+            result=subprocess.run([str(app/'Contents/MacOS/MAG')],capture_output=True,text=True,timeout=30,env=env)
+            self.assertEqual(result.returncode,17,result.stderr)
+            launch=next((mag/'logs').glob('launch-*'))
+            engine=json.loads((launch/'engine-env.json').read_text())
+            self.assertEqual(Path(engine['session_dir']).resolve(),launch.resolve())
+            self.assertEqual(Path(engine['report_request']).resolve(),(launch/'report-requested').resolve())
+            deadline=time.monotonic()+60
+            while time.monotonic()<deadline and 'reports: sent' not in ((launch/'supervisor.log').read_text() if (launch/'supervisor.log').exists() else ''):
+                time.sleep(.2)
+            log=(launch/'supervisor.log').read_text()
+            self.assertIn('reports: queued a crash report',log);self.assertIn('reports: sent 1',log);self.assertNotIn(token,log)
+            self.assertEqual(len(seen),1)
+            path,authorization,body=seen[0]
+            self.assertEqual((path,authorization),('/api/v1/reports','Bearer '+token))
+            report=json.loads(body)
+            self.assertEqual((report['trigger'],report['client']['platform'],report['client']['version']),('crash','macos','9.8.7'))
+            self.assertEqual(report['session']['engine_exit'],17)
+            self.assertNotIn(token.encode(),body);self.assertNotIn(str(root).encode(),body)
+            self.assertEqual(list((mag/'home/reports').glob('*.json')),[])
