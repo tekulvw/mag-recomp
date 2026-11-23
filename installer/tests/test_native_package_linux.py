@@ -173,6 +173,22 @@ int main(void) {
         package({'host':'linux-x86_64'},workspace,install/'MAG')
         return install
 
+    # A launcher and engine stand-in that records each phase's ticket and name, then hands off.
+    PHASE_RECORDER=r'''
+#include <stdio.h>
+#include <stdlib.h>
+int main(void) {
+ const char* request=getenv("MAG_HANDOFF_REQUEST");const char* ticket=getenv("MAG_PLAYER_PORTAL_TICKET");const char* name=getenv("MAG_PLAYER_SET_NAME");
+ FILE* out=fopen(request?"launcher.env":"engine.env","w");if(!out)return 40;
+ fprintf(out,"ticket=%s\nname=%s\nbytes=",ticket?ticket:"",name?name:"");
+ if(ticket){FILE* in=fopen(ticket,"rb");int c;if(!in)return 41;while((c=fgetc(in))!=EOF)fprintf(out,"%02x",c);fclose(in);}
+ fputs("\n",out);fclose(out);
+ if(request){FILE* f=fopen(request,"wx");if(!f)return 46;
+  fprintf(f,"{\"version\":1,\"token\":\"%s\",\"guest_path\":\"/dev_bdvd/PS3_GAME/USRDIR/bin/mage_g.self\",\"kind\":\"mage_g\"}\n",getenv("MAG_HANDOFF_TOKEN"));fclose(f);return 90;}
+ return 23;
+}
+'''
+
     @unittest.skipUnless(sys.platform=='linux','requires Linux ELF loader and OpenSSL development headers')
     def test_native_supervisor_links_and_fetches_a_ticket_before_each_phase(self):
         import base64, http.server, threading
@@ -198,6 +214,7 @@ int main(void) {
                     return self.reply(200,{'device_token':TOKEN,'player_name':'Rook_7'})
                 if self.path=='/api/v1/ticket':
                     if state['revoked'] or self.headers.get('Authorization')!='Bearer '+TOKEN:return self.reply(401,{'error':'invalid_token'})
+                    if body!={'audience':'example.org'}:return self.reply(400,{'error':'unknown_audience'})
                     return self.reply(200,dict(ticket=base64.b64encode(ticket).decode(),expires_at=1800000600,account_id=42,
                                                player_name='Rook_7',audience='example.org'))
                 self.reply(404,{'error':'not_found'})
@@ -206,20 +223,7 @@ int main(void) {
         self.addCleanup(server.server_close)
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp)
-            install=self.install_fixture(root,r'''
-#include <stdio.h>
-#include <stdlib.h>
-int main(void) {
- const char* request=getenv("MAG_HANDOFF_REQUEST");const char* ticket=getenv("MAG_PLAYER_PORTAL_TICKET");const char* name=getenv("MAG_PLAYER_SET_NAME");
- FILE* out=fopen(request?"launcher.env":"engine.env","w");if(!out)return 40;
- fprintf(out,"ticket=%s\nname=%s\nbytes=",ticket?ticket:"",name?name:"");
- if(ticket){FILE* in=fopen(ticket,"rb");int c;if(!in)return 41;while((c=fgetc(in))!=EOF)fprintf(out,"%02x",c);fclose(in);}
- fputs("\n",out);fclose(out);
- if(request){FILE* f=fopen(request,"wx");if(!f)return 46;
-  fprintf(f,"{\"version\":1,\"token\":\"%s\",\"guest_path\":\"/dev_bdvd/PS3_GAME/USRDIR/bin/mage_g.self\",\"kind\":\"mage_g\"}\n",getenv("MAG_HANDOFF_TOKEN"));fclose(f);return 90;}
- return 23;
-}
-''')
+            install=self.install_fixture(root,self.PHASE_RECORDER)
             config=root/'config/MAG';config.mkdir(parents=True,mode=0o700)
             (config/'settings.json').write_text(json.dumps({'server_address':'example.org','player_name':'Old_Name',
                                                             'portal_url':f'http://127.0.0.1:{port}'}))
@@ -246,7 +250,8 @@ int main(void) {
             launcher,engine=phases();ticket_file=str(install/'home/player/portal-ticket.bin')
             self.assertEqual((launcher['ticket'],launcher['name'],launcher['bytes']),(ticket_file,'Rook_7',ticket.hex()))
             self.assertEqual((engine['ticket'],engine['name'],engine['bytes']),(ticket_file,'',ticket.hex()))
-            self.assertEqual([(r[0],r[1]) for r in state['requests']],[('/api/v1/ticket','Bearer '+TOKEN)]*2)
+            # Each ticket is asked for the configured server's audience.
+            self.assertEqual([(r[0],r[1],r[3]) for r in state['requests']],[('/api/v1/ticket','Bearer '+TOKEN,{'audience':'example.org'})]*2)
             self.assertIn('you play as Rook_7',run.stderr);self.assertIn('(MAG had Old_Name)',run.stderr)
             self.assertEqual(Path(ticket_file).stat().st_mode&0o777,0o600);self.assertNotIn(TOKEN,run.stderr)
             # Unlink here.
@@ -271,3 +276,82 @@ int main(void) {
             (config/'settings.json').write_text(json.dumps({'server_address':'example.org','player_name':'Rook_7'}))
             run=mag();self.assertEqual(run.returncode,23,run.stderr);self.assertNotIn('MAG account',run.stderr)
             run=mag('--link');self.assertEqual(run.returncode,1);self.assertIn('No account portal',run.stderr)
+
+    @unittest.skipUnless(sys.platform=='linux','requires Linux ELF loader and OpenSSL development headers')
+    def test_native_supervisor_imports_a_service_account_token(self):
+        """--link-token: a staff-minted token from standard input, checked against a ticket-enforcing test server's portal."""
+        import base64, http.server, threading
+        TOKEN='mgd_'+'Service0123456789-_abcdefghijklmnopqrstuvw'
+        def ticket_bytes(audience,name):
+            return (b'MAGT\x01\x01'+bytes(8)+(100).to_bytes(8,'big')+(7).to_bytes(4,'big')+b'n'*16+
+                    bytes([len(audience)])+audience.encode()+bytes([len(name)])+name.encode()+b's'*64)
+        state={'audiences':{'test.example.org'},'revoked':False,'requests':[]}
+        class Portal(http.server.BaseHTTPRequestHandler):
+            def log_message(self,*args): pass
+            def reply(self,status,value):
+                body=json.dumps(value).encode();self.send_response(status)
+                self.send_header('Content-Type','application/json');self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body)
+            def do_POST(self):
+                body=json.loads(self.rfile.read(int(self.headers['Content-Length'])) or b'{}')
+                state['requests'].append((self.path,self.headers.get('Authorization'),body))
+                if self.path!='/api/v1/ticket':return self.reply(404,{'error':'not_found'})
+                if state['revoked'] or self.headers.get('Authorization')!='Bearer '+TOKEN:return self.reply(401,{'error':'invalid_token'})
+                audience=body.get('audience','play.example.net')  # no body: the portal's default audience
+                if audience not in state['audiences']:return self.reply(400,{'error':'unknown_audience'})
+                return self.reply(200,dict(ticket=base64.b64encode(ticket_bytes(audience,'Svc_Bot')).decode(),expires_at=1800000600,
+                                           account_id=7,player_name='Svc_Bot',audience=audience))
+        server=http.server.ThreadingHTTPServer(('127.0.0.1',0),Portal);port=server.server_address[1]
+        threading.Thread(target=server.serve_forever,daemon=True).start()
+        self.addCleanup(server.server_close);self.addCleanup(server.shutdown)
+        portal=f'http://127.0.0.1:{port}'
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            install=self.install_fixture(root,self.PHASE_RECORDER)
+            config=root/'config/MAG';config.mkdir(parents=True,mode=0o700)
+            settings=config/'settings.json';link=config/'portal-link.json'
+            settings.write_text(json.dumps({'server_address':'example.org','player_name':'Old_Name'}))
+            env={k:v for k,v in os.environ.items() if k not in ('DISPLAY','WAYLAND_DISPLAY')}
+            env['XDG_CONFIG_HOME']=str(root/'config')
+            def mag(*args,stdin=''):
+                return subprocess.run([str(install/'MAG/MAG'),*args],env=env,input=stdin,capture_output=True,text=True,timeout=60)
+            # No portal applies to this server yet: refused before reading the token or contacting anyone.
+            run=mag('--link-token',stdin=TOKEN+'\n')
+            self.assertEqual(run.returncode,1);self.assertIn('No account portal applies to example.org',run.stderr)
+            self.assertFalse(link.exists());self.assertEqual(state['requests'],[])
+            # The token never goes on the command line, and is not echoed back when it is put there.
+            run=mag('--link-token',TOKEN)
+            self.assertEqual(run.returncode,1);self.assertNotIn(TOKEN,run.stdout+run.stderr);self.assertFalse(link.exists())
+            run=mag('--portal-url',portal)  # --portal-url belongs to --link-token
+            self.assertEqual(run.returncode,1);self.assertIn('Usage',run.stderr)
+            # Garbage on standard input: nothing stored or sent.
+            run=mag('--server','test.example.org','--portal-url',portal,'--link-token',stdin='hunter2\n')
+            self.assertEqual(run.returncode,1);self.assertIn('no device token',run.stderr)
+            self.assertFalse(link.exists());self.assertEqual(state['requests'],[])
+            # Linked: the server and portal are saved, the token stored owner-only and checked with one ticket for that server.
+            run=mag('--server','Test.Example.org','--portal-url',portal+'/','--link-token',stdin='  '+TOKEN+'\r\n')
+            self.assertEqual(run.returncode,0,run.stdout+run.stderr)
+            self.assertIn(f'Linked as Svc_Bot at {portal} for test.example.org',run.stdout)
+            self.assertNotIn(TOKEN,run.stdout+run.stderr)
+            self.assertEqual(link.stat().st_mode&0o777,0o600)
+            self.assertEqual(json.loads(link.read_text()),{'schema_version':1,'portal':portal,'device_token':TOKEN,'player_name':'Svc_Bot'})
+            saved=json.loads(settings.read_text())
+            self.assertEqual((saved['server_address'],saved['portal_url'],saved['player_name']),('test.example.org',portal,'Svc_Bot'))
+            self.assertEqual(state['requests'],[('/api/v1/ticket','Bearer '+TOKEN,{'audience':'test.example.org'})])
+            # A launch then fetches a ticket for that server before each phase.
+            del state['requests'][:]
+            run=mag()
+            self.assertEqual(run.returncode,23,run.stderr)
+            logs=max((install/'logs').glob('launch-*'),key=lambda p:p.stat().st_mtime)
+            launcher=dict(line.split('=',1) for line in (logs/'launcher.env').read_text().splitlines())
+            self.assertEqual(launcher['bytes'],ticket_bytes('test.example.org','Svc_Bot').hex())
+            self.assertEqual([r[2] for r in state['requests']],[{'audience':'test.example.org'}]*2)
+            # A portal that does not issue tickets for the server: said so, and the token is kept for the next try.
+            state['audiences']=set()
+            run=mag('--link-token',stdin=TOKEN)
+            self.assertEqual(run.returncode,1)
+            self.assertIn(f"This account portal ({portal}) doesn't issue tickets for test.example.org",run.stderr)
+            self.assertIn('The token is saved',run.stderr);self.assertTrue(link.exists());self.assertNotIn(TOKEN,run.stderr)
+            # A revoked token is refused and not kept.
+            state['audiences']={'test.example.org'};state['revoked']=True
+            run=mag('--link-token',stdin=TOKEN)
+            self.assertEqual(run.returncode,1);self.assertIn('does not accept this token',run.stderr);self.assertFalse(link.exists())

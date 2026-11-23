@@ -277,12 +277,23 @@ static void portal_phase(const wchar_t *settings, const wchar_t *server, const w
     if (message[0]) notice(logs, message, prompt, state == MAG_PORTAL_READY ? MB_ICONINFORMATION : MB_ICONWARNING);
 }
 
+/* A command's result for automation: on standard output (standard error when it failed) when the
+ * caller redirected it, otherwise in a message box unless --no-prompt. */
+static void report(const wchar_t *message, int ok, int prompt) {
+    HANDLE out = GetStdHandle(ok ? STD_OUTPUT_HANDLE : STD_ERROR_HANDLE);
+    char utf8[4096]; int n = WideCharToMultiByte(CP_UTF8, 0, message, -1, utf8, sizeof utf8 - 1, NULL, NULL);
+    DWORD written;
+    if (out && out != INVALID_HANDLE_VALUE && n > 0) { utf8[n - 1] = '\n'; WriteFile(out, utf8, (DWORD)n, &written, NULL); }
+    else if (prompt) MessageBoxW(NULL, message, L"MAG account", MB_OK | (ok ? MB_ICONINFORMATION : MB_ICONERROR));
+}
+
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR arguments, int show) {
     (void)instance; (void)previous; (void)arguments; (void)show;
     /* First-run choices; the game validates and saves them in the player's settings file. */
-    static const wchar_t *usage = L"Usage: MAG.exe [--server <hostname or IPv4>] [--name <player name>] [--no-prompt] | MAG.exe --link | MAG.exe --unlink";
-    const wchar_t *server = NULL, *player = NULL;
-    int account = 0;  /* --link 1, --unlink 2: manage the account link, then exit */
+    static const wchar_t *usage = L"Usage: MAG.exe [--server <hostname or IPv4>] [--name <player name>] [--no-prompt] | MAG.exe --link | MAG.exe --unlink"
+                                  L" | MAG.exe [--server <host>] [--portal-url <url>] --link-token < token";
+    const wchar_t *server = NULL, *player = NULL, *portal_url = NULL;
+    int account = 0;  /* --link 1, --unlink 2, --link-token 3: manage the account link, then exit */
     int prompt = 1;  /* --no-prompt: never ask (automation); a missing name then stops with its message */
     int argc = 0; LPWSTR *argv = CommandLineToArgvW(GetCommandLineW(), &argc);
     if (!argv) fail(L"Cannot read the command line", NULL);
@@ -291,13 +302,18 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR arguments, int
         if (!wcscmp(a, L"--no-prompt")) { prompt = 0; continue; }
         if (!wcscmp(a, L"--link")) { account = 1; continue; }
         if (!wcscmp(a, L"--unlink")) { account = 2; continue; }
+        if (!wcscmp(a, L"--link-token")) { account = 3; continue; }
         if (!wcsncmp(a, L"--server", 8)) { target = &server; prefix = 8; }
         else if (!wcsncmp(a, L"--name", 6)) { target = &player; prefix = 6; }
+        else if (!wcsncmp(a, L"--portal-url", 12)) { target = &portal_url; prefix = 12; }
         if (!target) fail(usage, a);
         if (a[prefix] == L'=') *target = a + prefix + 1;
         else if (!a[prefix] && i + 1 < argc) *target = argv[++i];
         else fail(usage, a);
     }
+    /* --portal-url only names the portal a token is for; the device token itself is read from
+       standard input, never the command line, which other processes can read. */
+    if ((portal_url && account != 3) || (account == 3 && player)) fail(usage, NULL);
     if (account) {
         /* The link lives next to the settings file, outside the installation. */
         wchar_t appdata[MAX_PATH], config[MAX_PATH], settings[MAX_PATH], message[1024];
@@ -307,6 +323,11 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR arguments, int
         if (!CreateDirectoryW(config, NULL) && GetLastError() != ERROR_ALREADY_EXISTS) fail(L"Cannot create the settings folder", config);
         join(settings, config, L"settings.json");
         if (account == 1) return mag_portal_link_dialog(settings, server) ? 0 : 1;
+        if (account == 3) {
+            int ok = mag_portal_link_token(settings, server, portal_url, message, 1024);
+            report(message, ok, prompt);
+            return ok ? 0 : 1;
+        }
         int ok = mag_portal_unlink(settings, message, 1024);
         MessageBoxW(NULL, message, L"MAG account", MB_OK | (ok ? MB_ICONINFORMATION : MB_ICONERROR));
         return ok ? 0 : 1;

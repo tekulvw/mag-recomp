@@ -60,6 +60,7 @@ static std::string ticket_reply(const std::string &bytes, const std::string &nam
 }
 
 static const std::string portal = "https://magtest.online";
+static const std::string server = "Play.MagTest.Online";  // as typed; the audience is lowercased
 static const std::string token = "mgd_AbCdEfGhIjKlMnOpQrStUvWxYz0123456789-_abcd";
 
 static void urls() {
@@ -194,12 +195,37 @@ static void tickets() {
     CHECK(bytes.size() == 108 + 19 + 6);
     {
         FakeTransport t; t.add(200, ticket_reply(bytes, "Rook_7")); Ticket ticket;
-        Outcome o = fetch_ticket(t, portal, token, ticket);
+        Outcome o = fetch_ticket(t, portal, token, server, ticket);
         CHECK(o.ok() && ticket.bytes == bytes && ticket.player_name == "Rook_7" && ticket.account_id == 42 && ticket.expires_at == 1800000600);
         CHECK(t.requests.size() == 1 && t.requests[0].url == portal + "/api/v1/ticket");
         CHECK(t.requests[0].headers.size() == 1 && t.requests[0].headers[0].first == "Authorization" &&
               t.requests[0].headers[0].second == "Bearer " + token);
         CHECK(t.requests[0].body.find(token) == std::string::npos);  // only in the header
+        CHECK(t.requests[0].body == "{\"audience\":\"play.magtest.online\"}");
+    }
+    {   // another server: its own audience in the request and in the reply
+        const std::string other = make_ticket("test.example.org", "Rook_7");
+        FakeTransport t; t.add(200, ticket_reply(other, "Rook_7", "test.example.org")); Ticket ticket;
+        CHECK(fetch_ticket(t, portal, token, "TEST.example.org", ticket).ok() && ticket.audience == "test.example.org");
+        CHECK(t.requests[0].body == "{\"audience\":\"test.example.org\"}");
+    }
+    {   // no server: the portal's default audience
+        FakeTransport t; t.add(200, ticket_reply(bytes, "Rook_7")); Ticket ticket;
+        CHECK(fetch_ticket(t, portal, token, "", ticket).ok() && t.requests[0].body == "{}");
+    }
+    {   // a well-formed ticket for another server than the one asked for is refused
+        const std::string other = make_ticket("test.example.org", "Rook_7");
+        FakeTransport t; t.add(200, ticket_reply(other, "Rook_7", "test.example.org")); Ticket ticket;
+        Outcome o = fetch_ticket(t, portal, token, server, ticket);
+        CHECK(o.status == Status::BadResponse && ticket.bytes.empty());
+        CHECK(o.message.find("for test.example.org, not play.magtest.online") != std::string::npos);
+    }
+    {   // a portal that does not serve the server says so
+        FakeTransport t; t.add(400, "{\"error\":\"unknown_audience\"}"); Ticket ticket;
+        Outcome o = fetch_ticket(t, portal, token, "test.example.org", ticket);
+        CHECK(o.status == Status::UnknownAudience);
+        CHECK(o.message.find("doesn't issue tickets for test.example.org") != std::string::npos);
+        CHECK(o.message.find(token) == std::string::npos);
     }
     std::string truncated = bytes.substr(0, bytes.size() - 1), wrong_magic = bytes, padded = bytes + "x";
     wrong_magic[0] = 'X';
@@ -207,14 +233,15 @@ static void tickets() {
         {truncated, "Rook_7", "play.magtest.online"}, {wrong_magic, "Rook_7", "play.magtest.online"},
         {padded, "Rook_7", "play.magtest.online"}, {bytes, "Rook_8", "play.magtest.online"}, {bytes, "Rook_7", "other.example"},
         {make_ticket("play.magtest.online", "7bad"), "7bad", "play.magtest.online"},
+        {make_ticket("other.example", "Rook_7"), "Rook_7", "play.magtest.online"},  // the layout disagrees with the reply
     };
     for (auto &b : bad) {
         FakeTransport t; t.add(200, ticket_reply(b.bytes, b.name, b.audience)); Ticket ticket;
-        CHECK(fetch_ticket(t, portal, token, ticket).status == Status::BadResponse);
+        CHECK(fetch_ticket(t, portal, token, server, ticket).status == Status::BadResponse);
     }
     {
         FakeTransport t; t.add(200, "{\"ticket\":\"not base64!\",\"expires_at\":1,\"account_id\":42,\"player_name\":\"Rook_7\",\"audience\":\"a\"}");
-        Ticket ticket; CHECK(fetch_ticket(t, portal, token, ticket).status == Status::BadResponse);
+        Ticket ticket; CHECK(fetch_ticket(t, portal, token, server, ticket).status == Status::BadResponse);
     }
     struct Error { int status; const char *body; Status expected; const char *says; } errors[] = {
         {401, "{\"error\":\"invalid_token\"}", Status::Unlinked, "no longer linked"},
@@ -227,14 +254,14 @@ static void tickets() {
     };
     for (auto &e : errors) {
         FakeTransport t; t.replies.push_back({e.status, e.body, e.status ? "" : "certificate verify failed"}); Ticket ticket;
-        Outcome o = fetch_ticket(t, portal, token, ticket);
+        Outcome o = fetch_ticket(t, portal, token, server, ticket);
         CHECK(o.status == e.expected);
         if (o.message.find(e.says) == std::string::npos) { std::fprintf(stderr, "message: %s\n", o.message.c_str()); ++failures; }
         CHECK(o.message.find(token) == std::string::npos);
     }
     {   // a malformed token is never sent
         FakeTransport t; Ticket ticket;
-        CHECK(fetch_ticket(t, portal, "mgd_bad token\r\nX: y", ticket).status == Status::Unlinked && t.requests.empty());
+        CHECK(fetch_ticket(t, portal, "mgd_bad token\r\nX: y", server, ticket).status == Status::Unlinked && t.requests.empty());
     }
 }
 
@@ -264,16 +291,17 @@ static void storage_and_launch(const fs::path &scratch) {
     const std::string bytes = make_ticket("play.magtest.online", "Rook_8");
     {   // no portal, then a portal this computer is not linked to
         FakeTransport t;
-        CHECK(prepare_launch_ticket(t, link_file, ticket_file, "", "Run ./MAG --link.").state == LaunchTicket::State::NoPortal);
-        auto other = prepare_launch_ticket(t, link_file, ticket_file, "https://portal.example.org", "Run ./MAG --link.");
+        CHECK(prepare_launch_ticket(t, link_file, ticket_file, "", server, "Run ./MAG --link.").state == LaunchTicket::State::NoPortal);
+        auto other = prepare_launch_ticket(t, link_file, ticket_file, "https://portal.example.org", server, "Run ./MAG --link.");
         CHECK(other.state == LaunchTicket::State::NotLinked && other.message.find("https://magtest.online") != std::string::npos);
-        CHECK(prepare_launch_ticket(t, scratch / "none.json", ticket_file, portal, "x").state == LaunchTicket::State::NotLinked);
+        CHECK(prepare_launch_ticket(t, scratch / "none.json", ticket_file, portal, server, "x").state == LaunchTicket::State::NotLinked);
         CHECK(t.requests.empty());
     }
     {   // ready: the ticket is written owner-only and the name it carries wins
         FakeTransport t; t.add(200, ticket_reply(bytes, "Rook_8"));
-        auto ready = prepare_launch_ticket(t, link_file, ticket_file, portal, "Run ./MAG --link.");
+        auto ready = prepare_launch_ticket(t, link_file, ticket_file, portal, server, "Run ./MAG --link.");
         CHECK(ready.state == LaunchTicket::State::Ready && ready.file == ticket_file && ready.player_name == "Rook_8");
+        CHECK(t.requests.size() == 1 && t.requests[0].body == "{\"audience\":\"play.magtest.online\"}");
         CHECK(read(ticket_file) == bytes);
 #ifndef _WIN32
         CHECK(stat(ticket_file.c_str(), &st) == 0 && (st.st_mode & 0777) == 0600);
@@ -283,20 +311,90 @@ static void storage_and_launch(const fs::path &scratch) {
         for (auto &entry : fs::directory_iterator(ticket_file.parent_path())) leftovers += entry.path() != ticket_file;
         CHECK(leftovers == 0);
     }
+    {   // a portal that does not serve this server: the link is kept, and the player told why
+        FakeTransport t; t.add(400, "{\"error\":\"unknown_audience\"}");
+        auto failed = prepare_launch_ticket(t, link_file, ticket_file, portal, "test.example.org", "Run ./MAG --link.");
+        CHECK(failed.state == LaunchTicket::State::Failed && failed.status == Status::UnknownAudience && fs::exists(link_file));
+        CHECK(failed.message.find("test.example.org") != std::string::npos);
+    }
     {   // a failure keeps the link and says why
         FakeTransport t; t.add(403, "{\"error\":\"banned\",\"reason\":\"griefing\"}");
-        auto failed = prepare_launch_ticket(t, link_file, ticket_file, portal, "Run ./MAG --link.");
+        auto failed = prepare_launch_ticket(t, link_file, ticket_file, portal, server, "Run ./MAG --link.");
         CHECK(failed.state == LaunchTicket::State::Failed && failed.status == Status::Banned);
         CHECK(failed.message.find("griefing") != std::string::npos && fs::exists(link_file));
     }
     {   // unlinked on the website: the token is forgotten and the player is told how to link again
         FakeTransport t; t.add(401, "{\"error\":\"invalid_token\"}");
-        auto unlinked = prepare_launch_ticket(t, link_file, ticket_file, portal, "Run ./MAG --link.");
+        auto unlinked = prepare_launch_ticket(t, link_file, ticket_file, portal, server, "Run ./MAG --link.");
         CHECK(unlinked.state == LaunchTicket::State::Failed && unlinked.status == Status::Unlinked);
         CHECK(unlinked.message.find("Run ./MAG --link.") != std::string::npos && !fs::exists(link_file));
-        CHECK(prepare_launch_ticket(t, link_file, ticket_file, portal, "x").state == LaunchTicket::State::NotLinked);
+        CHECK(prepare_launch_ticket(t, link_file, ticket_file, portal, server, "x").state == LaunchTicket::State::NotLinked);
     }
     CHECK(forget_link(link_file, error));  // already gone: fine
+}
+
+// --link-token: a service-account token installed without the device-code page.
+static void token_import(const fs::path &scratch) {
+    const fs::path link_file = scratch / "import" / "portal-link.json";
+    std::string read_back;
+    CHECK(read_device_token("  " + token + "\r\n", read_back) && read_back == token);
+    for (std::string bad : std::vector<std::string>{"", "\n", "mgd_", "mgd_abc", "nope_" + token.substr(4), token + " extra",
+                                                     "mgd_" + std::string(300, 'a'), std::string(5000, ' ') + token})
+        CHECK(!read_device_token(bad, read_back));
+    const std::string audience = "test.example.org", bytes = make_ticket(audience, "Svc_Bot");
+    Link link; bool exists = false; std::string error;
+    {   // malformed input: nothing stored, nothing sent
+        FakeTransport t;
+        Outcome o = import_device_token(t, portal, audience, "not a token\n", link_file, link);
+        CHECK(o.status == Status::Unlinked && t.requests.empty() && !fs::exists(link_file));
+    }
+    {   // a good token: stored owner-only, verified by one ticket for the server, the name kept
+        FakeTransport t; t.add(200, ticket_reply(bytes, "Svc_Bot", audience));
+        Outcome o = import_device_token(t, portal, "Test.Example.org", token + "\n", link_file, link);
+        CHECK(o.ok() && link.portal == portal && link.device_token == token && link.player_name == "Svc_Bot");
+        CHECK(t.requests.size() == 1 && t.requests[0].url == portal + "/api/v1/ticket");
+        CHECK(t.requests[0].body == "{\"audience\":\"test.example.org\"}");
+        CHECK(t.requests[0].headers.size() == 1 && t.requests[0].headers[0].second == "Bearer " + token);
+        Link stored;
+        CHECK(load_link(link_file, stored, exists, error) && exists && stored.device_token == token && stored.player_name == "Svc_Bot");
+#ifndef _WIN32
+        struct stat st{};
+        CHECK(stat(link_file.c_str(), &st) == 0 && (st.st_mode & 0777) == 0600);
+#endif
+        CHECK(o.message.find(token) == std::string::npos);
+    }
+    {   // the portal does not serve the server: the token stays stored and the player is told why
+        FakeTransport t; t.add(400, "{\"error\":\"unknown_audience\"}");
+        Outcome o = import_device_token(t, portal, audience, token, link_file, link);
+        CHECK(o.status == Status::UnknownAudience && fs::exists(link_file));
+        CHECK(o.message.find("doesn't issue tickets for test.example.org") != std::string::npos);
+        CHECK(o.message.find("The token is saved") != std::string::npos);
+    }
+    {   // a refused (revoked) token is not kept
+        FakeTransport t; t.add(401, "{\"error\":\"invalid_token\"}");
+        Outcome o = import_device_token(t, portal, audience, token, link_file, link);
+        CHECK(o.status == Status::Unlinked && !fs::exists(link_file));
+        CHECK(o.message.find("does not accept this token") != std::string::npos && o.message.find(token) == std::string::npos);
+    }
+}
+
+// The portal-link.json format that automation may write itself (docs/player-settings.md): a
+// hand-written, compact file without player_name loads; near misses are refused.
+static void handwritten_link(const fs::path &scratch) {
+    const fs::path file = scratch / "handwritten.json";
+    Link link; bool exists = false; std::string error;
+    CHECK(write_private_file(file, "{\"schema_version\":1,\"portal\":\"https://portal.example.org\",\"device_token\":\"" + token + "\"}", error));
+    CHECK(load_link(file, link, exists, error) && exists && link.portal == "https://portal.example.org" && link.device_token == token &&
+          link.player_name.empty());
+    for (std::string bad : std::vector<std::string>{
+             "{\"schema_version\":1,\"portal\":\"https://portal.example.org/\",\"device_token\":\"" + token + "\"}",   // not normalised
+             "{\"schema_version\":1,\"portal\":\"HTTPS://Portal.example.org\",\"device_token\":\"" + token + "\"}",
+             "{\"schema_version\":1,\"portal\":\"https://portal.example.org\",\"device_token\":\"" + token + " \"}",
+             "{\"schema_version\":\"1\",\"portal\":\"https://portal.example.org\",\"device_token\":\"" + token + "\"}",
+             "{\"portal\":\"https://portal.example.org\",\"device_token\":\"" + token + "\"}"}) {
+        CHECK(write_private_file(file, bad, error));
+        CHECK(!load_link(file, link, exists, error) && exists);
+    }
 }
 
 int main(int argc, char **argv) {
@@ -307,6 +405,8 @@ int main(int argc, char **argv) {
     linking();
     tickets();
     storage_and_launch(argv[1]);
+    token_import(argv[1]);
+    handwritten_link(argv[1]);
     if (failures) { std::fprintf(stderr, "%d portal checks failed\n", failures); return 1; }
     std::puts("portal link and ticket checks passed");
     return 0;

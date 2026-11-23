@@ -34,10 +34,66 @@ What happens:
 
 - **Which portal.** The `portal_url` setting (optional, `https://` only; plain `http://` is accepted for `localhost` and `127.0.0.1`, for tests). Without it, the official server `play.magtest.online` uses `https://magtest.online`, and any other server has no portal: the link is not used there, and linking is refused.
 - **The device token** the portal issues is stored in `portal-link.json`, next to `settings.json`, with the portal it belongs to. It is sent only to that portal and never logged. On Linux and macOS the file is owner-only (0600) in an owner-only folder; on Windows it is in your profile's `%APPDATA%\MAG`, whose access is limited to you.
+- **Which server the ticket is for.** Each ticket request (`POST <portal>/api/v1/ticket` with the device token as `Authorization: Bearer`) sends the game server as its audience, `{"audience": "<server_address, lowercased>"}`, so one portal can issue tickets for several servers (the public server and a test server, for example). MAG checks that the reply's `audience`, and the ticket's own audience field, are the server it asked for. A portal that does not serve that server answers `unknown_audience`, and MAG says "This account portal (…) doesn't issue tickets for <server>": set `portal_url` to that server's portal.
 - **Before each phase** (the launcher, then the engine, which signs in again), MAG asks the portal for a fresh ticket and writes it atomically, owner-only, to `portal-ticket.bin` in the installation's private `home/player` folder (on macOS, the launch's private temporary folder). The ticket is valid for minutes; the game server accepts it a few times per service.
 - **The account's name wins.** The ticket carries your account's player name, and the game must sign in with it. When it differs from `player_name`, MAG saves the account's name as your player name and tells you (in the terminal on Linux, in a message box on macOS and Windows, where `--no-prompt` keeps it to the launch's `supervisor.log`).
-- **When the ticket cannot be fetched,** MAG says why and signs in with your player name for that launch, as an unlinked MAG does, while the game server still accepts that. The reasons: the computer was unlinked on the website (MAG forgets the token; link again), the account is banned (with the reason), the account has no player name yet (claim one at `https://magtest.online/account`), or the portal is unreachable or busy. `fall_back_to_name_sign_in` in `src/player_portal.h` turns that fallback off once the server requires tickets; the launch then stops with the message.
+- **When the ticket cannot be fetched,** MAG says why and signs in with your player name for that launch, as an unlinked MAG does, while the game server still accepts that. The reasons: the computer was unlinked on the website (MAG forgets the token; link again), the account is banned (with the reason), the account has no player name yet (claim one at `https://magtest.online/account`), the portal does not issue tickets for this server, or the portal is unreachable or busy. `fall_back_to_name_sign_in` in `src/player_portal.h` turns that fallback off once the server requires tickets; the launch then stops with the message.
 - **Not linked:** nothing changes. The launch uses the no-ticket profile with your player name.
+
+#### Test computers: a service-account token
+
+Test automation signs in to a ticket-enforcing test server (such as a LAN-only `test.magtest.online`) with a **service account**. Staff mint its device token in the portal's admin panel; the portal shows it once. Install it on the test computer without the link page:
+
+```sh
+# Linux, from the MAG folder (the token file is owner-only; the token is never put on the command line)
+./MAG --server test.magtest.online --portal-url https://magtest.online --link-token < service.token
+```
+
+```powershell
+# Windows: MAG.exe has no console, so give it the token file and collect its answer
+$p = Start-Process .\MAG.exe -ArgumentList '--server','test.magtest.online','--portal-url','https://magtest.online','--link-token','--no-prompt' `
+     -RedirectStandardInput service.token -RedirectStandardOutput link.out -RedirectStandardError link.err -Wait -PassThru
+$p.ExitCode   # 0 once linked
+```
+
+`--link-token` reads one `mgd_…` token from standard input (surrounding white space is ignored), never from the command line, where other processes could read it. `--server` and `--portal-url` are optional: given ones are saved to the settings file, so later launches use the same server and portal, and without them the settings already there apply (the official server needs no `--portal-url`). MAG then stores the token in `portal-link.json` (owner-only, replaced atomically) and checks it by fetching one ticket for the server. It prints `Linked as <name> at <portal> for <server>.` and exits 0, saving the account's name as the player name; otherwise it says why and exits 1. A token the portal refuses (`invalid_token`, for example revoked) is not kept; after any other failure (the portal unreachable, or not serving the server) it stays stored and each launch tries it again. `--name` does not go with `--link-token`. On Windows the answer goes to the redirected standard output (standard error when it failed), or into a message box unless `--no-prompt`.
+
+**macOS** has no command for this: its launcher fetches tickets inside the game, not in a supervisor. Automation writes the link file itself, owner-only (`chmod 600`), as `~/Library/Application Support/MAG/portal-link.json`, next to `settings.json`, whose `server_address` (and `portal_url` for any server other than the official one) must name the same server and portal:
+
+```json
+{
+  "schema_version": 1,
+  "portal": "https://magtest.online",
+  "device_token": "mgd_…",
+  "player_name": ""
+}
+```
+
+- `schema_version` is the number 1.
+- `portal` is exactly the portal the launch uses, normalised as `portal_url` is: `https://` (plain `http://` only for `localhost` and `127.0.0.1`), lowercase host, no default port, query or trailing slash. A link to another portal is ignored for the launch, with a message.
+- `device_token` is the token: `mgd_` and 4 to 252 letters, digits, `-` or `_`.
+- `player_name` is optional; MAG fills it in from the first ticket.
+- The file is at most 4 KiB; anything else, such as another `schema_version`, is reported as a damaged link and not used.
+
+The first launch then checks the token like any linked launch; `tests.test_player_portal` loads such a hand-written file.
+
+**Development runs** (`tools/boot.py --network-profile`) take the same token through a `portal` block in the network profile:
+
+```json
+"maps_host": "test.magtest.online",
+"host_sockets": true,
+"restore_ticket_setting": false,
+"portal": {"url": "https://magtest.online", "token_file": "service.token", "audience": "test.magtest.online"}
+```
+
+- `url` follows the `portal_url` rules. `token_file` holds the `mgd_…` token; a relative path is relative to the profile. On Linux and macOS it must be owner-only (`chmod 600`). The token is never logged or written to the run's records.
+- `audience` is optional and defaults to `maps_host`, lowercased. Name it when the server is reached by another address, such as `127.0.0.1` through a tunnel.
+- With a portal block, `maps_host` may be a LAN server: an IPv4 address, or a name that resolves to one, that is loopback or private. Public addresses are refused; without a portal block profiles stay loopback-only.
+- The block selects the ticket profile, so `host_sockets` must be true, and `restore_ticket_setting`, `local_account_name` and `local_np_ticket` must be off.
+- Before the launch, `boot.py` fetches one ticket for the audience with the request MAG sends. It uses Python's `urllib` with TLS verified against the system store, no proxy and no redirects; plain `http://` is allowed only for `localhost`. It writes the ticket owner-only to `portal-ticket.bin` in the run's output folder.
+- `boot.py` then sets `PS3RECOMP_NP_LOCAL_TICKET=1`, `PS3RECOMP_NP_TICKET_FILE` (that file) and `PS3_NP_ONLINE_ID` (with `PS3RECOMP_OSK_INITIAL_TEXT`, the ticket's player name), and never `MAG_LOCAL_NO_TICKET` or `MAG_LOCAL_ACCOUNT_NAME`. The engine of an `--engine-handoff` run reuses the same ticket, which the server accepts a few times within its lifetime of minutes.
+- `network-profile.json` in the run folder records the portal, the audience and the ticket's player, expiry and account, never the token or the ticket's bytes. A refused ticket stops the run before anything starts.
+- Profiles without a portal block are unchanged.
 
 The flow is `src/player_portal.cpp` (portable, with the HTTPS transport injected). Every transport verifies the portal's certificate and host name against the system's trust store and refuses redirects, so the device token goes nowhere else:
 
@@ -97,7 +153,7 @@ If the archive is not the retail version, or the server cannot be resolved, the 
 
 The portable build decodes the archive with its own zlib decoder and hashes with its own SHA-256 (`src/player_inflate.cpp`, `src/player_sha256.cpp`), so it needs neither zlib nor a crypto library. The rewritten settings block is stored uncompressed, as the archive format allows.
 
-`tests.test_player_portal` drives the link, ticket, storage and fallback flows against a fake transport, and on Linux the OpenSSL transport against a local TLS server (verified, untrusted and mismatched certificates, chunked replies). On macOS, the same file checks the `NSURLSession` transport headless (plain http, a refused self-signed certificate, a refused redirect). `installer/tests/test_native_package_linux.py` runs the packaged Linux supervisor against a fake portal: `--link`, a ticket before each phase, the name taking over, unlinking, and the fallbacks. `tests.test_player_settings_portable` covers the portable decoder against zlib's stored, fixed and dynamic blocks, the digest, the settings-file rules, the hard-link view, and the launch hook's first-run options and window, display mode and offline fallback. `tests.test_player_settings_window` drives the settings form and the SDL2 panel with synthetic SDL events into a software renderer (fields, validation, display mode, binding capture from keyboard, mouse and controller, conflicts, clear, scope, sensitivity, reset, save, cancel and an unreadable profile), compiles the Win32 window with MinGW-w64 where available, and on Windows drives the real Win32 window with synthetic messages. Synthetic tests cover native validation/storage, editing, timed display rollback, input ownership, archive preservation and the packaged supervisor's handoff/cleanup. Full game acceptance is a separate check; these tests contain no game data and do not start MAG.
+`tests.test_player_portal` drives the link, ticket (with its audience), token import, storage and fallback flows against a fake transport, and on Linux the OpenSSL transport against a local TLS server (verified, untrusted and mismatched certificates, chunked replies). On macOS, the same file checks the `NSURLSession` transport headless (plain http, a refused self-signed certificate, a refused redirect). `installer/tests/test_native_package_linux.py` runs the packaged Linux supervisor against a fake portal: `--link`, a ticket for the server before each phase, the name taking over, unlinking, the fallbacks, and `--link-token` (standard input only, saved settings, unknown audience, a revoked token). `installer/tests/test_native_package_windows_prompt.py` checks the Windows supervisor's `--link-token` and, where MinGW-w64 is installed, compiles it with its portal sources. `tests.test_player_settings_portable` covers the portable decoder against zlib's stored, fixed and dynamic blocks, the digest, the settings-file rules, the hard-link view, and the launch hook's first-run options and window, display mode and offline fallback. `tests.test_player_settings_window` drives the settings form and the SDL2 panel with synthetic SDL events into a software renderer (fields, validation, display mode, binding capture from keyboard, mouse and controller, conflicts, clear, scope, sensitivity, reset, save, cancel and an unreadable profile), compiles the Win32 window with MinGW-w64 where available, and on Windows drives the real Win32 window with synthetic messages. Synthetic tests cover native validation/storage, editing, timed display rollback, input ownership, archive preservation and the packaged supervisor's handoff/cleanup. Full game acceptance is a separate check; these tests contain no game data and do not start MAG.
 
 The rendering adapter keeps guest memory dimensions unchanged while increasing Metal color/depth targets, viewport/scissor and partial-clear coordinates. Fragment window positions are converted to guest units before the existing sample-grid and window-origin transforms. Guest readbacks retain their original dimensions and row layout. Native (100%) uses the original backend without wrapping it.
 
