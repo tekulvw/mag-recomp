@@ -39,6 +39,11 @@ the desktop libraries SDL loads at run time (X11 or Wayland, ALSA or PulseAudio,
 reads its files from the workspace beside `MAG`, so move the whole installation folder, not just
 `MAG`.
 
+To sign in with a magtest.online account, run `./MAG --link` once (and `./MAG --unlink` to undo it).
+The supervisor itself talks to the portal over HTTPS, through the `libssl` it links (from
+`libssl-dev`, with `ca-certificates`), before each phase; messages about the account go to its
+terminal output. See [Account link](../../docs/player-settings.md#account-link).
+
 If a build fails or is cancelled, select **Retry build** with the same game and installation
 folders. Inputs are reverified before tools are installed or downloaded. Completed managed
 dependencies and verified cached downloads are reused; older logs are retained in `logs/attempts/`.

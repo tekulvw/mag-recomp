@@ -17,6 +17,7 @@ from .safety import Cancellation, contained
 
 _SUPERVISOR = r'''
 #include <openssl/evp.h>
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -31,7 +32,10 @@ _SUPERVISOR = r'''
 #include <sys/wait.h>
 #include <sys/prctl.h>
 #include <signal.h>
+#include <thread>
 #include <unistd.h>
+#include "player_portal.h"
+#include "player_settings_portable.h"
 #include "supervisor_config.h"
 #ifndef MAG_RUNTIME_DEFAULTS  // a config written before packaged defaults existed: none
 #define MAG_RUNTIME_DEFAULTS {}
@@ -75,14 +79,81 @@ static int run(const fs::path& binary,const fs::path& elf,const fs::path& cwd,st
  close(fd);child=pid;int status;while(waitpid(pid,&status,0)<0){if(errno!=EINTR)fail("Cannot wait for game");}child=0;
  return WIFEXITED(status)?WEXITSTATUS(status):128+WTERMSIG(status);
 }
-static const char* usage="Usage: MAG [--server <hostname or IPv4>] [--name <player name>]";
+static const char* usage="Usage: MAG [--server <hostname or IPv4>] [--name <player name>] | MAG --link | MAG --unlink";
+// The settings as this launch will apply them, for choosing the account portal. A damaged file
+// yields none: the game reports it and plays offline.
+static mag::PortableSettings player_settings(const fs::path& path,const std::map<std::string,std::string>& choices,bool& usable) {
+ mag::PortableSettings settings;std::string error;std::error_code none;usable=true;
+ if(fs::exists(fs::symlink_status(path,none))){try{usable=mag::parse_portable_settings(read_file(path,65536),settings,error);}catch(const std::exception&){usable=false;}}
+ if(!usable)return mag::PortableSettings{};
+ if(auto c=choices.find("MAG_PLAYER_SET_SERVER");c!=choices.end()){std::string host=c->second;if(mag::check_server_address(host,error))settings.server_address=host;}
+ if(auto c=choices.find("MAG_PLAYER_SET_NAME");c!=choices.end()&&mag::check_player_name(c->second,error))settings.player_name=c->second;
+ return settings;
+}
+// Open the link page in the player's browser, never waiting for it (best effort; the URL is also printed).
+static void open_browser(const std::string& url) {
+ if(!getenv("DISPLAY")&&!getenv("WAYLAND_DISPLAY"))return;
+ pid_t pid=fork();if(pid<0)return;
+ if(!pid){if(fork()==0){setsid();int null=open("/dev/null",O_RDWR);if(null>=0){dup2(null,0);dup2(null,1);dup2(null,2);}
+  execlp("xdg-open","xdg-open",url.c_str(),(char*)nullptr);_exit(127);}_exit(0);}
+ while(waitpid(pid,nullptr,0)<0&&errno==EINTR){}
+}
+static const char* relink="Run ./MAG --link to link it again.";
+// MAG --link: an account link through the portal's device-code page; the token is stored owner-only.
+static int link_account(const fs::path& link_file,const std::string& portal,const fs::path& settings) {
+ if(portal.empty())fail("No account portal applies to this server. Linking works with play.magtest.online, or with portal_url in "+settings.string()+".");
+ auto transport=mag::portal::make_platform_transport();mag::portal::Link link;
+ auto outcome=mag::portal::run_link(*transport,portal,"MAG launcher (Linux)",{
+  [](const mag::portal::LinkStart& start){
+   std::cout<<"To link MAG to your account, open "<<start.verification_uri<<" and enter this code:\n\n    "<<start.user_code<<"\n\n";
+   if(!start.verification_uri_complete.empty()){std::cout<<"Or open "<<start.verification_uri_complete<<"\n";open_browser(start.verification_uri_complete);}
+   std::cout<<"Waiting for you to approve the link (Ctrl+C cancels)..."<<std::endl;},
+  [](int seconds){std::this_thread::sleep_for(std::chrono::seconds(seconds));return true;}},link);
+ if(!outcome.ok())fail(outcome.message);
+ std::string error;if(!mag::portal::save_link(link_file,link,error))fail(error);
+ std::cout<<"Linked"<<(link.player_name.empty()?std::string():" as "+link.player_name)<<". Start ./MAG to play.\n";
+ if(link.player_name.empty())std::cout<<"Your account has no player name yet: claim one at "<<portal<<"/account first.\n";
+ return 0;
+}
+static int unlink_account(const fs::path& link_file) {
+ mag::portal::Link link;bool exists=false;std::string error;mag::portal::load_link(link_file,link,exists,error);
+ if(!mag::portal::forget_link(link_file,error))fail(error);
+ if(!exists){std::cout<<"MAG is not linked to an account on this computer.\n";return 0;}
+ std::cout<<"MAG is no longer linked on this computer."<<(link.portal.empty()?std::string():" To also remove it from your account, use "+link.portal+"/account.")<<"\n";
+ return 0;
+}
+// Before each phase: a fresh ticket from the linked account, or the name sign-in when unlinked.
+// The launcher phase also takes the ticket's player name, which the game then saves.
+static void portal_ticket(std::map<std::string,std::string>& env,const fs::path& link_file,const fs::path& ticket,
+                          const mag::PortableSettings& settings,bool launcher) {
+ env.erase("MAG_PLAYER_PORTAL_TICKET");
+ const std::string portal=mag::portal::portal_for(settings.server_address,settings.portal_url);
+ if(portal.empty()||settings.server_address.empty())return;
+ if(!settings.ticket_file.empty()){if(launcher)std::cerr<<"MAG account: the ticket_file setting is used instead of the account link.\n";return;}
+ auto transport=mag::portal::make_platform_transport();
+ auto result=mag::portal::prepare_launch_ticket(*transport,link_file,ticket,portal,relink);
+ using State=mag::portal::LaunchTicket::State;
+ if(result.state==State::Ready){
+  env["MAG_PLAYER_PORTAL_TICKET"]=result.file.string();
+  if(launcher&&result.player_name!=settings.player_name){
+   env["MAG_PLAYER_SET_NAME"]=result.player_name;
+   std::cerr<<"MAG account: you play as "<<result.player_name<<", the name on your linked account"
+            <<(settings.player_name.empty()?std::string():" (MAG had "+settings.player_name+")")<<". MAG saved it as your player name.\n";
+  }
+  return;
+ }
+ if(result.state!=State::Failed){if(!result.message.empty()&&launcher)std::cerr<<"MAG account: "<<result.message<<"\n";return;}
+ if(!mag::portal::fall_back_to_name_sign_in)fail(result.message);
+ std::cerr<<"MAG account: "<<result.message<<" This time MAG signs in with your player name instead.\n";
+}
 int main(int argc,char** argv) {
  umask(0077);
  try {
  // First-run choices; the game validates and saves them in the player's settings file.
- std::map<std::string,std::string> choices;
+ std::map<std::string,std::string> choices;std::string account;
  for(int i=1;i<argc;i++){std::string a=argv[i];
   if(a=="--help"||a=="-h"){std::cout<<usage<<"\n";return 0;}
+  if(a=="--link"||a=="--unlink"){account=a;continue;}
   std::string key=a.rfind("--server",0)==0?"MAG_PLAYER_SET_SERVER":a.rfind("--name",0)==0?"MAG_PLAYER_SET_NAME":"";
   if(key.empty())fail(std::string(usage)+" (unknown option "+a+")");
   auto eq=a.find('=');if(eq!=std::string::npos)choices[key]=a.substr(eq+1);else if(i+1<argc&&(a=="--server"||a=="--name"))choices[key]=argv[++i];else fail(usage);}
@@ -90,6 +161,11 @@ int main(int argc,char** argv) {
  if(config&&*config=='/')settings=fs::path(config)/"MAG";else if(const char* h=getenv("HOME");h&&*h=='/')settings=fs::path(h)/".config/MAG";
  else fail("Cannot find your configuration folder (set HOME or XDG_CONFIG_HOME)");
  fs::create_directories(settings.parent_path());private_directory(settings);settings/="settings.json";
+ const fs::path link_file=mag::portal::link_path(settings);bool settings_usable=true;
+ if(account=="--unlink")return unlink_account(link_file);
+ if(account=="--link"){auto chosen=player_settings(settings,choices,settings_usable);
+  if(!settings_usable)fail("Fix or delete "+settings.string()+" first: it is damaged.");
+  return link_account(link_file,mag::portal::portal_for(chosen.server_address,chosen.portal_url),settings);}
  char self[65536];auto n=readlink("/proc/self/exe",self,sizeof self-1);if(n<=0||n==(ssize_t)sizeof self-1)fail("Cannot locate MAG executable");self[n]=0;
  fs::path app=fs::path(self).parent_path();root=app.parent_path();auto workspace=(app/MAG_WORKSPACE).lexically_normal();auto vfs=workspace/"local/retail-v1.0";
  auto launcher=app/"bin/MagRecomp",engine=app/"bin/MagEngine",le=vfs/"PS3_GAME/USRDIR/EBOOT.elf",ee=vfs/"PS3_GAME/USRDIR/bin/mage_g.elf",es=vfs/"PS3_GAME/USRDIR/bin/mage_g.self";
@@ -103,6 +179,9 @@ int main(int argc,char** argv) {
  for(auto& d:std::map<std::string,std::string>MAG_RUNTIME_DEFAULTS)env[d.first]=d.second;
  // Preserve only desktop transport/session variables, never inherited game diagnostics.
  for(auto name:{"DISPLAY","WAYLAND_DISPLAY","XDG_RUNTIME_DIR","DBUS_SESSION_BUS_ADDRESS","XAUTHORITY","PULSE_SERVER","PIPEWIRE_REMOTE"})if(auto value=getenv(name))env[name]=value;
+ const fs::path ticket=root/"home/player/portal-ticket.bin";
+ auto launch_settings=player_settings(settings,choices,settings_usable);
+ portal_ticket(env,link_file,ticket,launch_settings,true);
  signal(SIGINT,interrupted);signal(SIGTERM,interrupted);signal(SIGHUP,interrupted);
  int result=run(launcher,le,logs,env,"launcher.log");
  if(result!=90){
@@ -114,10 +193,18 @@ int main(int argc,char** argv) {
  if(read_file(request,4096)!=expected)fail("Engine handoff request identity mismatch");
  check(engine,MAG_ENGINE_SHA256);check(ee,MAG_ENGINE_ELF_SHA256);check(es,MAG_ENGINE_SELF_SHA256);
  for(auto i=env.begin();i!=env.end();)if(i->first.find("MAG_HANDOFF_")==0||i->first.find("MAG_ENGINE_")==0||i->first=="MAG_PLAYER_SETUP"||i->first=="MAG_PLAYER_SET_SERVER"||i->first=="MAG_PLAYER_SET_NAME")i=env.erase(i);else ++i;
+ // The engine signs in again (MAS, statistics) and gets its own fresh ticket; it reads the name the
+ // launcher saved, so the settings are read again here.
+ {std::map<std::string,std::string> none;portal_ticket(env,link_file,ticket,player_settings(settings,none,settings_usable),false);}
  env["PS3_BOOT_PATH"]="/dev_bdvd/PS3_GAME/USRDIR/bin/mage_g.self";return run(engine,ee,logs,env,"engine.log");
  }catch(const std::exception& e){std::string msg="MAG could not start: "+std::string(e.what())+"\n";std::cerr<<msg;if(!root.empty()){int fd=open((root/"launch-error.log").c_str(),O_WRONLY|O_CREAT|O_TRUNC|O_NOFOLLOW,0600);if(fd>=0){write(fd,msg.data(),msg.size());close(fd);}}return 1;}
 }
 '''
+
+
+# Portable sources the supervisor compiles with it (HTTPS through OpenSSL's libssl).
+SUPERVISOR_SOURCES = ('player_portal.h', 'player_portal.cpp', 'player_portal_openssl.cpp', 'player_settings_portable.h',
+                      'player_settings_file.cpp', 'player_sign_in.h')
 
 
 def _copy_dependencies(binaries, destination, token, dynamic_libraries=()):
@@ -230,10 +317,15 @@ def package(config, workspace, destination, token=None, events=None):
             encoding='utf-8')
         source = scratch / 'supervisor.cpp'
         source.write_text(_SUPERVISOR, encoding='utf-8')
+        # The account link and ticket fetch, and the settings rules, from the workspace's own
+        # source: the same code the game binaries were built from.
+        for name in SUPERVISOR_SOURCES:
+            shutil.copyfile(_ordinary(contained(workspace, 'src/' + name)), scratch / name)
         from .native_package import _run_tool
         compiler = config.get('linux_toolchain', {}).get('cxx', 'c++')
-        _run_tool([compiler, '-std=c++17', '-O2', str(source), '-o', str(destination / 'MAG'),
-                   '-lcrypto', '-Wl,-rpath,$ORIGIN/lib'], token)
+        _run_tool([compiler, '-std=c++20', '-O2', '-I' + str(scratch), str(source),
+                   *[str(scratch / name) for name in SUPERVISOR_SOURCES if name.endswith('.cpp')],
+                   '-o', str(destination / 'MAG'), '-lssl', '-lcrypto', '-Wl,-rpath,$ORIGIN/lib'], token)
         _ordinary(destination / 'MAG').chmod(0o755)
         libraries = destination / 'lib'; libraries.mkdir()
         runtime['libraries'] = _copy_dependencies(
