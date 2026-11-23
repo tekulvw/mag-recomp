@@ -15,6 +15,7 @@
 #include <functional>
 #include <mutex>
 #include <sstream>
+#include <string>
 #include <thread>
 
 using namespace mag;
@@ -224,6 +225,31 @@ static void in_game(const fs::path& folder) {
         CHECK(item(window, IdApply) == "Apply controls" && !visible(window, IdServer) && visible(window, IdRows));
         CHECK(binding(window, 0, 0) == "W" && binding(window, 1, 1) == "Unbound");
         CHECK(shown(GetDlgItem(GetDlgItem(window, IdRows), IdBinding)) && shown(GetDlgItem(GetDlgItem(window, IdRows), IdBinding + 1)));
+        {
+            HWND rows = GetDlgItem(window, IdRows);
+            int headings = 0;
+            for (HWND child = GetWindow(rows, GW_CHILD); child; child = GetWindow(child, GW_HWNDNEXT)) {
+                const std::string name = text(child);
+                headings += name == "Native menu / command buttons" || name == "Commands" || name == "Vehicles";
+            }
+            CHECK(headings == 3);
+            SCROLLINFO info{};
+            info.cbSize = sizeof info;
+            info.fMask = SIF_ALL;
+            GetScrollInfo(rows, SB_VERT, &info);
+            CHECK(info.nMax > int(info.nPage));  // the rows scroll
+            HWND last = GetDlgItem(rows, IdBinding + 18 * 4);
+            RECT client, button;
+            GetClientRect(rows, &client);
+            GetWindowRect(last, &button);
+            MapWindowPoints(nullptr, rows, reinterpret_cast<POINT*>(&button), 2);
+            CHECK(button.top > client.bottom);  // below the fold at first
+            SendMessageW(rows, WM_VSCROLL, SB_BOTTOM, 0);
+            GetWindowRect(last, &button);
+            MapWindowPoints(nullptr, rows, reinterpret_cast<POINT*>(&button), 2);
+            CHECK(button.top >= 0 && button.bottom <= client.bottom);  // scrolled into view
+            SendMessageW(rows, WM_VSCROLL, SB_TOP, 0);
+        }
         post_click(window, IdBinding + 1 * 4 + 1 * 2);
         CHECK(wait_text(window, IdHint, "Press a key"));
         PostMessageW(window, WM_KEYDOWN, 'Q', LPARAM(1 | (0x10 << 16)));
@@ -349,6 +375,9 @@ int main(int argc, char** argv) {
     ControlsSettingsRegistration registration;
     registration.path = folder / "controls.json";
     registration.actions = {{1, "Move forward", 1, 3}, {2, "Fire", 1, 7}, {3, "Start", 17, 7, "Native menu / command buttons"}};
+    // More groups than the list shows at once (as the game's catalog has): headings and scrolling.
+    for (ActionId id = 10; id < 26; ++id)
+        registration.actions.push_back({id, "Vehicle action " + std::to_string(id), 1, 7, id < 18 ? "Commands" : "Vehicles"});
     registration.defaults.bindings = {{{InputSource::Keyboard, 26}, 1}, {{InputSource::Mouse, 0}, 2},
                                       {{InputSource::Controller, 10}, 2}, {{InputSource::Keyboard, 41}, 3, 17},
                                       {{InputSource::Controller, 6}, 3, 17}};

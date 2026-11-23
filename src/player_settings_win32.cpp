@@ -1149,6 +1149,8 @@ LRESULT CALLBACK rows_procedure(HWND hwnd, UINT message, WPARAM w, LPARAM l) {
         case SB_PAGEUP: to -= int(info.nPage); break;
         case SB_PAGEDOWN: to += int(info.nPage); break;
         case SB_THUMBTRACK: case SB_THUMBPOSITION: to = info.nTrackPos; break;
+        case SB_TOP: to = 0; break;
+        case SB_BOTTOM: to = info.nMax; break;
         default: break;
         }
         scroll_rows(to);
