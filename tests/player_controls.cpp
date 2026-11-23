@@ -478,6 +478,31 @@ static void action_time_tests() {
     check(action_value(frame,2)==0 && frame.events.size()==4,"completed short pulses retain multiplicity despite terminal up");
     for(unsigned i=0;i<4;++i)check(frame.events[i].time_ns==100+10*i,"native delivery can recover physical pulse duration and order");
 }
+// Prompt queries: bindings by action and context, the last device and the profile revision.
+static void prompt_query_tests() {
+    ControlsProfile profile;
+    profile.bindings={{{InputSource::Keyboard,27},7},{{InputSource::Mouse,1},7},{{InputSource::Controller,2},7},
+                      {{InputSource::Keyboard,41},9,uint32_t(InputContext::OnFoot)|uint32_t(InputContext::Menu)}};
+    mag_controls_configure(profile);
+    const uint64_t revision=mag_controls_profile_revision();
+    auto bound=mag_controls_action_bindings(7,InputContext::OnFoot);
+    check(bound.size()==2 && bound[0].control==PhysicalControl{InputSource::Keyboard,27} && bound[1].control.source==InputSource::Mouse,
+          "keyboard and mouse bindings in profile order; the controller stays native without a remap");
+    check(mag_controls_action_bindings(7,InputContext::Menu).empty() && mag_controls_action_bindings(9,InputContext::Menu).size()==1,
+          "bindings filtered by context");
+    profile.controller_remap=true;mag_controls_configure(profile);
+    check(mag_controls_profile_revision()>revision && mag_controls_controller_remapped(),"configure advances the revision");
+    check(mag_controls_action_bindings(7,InputContext::OnFoot).size()==3,"a remapped controller binding is listed");
+    check(mag_controls_last_device()==InputDevice::None,"no device before a press");
+    mag_controls_set_capture_state({true,true,false,true,true,false,1});
+    mag_controls_push_event({{InputSource::Keyboard,27},true,2});
+    check(mag_controls_last_device()==InputDevice::KeyboardMouse,"a key press");
+    mag_controls_push_controller_axes({.1,0,0,0,0,0},false);
+    check(mag_controls_last_device()==InputDevice::KeyboardMouse,"a resting stick is no device change");
+    mag_controls_push_controller_axes({0,-.8,0,0,0,0},false);
+    check(mag_controls_last_device()==InputDevice::Controller,"a stick pushed past half way");
+}
+
 int main(int argc, char** argv) {
     try {
         if (argc!=2) return 2;
@@ -488,7 +513,7 @@ int main(int argc, char** argv) {
         else if(name=="device") device_tests(); else if(name=="device-order") device_order_tests(); else if(name=="sample-phases") sample_phase_tests();
         else if(name=="sample-lifecycle") sample_lifecycle_tests(); else if(name=="sample-contexts") sample_context_tests(); else if(name=="sample-revocation") sample_revocation_tests();
         else if(name=="sample-mouse-revocation") sample_mouse_revocation_tests(); else if(name=="configure-policy") configure_policy_tests(); else if(name=="native-neutral") native_neutral_tests();
-        else if(name=="precise-mouse") precise_mouse_tests(); else if(name=="capture-producers") capture_producer_tests(); else if(name=="source-disconnect") source_disconnect_tests(); else if(name=="action-time") action_time_tests(); else return 2;
+        else if(name=="precise-mouse") precise_mouse_tests(); else if(name=="capture-producers") capture_producer_tests(); else if(name=="source-disconnect") source_disconnect_tests(); else if(name=="action-time") action_time_tests(); else if(name=="prompt-queries") prompt_query_tests(); else return 2;
         return 0;
     } catch(const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }
 }

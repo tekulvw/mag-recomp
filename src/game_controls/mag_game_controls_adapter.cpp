@@ -12,11 +12,15 @@
 #include <bitset>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <limits>
 #include <map>
 #include <mutex>
 #include <set>
 #include <stdexcept>
+#include <string>
 #include <utility>
 #include <vector>
 using namespace mag;
@@ -88,6 +92,11 @@ float value_curve(uint32_t kind, float v) {
 bool system_action(ActionId action) {
     const auto* entry = mag_game_controls_action(action);
     return entry && entry->system_channel >= 0;
+}
+// Situational actions are recognized by their own token only (7.3) and never required (7.4).
+bool optional_action(ActionId action) {
+    const auto* entry = mag_game_controls_action(action);
+    return entry && entry->optional;
 }
 
 bool contains(const std::vector<uint32_t>& values, uint32_t value) {
@@ -225,6 +234,9 @@ struct MagGameControlsAdapter::State {
     std::mutex pending_mutex;
     std::optional<ControlsProfile> pending;
     const char* status = "waiting for input poll";
+    std::string error_status;  // status text of the last error (InvalidState and its reason)
+    void (*census_sink)(const char*) = nullptr;
+    std::set<std::string> census_seen;
 
     // Scopes on the owning thread.
     std::optional<uint64_t> thread;
@@ -256,6 +268,34 @@ struct MagGameControlsAdapter::State {
 
     MagGameControlsMouseAim latch;
     std::optional<MagMouseAimIdentity> latch_identity;
+    bool wake_positive = false;  // sign of the last wake input (7.5); the first one is positive
+
+    // Opt-in diagnostics (MAG_GAME_CONTROLS_TRACE=1): about once a second, how far mouse look got
+    // through this adapter, so a camera that does not turn can be traced to the step that stopped it.
+    struct LookTrace {
+        bool on = [] { const char* v = std::getenv("MAG_GAME_CONTROLS_TRACE"); return v && *v && std::strcmp(v, "0"); }();
+        std::chrono::steady_clock::time_point next{};
+        unsigned routes{}, eligible{}, look_held{}, held_by_menu{}, mouse_eligible{}, motion_frames{}, prepares{},
+            prepare_motion{}, latched{}, consumer_seams{}, consumed{}, capture_on{}, capture_off{};
+        double dx{}, dy{};
+    } look_trace;
+    void trace_look() {
+        auto& t = look_trace;
+        if (!t.on) return;
+        const auto now = std::chrono::steady_clock::now();
+        if (now < t.next) return;
+        if (t.routes)
+            std::fprintf(stderr,
+                         "[game-controls] trace look: routes=%u gameplay=%u look_held=%u held_by_menu=%u mouse_eligible=%u "
+                         "motion_frames=%u (dx %.0f dy %.0f) prepared=%u with_motion=%u latched=%u consumer_seams=%u consumed=%u "
+                         "mouse lock requests on/off=%u/%u\n",
+                         t.routes, t.eligible, t.look_held, t.held_by_menu, t.mouse_eligible, t.motion_frames, t.dx, t.dy,
+                         t.prepares, t.prepare_motion, t.latched, t.consumer_seams, t.consumed, t.capture_on, t.capture_off);
+        const bool on = t.on;
+        t = LookTrace{};
+        t.on = on;
+        t.next = now + std::chrono::seconds(1);
+    }
     std::map<uint32_t, AssistEntry> assist;
     std::vector<std::optional<AssistScope>> cleanup_scopes;
     Lifecycle lifecycle;
@@ -531,17 +571,23 @@ struct MagGameControlsAdapter::State {
         if (!mag_input_capture_poll_begin(poll_number)) throw std::runtime_error("capture layer refused the input poll");
         capture_poll_open = true;
     }
-    // 8.2: the replacement owns the keyboard only while the local handler is validly registered.
+    // 8.2: the replacement owns the keyboard only while the local handler is validly registered,
+    // and mutes the legacy keyboard pad only while this poll would attach on foot: in an in-match
+    // menu it routes the system buttons alone, so the pad keeps the menu's other buttons.
     void update_keyboard_ownership() {
-        bool owned = false;
+        bool owned = false, on_foot = false;
         try {
-            if (const auto local = guest.local_owner())
+            if (const auto local = guest.local_owner()) {
                 owned = !lifecycle.exhausted && !lifecycle.is_tombstoned(local->handler) &&
                         removal_known_clear(local->handler) && guest.system_routes().has_value();
+                on_foot = owned && local->enabled && guest.gameplay_routes().has_value() && build_contract(*local);
+            }
         } catch (...) {
+            mag_input_capture_set_keyboard_pad_live(0);
             mag_input_capture_set_keyboard_owner(0);
             throw;
         }
+        mag_input_capture_set_keyboard_pad_live(owned && !on_foot);
         mag_input_capture_set_keyboard_owner(owned);
     }
     void sample_seal() {
@@ -603,8 +649,40 @@ struct MagGameControlsAdapter::State {
 
     // ---- Handler update and attachment (7.2, 7.4) --------------------------------------------
 
+    // Diagnostics only: describe the handler being updated, once per distinct description.
+    void census(uint32_t handler) noexcept {
+        if (!census_sink || census_seen.size() >= 2048) return;
+        try {
+            auto r = guest.reads();
+            const char* role = owner_handler(handler) ? "owner"
+                : gameplay_routes && contains(*gameplay_routes, handler) ? "gameplay-route"
+                : contains(system_routes, handler) ? "system-route" : "other";
+            char head[160];
+            std::snprintf(head, sizeof head, "census role=%s context=%s enabled=%d state=%u/%08X controls=", role,
+                          !frame ? "none" : gameplay_eligible ? "OnFoot" : "Menu",
+                          int(r.u8(uint64_t(handler) + 0x40).value_or(0xFF)), owner ? unsigned(owner->state_id) : 0u,
+                          owner ? r.u32(owner->state).value_or(0) : 0u);
+            std::string line = head;
+            if (const auto controls = guest.watched_controls(handler)) {
+                for (const auto& control : *controls) {
+                    char item[24];
+                    std::snprintf(item, sizeof item, "%08X:%u,", control.token, control.channel);
+                    line += item;
+                }
+            } else {
+                line += "unreadable";
+            }
+            if (census_seen.insert(line).second) census_sink(line.c_str());
+        } catch (...) {
+        }
+    }
+
     void handler_enter(MagGameControlsCpu& cpu) {
         if (++handler_depth != 1) return;
+        update_handler(cpu);
+        census(address(cpu.gpr[3]));  // as the update leaves it
+    }
+    void update_handler(MagGameControlsCpu& cpu) {
         recognition_handler = 0;
         if (!sample_key || !sealed) return;
         auto routes = guest.system_routes();
@@ -637,6 +715,7 @@ struct MagGameControlsAdapter::State {
         std::set<ActionId> needed;
         for (const auto& binding : profile.bindings)
             if ((binding.contexts & uint32_t(InputContext::OnFoot)) && !system_action(binding.action) &&
+                !optional_action(binding.action) &&
                 (binding.control.source != InputSource::Controller || profile.controller_remap))
                 needed.insert(binding.action);
         std::set<uint32_t> tokens;
@@ -676,7 +755,8 @@ struct MagGameControlsAdapter::State {
             for (const auto& control : contract->controls) {
                 const bool look = mag_game_controls_look_token(control.token);
                 const ActionId action = look ? control.token : mag_game_controls_token_action(control.token);
-                if ((look || mag_game_controls_action(action)) && !add(control.channel, action)) return false;
+                if ((look || (mag_game_controls_action(action) && !optional_action(action))) && !add(control.channel, action))
+                    return false;
             }
         for (const auto& action : mag_game_controls_actions())
             if (action.system_channel >= 0 && !add(uint32_t(action.system_channel), action.id)) return false;
@@ -724,7 +804,10 @@ struct MagGameControlsAdapter::State {
             reset_host_caches();
             gameplay_receipts.clear();
         }
-        if (mouse_capture) mouse_capture(gameplay_eligible && profile.mode != InputMode::Controller);
+        // The same request as each handler update makes (route): attaching happens every poll, and
+        // asking for the lock here while a menu holds look would take it back every poll for the
+        // handler update to release again, so the lock flapped for as long as the menu stayed.
+        if (mouse_capture) mouse_capture(gameplay_eligible && !look_held_by_menu && profile.mode != InputMode::Controller);
         attached_tick = tick;
         status = gameplay_eligible ? "on-foot Rust input attached" : "native menu buttons attached";
         return true;
@@ -763,8 +846,16 @@ struct MagGameControlsAdapter::State {
             if (gameplay_eligible)
                 status = look_held_by_menu ? "on-foot input attached; a menu holds look" : "on-foot Rust input attached";
         }
-        if (mouse_capture) mouse_capture(gameplay_eligible && !look_held_by_menu && profile.mode != InputMode::Controller);
+        const bool capture_mouse = gameplay_eligible && !look_held_by_menu && profile.mode != InputMode::Controller;
+        if (mouse_capture) mouse_capture(capture_mouse);
         if (mouse_eligible && mouse_motion()) mag_controls_accept_mouse(*sample_key);
+        if (look_trace.on) {
+            auto& t = look_trace;
+            ++t.routes; t.eligible += gameplay_eligible; t.look_held += look_held; t.held_by_menu += look_held_by_menu;
+            t.mouse_eligible += mouse_eligible; (capture_mouse ? t.capture_on : t.capture_off)++;
+            if (mouse_motion()) { ++t.motion_frames; t.dx += frame->mouse_dx; t.dy += frame->mouse_dy; }
+            trace_look();
+        }
         frame->policy = mag_controls_current_policy();
     }
 
@@ -809,9 +900,15 @@ struct MagGameControlsAdapter::State {
         if (!token || !binding || !tuning || !*binding || *binding > 0xFFFFFFF3 || !*tuning || *tuning > 0xFFFFFFD7) return false;
         const auto channel = r.u32(uint64_t(*binding) + 8);
         if (!channel || *channel >= 32) return false;
-        const auto mapped = channel_actions.find(*channel);
-        if (mapped == channel_actions.end()) return false;
-        const ActionId action = mapped->second;
+        // A watched token that names a catalog action is that action wherever it is watched; any
+        // other token takes the action of its channel.
+        const ActionId named = mag_game_controls_token_action(*token);
+        ActionId action = mag_game_controls_action(named) ? named : 0;
+        if (!action) {
+            const auto mapped = channel_actions.find(*channel);
+            if (mapped == channel_actions.end()) return false;
+            action = mapped->second;
+        }
 
         // Step 3.
         const auto* catalog = mag_game_controls_action(action);
@@ -828,8 +925,11 @@ struct MagGameControlsAdapter::State {
                 gameplay_eligible = mouse_eligible = false;
                 return false;
             }
+            // Situational actions may be watched by any system route (a vehicle's or a menu's own
+            // handler); other actions only by the owner or a gameplay route.
             if (gameplay ? mag_game_controls_token_action(*token) != action
-                         : !gameplay_routes || !contains(*gameplay_routes, handler))
+                         : !(gameplay_routes && contains(*gameplay_routes, handler)) &&
+                               !(optional_action(action) && contains(system_routes, handler)))
                 return false;
         }
 
@@ -881,6 +981,9 @@ struct MagGameControlsAdapter::State {
         } else if (gameplay) {
             host_caches[n] = {*owner, handler, *token, *binding, *tuning, tuple};
             if (offer) gameplay_receipts[action] = *offer;
+        } else if (optional_action(action)) {
+            // Given back like a system button when the adapter lets go (6.5).
+            system_caches[n] = {handler, *token, *binding, *tuning, tuple};
         }
         if (accept) mag_controls_accept_action(*sample_key, action, *offer);
 
@@ -968,6 +1071,8 @@ struct MagGameControlsAdapter::State {
             return;
         }
         if (mouse_motion()) mag_controls_accept_mouse(*sample_key);
+        ++look_trace.prepares;
+        if (mouse_motion()) ++look_trace.prepare_motion;
         const auto look = mag_controls_mouse_look(frame->mouse_dx, frame->mouse_dy, profile.mouse, AimMode::Hip);
         const MagMouseAimIdentity identity{session, poll_number, tick, frame->capture_generation, current->handle(),
                                            current->actor, current->logic, current->controller, current->state, current->aim};
@@ -977,9 +1082,16 @@ struct MagGameControlsAdapter::State {
             return;
         }
         latch_identity = identity;
+        ++look_trace.latched;
+        // 7.5: the wake input keeps a soldier at rest running the look consumer while the mouse moves.
+        float yaw_input = 0.0f;
+        if (look.yaw != 0 || look.pitch != 0) {
+            wake_positive = !wake_positive;
+            yaw_input = wake_positive ? MouseWakeYawInput : -MouseWakeYawInput;
+        }
         auto r = guest.reads();
-        if (!r.write_f32(uint64_t(current->actor) + ActorYawInput, 0.0f) || !r.write_f32(uint64_t(current->actor) + ActorPitchInput, 0.0f))
-            throw std::runtime_error("cannot clear the stick look rates");
+        if (!r.write_f32(uint64_t(current->actor) + ActorYawInput, yaw_input) || !r.write_f32(uint64_t(current->actor) + ActorPitchInput, 0.0f))
+            throw std::runtime_error("cannot write the stick look rates");
         status = "on-foot mouse prepared";
     }
 
@@ -1008,6 +1120,7 @@ struct MagGameControlsAdapter::State {
 
     // BasicYaw, BasicPitch, SprintYaw, SprintPitch: add the latched displacement once.
     void consume(Hook event, MagGameControlsCpu& cpu) {
+        ++look_trace.consumer_seams;
         if (!latch_identity || !actor_owner || !frame_valid()) return;
         const auto current = guest.resolve_owner(actor_owner->handler, true);
         if (!current || *current != *actor_owner) return;
@@ -1022,6 +1135,7 @@ struct MagGameControlsAdapter::State {
         if (address(cpu.gpr[actor_register]) != actor_owner->actor) return;
         const auto delta = latch.consume(*latch_identity, site, event == Hook::BasicPitch ? cpu.fpr[1] : 1.0);
         if (!delta) return;
+        if (*delta != 0) ++look_trace.consumed;
         if (event == Hook::BasicYaw) {
             auto r = guest.reads();
             const uint64_t request = uint64_t(actor_owner->actor) + ActorYawRequest;
@@ -1196,15 +1310,29 @@ MagGameControlsAdapter::~MagGameControlsAdapter() {
 }
 
 bool MagGameControlsAdapter::dispatch(MagControlsHook event, MagGameControlsCpu cpu) noexcept {
+    auto& s = *state_;
     try {
-        return state_->dispatch(event, cpu);
+        return s.dispatch(event, cpu);
+    } catch (const std::exception& error) {
+        // Name the reason, so a log shows which guest record or engine rule refused.
+        try {
+            s.error_status = std::string(InvalidState) + ": " + error.what();
+            s.cancel_quietly(s.error_status.c_str());
+        } catch (...) {
+            s.cancel_quietly(InvalidState);
+        }
     } catch (...) {
-        state_->cancel_quietly(InvalidState);
-        return false;
+        s.cancel_quietly(InvalidState);
     }
+    return false;
 }
 
 const char* MagGameControlsAdapter::status() const noexcept { return state_->status; }
+
+void MagGameControlsAdapter::set_census(void (*sink)(const char*)) {
+    state_->census_sink = sink;
+    state_->census_seen.clear();
+}
 
 void MagGameControlsAdapter::request_profile(const ControlsProfile& profile) {
     mag_game_controls_validate_profile(profile);

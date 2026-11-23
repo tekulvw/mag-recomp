@@ -24,6 +24,7 @@ namespace {
 std::string calls;
 XINPUT_STATE pads[4];
 bool connected[4];
+bool e_down = true;
 int owned = 0, async_reads = 0, dialog = 0, withhold = 0, osk_handles = 0;
 void* controller_of_port[4];
 
@@ -41,10 +42,11 @@ DWORD WINAPI XInputGetState(DWORD port, XINPUT_STATE* state) {
 }
 SHORT WINAPI GetAsyncKeyState(int key) {
     ++async_reads;
-    return key == 'E' ? SHORT(0x8000) : 0;
+    return key == 'E' && e_down ? SHORT(0x8000) : 0;
 }
 // The capture layer.
 int mag_input_capture_keyboard_owned(void) { return owned; }
+int mag_input_capture_keyboard_pad_muted(void) { return owned; }
 void mag_input_capture_backend_begin(void) { calls += "begin;"; }
 void mag_input_capture_controller_open(void* controller, unsigned port) {
     controller_of_port[port] = controller;
@@ -136,7 +138,12 @@ void keyboard() {
     mag_player_xinput_get_state(0, &state);
     require(mag_player_get_async_key_state('E') == 0, "owned with a controller");
     owned = 0;
-    require(mag_player_get_async_key_state('E') == SHORT(0x8000), "released ownership restores the fallback");
+    // A key held across the unmute (gameplay to an in-match menu) waits for a release.
+    require(mag_player_get_async_key_state('E') == 0, "a key held across the unmute does not count");
+    e_down = false;
+    require(mag_player_get_async_key_state('E') == 0, "released");
+    e_down = true;
+    require(mag_player_get_async_key_state('E') == SHORT(0x8000), "a fresh press after the unmute counts");
 }
 
 void window() {

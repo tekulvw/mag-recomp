@@ -77,12 +77,22 @@ typedef struct {
 } MagXInputCapture;
 void mag_win32_xinput_capture(const MagXInputGamepad* in, MagXInputCapture* out);
 
-/* What the SDK's keyboard fallback reads for one key: nothing while the controls adapter owns the
- * keyboard, otherwise the system's answer unchanged. */
-int16_t mag_win32_keyboard_fallback_state(int16_t system_state, int keyboard_owned);
+/* What the SDK's keyboard fallback reads for one key: nothing while the controls adapter mutes the
+ * keyboard pad (player_input_capture.h), otherwise the system's answer unchanged. */
+int16_t mag_win32_keyboard_fallback_state(int16_t system_state, int keyboard_pad_muted);
 /* Whether a Raw Input report reaches the capture core: presses and motion only while the game
  * window is focused; releases always, so a control held when focus left can still end. */
 int mag_win32_raw_input_admitted(int window_focused, int press_or_motion);
+
+/* Window messages and virtual keys of the menu-mode check, restated (checked against the system
+ * headers in the Windows build). */
+enum { MAG_WIN32_WM_SYSKEYDOWN = 0x0104, MAG_WIN32_WM_SYSKEYUP = 0x0105, MAG_WIN32_WM_SYSCHAR = 0x0106 };
+enum { MAG_WIN32_VK_MENU = 0x12, MAG_WIN32_VK_F4 = 0x73, MAG_WIN32_VK_F10 = 0x79 };
+/* Whether the game window's pump withholds a message from the default window procedure because it
+ * would enter the window's menu mode, whose modal loop stops the pump and the game with it: the
+ * release of a lone Alt or of F10, and Alt with a character key (a menu mnemonic, Alt+Space).
+ * Alt+F4 (a key press) and everything else pass. */
+int mag_win32_withholds_menu_message(unsigned message, uintptr_t wparam);
 
 #ifdef __cplusplus
 }

@@ -6,6 +6,7 @@
 #include <mutex>
 namespace {
 std::atomic<bool> keyboard_owned{false};
+std::atomic<bool> keyboard_pad_live{false};
 struct Capture {
     std::mutex mutex;
     std::atomic<bool> collecting{false};
@@ -30,6 +31,12 @@ void mag_input_capture_set_keyboard_owner(int owned) {
 }
 int mag_input_capture_keyboard_owned(void) {
     return keyboard_owned.load(std::memory_order_acquire);
+}
+void mag_input_capture_set_keyboard_pad_live(int live) {
+    keyboard_pad_live.store(live!=0,std::memory_order_release);
+}
+int mag_input_capture_keyboard_pad_muted(void) {
+    return keyboard_owned.load(std::memory_order_acquire) && !keyboard_pad_live.load(std::memory_order_acquire);
 }
 int mag_input_capture_poll_begin(uint64_t sequence) {
     auto& c=capture();std::lock_guard lock(c.mutex);

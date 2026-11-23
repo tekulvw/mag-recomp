@@ -161,8 +161,11 @@ assist record embedded at `+0x1A0`. A *clean* assist record has u32 zero at `+0`
 
 ### 2.3 Game actions
 
-Action identifiers are the game's action-name tokens. The adapter's catalog (label, whether a
-controller button may be remapped to it, system channel for system buttons):
+Action identifiers are the game's action-name tokens: CRC-32 (the zlib polynomial) of the
+lower-cased action name, for example `fire` is `0x58DE09CF`. The game's on-screen prompts name the
+same actions as `[Name]` placeholders (`[Action]`, `[OS_Enter]`, `[Bleedout]`), so a prompt names
+an adapter action exactly (`mag_game_controls_prompt_action`). The adapter's catalog (label,
+whether a controller button may be remapped to it, system channel for system buttons):
 
 | Token | Label | Controller | System channel |
 | --- | --- | --- | --- |
@@ -187,8 +190,30 @@ controller button may be remapped to it, system channel for system buttons):
 | `0xEAB2ACF1` | D-pad left (commands) | yes | 2 |
 | `0x3D898BBF` | D-pad right (commands) | yes | 3 |
 
+**Situational actions** (catalog revision 2) are gameplay actions the game watches only in some
+situations: when the player is downed, on an on-screen prompt, in a command menu or in a vehicle.
+They are keyboard and mouse only (a controller presses them natively), *optional* (never required
+for the channel contract, 7.4) and recognized by their own token wherever the game watches them
+(7.3):
+
+| Token | Name | Label | Default key |
+| --- | --- | --- | --- |
+| `0x33E32A99` | os_enter | Confirm (on-screen prompts) | Return |
+| `0x75453127` | os_cancel | Back (on-screen prompts) | Backspace |
+| `0x40FEEC35` | bleedout | Bleed out (when downed) | X |
+| `0xC6DCD89F` | commandscreen | Command screen | M |
+| `0xA79B7198` | tcm_abilities | Tactical menu: abilities | 1 |
+| `0x6B7B7C6C` | tcm_frago | Tactical menu: FRAGO | 2 |
+| `0xF69D4193` | tcm_voicechat | Tactical menu: voice chat | 3 |
+| `0x74700E10` | vseatnext | Change seats | V |
+| `0xE3DD5118` | vsmoke | Smoke screen | B |
+
+The default keys are not yet verified against the game: which handler watches each token, on
+which channel and in which context comes from a census of a hosted match (`MAG_GAME_CONTROLS_TRACE`,
+section 4).
+
 Token aliases (a watched token that stands for a catalog action): `0x68C3570D` is Aim,
-`0x9716C7A1` is Crouch/prone, `0x71C8F2F0` is Interact. Every other token stands for itself.
+`0x9716C7A1` is Crouch/prone, `0x71C8F2F0` (contaction, the held form) is Interact. Every other token stands for itself.
 
 Look tokens (the four look-axis channels): `0xC8A3E21D`, `0x941734A2`, `0x661CB595`, `0xC34F3A66`.
 
@@ -258,12 +283,32 @@ rules in section 5 depend on (`002726B8`, `0026F91C`, `0023F108`).
 **Thread ownership.** The first thread that delivers `OuterEnter` after start owns the adapter for
 the session; events from every other thread are ignored entirely.
 
+**Census.** With `MAG_GAME_CONTROLS_TRACE=1`, or when a file named `controls-trace` exists next to the
+controls preferences (the packaged players pass no `MAG_` variables to the engine; on macOS that is
+`~/Library/Application Support/MAG/controls-trace`), the runtime prints, once per distinct description, each
+handler the game updates: its role (the local player's handler, a gameplay route, another system
+route or other), the attached context, whether it is enabled, the local player's movement state id
+and vtable, and every watched token with its channel (`[game-controls] census ...`). It reads guest
+memory only and changes nothing; it is how situational tokens, their channels and the vehicle
+states are learned from a match.
+
 **Status.** The adapter keeps a short status string. The runtime prints it (prefix
 `[game-controls]`) whenever it changes, except while it says it is waiting for a poll; the
 attachment statuses all print as "on-foot controls attached".
 
 **Failures.** Any error inside event handling cancels (section 6.2) with the status "rejected
-unavailable or invalid state" and makes the event return false (the game proceeds natively).
+unavailable or invalid state", followed by a colon and the error's own description when it has one
+(for example "invalid tuning record"), and makes the event return false (the game proceeds
+natively).
+
+**Diagnostics.** `MAG_GAME_CONTROLS_TRACE=1` (any value but empty or `0`) adds opt-in log lines;
+nothing changes behaviour. About once a second while handlers update, `trace look` counts how far
+mouse look got: handler updates, gameplay eligibility, look held by a menu, mouse eligibility,
+frames with motion and their summed counts, prepared and latched frames, look consumer seams run,
+nonzero displacements consumed, and the mouse-lock requests made (on and off). Every five seconds,
+`trace cost` gives the owner thread's update ticks, its hook calls per tick, the time spent in the
+hooks per tick, and each event above 2% of that time (by its number in `MagControlsHook`). The
+desktop backends add their own lines (section 8.1).
 
 **Construction** validates the profile, requires a session and both memory callbacks, configures
 the engine with the profile, reports the context as unsupported, records the engine's capture
@@ -479,8 +524,8 @@ since last seen, reset system and host caches, clear receipts and cancel the mou
    - adopt the owner; keep the gameplay routes (or none); gameplay is eligible when gameplay routes
      exist, the contract was built and the owner's handler is enabled;
    - clear the channel map, gameplay and system receipts, mouse eligibility;
-   - map each contract channel whose token is a look token or a catalog action (after aliases) to
-     that action; two different actions on one channel cancel ("ambiguous native action channel");
+   - map each contract channel whose token is a look token or a catalog action (after aliases)
+     that is not situational to that action; two different actions on one channel cancel ("ambiguous native action channel");
      map each catalog system channel to its system action;
    - report the context supported and request desktop capture unless the mode is Controller;
    - the semantic context is OnFoot when gameplay is eligible, otherwise Menu; attach the sample
@@ -490,7 +535,9 @@ since last seen, reset system and host caches, clear receipts and cancel the mou
      generation (a context change is not a device reset);
    - remember the context and the new capture generation; without gameplay eligibility reset host
      caches and clear gameplay receipts; request relative mouse capture only with gameplay
-     eligibility outside Controller mode; record the attaching tick; status "on-foot Rust input
+     eligibility outside Controller mode and while no menu holds look (the same request as step 5;
+     a frame attaches at every poll, so asking for the lock here regardless would take it back at
+     every poll while a menu holds look); record the attaching tick; status "on-foot Rust input
      attached" or "native menu buttons attached".
 4. Remember the system routes. When gameplay routes are now unavailable (a menu opened during the
    poll), revoke gameplay and mouse eligibility, reset host caches, clear gameplay receipts and
@@ -520,14 +567,16 @@ Returns false (the game recognizes the control itself) unless every step below a
    frame. If the owner no longer matches, cancel ("native input routing changed") and return false.
 2. Control record `n` = r29 (not above `0xFFFFFFE3`); r31 and r3 must equal `n+8`. Read token,
    binding (nonzero, not above `0xFFFFFFF3`), tuning (nonzero, not above `0xFFFFFFD7`) and the
-   binding's channel (below 32). The action is the channel map's entry; none: return false.
+   binding's channel (below 32). The action is the token's catalog action (after aliases) when
+   it has one, otherwise the channel map's entry; none: return false.
 3. `system` = the action has a system channel; `gameplay` = the current handler is the owner's
    handler.
    - System action: the current handler must still be in the system routes, otherwise cancel
      ("native system route changed") and return false.
    - Other actions: gameplay must be eligible; the channel contract must still be current (7.4),
      otherwise revoke gameplay and mouse eligibility and return false; on the owner's handler the
-     token (after aliases) must equal the action; on another handler it must be a gameplay route.
+     token (after aliases) must equal the action; on another handler it must be a gameplay route,
+     or, for a situational action, any system route (a vehicle's or a menu's own handler).
 4. `mouse look` = gameplay, a look token, mouse eligible and the frame's look owner is the mouse.
    Ask the engine for this action's offer (`mag_controls_offer`). `remapped` = the profile remaps
    the controller and the action allows controller remapping. `deny native` = (gameplay or system)
@@ -561,7 +610,8 @@ Returns false (the game recognizes the control itself) unless every step below a
 12. Non-system action on the owner's handler: record a host cache. With an offer, keep it as a
     gameplay receipt and, when not blocked and the value is above zero, accept the action. On a
     gameplay route handler (not the owner's) nothing is recorded: no host cache, no receipt, no
-    acceptance; the published tuple is the only effect.
+    acceptance; the published tuple is the only effect. A situational action on another handler
+    is recorded as a system cache (6.5), so it is given back when the adapter lets go.
 13. Return true.
 
 `ControlCallback`: when the current control is r29 and the frame is no longer valid, write the
@@ -570,8 +620,8 @@ neutral tuple to it, forget its host cache, set r0 to zero and clear the current
 ### 7.4 Channel contract
 
 Built from the owner's watched controls (5.2). The needed set is every profile binding active in
-OnFoot whose action is not a system action (controller bindings count only when the profile remaps
-the controller). Every token in the list must be unique. Each look token adds its channel to the
+OnFoot whose action is neither a system action nor situational (controller bindings count only
+when the profile remaps the controller). Every token in the list must be unique. Each look token adds its channel to the
 required mask; all four must be present. Each token that is (after aliases) a catalog action or a
 bound action is removed from the needed set and adds its channel to the mask. The contract exists
 when the needed set ends empty and the mask is nonzero. It is *current* while the owner's watched
@@ -592,8 +642,19 @@ list still equals it exactly and gameplay routes are available.
   generation, actor handle `generation<<16|index`, actor, logic, controller, state, aim kind),
   yaw = minus the converted yaw (screen-right motion turns the other way in the game's yaw), pitch
   as converted, time step f31, rotation allowed, and mouse ownership = the look owner is the mouse.
-  When prepared, write 0.0 to the actor's two look-rate inputs (failure is an error) and set
-  status "on-foot mouse prepared".
+  When prepared, write the actor's two look-rate inputs (failure is an error) and set status
+  "on-foot mouse prepared": the pitch input is 0.0; the yaw input is 0.0 when the converted motion
+  is zero in both axes, else the *wake input* `0.001`, its sign flipping at every prepared frame
+  that has motion (the first is positive).
+  Why the wake input: a soldier who has stood still for a few seconds settles into an at-rest
+  state in which the game stops running its basic look consumer (so the `BasicYaw` and
+  `BasicPitch` seams no longer fire), and it leaves that state only when the look-rate input
+  turns the soldier faster than a very small stillness bound. Mouse motion reaches the game at
+  those seams and not through the look-rate input, so without the wake input the mouse could not
+  turn a soldier at rest, horizontally or vertically. The wake input is a thousandth of full stick
+  deflection: about 300 times the stillness bound, a turn of a few thousandths of a degree per
+  frame, and the alternating sign cancels it over consecutive frames. A smaller value (one
+  millionth) was measured not to wake the soldier (section 10).
 - `YawRateEnter`: counts depth; it is the observed one when at depth one, r3 is the actor-scope
   owner's actor and `lr` matches the caller for the owner's aim kind (sprint or basic).
   `SprintPitchRateEnter` likewise with the sprint caller.
@@ -675,7 +736,7 @@ The SDL backend runs on the game window's thread. The SDK's window pump polls SD
 takes its keyboard-pad sample; compile definitions on `libs/input/pad_sdl_keyboard.c` rename that
 sample and the keyboard-pad state, and `player_input_sdl_keyboard.c` takes their place: the sample
 first runs the capture backend with the same window and dialog flag, then the SDK's own sample; the
-state is neutral (window flag kept) while the adapter owns the keyboard (8.2), as the macOS window
+state is neutral (window flag kept) while the adapter mutes the keyboard pad (8.2), as the macOS window
 pad is. While capture is requested an SDL event filter (chained after any filter already set)
 observes keyboard, mouse and window events and queues them for the pump; it passes every event
 on except one: a press of Escape on the focused game window while the adapter owns the keyboard
@@ -718,10 +779,14 @@ CMake refuses to configure without it.
 While capture is requested the window registers for Raw Input from keyboards and mice, with no
 flags (legacy key and mouse messages still flow, and input arrives only while the application is
 in the foreground); the registration is removed when capture stops or the window changes. The
-backend reads `WM_INPUT` for the game window and never consumes it. It withholds exactly one
-message: a key press of Escape on the focused game window while the adapter owns the keyboard and
-requests capture and no dialog owns the keyboard, which the window procedure would treat as quit
-(the Linux rule; closing the window still quits). Keys are scan codes with their E0 prefix,
+backend reads `WM_INPUT` for the game window and never consumes it. It withholds a key press of
+Escape on the focused game window while the adapter owns the keyboard and requests capture and no
+dialog owns the keyboard, which the window procedure would treat as quit (the Linux rule; closing
+the window still quits). While capture is installed it also withholds the messages that would put
+the window in its menu mode: the release of a lone Alt or of F10 (`WM_SYSKEYUP`) and Alt with a
+character key (`WM_SYSCHAR`, a menu mnemonic or Alt+Space). The game window has no menu, and the
+modal menu loop would stop the pump, and the game with it, until another key or a click. Alt+F4 is
+a key press and still closes the window; Alt itself still reaches the game as a key. Keys are scan codes with their E0 prefix,
 translated by an explicit table (`player_input_win32_map.c`) to HID usages; E1 sequences (Pause),
 escape-sequence fragments, the fake shifts Windows adds around navigation keys, Break, system and
 media keys and the GUI keys are not captured. Raw Input repeats held keys, so the backend tracks
@@ -737,7 +802,11 @@ it arrives: presses and motion count only while the game window is focused, rele
 so a press made in another window before the next pump never reaches the game. Losing focus
 releases the confinement and shows the cursor again; a replaced or dropped confinement is
 re-applied at the next pump ("mouse lock lost; re-applying", once per loss). Every capture state
-change is logged once (`desktop_capture_transition`), as on Linux.
+change is logged once (`desktop_capture_transition`), as on Linux. With `MAG_GAME_CONTROLS_TRACE=1`
+the backend logs each acquisition of the lock with the client area and the confinement Windows
+applied, each release or failure, and about once a second what became of the raw mouse reports:
+motion accepted, or dropped as unfocused, capture not installed, not ready, not relative or stale
+(an older motion epoch), the confinement losses found, and the mouse-look requests the adapter made.
 
 Controllers on macOS and Linux reach the capture layer through `player_input_sdl_pad.c`: compile
 definitions on `libs/input/cellPad.c` route its SDL GameController calls through wrappers that
@@ -750,7 +819,7 @@ refresh (cellPad sweeps ports 0 to 3 in order), each port keeps one identity, bu
 GameController numbers (A 0, B 1, X 2, Y 3, Back 4, Guide 5, Start 6, stick buttons 7 and 8,
 shoulders 9 and 10, D-pad up, down, left, right 11 to 14), sticks are right/down-positive and
 triggers 0..32767. cellPad's own keyboard fallback reads keys only when XInput reports nothing on
-port 0; while the adapter owns the keyboard it reads none at all, so bound keys do not double as pad
+port 0; while the adapter mutes the keyboard pad (8.2) it reads none at all, so bound keys do not double as pad
 buttons. Keyboard and mouse capture is merged with XInput, never gated on it: a controller (real,
 or a virtual one from Steam Input, a driver or a streaming client) keeps working beside the
 keyboard and mouse, and its presence does not turn keyboard and mouse capture off. (cellPad's
@@ -763,6 +832,24 @@ At each outermost `PollEnter`: keyboard is owned by the replacement when the loc
 (allowing disabled), lifecycle is not exhausted, the owner's handler is not tombstoned, its removal
 is known not pending and system routes are available. The answer is published once per poll
 (`mag_input_capture_set_keyboard_owner`); on an error it is released before the error propagates.
+Ownership decides who reads the keyboard's own keys, such as Escape, which the SDL and Win32
+backends withhold from the window while it is owned (8.1).
+
+The **legacy keyboard pad** (the SDK's fixed key-to-button layout: X Cross, C Circle, Z Square,
+V Triangle, Return Start, Space Select, arrows the D-pad, W/A/S/D and I/J/K/L the sticks, Q/E, R/T
+and F/G the shoulders, triggers and stick buttons) is muted only while the keyboard is owned *and*
+this poll would attach on foot: the owner is enabled, gameplay routes are available (5.4) and the
+channel contract builds (7.4). Otherwise, in an in-match menu that has a local player (the pause
+menu, the death and spawn-selection screens, any UI that blocks gameplay), the adapter attaches as
+Menu and routes the system buttons alone (Escape, Tab and the arrows), so the pad stays live
+(`mag_input_capture_set_keyboard_pad_live`) and the menu's other buttons work from the keyboard as
+they do in the front end. The pad's readers (macOS window pad, SDL keyboard pad, Win32 keyboard
+fallback) obey `mag_input_capture_keyboard_pad_muted()`: owned and not live. When the pad comes back
+from being muted, a key or stick direction still held counts only after it has been released once
+(`player_input_keyboard_pad_gate.h`), so a gameplay key held across the change does not press a
+menu button. The arrows reach a menu through both paths with the same meaning. Return and Space
+press Start and Select natively, except on a control the adapter already replaces, which then reads
+only the adapter's bindings unless a controller is connected (7.3 step 6).
 
 ### 8.3 Controller sample
 
@@ -780,8 +867,9 @@ neither releases nor connects).
 
 The settings registration uses the catalog (`mag_game_controls_descriptors`): one descriptor per action, label from the catalog,
 contexts OnFoot|Menu for system actions and OnFoot otherwise, sources keyboard|mouse|controller for
-controller-capable actions and keyboard|mouse otherwise, group "Native menu / command buttons" or
-"On-foot actions". Validation is the catalog's profile validation; upgrade is the catalog upgrade.
+controller-capable actions and keyboard|mouse otherwise, group "Native menu / command buttons",
+"On-foot actions" or the situational action's own group ("Prompts and downed", "Commands",
+"Vehicles"). Validation is the catalog's profile validation; upgrade is the catalog upgrade.
 With a session, apply queues the profile on the adapter (after the session ends it reports that the
 saved controls apply next launch). Without a session (startup), apply only records that the player
 chose explicitly, so the startup mode override no longer applies.
@@ -826,6 +914,17 @@ Switches:
 
 Evidence for the default (the rule for in-repository code on by default, AGENTS.md):
 
+- *Mouse look on Windows (2026-11-23, local Training, relative motion injected with `SendInput`,
+  frame dumps, `MAG_GAME_CONTROLS_TRACE=1`):* 1000 counts in two seconds turned the camera in every
+  phase: at rest horizontally and vertically, after a pause-menu round trip, after a lone Alt tap,
+  while walking, and at rest again (frame change 10.7 to 34.1, against 1.1 to 3.5 for two idle
+  seconds before each). In every second with motion the adapter consumed a displacement in as many
+  frames as had motion. The lock was acquired at spawn and after the menu and released once for
+  the menu, with the confinement equal to the client area. Before the wake input (7.5) the same
+  check consumed nothing at rest. A soldier at rest stopped running the look consumer, so motion
+  turned the camera only while walking. A wake input of one millionth did not wake the soldier.
+  Before the attach fix (7.2) the lock was taken and released every frame while the pause menu
+  was open.
 - *Correctness:* the synthetic suites in section 11 (adapter, capture core, SDL and Win32 backends,
   settings registration, catalog) and the installer's synthetic toolchain and switch tests
   (`installer/tests/test_managed_tools.py`, `installer/tests/test_player_build.py`). On macOS the

@@ -4,7 +4,7 @@ The ps3recomp runtime keeps most of its behaviour behind opt-in switches: enviro
 it reads at run time and CMake options it reads at configure time. This page lists every one
 mag-recomp sets, with the value, the platforms, the file that sets it, the reason and how to turn
 it off for a comparison. It applies to the runtime pinned in
-[`profiles/framework.json`](../profiles/framework.json) (`mag-recomp/runtime-2026.11.22-kbshared`, `6feaa046`).
+[`profiles/framework.json`](../profiles/framework.json) (`mag-recomp/runtime-2026.11.23-kbmerge`, `ef74175d`).
 
 `tools/check_ps3recomp_flags.py` extracts the switches from the sources and fails when this page
 is missing one, lists one nothing sets any more, or gives a value or file the sources no longer
@@ -177,7 +177,7 @@ starts being set here; move its row up when that happens.
 | Switch | Kind | Runtime default | Platforms | Why mag-recomp relies on it | Opt out |
 |---|---|---|---|---|---|
 | `PS3RECOMP_NATIVE_OSK_SDL` | CMake | `ON` | Linux | The SDL2 text-entry dialog for the native on-screen keyboard: players sign in without automation (runtime pin of #128 and #134). | `-DPS3RECOMP_NATIVE_OSK_SDL=OFF` |
-| `PS3RECOMP_PAD_SDL_KEYBOARD` | CMake | `ON` | Linux | The game window's keyboard drives controller port 0 until a controller is connected (README, "For players"). The controls adapter's SDL keyboard/mouse capture (on in player builds) runs from that keyboard's per-pump sample, so `MAG_GAME_CONTROLS` refuses to configure with it off (`cmake/MagControls.cmake`). | `PAD_NO_KEYBOARD=1` at run time, or `-DPS3RECOMP_PAD_SDL_KEYBOARD=OFF` |
+| `PS3RECOMP_PAD_SDL_KEYBOARD` | CMake | `ON` | Linux | The game window's keyboard drives controller port 0, alongside any connected controller (README, "For players"). The controls adapter's SDL keyboard/mouse capture (on in player builds) runs from that keyboard's per-pump sample, so `MAG_GAME_CONTROLS` refuses to configure with it off (`cmake/MagControls.cmake`). | `PAD_NO_KEYBOARD=1` at run time, or `-DPS3RECOMP_PAD_SDL_KEYBOARD=OFF` |
 | `PS3RECOMP_NATIVE_OSK_WINDOWS` | CMake | `ON` | Windows | Native Windows text input for the on-screen keyboard. The controls adapter's Win32 keyboard/mouse capture (on in player builds) runs from the window pump calls this host shares, so `MAG_GAME_CONTROLS` refuses to configure with it off (`cmake/MagControls.cmake`). | `-DPS3RECOMP_NATIVE_OSK_WINDOWS=OFF` |
 | `PS3RECOMP_SPURS_STORE_WAKE` | env | `1` | all | A store to a SPURS instance's request line wakes the scheduler at once instead of on its next 1 ms pass. Synthetically, a PPU store reaches the policy module start in about 10 µs instead of about 1 ms at the median under both coherence schemes (fork #81). | `0` |
 | `PS3RECOMP_SPU_SMC_TRACE` | env | `1` | all | The SPU micro-interpreter replays decoded runs while their words are unchanged. On Linux Training it took 6 decodes in 6.5 million entries, halved the cost per entry (336 to 168 ns) and raised guest fps 2.8% (33.13 against 32.23, three rounds each; fork #85). | `0` |

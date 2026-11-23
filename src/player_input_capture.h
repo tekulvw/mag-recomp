@@ -20,6 +20,13 @@ void mag_input_capture_poll_abort(uint64_t input_sample_sequence);
 // This suppresses only a legacy keyboard fallback, never physical controllers.
 void mag_input_capture_set_keyboard_owner(int owned);
 int mag_input_capture_keyboard_owned(void);
+// Within that ownership, whether the legacy keyboard pad (the SDK's fixed key-to-button layout)
+// stays live. The adapter keeps it live only in an in-match menu (no on-foot gameplay), where it
+// routes nothing but the system buttons: the menu's own buttons (Cross on X, ...) then still work.
+// Live by itself never unmutes anything; it is ignored while the keyboard is not owned.
+void mag_input_capture_set_keyboard_pad_live(int live);
+// What the legacy keyboard pad's readers obey: owned and not live.
+int mag_input_capture_keyboard_pad_muted(void);
 void mag_input_capture_controller_open(void* controller,unsigned native_port);
 void mag_input_capture_controller_close(void* controller);
 void mag_input_capture_backend_begin(void);

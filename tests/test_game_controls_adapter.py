@@ -77,6 +77,18 @@ class GameControlsAdapterTests(unittest.TestCase):
     def test_a_menu_holding_look_releases_the_mouse_lock_until_look_returns(self):
         self.run_scenario('menu')
 
+    def test_in_match_menus_keep_the_legacy_keyboard_pad_live(self):
+        self.run_scenario('menu-pad')
+
+    def test_situational_actions_are_optional_and_recognized_by_their_own_token(self):
+        self.run_scenario('situational')
+
+    def test_census_reports_each_handler_description_once(self):
+        self.run_scenario('census')
+
+    def test_prompt_queries_report_bindings_device_and_revision(self):
+        self.run_scenario('prompt-queries')
+
 
 if __name__ == '__main__':
     unittest.main()
