@@ -5,6 +5,7 @@ prefix=r'''#include "macos_runloop.h"
 #include "mag_extension.h"
 #include "frame_present_policy.h"
 #include "mag_frame_clock.h"
+#include "mag_session_monitor.h"
 #include <dispatch/dispatch.h>
 #include <atomic>
 #include <thread>
@@ -50,7 +51,7 @@ class WindowCloseSession(unittest.TestCase):
   R=pathlib.Path(tempfile.mkdtemp(prefix='mag-window-close-session-'))
   s=(ROOT/'src/main.cpp').read_text();start=s.index('static DWORD WINAPI frame_clock(LPVOID)');end=s.index('\n/* ---------------------------------------------------------------------------',start);clock=s[start:end]
   source=R/'frame_clock_child.cpp';source.write_text(prefix+clock+suffix);binary=R/'frame_clock_child'
-  cmd=['clang++','-std=c++20','-O2','-fsanitize=undefined','-fno-sanitize-recover=all','-fblocks','-I'+str(ROOT/'src'),str(source),str(ROOT/'src/mag_extension.cpp'),'-framework','CoreFoundation','-o',str(binary)]
+  cmd=['clang++','-std=c++20','-O2','-fsanitize=undefined','-fno-sanitize-recover=all','-fblocks','-I'+str(ROOT/'src'),str(source),str(ROOT/'src/mag_extension.cpp'),str(ROOT/'src/mag_session_monitor.cpp'),'-framework','CoreFoundation','-o',str(binary)]
   q=subprocess.run(cmd,capture_output=True);(R/'child-build.log').write_bytes(q.stdout+q.stderr);self.assertEqual(q.returncode,0,q.stderr.decode())
   results=[]
   for mode in [0,4,1,2,3,5,6]:
