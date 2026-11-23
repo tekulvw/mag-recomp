@@ -81,7 +81,21 @@ static int run(const fs::path& binary,const fs::path& elf,const fs::path& cwd,st
  close(fd);child=pid;int status;while(waitpid(pid,&status,0)<0){if(errno!=EINTR)fail("Cannot wait for game");}child=0;
  return WIFEXITED(status)?WEXITSTATUS(status):128+WTERMSIG(status);
 }
-static const char* usage="Usage: MAG [--server <hostname or IPv4>] [--name <player name>] | MAG --link | MAG --unlink";
+// The settings window (MagEngine --mag-player-settings-setup, src/player_settings_session.h): the
+// same window F10 opens in game, with Play MAG, before the game starts. 0: Play MAG; 3: cancelled;
+// anything else: it could not open, and the launch goes on with the saved settings.
+static int run_settings(const fs::path& engine,const fs::path& logs,const std::map<std::string,std::string>& env,const char* notice) {
+ int fd=open((logs/"settings.log").c_str(),O_WRONLY|O_CREAT|O_APPEND|O_NOFOLLOW|O_CLOEXEC,0600);if(fd<0)return 1;
+ std::vector<std::string> values;for(auto& e:env)values.push_back(e.first+"="+e.second);
+ std::vector<char*> block;for(auto& v:values)block.push_back(v.data());block.push_back(nullptr);
+ pid_t parent=getpid();pid_t pid=fork();if(pid<0){close(fd);return 1;}
+ if(!pid){prctl(PR_SET_PDEATHSIG,SIGTERM);if(getppid()!=parent)_exit(1);if(chdir(logs.c_str())||dup2(fd,1)<0||dup2(fd,2)<0)_exit(1);close(fd);
+  char setup[]="--mag-player-settings-setup";char* args[]={const_cast<char*>(engine.c_str()),setup,const_cast<char*>(notice),nullptr};
+  execve(engine.c_str(),args,block.data());_exit(127);}
+ close(fd);child=pid;int status;while(waitpid(pid,&status,0)<0){if(errno!=EINTR)return 1;}child=0;
+ return WIFEXITED(status)?WEXITSTATUS(status):1;
+}
+static const char* usage="Usage: MAG [--server <hostname or IPv4>] [--name <player name>] [--no-prompt] | MAG --link | MAG --unlink";
 // The settings as this launch will apply them, for choosing the account portal. A damaged file
 // yields none: the game reports it and plays offline.
 static mag::PortableSettings player_settings(const fs::path& path,const std::map<std::string,std::string>& choices,bool& usable) {
@@ -153,8 +167,11 @@ int main(int argc,char** argv) {
  try {
  // First-run choices; the game validates and saves them in the player's settings file.
  std::map<std::string,std::string> choices;std::string account;
+ // --no-prompt (or MAG_SKIP_SETUP=1 from the caller): no settings window, for scripts and test lanes.
+ bool prompt=true;
  for(int i=1;i<argc;i++){std::string a=argv[i];
   if(a=="--help"||a=="-h"){std::cout<<usage<<"\n";return 0;}
+  if(a=="--no-prompt"){prompt=false;continue;}
   if(a=="--link"||a=="--unlink"){account=a;continue;}
   std::string key=a.rfind("--server",0)==0?"MAG_PLAYER_SET_SERVER":a.rfind("--name",0)==0?"MAG_PLAYER_SET_NAME":"";
   if(key.empty())fail(std::string(usage)+" (unknown option "+a+")");
@@ -179,15 +196,39 @@ int main(int argc,char** argv) {
  std::map<std::string,std::string> env={{"PATH","/usr/bin:/bin"},{"HOME",(root/"home").string()},{"LANG","C.UTF-8"},{"LD_LIBRARY_PATH",(app/"lib").string()},{"PS3_VFS_ROOT",vfs.string()},{"PS3_BOOT_PATH","/dev_bdvd/PS3_GAME/USRDIR/EBOOT.BIN"},{"PS3RECOMP_VK_WINDOW","1"},{"PS3RECOMP_VK_GUEST_PROGRAMS","1"},{"PS3_HLE_UNRESOLVED","halt"},{"PS3_SYSCALL_UNRESOLVED","halt"},{"MAG_HANDOFF_REQUEST",request.string()},{"MAG_HANDOFF_TOKEN",token},{"MAG_ENGINE_BINARY",engine.string()},{"MAG_ENGINE_ELF",ee.string()},{"MAG_ENGINE_SELF",es.string()},{"MAG_ENGINE_BINARY_SHA256",MAG_ENGINE_SHA256},{"MAG_ENGINE_ELF_SHA256",MAG_ENGINE_ELF_SHA256},{"MAG_ENGINE_SELF_SHA256",MAG_ENGINE_SELF_SHA256},{"MAG_ENGINE_KEY_SHA256",key},
   {"PS3_GAMEDATA_ROOT",(root/"home/gamedata").string()},{"MAG_PLAYER_SETTINGS_PATH",settings.string()},{"MAG_PLAYER_OVERLAY_ROOT",(root/"home/player").string()},{"MAG_PLAYER_SETUP","1"}};
  for(auto& c:choices)env[c.first]=c.second;
+ // This supervisor opens setup itself, below; the launcher never does.
+ env["MAG_SKIP_SETUP"]="1";
  // Required runtime defaults recorded at packaging (movie playback for decoder builds).
  for(auto& d:std::map<std::string,std::string>MAG_RUNTIME_DEFAULTS)env[d.first]=d.second;
  // Preserve only desktop transport/session variables, never inherited game diagnostics.
  for(auto name:{"DISPLAY","WAYLAND_DISPLAY","XDG_RUNTIME_DIR","DBUS_SESSION_BUS_ADDRESS","XAUTHORITY","PULSE_SERVER","PIPEWIRE_REMOTE"})if(auto value=getenv(name))env[name]=value;
  const fs::path ticket=root/"home/player/portal-ticket.bin";
+ // Setup at every launch: the settings window, filled with the saved settings, so Play MAG is one
+ // click. Command-line choices, --no-prompt, MAG_SKIP_SETUP and a session without a desktop go
+ // straight in.
+ const char* skip=getenv("MAG_SKIP_SETUP");
+ const bool desktop=env.count("DISPLAY")||env.count("WAYLAND_DISPLAY");
+ const bool interactive=prompt&&desktop&&!(skip&&*skip&&std::string(skip)!="0");
+ signal(SIGINT,interrupted);signal(SIGTERM,interrupted);signal(SIGHUP,interrupted);
+ if(interactive&&choices.empty()){
+  int chosen=run_settings(engine,logs,env,nullptr);
+  if(chosen==3)return 0;  // Cancel: the player chose not to play
+  if(chosen)std::cerr<<"The settings window could not open; starting with the saved settings.\n";
+ }
  auto launch_settings=player_settings(settings,choices,settings_usable);
  portal_ticket(env,link_file,ticket,launch_settings,true);
- signal(SIGINT,interrupted);signal(SIGTERM,interrupted);signal(SIGHUP,interrupted);
  int result=run(launcher,le,logs,env,"launcher.log");
+ // A server needs a player name. When the game reports none, the settings window asks for it (or
+ // for the account link, which supplies it), then the launcher starts again.
+ {std::error_code none;const auto marker=root/"home/player/needs-player-name";
+  for(int attempt=2;result!=90&&interactive&&attempt<=4&&fs::exists(fs::symlink_status(marker,none));attempt++){
+   int answer=run_settings(engine,logs,env,"--notice=player-name");
+   if(answer==3)return 0;
+   if(answer)break;  // no window: the launch message below explains
+   fs::remove(marker,none);fs::remove(root/"home/player/launch-message.txt",none);
+   portal_ticket(env,link_file,ticket,player_settings(settings,choices,settings_usable),true);  // linked meanwhile
+   result=run(launcher,le,logs,env,("launcher-"+std::to_string(attempt)+".log").c_str());
+  }}
  if(result!=90){
   // A launch the player must correct (such as choosing a name) explains itself.
   std::error_code none;auto note=root/"home/player/launch-message.txt";
@@ -196,7 +237,7 @@ int main(int argc,char** argv) {
  auto expected="{\"version\":1,\"token\":\""+token+"\",\"guest_path\":\"/dev_bdvd/PS3_GAME/USRDIR/bin/mage_g.self\",\"kind\":\"mage_g\"}\n";
  if(read_file(request,4096)!=expected)fail("Engine handoff request identity mismatch");
  check(engine,MAG_ENGINE_SHA256);check(ee,MAG_ENGINE_ELF_SHA256);check(es,MAG_ENGINE_SELF_SHA256);
- for(auto i=env.begin();i!=env.end();)if(i->first.find("MAG_HANDOFF_")==0||i->first.find("MAG_ENGINE_")==0||i->first=="MAG_PLAYER_SETUP"||i->first=="MAG_PLAYER_SET_SERVER"||i->first=="MAG_PLAYER_SET_NAME")i=env.erase(i);else ++i;
+ for(auto i=env.begin();i!=env.end();)if(i->first.find("MAG_HANDOFF_")==0||i->first.find("MAG_ENGINE_")==0||i->first=="MAG_PLAYER_SETUP"||i->first=="MAG_PLAYER_SET_SERVER"||i->first=="MAG_PLAYER_SET_NAME"||i->first=="MAG_SKIP_SETUP")i=env.erase(i);else ++i;
  // The engine signs in again (MAS, statistics) and gets its own fresh ticket; it reads the name the
  // launcher saved, so the settings are read again here.
  {std::map<std::string,std::string> none;portal_ticket(env,link_file,ticket,player_settings(settings,none,settings_usable),false);}
@@ -208,7 +249,7 @@ int main(int argc,char** argv) {
 
 # Portable sources the supervisor compiles with it (HTTPS through OpenSSL's libssl).
 SUPERVISOR_SOURCES = ('player_portal.h', 'player_portal.cpp', 'player_portal_openssl.cpp', 'player_settings_portable.h',
-                      'player_settings_file.cpp', 'player_sign_in.h')
+                      'player_settings_file.cpp', 'player_settings_text.h', 'player_sign_in.h')
 
 
 def _copy_dependencies(binaries, destination, token, dynamic_libraries=()):

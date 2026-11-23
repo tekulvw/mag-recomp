@@ -2,6 +2,7 @@
 // and formatting, without I/O. The game and the packaged supervisors share it.
 #include "player_settings_portable.h"
 #include "player_portal.h"
+#include "player_settings_text.h"
 #include "player_sign_in.h"
 #include <cctype>
 #include <map>
@@ -129,13 +130,33 @@ bool mag::check_player_name(const std::string &name, std::string &error) {
     if (name.empty()) return true;
     bool ok = name.size() >= 3 && name.size() <= 15 && std::isalpha((unsigned char)name[0]);
     for (char c : name) ok = ok && (std::isalnum((unsigned char)c) || c == '-' || c == '_');
-    if (!ok) error = "A player name has 3 to 15 letters, digits, - or _, and starts with a letter.";
+    if (!ok) error = MAG_SETTINGS_NAME_RULE;
     return ok;
 }
 
 bool mag::check_display_mode(const std::string &mode, std::string &error) {
     if (mode == "windowed" || mode == "borderless") return true;
     error = "The display mode must be \"windowed\" or \"borderless\".";
+    return false;
+}
+
+bool mag::check_output_size(int width, int height, std::string &error) {
+    for (int i = 0; i < MAG_SETTINGS_OUTPUT_SIZES; ++i)
+        if (width == mag_settings_output_widths[i] && height == mag_settings_output_heights[i]) return true;
+    error = "Choose a supported output size.";
+    return false;
+}
+
+bool mag::check_render_scale(int percent, std::string &error) {
+    for (int i = 0; i < MAG_SETTINGS_RENDER_SCALES; ++i)
+        if (percent == mag_settings_render_scales[i]) return true;
+    error = "Choose a supported rendering resolution.";
+    return false;
+}
+
+bool mag::check_anti_aliasing(const std::string &mode, std::string &error) {
+    if (mode == "off" || mode == "fxaa") return true;
+    error = "Choose Off or FXAA for anti-aliasing.";
     return false;
 }
 
@@ -157,16 +178,27 @@ bool mag::parse_portable_settings(const std::string &json, PortableSettings &set
         }
         target = int(it->second.number); return true;
     };
+    auto number = [&](const char *key, int &target) {
+        auto it = values.find(key);
+        if (it == values.end()) return true;
+        if (it->second.text || it->second.number < 0 || it->second.number > 100000) {
+            error = std::string("Setting \"") + key + "\" must be a whole number."; return false;
+        }
+        target = int(it->second.number); return true;
+    };
     auto version = values.find("schema_version");
     if (version != values.end() && (version->second.text || version->second.number != 1)) { error = "This settings version is not supported."; return false; }
     if (!text("server_address", parsed.server_address) || !text("player_name", parsed.player_name) ||
         !port("tcp_port", parsed.tcp_port) || !port("udp_port", parsed.udp_port) ||
         !text("ticket_file", parsed.ticket_file) || !text("portal_url", parsed.portal_url) ||
-        !text("display_mode", parsed.display_mode))
+        !text("display_mode", parsed.display_mode) || !number("output_width", parsed.output_width) ||
+        !number("output_height", parsed.output_height) || !number("render_scale", parsed.render_scale) ||
+        !text("anti_aliasing", parsed.anti_aliasing))
         return false;
     if (!check_server_address(parsed.server_address, error) || !check_player_name(parsed.player_name, error) ||
         !check_ticket_file(parsed.ticket_file, error) || !mag::portal::check_portal_url(parsed.portal_url, error) ||
-        !check_display_mode(parsed.display_mode, error))
+        !check_display_mode(parsed.display_mode, error) || !check_output_size(parsed.output_width, parsed.output_height, error) ||
+        !check_render_scale(parsed.render_scale, error) || !check_anti_aliasing(parsed.anti_aliasing, error))
         return false;
     settings = parsed;
     return true;
@@ -178,6 +210,10 @@ std::string mag::format_portable_settings(const PortableSettings &s) {
            ",\n  \"player_name\": " + quoted(s.player_name) +
            (s.ticket_file.empty() ? std::string() : ",\n  \"ticket_file\": " + quoted(s.ticket_file)) +
            (s.portal_url.empty() ? std::string() : ",\n  \"portal_url\": " + quoted(s.portal_url)) +
-           (s.display_mode == "windowed" ? std::string() : ",\n  \"display_mode\": " + quoted(s.display_mode)) + "\n}\n";
+           (s.display_mode == "windowed" ? std::string() : ",\n  \"display_mode\": " + quoted(s.display_mode)) +
+           (s.output_width == 1280 && s.output_height == 720 ? std::string()
+                : ",\n  \"output_width\": " + std::to_string(s.output_width) + ",\n  \"output_height\": " + std::to_string(s.output_height)) +
+           (s.render_scale == 100 ? std::string() : ",\n  \"render_scale\": " + std::to_string(s.render_scale)) +
+           (s.anti_aliasing == "off" ? std::string() : ",\n  \"anti_aliasing\": " + quoted(s.anti_aliasing)) + "\n}\n";
 }
 

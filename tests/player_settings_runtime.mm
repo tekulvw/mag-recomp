@@ -8,11 +8,14 @@
 
 extern "C" {
 #ifndef MAG_CMAKE_INPUT_FIXTURE
-PS3RecompMacOSPadState mag_sdk_pad_macos_state(void){return {7,10,20,30,40};}
-uint16_t mag_sdk_pad_macos_buttons(void){return 7;}
+int fixture_pad_held=1;  // the SDK keyboard pad: buttons 7 and the sticks off centre while held
+PS3RecompMacOSPadState mag_sdk_pad_macos_state(void){
+    return fixture_pad_held?PS3RecompMacOSPadState{7,10,20,30,40}:PS3RecompMacOSPadState{0,128,128,128,128};}
+uint16_t mag_sdk_pad_macos_buttons(void){return fixture_pad_held?7:0;}
 #else
 int fixture_input_button(void);
 int fixture_input_axis(void);
+extern int fixture_pad_held;
 #endif
 Uint8 SDL_GameControllerGetButton(SDL_GameController*,SDL_GameControllerButton){return 1;}
 Sint16 SDL_GameControllerGetAxis(SDL_GameController*,SDL_GameControllerAxis){return 4000;}
@@ -38,6 +41,7 @@ int main(int argc,char**argv){@autoreleasepool{
     assert(MAGSettingsSave(path,settings,&error));
     setenv("MAG_PLAYER_SETTINGS_PATH",path.fileSystemRepresentation,1);
     setenv("MAG_PLAYER_OVERLAY_ROOT",root.fileSystemRepresentation,1);setenv("MAG_PLAYER_SETUP","1",1);
+    setenv("MAG_SKIP_SETUP","1",1);  // setup opens at every launch; this fixture plays straight in
     assert(mag_player_settings_prepare()==1);assert(!strcmp(getenv("PS3_AA"),"fxaa"));
     assert(!strcmp(getenv("MAG_PLAYER_RENDER_SCALE"),"200"));
     // A later settings edit must not change the launcher-to-engine snapshot.
@@ -73,6 +77,11 @@ int main(int argc,char**argv){@autoreleasepool{
     NSString *snapshot=[root stringByAppendingPathComponent:@"launch-settings.json"];
     assert([MAGSettingsLoad(snapshot,NULL,&error)[@"render_scale"] intValue]==200);
     [panel cancel:nil];assert(!mag_player_input_blocked());
+    // Keys held while the panel had the pad count again only after a release
+    // (player_input_keyboard_pad_gate.h), so the key that closed the panel does not reach the game.
+    state=ps3recomp_pad_macos_state();assert(state.buttons==0&&state.analog_lx==128);
+    fixture_pad_held=0;assert(ps3recomp_pad_macos_buttons()==0);
+    fixture_pad_held=1;
     assert(ps3recomp_pad_macos_buttons()==7);
     assert(ps3recomp_pad_macos_state().analog_lx==10);
     puts("runtime snapshot, settings menu and input ownership passed");

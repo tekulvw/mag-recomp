@@ -80,6 +80,9 @@ class GameControlsAdapterTests(unittest.TestCase):
     def test_a_menu_holding_look_releases_the_mouse_lock_until_look_returns(self):
         self.run_scenario('menu')
 
+    def test_a_frame_withdrawn_by_another_thread_mid_recognition_is_left_to_the_game(self):
+        self.run_scenario('withdrawn')
+
     def test_in_match_menus_keep_the_legacy_keyboard_pad_live(self):
         self.run_scenario('menu-pad')
 

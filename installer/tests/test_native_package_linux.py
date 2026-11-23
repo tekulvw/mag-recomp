@@ -174,6 +174,71 @@ int main(void) {
         return install
 
     @unittest.skipUnless(sys.platform=='linux','requires Linux ELF loader and OpenSSL development headers')
+    def test_native_supervisor_opens_setup_at_every_launch(self):
+        """MAG Settings with Play MAG before every launch (the engine's settings window), unless the caller
+        opts out; Cancel plays nothing; a missing name reopens it with a notice."""
+        source = r"""
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+int main(int argc,char** argv) {
+ const char* home=getenv("HOME");char path[4096];snprintf(path,sizeof path,"%s/calls.txt",home);
+ FILE* f=fopen(path,"a");if(!f)return 60;
+ const char* skip=getenv("MAG_SKIP_SETUP");
+ if(argc>1&&!strcmp(argv[1],"--mag-player-settings-setup")){
+  fprintf(f,"setup %s skip=%s settings=%s\n",argc>2?argv[2]:"-",skip?skip:"0",getenv("MAG_PLAYER_SETTINGS_PATH")?"1":"0");fclose(f);
+  snprintf(path,sizeof path,"%s/named",home);FILE* named=fopen(path,"w");if(named)fclose(named);
+  snprintf(path,sizeof path,"%s/answer",home);FILE* a=fopen(path,"r");int code=0;if(a){if(fscanf(a,"%d",&code)!=1)code=0;fclose(a);}
+  return code;}
+ const char* request=getenv("MAG_HANDOFF_REQUEST");
+ fprintf(f,"%s skip=%s\n",request?"launcher":"engine",skip?skip:"0");fclose(f);
+ if(!request)return 23;
+ snprintf(path,sizeof path,"%s/needs-name",home);
+ if(access(path,F_OK)==0){char named[4096];snprintf(named,sizeof named,"%s/named-after",home);
+  if(access(named,F_OK)!=0){FILE* n=fopen(named,"w");if(n)fclose(n);
+   snprintf(path,sizeof path,"%s/player/needs-player-name",home);FILE* m=fopen(path,"w");if(m)fclose(m);return 9;}}
+ FILE* r=fopen(request,"wx");if(!r)return 46;
+ fprintf(r,"{\"version\":1,\"token\":\"%s\",\"guest_path\":\"/dev_bdvd/PS3_GAME/USRDIR/bin/mage_g.self\",\"kind\":\"mage_g\"}\n",getenv("MAG_HANDOFF_TOKEN"));fclose(r);return 90;
+}
+"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            install = self.install_fixture(root, source)
+            home = install / 'home'
+            base = {k: v for k, v in os.environ.items() if k not in ('DISPLAY', 'WAYLAND_DISPLAY', 'MAG_SKIP_SETUP')}
+            base['XDG_CONFIG_HOME'] = str(root / 'config')
+
+            def launch(*args, **extra):
+                calls = home / 'calls.txt'
+                calls.unlink(missing_ok=True)
+                run = subprocess.run([str(install / 'MAG/MAG'), *args], env={**base, **extra}, capture_output=True, text=True, timeout=30)
+                return run, calls.read_text().splitlines() if calls.exists() else []
+
+            run, calls = launch(DISPLAY=':fixture')
+            self.assertEqual(run.returncode, 23, run.stderr)
+            self.assertEqual(calls, ['setup - skip=1 settings=1', 'launcher skip=1', 'engine skip=0'])
+            run, calls = launch(DISPLAY=':fixture')  # every launch, not only the first
+            self.assertEqual(calls[0], 'setup - skip=1 settings=1')
+            (home / 'answer').write_text('3')  # Cancel: nothing plays
+            run, calls = launch(DISPLAY=':fixture')
+            self.assertEqual((run.returncode, calls), (0, ['setup - skip=1 settings=1']))
+            (home / 'answer').write_text('1')  # the window could not open: play with the saved settings
+            run, calls = launch(DISPLAY=':fixture')
+            self.assertEqual((run.returncode, calls[1:]), (23, ['launcher skip=1', 'engine skip=0']))
+            (home / 'answer').unlink()
+            for args, extra in ((['--no-prompt'], {'DISPLAY': ':fixture'}), ([], {'DISPLAY': ':fixture', 'MAG_SKIP_SETUP': '1'}),
+                                ([], {}), (['--server', 'example.org', '--name', 'Rook_7'], {'DISPLAY': ':fixture'})):
+                run, calls = launch(*args, **extra)
+                self.assertEqual((run.returncode, calls), (23, ['launcher skip=1', 'engine skip=0']), (args, extra))
+            # The game needs a name: the window opens again saying so, then the launcher starts again.
+            (home / 'needs-name').write_text('')
+            run, calls = launch(DISPLAY=':fixture')
+            self.assertEqual(run.returncode, 23, run.stderr)
+            self.assertEqual(calls, ['setup - skip=1 settings=1', 'launcher skip=1', 'setup --notice=player-name skip=1 settings=1',
+                                     'launcher skip=1', 'engine skip=0'])
+
+    @unittest.skipUnless(sys.platform=='linux','requires Linux ELF loader and OpenSSL development headers')
     def test_native_supervisor_links_and_fetches_a_ticket_before_each_phase(self):
         import base64, http.server, threading
         TOKEN='mgd_'+'Fixture0123456789-_abcdefghijklmnopqrstuvw'

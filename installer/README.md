@@ -7,7 +7,8 @@ result in a self-contained `MAG` folder: `MAG.app` on macOS, `MAG\MAG.exe` on Wi
 Linux, beside the game files it reads.
 
 New macOS builds include the [compact native settings panel](../docs/player-settings.md).
-It opens on first launch; use **MAG → Settings…** during play or hold **Option** on launch for recovery.
+It opens before the game at every launch (`--no-prompt` skips it); use **MAG → Settings…** or F10 during play.
+Windows builds have the same window ([player-settings.md](../docs/player-settings.md)).
 
 The installer contains tooling only: this directory, a source kit with this repository's tools,
 sources and profiles, and the four ps3recomp checkouts pinned in `profiles/framework.json` (MIT).

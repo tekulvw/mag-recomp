@@ -21,9 +21,12 @@ struct MagGameControlsAction {
     const char* group = nullptr;  // Settings group; null: by kind.
 };
 
-constexpr unsigned MagGameControlsCatalogRevision = 2;
+constexpr unsigned MagGameControlsCatalogRevision = 3;
 
 std::span<const MagGameControlsAction> mag_game_controls_actions();
+// Actions an older catalog had. A saved profile may still bind them, so loading accepts them;
+// upgrading removes them (or moves a player's own key to the action that replaced them).
+std::span<const mag::ActionId> mag_game_controls_retired_actions();
 const MagGameControlsAction* mag_game_controls_action(mag::ActionId);
 // The catalog action a watched token stands for (aliases resolved); other tokens map to themselves.
 mag::ActionId mag_game_controls_token_action(uint32_t token);
@@ -49,5 +52,6 @@ void mag_game_controls_validate_profile(const mag::ControlsProfile&);
 // group, controller sources only where a controller button may be remapped.
 std::vector<mag::ActionDescriptor> mag_game_controls_descriptors();
 // Adds the defaults of actions newer than the profile's catalog revision once, never displacing a
-// custom binding.
+// custom binding; moves defaults the catalog changed only where the player left them; removes
+// retired actions, keeping a player's own key on the action that replaced them where it fits.
 void mag_game_controls_upgrade_profile(mag::ControlsProfile&);
