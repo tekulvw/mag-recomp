@@ -110,7 +110,14 @@ You build MAG on your own computer from your own copy; nothing game-derived is e
    On Windows, a controller is needed to play matches. The keyboard only covers menus (arrow keys,
    Z / X / A / S for the face buttons, Return for Start), has no camera or aim, and is ignored
    whenever any controller is present, including virtual gamepads created by Steam Input or
-   remote-desktop and streaming software. Mouse aim is not available on any system yet.
+   remote-desktop and streaming software.
+
+   **Keyboard and mouse** play is built in on every system. In a match, on foot: WASD moves, the
+   mouse aims, left button fires, right button aims down sights, Space jumps, Left Shift sprints,
+   R reloads, E interacts (hold for objectives), C crouches (hold for prone), Q and G cycle weapons
+   and equipment, F is melee, Escape is Start, Tab is Select and the arrow keys are the D-pad. A
+   controller keeps working beside it. To build without it, set `MAG_GAME_CONTROLS=0` before
+   starting the installer.
 
 **If a download fails** (for example during a GitHub outage), retry later. Or point the installer
 at a folder of previously downloaded tools with `build --cache <folder>`, or at a mirror with

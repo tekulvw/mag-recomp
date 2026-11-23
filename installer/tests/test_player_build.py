@@ -11,7 +11,19 @@ from mag_installer import player_build
 from mag_installer.model import InstallerError
 
 
+RUST = {'cargo': '/managed/cargo', 'rustc': '/managed/rustc'}
+
+
 class PlayerBuildTests(unittest.TestCase):
+    def setUp(self):
+        # No test downloads the pinned Rust toolchain; each sees where the build would get it.
+        patcher = patch('mag_installer.managed_tools.rust_toolchain', return_value=RUST)
+        self.rust = patcher.start()
+        self.addCleanup(patcher.stop)
+        environment = patch.dict('os.environ')
+        environment.start(); self.addCleanup(environment.stop)
+        os.environ.pop('MAG_GAME_CONTROLS', None)
+
     def test_player_cli_uses_same_automatic_flow_without_recipe_argument(self):
         from mag_installer.__main__ import main
         with patch('mag_installer.player_build.install') as build, redirect_stdout(io.StringIO()):
@@ -59,7 +71,7 @@ class PlayerBuildTests(unittest.TestCase):
                 def tools(managed, **kwargs):
                     steps.append('tools')
                     self.assertEqual(managed, output / 'managed-tools')
-                    return {'python': '/managed/python', 'cmake': '/managed/cmake', 'ninja': '/managed/ninja',
+                    return {'root': '/managed', 'python': '/managed/python', 'cmake': '/managed/cmake', 'ninja': '/managed/ninja',
                             'git': '/usr/bin/git', 'ffmpeg': {}, 'prefix': '/managed/prefix'}
                 def native(config_path, native_output, **kwargs):
                     steps.append('native')
@@ -107,7 +119,7 @@ class PlayerBuildTests(unittest.TestCase):
                 steps.append('build-tools'); return toolchain
             def tools(managed, **kwargs):
                 steps.append('tools')
-                return {'python': 'C:/m/python.exe', 'cmake': 'C:/m/cmake.exe', 'ninja': 'C:/m/ninja.exe', 'git': 'C:/m/git.exe'}
+                return {'root': 'C:/m', 'python': 'C:/m/python.exe', 'cmake': 'C:/m/cmake.exe', 'ninja': 'C:/m/ninja.exe', 'git': 'C:/m/git.exe'}
             def native(config_path, native_output, **kwargs):
                 steps.append('native')
                 config = json.loads(config_path.read_text())
@@ -169,7 +181,7 @@ class PlayerBuildTests(unittest.TestCase):
                 verify = stack.enter_context(patch('mag_installer.native_build._verify_identities'))
                 stack.enter_context(patch('mag_installer.managed_tools.ensure_apple_sdk'))
                 stack.enter_context(patch('mag_installer.managed_tools.bootstrap', return_value={
-                    'python':'python', 'cmake':'cmake', 'ninja':'ninja', 'git':'git', 'ffmpeg':{}}))
+                    'root':'managed', 'python':'python', 'cmake':'cmake', 'ninja':'ninja', 'git':'git', 'ffmpeg':{}}))
                 def native(config, work, **kwargs):
                     (work / 'logs').mkdir(parents=True)
                     (work / 'logs/failure.log').write_text('retained error evidence')
@@ -239,6 +251,28 @@ class PlayerBuildTests(unittest.TestCase):
     def test_linux_route_uses_compilers_ffmpeg_and_mag_directory(self):
         self.assertNotIn('cmake_args', self.linux_route({}))
 
+    def test_game_controls_are_built_by_default_with_the_pinned_rust(self):
+        settings = self.linux_route({})
+        self.assertEqual(settings['game_controls'], RUST)
+        self.assertEqual(self.rust.call_args.args[0], 'managed')
+        self.assertEqual(self.linux_route({'MAG_GAME_CONTROLS': '1'})['game_controls'], RUST)
+
+    def test_game_controls_switch_off_skips_the_adapter_and_its_toolchain(self):
+        self.rust.reset_mock()
+        self.assertNotIn('game_controls', self.linux_route({'MAG_GAME_CONTROLS': '0'}))
+        self.rust.assert_not_called()
+
+    def test_invalid_game_controls_switch_stops_before_any_tool_setup(self):
+        with tempfile.TemporaryDirectory() as temp, patch.dict('os.environ', {'MAG_GAME_CONTROLS': 'off'}):
+            root = Path(temp).resolve(); source = root / 'inputs'; self.inputs(source)
+            with patch.object(player_build, 'readiness', return_value={'ready': True}), \
+                 patch.object(player_build, '_manifest', return_value={'kit': {}, 'host': 'linux-x86_64'}), \
+                 patch('mag_installer.managed_tools.bootstrap') as tools:
+                with self.assertRaisesRegex(InstallerError, 'MAG_GAME_CONTROLS must be 0 or 1'):
+                    player_build.install(root, source, root / 'MAG', root / 'cache')
+                tools.assert_not_called()
+            self.assertFalse((root / 'MAG').exists())
+
     def test_x86_level_override_reaches_the_build_settings(self):
         self.assertEqual(self.linux_route({'MAG_X86_LEVEL': 'baseline'})['cmake_args'], ['-DMAG_X86_LEVEL=baseline'])
 
@@ -256,7 +290,7 @@ class PlayerBuildTests(unittest.TestCase):
             stack.enter_context(patch('mag_installer.native_build._verify_identities'))
             stack.enter_context(patch('mag_installer.managed_tools.ensure_linux_build_tools', return_value={'cc':'/usr/bin/clang', 'cxx':'/usr/bin/clang++'}))
             apple = stack.enter_context(patch('mag_installer.managed_tools.ensure_apple_sdk'))
-            stack.enter_context(patch('mag_installer.managed_tools.bootstrap', return_value={'python':'python', 'cmake':'cmake', 'ninja':'ninja', 'git':'git', 'ffmpeg':{'avcodec':'codec.so'}}))
+            stack.enter_context(patch('mag_installer.managed_tools.bootstrap', return_value={'root':'managed', 'python':'python', 'cmake':'cmake', 'ninja':'ninja', 'git':'git', 'ffmpeg':{'avcodec':'codec.so'}}))
             def native(config, work, **kwargs):
                 data = json.loads(config.read_text())
                 self.assertEqual(data['host'], 'linux-x86_64')
@@ -283,7 +317,7 @@ class PlayerBuildTests(unittest.TestCase):
                     raise InstallerError('wrong input identity')
             stack.enter_context(patch('mag_installer.native_build._verify_identities', side_effect=verify))
             sdk = stack.enter_context(patch('mag_installer.managed_tools.ensure_apple_sdk'))
-            tools = stack.enter_context(patch('mag_installer.managed_tools.bootstrap', return_value={'python':'python', 'cmake':'cmake', 'ninja':'ninja', 'git':'git', 'ffmpeg':{}}))
+            tools = stack.enter_context(patch('mag_installer.managed_tools.bootstrap', return_value={'root':'managed', 'python':'python', 'cmake':'cmake', 'ninja':'ninja', 'git':'git', 'ffmpeg':{}}))
             stack.enter_context(patch('mag_installer.native_build.install'))
             stack.enter_context(patch('mag_installer.native_package.package', side_effect=lambda config, work, target, **kwargs: target))
             with self.assertRaisesRegex(InstallerError, 'wrong input identity'):

@@ -84,6 +84,10 @@ release download fails with a server error or times out, the installer fetches t
 through GitHub's REST API (one unauthenticated request per tool). Errors name the HTTP status and
 host, and a certificate failure says so instead of retrying.
 
+The keyboard and mouse controls add the pinned Rust compiler, standard library and cargo from
+`static.rust-lang.org` (about 110 MB). Set `MAG_GAME_CONTROLS=0` before starting the installer to
+build without the controls and skip that download.
+
 Two optional fallbacks cover longer outages:
 
 - **A pre-filled cache:** `build --cache <folder>` reads `<folder>/<sha256>.blob` files before

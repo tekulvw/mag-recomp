@@ -276,6 +276,86 @@ WINDOWS_FFMPEG_DLLS = ('avcodec-63.dll', 'avformat-63.dll', 'avutil-61.dll', 'sw
 LOCKS = {'macos-arm64': LOCK, 'windows-x86_64': WINDOWS_LOCK, 'linux-x86_64': LINUX_LOCK}
 SUPPORTED_HOSTS = tuple(LOCKS)
 
+# The Rust toolchain of rust-toolchain.toml, for the game controls adapter's portable input engine
+# (crates/mag-input, no third-party crates). Official standalone components from the Rust project's
+# distribution server; sizes and SHA-256 from its published .sha256 files and the signed
+# channel-rust-1.99.0.toml. Kept apart from the LOCK dictionaries so the identities of the
+# dependency prefixes they record stay unchanged.
+RUST_CHANNEL = '1.99.0'
+RUST_TARGETS = {'macos-arm64': 'aarch64-apple-darwin', 'windows-x86_64': 'x86_64-pc-windows-msvc',
+                'linux-x86_64': 'x86_64-unknown-linux-gnu'}
+_RUST_COMPONENTS = {
+    'macos-arm64': {'rustc': (50296404, '334a66714ca316d71bbe5efe44f71762d0b276cea73be2987374693a837f7450'),
+                    'cargo': (8951812, '76abff0ad79a10a3152dff640ea0d8b3c37637d9300bf55da41b95c3ddc069c1'),
+                    'rust-std': (30726892, 'a7c6de8aa21e7c31163a7656295b321bb85f5dce55ed8ea95ac9ac561202bb5b')},
+    'windows-x86_64': {'rustc': (77093924, '20fed82e629c1ed145f9e9bdee9aad65e790d4237a49bcfc61221eda69e35b14'),
+                       'cargo': (9883480, '6201b8dcea8cc55ccfa12e842adf1b2c2aa96490a6cb4f129bf03f2df08c80c9'),
+                       'rust-std': (23579412, 'adadeafff137a7610884696912b853d4de259c4299ab035b66661e2e0f923ff0')},
+    'linux-x86_64': {'rustc': (84044652, '77171ba2a0345fdf2abc4fedda55d6de078dae7a68527c28be8c77dcc9604bd5'),
+                     'cargo': (10954432, 'd7674918d28093097614cd9728b6ca60db9ea3038f640f0bd1e9a4188c7568ce'),
+                     'rust-std': (31598812, '3e58dff2d0b72196b5ea4e90536e174d400de88564a52694686b81e091169933')}}
+
+
+def _rust_spec(host, component):
+    target = RUST_TARGETS[host]
+    size, digest = _RUST_COMPONENTS[host][component]
+    name = f'{component}-{RUST_CHANNEL}-{target}'
+    # The archive's own top directory, then the component directory inside it.
+    inner = 'rust-std-' + target if component == 'rust-std' else component
+    return {'id': 'rust-' + component + '-' + target, 'url': f'https://static.rust-lang.org/dist/{name}.tar.xz',
+            'size': size, 'sha256': digest, 'archive': 'tar.xz', 'root': name + '/' + inner,
+            'max_expanded_bytes': 2147483648, 'max_entries': 50000}
+
+
+RUST_LOCKS = {host: {component: _rust_spec(host, component) for component in ('rustc', 'cargo', 'rust-std')}
+              for host in RUST_TARGETS}
+
+
+def rust_toolchain(root, cache=None, token=None, events=None, host=None):
+    """The pinned cargo and rustc, as {'cargo': path, 'rustc': path}.
+
+    rustc finds its standard library in its own tree, so its component and the target's rust-std
+    component are copied together into one directory, with an inventory that a later run (a retry)
+    verifies like a downloaded tool. cargo runs from its own verified tree."""
+    token = token or Cancellation(); events = events or (lambda event: None)
+    host = host or host_key()
+    if host not in RUST_LOCKS: raise InstallerError('The Rust toolchain is pinned only for supported hosts')
+    root = Path(root).absolute(); root.mkdir(parents=True, exist_ok=True)
+    if root.is_symlink(): raise InstallerError('Managed root must not be a symlink')
+    cache = Path(cache) if cache else root / 'cache'
+    specs = RUST_LOCKS[host]
+    located = {key: materialize(spec, root / 'artifacts', cache, token, events) / spec['root']
+               for key, spec in specs.items()}
+    for key, path in located.items():
+        if path.is_symlink() or not path.is_dir(): raise InstallerError(f'The pinned Rust {key} archive has an unexpected layout')
+    identity = hashlib.sha256('\n'.join(specs[key]['sha256'] for key in ('rustc', 'rust-std')).encode()).hexdigest()
+    combined = root / 'artifacts' / ('rust-toolchain-' + RUST_TARGETS[host] + '-' + identity[:16])
+    if combined.exists() or combined.is_symlink():
+        receipt = combined / 'MANAGED-INVENTORY.json'
+        if combined.is_symlink() or receipt.is_symlink() or not receipt.is_file() or \
+                json.loads(receipt.read_text()) != _inventory(combined, token):
+            raise InstallerError('Managed Rust toolchain changed; choose fresh storage')
+    else:
+        with tempfile.TemporaryDirectory(prefix='.managed-', dir=root / 'artifacts') as scratch:
+            staged = Path(scratch) / 'payload'
+            for key in ('rustc', 'rust-std'):
+                for source in sorted(located[key].rglob('*')):
+                    token.check(); relative = source.relative_to(located[key])
+                    if relative.as_posix() in ('manifest.in', 'MANAGED-INVENTORY.json'): continue
+                    target = staged / relative
+                    if source.is_symlink(): raise InstallerError('The pinned Rust components contain links')
+                    if source.is_dir(): target.mkdir(parents=True, exist_ok=True); continue
+                    if target.exists(): raise InstallerError('The pinned Rust components overlap: ' + relative.as_posix())
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(source, target); target.chmod(stat.S_IMODE(source.stat().st_mode))
+            _write_json(staged / 'MANAGED-INVENTORY.json', _inventory(staged, token))
+            staged.rename(combined)
+    suffix = '.exe' if host == 'windows-x86_64' else ''
+    paths = {'cargo': located['cargo'] / 'bin' / ('cargo' + suffix), 'rustc': combined / 'bin' / ('rustc' + suffix)}
+    missing = [str(path) for path in paths.values() if not path.is_file()]
+    if missing: raise InstallerError('The pinned Rust toolchain is missing: ' + ', '.join(missing))
+    return {key: str(value) for key, value in paths.items()}
+
 
 def _name(value):
     if not value or '\\' in value or value.startswith('/') or ':' in value:
@@ -631,7 +711,7 @@ def bootstrap(root, cache=None, token=None, events=None, build_dependencies=True
             if missing: raise InstallerError('Managed dependencies did not produce required files: '+', '.join(missing))
             _write_json(marker,identity)
             _write_json(prefix/'MANAGED-INVENTORY.json',_inventory(prefix,token))
-    paths.update(dependencies_ready=build_dependencies,cmake_args=['-DCMAKE_PREFIX_PATH='+str(prefix)],python_site=[str(p) for p in sites],prefix=str(prefix),logs=str(logs),
+    paths.update(root=root,dependencies_ready=build_dependencies,cmake_args=['-DCMAKE_PREFIX_PATH='+str(prefix)],python_site=[str(p) for p in sites],prefix=str(prefix),logs=str(logs),
                  ffmpeg={'include':str(prefix/'include'),'avcodec':str(prefix/'lib/libavcodec.63.dylib'),'avformat':str(prefix/'lib/libavformat.63.dylib'),'avutil':str(prefix/'lib/libavutil.61.dylib'),'swscale':str(prefix/'lib/libswscale.10.dylib')})
     return {k:str(v) if isinstance(v,Path) else v for k,v in paths.items()}
 
@@ -933,7 +1013,7 @@ def _bootstrap_windows(root, cache, token, events):
     missing = [p for p in [ffmpeg['include'], *(ffmpeg[n] for n in WINDOWS_FFMPEG_LIBRARIES),
                            *(str(ffmpeg_root / 'bin' / d) for d in WINDOWS_FFMPEG_DLLS)] if not Path(p).exists()]
     if missing: raise InstallerError('The pinned FFmpeg build is missing: ' + ', '.join(missing))
-    paths.update(dependencies_ready=True, cmake_args=['-DCMAKE_PREFIX_PATH=' + prefix.as_posix()],
+    paths.update(root=root, dependencies_ready=True, cmake_args=['-DCMAKE_PREFIX_PATH=' + prefix.as_posix()],
                  python_site=[str(p) for p in sites], prefix=str(prefix), managed_prefix=str(prefix), logs=str(logs),
                  ffmpeg=ffmpeg)
     return {k: str(v) if isinstance(v, Path) else v for k, v in paths.items()}
@@ -1060,7 +1140,7 @@ def _bootstrap_linux(root, cache, token, events, build_dependencies):
             if missing: raise InstallerError('Managed Linux dependencies did not produce: ' + ', '.join(missing))
             _write_json(marker, identity)
             _write_json(prefix / 'MANAGED-INVENTORY.json', _inventory(prefix, token))
-    paths.update(dependencies_ready=build_dependencies, cmake_args=['-DCMAKE_PREFIX_PATH=' + str(prefix)],
+    paths.update(root=root, dependencies_ready=build_dependencies, cmake_args=['-DCMAKE_PREFIX_PATH=' + str(prefix)],
                  python_site=[str(p) for p in sites], prefix=str(prefix), managed_prefix=str(prefix), logs=str(logs),
                  linux_toolchain={key: toolchain[key] for key in ('cc', 'cxx')},
                  ffmpeg={'include': str(prefix / 'include'), **{name: str(prefix / 'lib' / ('lib' + name + '.so.' + version))
