@@ -27,6 +27,10 @@
 #include <algorithm>
 #else
 #include <SDL2/SDL.h>
+#include <SDL2/SDL_vulkan.h>
+#include <fcntl.h>
+#include <deque>
+#include <mutex>
 #include <spawn.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -82,11 +86,27 @@ void hold_input(bool held) {
 #endif
 }
 
-// Starts `binary` with these switches and waits for it. -1 when it could not start. On Windows,
-// `signalled` runs (on this thread) each time `event` is set while the window is open.
+#ifndef _WIN32
+// Requests from the settings window for the game window (`display ...`), applied by the window's
+// own pump (mag_player_settings_sdl_pump).
+std::mutex s_display_lock;
+std::deque<std::string> s_display_requests;
+bool s_display_previewing = false;  // a preview not yet kept or restored (pump thread only)
+void request_display(const std::string& line) {
+    std::lock_guard<std::mutex> lock(s_display_lock);
+    s_display_requests.push_back(line);
+}
+#endif
+
+// Starts `binary` with these switches and waits for it. -1 when it could not start. `signalled`
+// runs (on this thread) each time the window saves controls: on Windows when `event` is set; on
+// POSIX for each "controls" line on the window's event pipe (`events`, the read end, whose write
+// end the child gets as fd 3).
 int run_window_process(const fs::path& binary, const std::string& arguments, void* event = nullptr,
-                       void (*signalled)() = nullptr) {
+                       void (*signalled)() = nullptr, int events = -1, int events_write = -1) {
 #ifdef _WIN32
+    (void)events;
+    (void)events_write;
     std::wstring command = L"\"" + binary.wstring() + L"\" ";
     for (char c : arguments) command += wchar_t(c);
     STARTUPINFOW startup{};
@@ -108,7 +128,6 @@ int run_window_process(const fs::path& binary, const std::string& arguments, voi
     return int(code);
 #else
     (void)event;
-    (void)signalled;
     const std::string path = binary.string();
     std::vector<std::string> words;
     for (size_t at = 0; at < arguments.size();) {
@@ -120,7 +139,31 @@ int run_window_process(const fs::path& binary, const std::string& arguments, voi
     for (auto& word : words) argv.push_back(word.data());
     argv.push_back(nullptr);
     pid_t child = 0;
-    if (posix_spawn(&child, path.c_str(), nullptr, nullptr, argv.data(), environ) != 0) return -1;
+    posix_spawn_file_actions_t actions;
+    posix_spawn_file_actions_init(&actions);
+    if (events_write >= 0) posix_spawn_file_actions_adddup2(&actions, events_write, 3);  // dup2 clears close-on-exec
+    const int spawned = posix_spawn(&child, path.c_str(), &actions, nullptr, argv.data(), environ);
+    posix_spawn_file_actions_destroy(&actions);
+    if (events_write >= 0) close(events_write);
+    if (spawned != 0) { if (events >= 0) close(events); return -1; }
+    if (events >= 0) {
+        // Until the window closes (end of file): saved controls now, display requests to the pump.
+        std::string pending;
+        char buffer[256];
+        for (;;) {
+            const ssize_t n = read(events, buffer, sizeof buffer);
+            if (n < 0 && errno == EINTR) continue;
+            if (n <= 0) break;
+            pending.append(buffer, size_t(n));
+            for (size_t end; (end = pending.find('\n')) != std::string::npos; pending.erase(0, end + 1)) {
+                const std::string line = pending.substr(0, end);
+                if (line == "controls") { if (signalled) signalled(); }
+                else if (line.rfind("display ", 0) == 0) request_display(line);
+            }
+        }
+        close(events);
+        request_display("display end");  // a preview the window left behind returns
+    }
     int status = 0;
     while (waitpid(child, &status, 0) < 0)
         if (errno != EINTR) return -1;
@@ -161,6 +204,13 @@ extern "C" int mag_player_settings_window_command(int argc, char** argv, int* co
         if (!value("--game-window=").empty()) options.game_window = reinterpret_cast<void*>(std::strtoull(value("--game-window=").c_str(), nullptr, 16));
         if (!value("--controls-event=").empty()) options.controls_saved = reinterpret_cast<void*>(std::strtoull(value("--controls-event=").c_str(), nullptr, 16));
         if (option == "--notice=player-name") options.notice = MAG_SETTINGS_NAME_NEEDED;
+#ifndef _WIN32
+        if (!value("--events-fd=").empty()) {
+            options.game_events = std::atoi(value("--events-fd=").c_str());
+            // Not for the browser or anything else this window starts: the game waits for its end.
+            if (options.game_events >= 0) fcntl(options.game_events, F_SETFD, FD_CLOEXEC);
+        }
+#endif
     }
     const fs::path settings = path_variable("MAG_PLAYER_SETTINGS_PATH");
     if (settings.empty()) {
@@ -209,7 +259,19 @@ extern "C" void mag_player_settings_open(void) {
                       static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(event)));
         arguments += handles;
 #endif
-        const int code = run_window_process(self, arguments, event, controls_saved);
+        int events = -1, events_write = -1;
+#ifndef _WIN32
+        // The window's requests to this game: saved controls, and the display preview.
+        int ends[2];
+        if (pipe(ends) == 0) {
+            fcntl(ends[0], F_SETFD, FD_CLOEXEC);
+            fcntl(ends[1], F_SETFD, FD_CLOEXEC);
+            events = ends[0];
+            events_write = ends[1];
+            arguments += " --events-fd=3";
+        }
+#endif
+        const int code = run_window_process(self, arguments, event, controls_saved, events, events_write);
 #ifdef _WIN32
         if (event) CloseHandle(event);
 #endif
@@ -305,14 +367,69 @@ int watch(void* userdata, SDL_Event* event) {
         s_requested.store(true, std::memory_order_release);
     return 1;
 }
+// The window's client size in physical pixels (`width` x `height`), centred: SDL sizes windows in
+// points, which a scaled desktop maps to more pixels.
+void set_output_size(SDL_Window* window, int width, int height) {
+    int points_w = 0, points_h = 0, pixels_w = 0, pixels_h = 0;
+    SDL_GetWindowSize(window, &points_w, &points_h);
+    SDL_Vulkan_GetDrawableSize(window, &pixels_w, &pixels_h);
+    const double scale = points_w > 0 && pixels_w > 0 ? double(pixels_w) / points_w : 1.0;
+    SDL_SetWindowSize(window, int(width / scale + .5), int(height / scale + .5));
+    SDL_SetWindowPosition(window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
+}
+struct DisplayState { Uint32 fullscreen = 0; int w = 0, h = 0, x = 0, y = 0; } s_before_preview;
+void apply_display(SDL_Window* window, const std::string& line) {
+    if (line == "display keep") { s_display_previewing = false; return; }
+    if (line == "display restore" || line == "display end") {
+        if (!s_display_previewing) return;
+        s_display_previewing = false;
+        SDL_SetWindowFullscreen(window, s_before_preview.fullscreen);
+        if (!s_before_preview.fullscreen) {
+            SDL_SetWindowSize(window, s_before_preview.w, s_before_preview.h);
+            SDL_SetWindowPosition(window, s_before_preview.x, s_before_preview.y);
+        }
+        return;
+    }
+    if (!s_display_previewing) {
+        s_display_previewing = true;
+        s_before_preview.fullscreen = SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN_DESKTOP;
+        SDL_GetWindowSize(window, &s_before_preview.w, &s_before_preview.h);
+        SDL_GetWindowPosition(window, &s_before_preview.x, &s_before_preview.y);
+    }
+    int width = 0, height = 0;
+    if (line == "display borderless") SDL_SetWindowFullscreen(window, SDL_WINDOW_FULLSCREEN_DESKTOP);
+    else if (std::sscanf(line.c_str(), "display windowed %d %d", &width, &height) == 2 && width > 0 && height > 0) {
+        SDL_SetWindowFullscreen(window, 0);
+        set_output_size(window, width, height);
+    }
+}
 }  // namespace
 extern "C" void mag_player_settings_sdl_pump(void* sdl_window) {
     auto* window = static_cast<SDL_Window*>(sdl_window);
     if (window != s_watched) {
         if (s_watched) SDL_DelEventWatch(watch, s_watched);
         s_watched = window;
-        if (window) SDL_AddEventWatch(watch, window);
+        s_display_previewing = false;
+        if (window) {
+            SDL_AddEventWatch(watch, window);
+            // The saved output resolution (MAG_PLAYER_OUTPUT_SIZE) when windowed and it fits the screen.
+            unsigned width = 0, height = 0;
+            SDL_Rect usable{0, 0, 0, 0};
+            if (const char* size = std::getenv("MAG_PLAYER_OUTPUT_SIZE");
+                size && std::sscanf(size, "%ux%u", &width, &height) == 2 && width && height &&
+                !(SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN) &&
+                SDL_GetDisplayUsableBounds(SDL_GetWindowDisplayIndex(window), &usable) == 0 &&
+                int(width) <= usable.w && int(height) <= usable.h)
+                set_output_size(window, int(width), int(height));
+        }
     }
+    std::deque<std::string> requests;
+    {
+        std::lock_guard<std::mutex> lock(s_display_lock);
+        requests.swap(s_display_requests);
+    }
+    for (const auto& line : requests)
+        if (window) apply_display(window, line);
     if (s_requested.exchange(false, std::memory_order_acq_rel)) mag_player_settings_open();
 }
 #endif
