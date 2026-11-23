@@ -64,16 +64,89 @@ static void prompts() {
     require(mag_game_controls_prompt_action("OS_Enter") == 0x33e32a99, "[OS_Enter]");
     require(mag_game_controls_prompt_action("NotAnAction") == 0, "unknown names are no action");
     // Each situational action's identifier is the token of its prompt name.
-    for (const char* name : {"OS_Enter", "OS_Cancel", "Bleedout", "CommandScreen", "TCM_Abilities", "TCM_Frago",
+    for (const char* name : {"OS_Enter", "OS_Cancel", "Bleedout", "TCM_Abilities", "TCM_Frago",
                              "TCM_VoiceChat", "VSeatNext", "VSmoke"}) {
         const auto* action = mag_game_controls_action(mag_game_controls_name_token(name));
         require(action && action->optional, "situational action missing from the catalog");
     }
+    // The command screen is watched on the Select button: its token stands for Select.
+    require(mag_game_controls_prompt_action("CommandScreen") == 0x0a7fd35e, "[CommandScreen] is Select");
+    require(!mag_game_controls_action(0xc6dcd89f), "the retired command screen is still an action");
+    require(mag_game_controls_retired_actions().size() == 1 && mag_game_controls_retired_actions()[0] == 0xc6dcd89f,
+            "the command screen is listed as retired");
     require(mag_game_controls_pad_layout_key(MagPadButton::Cross) == 27 &&
                 mag_game_controls_pad_layout_key(MagPadButton::Circle) == 6 &&
                 mag_game_controls_pad_layout_key(MagPadButton::Start) == 40 &&
                 mag_game_controls_pad_layout_key(MagPadButton::R3) == 10,
             "pad layout keys");
+}
+// A revision 2 profile: today's defaults with revision 2's keys (Confirm Return, Bleed out X,
+// Command screen M).
+static ControlsProfile revision_2() {
+    auto p = mag_game_controls_default_profile();
+    for (auto& b : p.bindings) {
+        if (b.action == 0x33e32a99) b.control.code = 40;
+        else if (b.action == 0x40feec35) b.control.code = 27;
+    }
+    p.bindings.push_back({{InputSource::Keyboard, 16}, 0xc6dcd89f});
+    p.catalog_revision = 2;
+    return p;
+}
+static uint32_t key_of(const ControlsProfile& p, ActionId action) {
+    for (const auto& b : p.bindings)
+        if (b.action == action && b.control.source == InputSource::Keyboard && (b.contexts & 1)) return b.control.code;
+    return 0;
+}
+static size_t count_of(const ControlsProfile& p, ActionId action) {
+    return size_t(std::count_if(p.bindings.begin(), p.bindings.end(), [&](const auto& b) { return b.action == action; }));
+}
+static void upgrade_from_2() {
+    constexpr ActionId Confirm = 0x33e32a99, Bleedout = 0x40feec35, Command = 0xc6dcd89f, Select = 0x0a7fd35e,
+                       Melee = 0xdb59e9a9;
+    {   // Untouched defaults become today's defaults: X confirms, Return bleeds out, no M.
+        auto p = revision_2();
+        mag_game_controls_upgrade_profile(p);
+        mag_game_controls_validate_profile(p);
+        auto defaults = mag_game_controls_default_profile();
+        require(p.catalog_revision == MagGameControlsCatalogRevision, "revision 3 recorded");
+        require(key_of(p, Confirm) == 27 && key_of(p, Bleedout) == 40 && !count_of(p, Command), "untouched defaults moved");
+        require(p.bindings.size() == defaults.bindings.size(), "nothing else changed");
+    }
+    {   // The player put Bleed out on K: it stays; Confirm still moves to X.
+        auto p = revision_2();
+        for (auto& b : p.bindings) if (b.action == Bleedout) b.control.code = 14;
+        mag_game_controls_upgrade_profile(p);
+        mag_game_controls_validate_profile(p);
+        require(key_of(p, Bleedout) == 14 && key_of(p, Confirm) == 27, "a rebound Bleed out moved");
+    }
+    {   // The player put Confirm on K and Melee's second key on Return: Confirm stays; Bleed out keeps
+        // X because Return is taken.
+        auto p = revision_2();
+        for (auto& b : p.bindings) if (b.action == Confirm) b.control.code = 14;
+        p.bindings.push_back({{InputSource::Keyboard, 40}, Melee});
+        mag_game_controls_upgrade_profile(p);
+        mag_game_controls_validate_profile(p);
+        require(key_of(p, Confirm) == 14, "a rebound Confirm moved");
+        require(key_of(p, Bleedout) == 27, "Bleed out left without a key or displaced Melee");
+    }
+    {   // The player's own command screen key (K) becomes an on-foot Select key; the default M goes.
+        auto p = revision_2();
+        for (auto& b : p.bindings) if (b.action == Command) b.control.code = 14;
+        mag_game_controls_upgrade_profile(p);
+        mag_game_controls_validate_profile(p);
+        const auto kept = std::find_if(p.bindings.begin(), p.bindings.end(), [&](const auto& b) {
+            return b.action == Select && b.control == PhysicalControl{InputSource::Keyboard, 14};
+        });
+        require(!count_of(p, Command) && kept != p.bindings.end() && kept->contexts == 1, "the player's command key was lost");
+    }
+    {   // Select already has two keys on foot: the player's command key cannot join and is dropped.
+        auto p = revision_2();
+        for (auto& b : p.bindings) if (b.action == Command) b.control.code = 14;
+        p.bindings.push_back({{InputSource::Keyboard, 15}, Select});
+        mag_game_controls_upgrade_profile(p);
+        mag_game_controls_validate_profile(p);
+        require(!count_of(p, Command) && count_of(p, Select) == 3, "Select took a third key");  // + controller Back
+    }
 }
 static void upgrade() {
     ControlsProfile old;  // Revision 0: on-foot keys only, Escape and X already used by the player.
@@ -85,8 +158,8 @@ static void upgrade() {
     const auto has = [&](ActionId action) {
         return std::any_of(old.bindings.begin(), old.bindings.end(), [&](const auto& b) { return b.action == action; });
     };
-    require(has(0x33e32a99) && has(0x74700e10), "revision 2 defaults added");
-    require(!has(0x40feec35), "a situational default displaced the player's own key");
+    require(has(0x40feec35) && has(0x74700e10), "situational defaults added");
+    require(!has(0x33e32a99), "a situational default displaced the player's own key (X)");
     require(!has(0x58de09cf), "an unbound revision 0 action was bound again");
     ControlsProfile one = mag_game_controls_default_profile();  // Revision 1 (before situational actions).
     std::erase_if(one.bindings, [](const auto& b) { return mag_game_controls_action(b.action)->revision == 2; });
@@ -105,6 +178,7 @@ static void upgrade() {
     require(old.bindings.size() == count, "upgrade runs once");
     ControlsProfile future;
     future.catalog_revision = MagGameControlsCatalogRevision + 1;
+    upgrade_from_2();
     bool refused = false;
     try { mag_game_controls_upgrade_profile(future); } catch (const std::invalid_argument&) { refused = true; }
     require(refused, "newer catalog accepted");

@@ -118,7 +118,8 @@ void resolve() {
     require(mag_game_prompts_label("ContAction", s) == "E", "[ContAction] is the held Interact");
     require(mag_game_prompts_label("Fire", s) == "LMB", "[Fire] names the mouse button");
     require(mag_game_prompts_label("fire", s) == "LMB", "names are case-insensitive");
-    require(mag_game_prompts_label("Bleedout", s) == "X", "[Bleedout]");
+    require(mag_game_prompts_label("Bleedout", s) == "ENTER", "[Bleedout]");
+    require(mag_game_prompts_label("CommandScreen", s) == "TAB", "[CommandScreen] is the Select key");
     require(mag_game_prompts_label("NoSuchAction", s).empty(), "unknown name keeps the icon");
     // Menu buttons: the SDK keyboard pad's Cross and Circle keys, whatever the profile binds.
     require(mag_game_prompts_label("OS_Enter", s) == "X", "menu confirm is the pad's Cross key");
