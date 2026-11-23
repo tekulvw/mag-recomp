@@ -101,10 +101,12 @@ class Win32SettingsWindowTests(unittest.TestCase):
             (root / 'sdata_decrypt.h').write_text('#include <stddef.h>\n#include <stdint.h>\n'
                 'static inline uint8_t* sdata_decrypt(const uint8_t*,size_t,size_t*) { return NULL; }\n')
             binary = root / 'driver.exe'
+            subprocess.run([compiler, '/nologo', '/c', '/W3', '/WX', '/MT', str(ROOT / 'src/player_input_win32_map.c'),
+                            '/Fo' + str(root / 'map.obj')], check=True, timeout=120)
             subprocess.run([compiler, '/nologo', '/std:c++20', '/EHsc', '/W3', '/WX', '/MT', '/DUNICODE', '/D_UNICODE',
                             '/DMAG_PLAYER_ARCHIVE_NO_ZLIB=1', '/DMAG_PLAYER_SETTINGS_CONTROLS=1', '/D_CRT_SECURE_NO_WARNINGS', '/I' + str(ROOT / 'src'), '/I' + str(root),
                             str(ROOT / 'tests/player_settings_win32.cpp'), str(ROOT / 'src/player_settings_win32.cpp'),
-                            str(ROOT / 'src/player_input_win32_map.c'), *[str(ROOT / s) for s in FORM],
+                            str(root / 'map.obj'), *[str(ROOT / s) for s in FORM],
                             '/Fo' + str(root) + '\\', '/Fe' + str(binary), '/link', str(root / 'cargo/release/mag_input.lib'),
                             'user32.lib', 'gdi32.lib', 'comctl32.lib', 'xinput.lib', 'userenv.lib', 'ws2_32.lib',
                             'bcrypt.lib', 'ntdll.lib', 'advapi32.lib', 'dbghelp.lib'], check=True, timeout=300)

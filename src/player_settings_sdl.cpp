@@ -261,9 +261,10 @@ SettingsPanel::State SettingsPanel::handle(const SDL_Event& event, uint64_t now_
     }
     if (prompt_ != Prompt::None) {
         if (event.type == SDL_KEYDOWN) {
-            const SDL_Keycode key = event.key.keysym.sym;
-            if (key == SDLK_RETURN || key == SDLK_KP_ENTER || key == SDLK_y) return answer(true);
-            if (key == SDLK_ESCAPE || key == SDLK_n) return answer(false);
+            // Physical keys (scancodes) throughout: they need no keyboard layout to be known.
+            const SDL_Scancode key = event.key.keysym.scancode;
+            if (key == SDL_SCANCODE_RETURN || key == SDL_SCANCODE_KP_ENTER || key == SDL_SCANCODE_Y) return answer(true);
+            if (key == SDL_SCANCODE_ESCAPE || key == SDL_SCANCODE_N) return answer(false);
         } else if (event.type == SDL_MOUSEBUTTONDOWN && event.button.button == SDL_BUTTON_LEFT) {
             if (inside(prompt_yes(), event.button.x, event.button.y)) return answer(true);
             if (inside(prompt_no(), event.button.x, event.button.y)) return answer(false);
@@ -332,20 +333,20 @@ SettingsPanel::State SettingsPanel::handle(const SDL_Event& event, uint64_t now_
         }
         break;
     case SDL_KEYDOWN: {
-        const SDL_Keycode key = event.key.keysym.sym;
+        const SDL_Scancode key = event.key.keysym.scancode;
         const bool shift = event.key.keysym.mod & KMOD_SHIFT, control = event.key.keysym.mod & KMOD_CTRL;
-        if (key == SDLK_ESCAPE) { state_ = State::Cancelled; break; }
-        if (key == SDLK_TAB && control) { set_page((page_ + (shift ? (form_.controls ? 2 : 0) : 1)) % (form_.controls ? 3 : 1)); break; }
-        if (key == SDLK_s && control) { save(); break; }
-        if (key == SDLK_TAB || key == SDLK_DOWN || key == SDLK_UP) {
+        if (key == SDL_SCANCODE_ESCAPE) { state_ = State::Cancelled; break; }
+        if (key == SDL_SCANCODE_TAB && control) { set_page((page_ + (shift ? (form_.controls ? 2 : 0) : 1)) % (form_.controls ? 3 : 1)); break; }
+        if (key == SDL_SCANCODE_S && control) { save(); break; }
+        if (key == SDL_SCANCODE_TAB || key == SDL_SCANCODE_DOWN || key == SDL_SCANCODE_UP) {
             const int n = int(items.size());
-            focus_ = (focus_ + ((key == SDLK_UP || (key == SDLK_TAB && shift)) ? n - 1 : 1)) % n;
+            focus_ = (focus_ + ((key == SDL_SCANCODE_UP || (key == SDL_SCANCODE_TAB && shift)) ? n - 1 : 1)) % n;
             ensure_visible();
             break;
         }
         if (!current) break;
-        if (key == SDLK_LEFT || key == SDLK_RIGHT) {
-            const int step = key == SDLK_RIGHT ? 1 : -1;
+        if (key == SDL_SCANCODE_LEFT || key == SDL_SCANCODE_RIGHT) {
+            const int step = key == SDL_SCANCODE_RIGHT ? 1 : -1;
             if (current->kind == Kind::Choice) {
                 const int n = current->id == 2 ? 3 : 2;
                 set_choice(current->id, (choice(current->id) + n + step) % n);
@@ -356,12 +357,12 @@ SettingsPanel::State SettingsPanel::handle(const SDL_Event& event, uint64_t now_
             }
             break;
         }
-        if (key == SDLK_BACKSPACE || key == SDLK_DELETE) {
+        if (key == SDL_SCANCODE_BACKSPACE || key == SDL_SCANCODE_DELETE) {
             if (current->kind == Kind::Text && !field(current->id)->empty()) field(current->id)->pop_back();
             else if (current->kind == Kind::Slot) clear_slot(*current);
             break;
         }
-        if (key == SDLK_RETURN || key == SDLK_KP_ENTER || (key == SDLK_SPACE && current->kind != Kind::Text)) activate(*current, now_ms);
+        if (key == SDL_SCANCODE_RETURN || key == SDL_SCANCODE_KP_ENTER || (key == SDL_SCANCODE_SPACE && current->kind != Kind::Text)) activate(*current, now_ms);
         break;
     }
     case SDL_MOUSEBUTTONDOWN:

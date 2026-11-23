@@ -24,7 +24,7 @@ static SDL_Event key(SDL_Scancode code, SDL_Keymod mod = KMOD_NONE) {
     SDL_Event e{};
     e.type = SDL_KEYDOWN;
     e.key.keysym.scancode = code;
-    e.key.keysym.sym = SDL_GetKeyFromScancode(code);
+    e.key.keysym.sym = SDLK_UNKNOWN;  // the panel reads physical keys only
     e.key.keysym.mod = Uint16(mod);
     return e;
 }
