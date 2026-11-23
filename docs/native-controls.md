@@ -1,7 +1,8 @@
 # Game controls adapter: seam and behaviour specification
 
-This is the specification the opt-in game controls adapter (`src/game_controls/`, CMake option
-`MAG_GAME_CONTROLS`) is implemented from. It follows
+This is the specification the game controls adapter (`src/game_controls/`, CMake option
+`MAG_GAME_CONTROLS`, off by default in CMake and on in installer player builds, section 10) is
+implemented from. It follows
 [the reimplementation method](native-graphics-reimplementation-method.md): it states guest-visible
 interface facts (seams named by guest address and register, guest data layouts needed to read and
 write guest memory, game-chosen values) and the adapter's own behaviour. It does not describe how
@@ -805,6 +806,37 @@ An installer recipe builds it when its local configuration names the toolchain:
 `"game_controls": {"cargo": "<path>", "rustc": "<path>"}` (the toolchain's own executables, not
 rustup proxies). The recipe then prepares `mage_g-controls` from the last spliced lift (`mage_g-ctr64`) and
 configures only the engine with the adapter.
+
+**Player builds include it by default** on macOS, Windows and Linux. The installer downloads the
+Rust release of `rust-toolchain.toml` as the Rust project's official standalone `rustc`, `cargo`
+and `rust-std` archives for the host, pinned by size and SHA-256 in
+`installer/mag_installer/managed_tools.py` (`RUST_LOCKS`, about 110 MB per host), copies `rustc`
+and its standard library into one verified directory (`rust_toolchain`), and writes that
+`game_controls` entry into the build settings. The input engine has no third-party crates, so
+cargo builds it `--locked --offline`.
+
+Switches:
+
+- `MAG_GAME_CONTROLS=0` in the installer's environment builds without the adapter and downloads no
+  Rust (`1` or unset keeps it; anything else stops the build before any download). The result is
+  the build from before this default: the SDK's keyboard pad and controllers only.
+- `MAG_GAME_CONTROLS=0` in the engine's environment turns a built adapter off at run time (section
+  4); the hooks then cost one null check each. Launch `MagRecomp` directly to use it, since the
+  packaged supervisors do not pass `MAG_` variables through.
+
+Evidence for the default (the rule for in-repository code on by default, AGENTS.md):
+
+- *Correctness:* the synthetic suites in section 11 (adapter, capture core, SDL and Win32 backends,
+  settings registration, catalog) and the installer's synthetic toolchain and switch tests
+  (`installer/tests/test_managed_tools.py`, `installer/tests/test_player_build.py`). On macOS the
+  pinned toolchain the installer downloads builds `crates/mag-input` with `--locked --offline`.
+- *Controller play stays native by default:* with `controller_remap` false (the default profile)
+  digital controller input stays on the native path and the sticks keep the native response
+  ([player-controls-settings.md](player-controls-settings.md)); aim assist is denied only under the
+  engine's KBM policy (section 7.6). Any adapter error cancels and the game proceeds natively
+  (section 4, "Failures").
+- *Not yet recorded:* an in-game check of mouse aim in Training on Windows and Linux, and a frame
+  rate comparison with and without `MAG_GAME_CONTROLS`. Record them here when they are run.
 
 ## 11. Tests
 

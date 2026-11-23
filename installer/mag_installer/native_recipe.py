@@ -166,6 +166,20 @@ def x86_level_override(environ, host):
     return ['-DMAG_X86_LEVEL=' + value]
 
 
+def game_controls_enabled(environ):
+    """Whether a player build includes the game controls adapter (docs/native-controls.md).
+
+    On by default: keyboard and mouse play with mouse aim, beside any controller. Setting
+    MAG_GAME_CONTROLS=0 in the installer's environment builds without it (and without the Rust
+    toolchain it needs); 1 or unset keeps it. At run time the same variable set to 0 turns a built
+    adapter off. The build environment itself never inherits MAG_* variables.
+    """
+    value = environ.get('MAG_GAME_CONTROLS', '')
+    if value not in ('', '0', '1'):
+        raise InstallerError(f'MAG_GAME_CONTROLS must be 0 or 1, not {value!r}')
+    return value != '0'
+
+
 def splice_pins(pin):
     """A role's extra tagged commits (the fixed lifters the PPU splices read), as a list.
 

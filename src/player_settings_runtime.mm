@@ -139,6 +139,17 @@ static void installMenu(NSWindow *game) {
     if(!appItem.submenu)appItem.submenu=[[NSMenu alloc] initWithTitle:@"MAG"];
     NSMenuItem *settings=[[NSMenuItem alloc] initWithTitle:@"Settings…" action:@selector(showSettings:) keyEquivalent:@","];
     settings.target=controller;[appItem.submenu insertItem:settings atIndex:0];
+    // F10 in the game window also opens settings, as on Windows and Linux (Fn-F10 where the
+    // function keys control media). The monitor sees the key before the window's pad view.
+    static id f10;
+    if(!f10){
+        __weak NSWindow *weakGame=game;__weak MAGSettingsController *weakController=controller;
+        f10=[NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskKeyDown handler:^NSEvent*(NSEvent *event){
+            if(event.keyCode!=109||event.window!=weakGame)return event;  // 109: kVK_F10
+            if(!event.isARepeat)[weakController showSettings:nil];
+            return nil;
+        }];
+    }
     if(![appItem.submenu itemWithTitle:@"Quit MAG"]){
         [appItem.submenu addItem:NSMenuItem.separatorItem];
         NSMenuItem *quit=[[NSMenuItem alloc] initWithTitle:@"Quit MAG" action:@selector(performClose:) keyEquivalent:@"q"];

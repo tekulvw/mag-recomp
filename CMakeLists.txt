@@ -351,6 +351,29 @@ else()
     if(WIN32)
         target_link_libraries(${PROJECT_NAME} PRIVATE ws2_32)
     endif()
+    # The settings window (F10, and setup at the first launch): its own process of this binary,
+    # with Win32 controls on Windows and an SDL2 panel elsewhere (src/player_settings_session.h).
+    # Also inert without MAG_PLAYER_SETTINGS_PATH. Its Controls pages and the F10 seams come with
+    # MAG_GAME_CONTROLS (cmake/MagControls.cmake).
+    target_sources(${PROJECT_NAME} PRIVATE src/player_settings_session.cpp src/player_settings_form.cpp)
+    if(WIN32)
+        target_sources(${PROJECT_NAME} PRIVATE src/player_settings_win32.cpp src/player_input_win32_map.c)
+        set_source_files_properties(src/player_settings_win32.cpp TARGET_DIRECTORY ${PROJECT_NAME}
+            PROPERTIES COMPILE_DEFINITIONS "UNICODE;_UNICODE")
+        target_link_libraries(${PROJECT_NAME} PRIVATE user32 gdi32 comctl32 xinput)
+    else()
+        target_sources(${PROJECT_NAME} PRIVATE src/player_settings_sdl.cpp)
+        # The panel draws with the SDK's public-domain bitmap font (libs/misc/osk_font8x8.h).
+        set_source_files_properties(src/player_settings_sdl.cpp TARGET_DIRECTORY ${PROJECT_NAME}
+            PROPERTIES INCLUDE_DIRECTORIES "${PS3RECOMP_DIR}")
+        find_package(SDL2 REQUIRED)
+        if(TARGET SDL2::SDL2)
+            target_link_libraries(${PROJECT_NAME} PRIVATE SDL2::SDL2)
+        else()
+            target_include_directories(${PROJECT_NAME} PRIVATE ${SDL2_INCLUDE_DIRS})
+            target_link_libraries(${PROJECT_NAME} PRIVATE ${SDL2_LIBRARIES})
+        endif()
+    endif()
 endif()
 
 # The lifted SPU sources use bare #include "spu_context.h". Scope that include

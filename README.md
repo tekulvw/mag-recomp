@@ -52,9 +52,11 @@ The [installer](installer/README.md) does all of that for you: choose your game 
 installation folder, click **Build MAG**, and it downloads pinned build tools, runs every step on
 your computer and packages the result. Download it from a release.
 
-New macOS builds also include a [native settings panel](docs/player-settings.md) for the game server,
-display mode, output resolution and FXAA. Open **MAG → Settings…** while playing, or hold **Option**
-when launching to open setup first. Settings survive updates and rebuilds.
+MAG has a [settings window](docs/player-settings.md) for the game server, player name, display mode
+and controls on every system: press **F10** while playing. It also opens before the game on the
+first launch; hold **Option** (macOS) or **Shift** (Windows) when launching to open it then too.
+macOS also has **MAG → Settings…**, Command-comma, and output resolution and FXAA. Settings survive
+updates and rebuilds.
 
 ## For players
 
@@ -88,9 +90,10 @@ You build MAG on your own computer from your own copy; nothing game-derived is e
    (`play.magtest.online`); change it only if you were given another.
    - **macOS:** the setup window opens on first launch. Fill in **Player name** (and **Game server**
      if needed), then click **Play MAG**.
-   - **Windows:** double-click `MAG.exe`. The first time, a small window asks for your name.
-   - **Linux:** run it once from the MAG folder with your name: `./MAG --name YourName`
-     (add `--server <address>` for another server).
+   - **Windows and Linux:** start `MAG.exe` (Windows) or `./MAG` from the MAG folder (Linux). The
+     first time, the **MAG Setup** window opens: fill in **Player name** (and **Game server** if
+     needed), then click **Save and play**. Without a desktop (over SSH, say) run it once with
+     your name instead: `./MAG --name YourName` (add `--server <address>` for another server).
 
    A name has 3 to 15 letters, digits, `-` or `_`, and starts with a letter. MAG remembers it, and
    types it in for you when the game asks you to sign in: just confirm it. On Linux that sign-in box
@@ -119,7 +122,14 @@ You build MAG on your own computer from your own copy; nothing game-derived is e
    On Windows, a controller is needed to play matches. The keyboard only covers menus (arrow keys,
    Z / X / A / S for the face buttons, Return for Start), has no camera or aim, and is ignored
    whenever any controller is present, including virtual gamepads created by Steam Input or
-   remote-desktop and streaming software. Mouse aim is not available on any system yet.
+   remote-desktop and streaming software.
+
+   **Keyboard and mouse** play is built in on every system. In a match, on foot: WASD moves, the
+   mouse aims, left button fires, right button aims down sights, Space jumps, Left Shift sprints,
+   R reloads, E interacts (hold for objectives), C crouches (hold for prone), Q and G cycle weapons
+   and equipment, F is melee, Escape is Start, Tab is Select and the arrow keys are the D-pad. A
+   controller keeps working beside it. To build without it, set `MAG_GAME_CONTROLS=0` before
+   starting the installer.
 
 **If a download fails** (for example during a GitHub outage), retry later. Or point the installer
 at a folder of previously downloaded tools with `build --cache <folder>`, or at a mirror with

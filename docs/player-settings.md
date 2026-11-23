@@ -2,7 +2,7 @@
 
 New macOS player builds include a compact native **MAG Settings** window. On the first launch it opens before the game starts. Choose settings and click **Play MAG**. Later launches reuse the saved settings.
 
-Open **MAG → Settings…** or press **Command-comma** while playing. Hold **Option** while opening MAG to bring up setup before starting the game. The bundled `Contents/MacOS/MAG --settings` command opens the same recovery path.
+Open **MAG → Settings…**, or press **F10** or **Command-comma** while playing (Fn-F10 where the function keys control media). Hold **Option** while opening MAG to bring up setup before starting the game. The bundled `Contents/MacOS/MAG --settings` command opens the same recovery path.
 
 ## Connection
 
@@ -64,23 +64,32 @@ Existing schema-version-1 preferences without `render_scale` load at 100% and pr
 The feature is opt-in at the runner boundary: the packaged macOS supervisor supplies `MAG_PLAYER_SETTINGS_PATH`, `MAG_PLAYER_OVERLAY_ROOT` and the launcher-only `MAG_PLAYER_SETUP` flag. Ordinary development launches without those variables retain their existing behavior. The setup flag is removed for engine handoff, which reads the private launch snapshot.
 The launch snapshot also supplies `MAG_PLAYER_RENDER_SCALE` as an integer percentage to the Metal render-target adapter. Applying a different rendering choice while playing updates preferences for the next launch and leaves the active launch snapshot intact.
 
-The AppKit implementation is macOS-only. Windows and Linux use the settings file described below.
+The AppKit implementation is macOS-only. Windows and Linux have their own settings window, described below.
 
 ## Windows and Linux
 
-There is no settings window yet. The connection settings live in a small file:
+Press **F10** in the game window to open **MAG Settings**. It also opens before the game starts on the first launch, and on Windows when you hold **Shift** while starting MAG. It has the same pages as macOS where they apply:
+
+- **General:** game server, optional TCP and UDP ports (blank keeps the game's defaults), player name, and **Display mode** (Windowed, or Borderless fullscreen at the desktop size). Output and rendering resolution and FXAA are Metal features and are not offered; the Vulkan game window can be resized freely.
+- **Keyboard and mouse** and **Controller**, when the build has the keyboard and mouse controls ([player-controls-settings.md](player-controls-settings.md)): two bindings per action for on-foot play or menus, conflict replacement, clear, per-device reset, input mode, mouse sensitivity and Invert Y. Choose a binding with **Set primary** or **Set secondary** (Windows) or by selecting it and pressing Enter (Linux), then press the key, mouse button or controller button; Escape, focus loss or 15 seconds cancel.
+
+**Save** keeps the changes; **Cancel** (or Escape) discards them. Saved controls apply to the running game at once. Server, port and display changes apply at the next launch; they never move an active session. The game, an online match included, keeps running behind the window, and gameplay input from controllers, keyboard and mouse is held while it is open.
+
+The window is its own process of the game's engine binary (`MagEngine --mag-player-settings`, `src/player_settings_session.cpp`), so it never shares the game window's thread or event queue. On Windows it is a window of standard Win32 controls (`src/player_settings_win32.cpp`). On Linux it is a panel drawn with the SDL2 the game already ships (`src/player_settings_sdl.cpp`), with the runtime's public-domain 8x8 font, so it needs no toolkit: keyboard (Tab, arrows, Enter, Ctrl+Tab for pages, Ctrl+S to save) and mouse both work. Both edit the same settings form (`src/player_settings_form.cpp`), which uses the settings file's own validation and the controls service, so no rule is restated. F10 reaches the game window through the controls adapter's window seams; a build with `MAG_GAME_CONTROLS=0` has no Controls pages and no F10, and opens the window only at the first launch (or with Shift on Windows).
+
+The settings live in a small file:
 
 - **Windows:** `%APPDATA%\MAG\settings.json`
 - **Linux:** `$XDG_CONFIG_HOME/MAG/settings.json`, or `~/.config/MAG/settings.json`
 
-The first launch creates it with the same defaults as macOS (`play.magtest.online`, no player name). Choose a server and name once from the command line, and later launches reuse them:
+Without a settings window (for example over SSH, where none can open), the first launch creates the file with the same defaults as macOS (`play.magtest.online`, no player name). Choose a server and name once from the command line, and later launches reuse them; the command line also skips the setup window:
 
 ```sh
 MAG --server play.example.org --name Rook_7        # Linux, from the MAG folder
 MAG.exe --server play.example.org --name Rook_7    # Windows
 ```
 
-A server needs a player name. On Windows, MAG asks for it in a small window the first time and remembers it (`--no-prompt` turns the window off for automation). On Linux, the launch stops and says to add `--name`, or to link your account (`--link`), which supplies the name. You can also edit the file. It uses the macOS file's connection fields: `server_address`, `tcp_port`, `udp_port` (0 for the game default), `player_name` and the optional `ticket_file` and `portal_url`. Other keys are ignored, and the same validation rules apply. A damaged file is never overwritten. It is reported in `logs/launch-*/launcher.log`, and that launch plays offline.
+A server needs a player name. On Windows, MAG asks for it in a small window the first time and remembers it (`--no-prompt` turns the window off for automation). On Linux, the launch stops and says to add `--name`, or to link your account (`--link`), which supplies the name. You can also edit the file. It uses the macOS file's connection fields: `server_address`, `tcp_port`, `udp_port` (0 for the game default), `player_name`, `display_mode` (`windowed` or `borderless`, written only when borderless) and the optional `ticket_file` and `portal_url`. Other keys are ignored, and the same validation rules apply. A damaged file is never overwritten. It is reported in `logs/launch-*/launcher.log`, and that launch plays offline.
 
 The game builds the same connection override as macOS (`src/player_settings_portable.cpp`, `src/player_server_overlay_portable.cpp`). The private view of the game files lives in `home/player/server/vfs`, inside the installation. It holds real folders and hard links to the original files, plus the one rewritten archive, so it costs no copy and it is rebuilt whenever the server changes. MAG and its game files must be on the same drive, which an installer-built folder always is.
 
@@ -88,7 +97,7 @@ If the archive is not the retail version, or the server cannot be resolved, the 
 
 The portable build decodes the archive with its own zlib decoder and hashes with its own SHA-256 (`src/player_inflate.cpp`, `src/player_sha256.cpp`), so it needs neither zlib nor a crypto library. The rewritten settings block is stored uncompressed, as the archive format allows.
 
-`tests.test_player_portal` drives the link, ticket, storage and fallback flows against a fake transport, and on Linux the OpenSSL transport against a local TLS server (verified, untrusted and mismatched certificates, chunked replies). On macOS, the same file checks the `NSURLSession` transport headless (plain http, a refused self-signed certificate, a refused redirect). `installer/tests/test_native_package_linux.py` runs the packaged Linux supervisor against a fake portal: `--link`, a ticket before each phase, the name taking over, unlinking, and the fallbacks. `tests.test_player_settings_portable` covers the portable decoder against zlib's stored, fixed and dynamic blocks, the digest, the settings-file rules, the hard-link view, and the launch hook's first-run options and offline fallback. Synthetic tests cover native validation/storage, editing, timed display rollback, input ownership, archive preservation and the packaged supervisor's handoff/cleanup. Full game acceptance is a separate check; these tests contain no game data and do not start MAG.
+`tests.test_player_portal` drives the link, ticket, storage and fallback flows against a fake transport, and on Linux the OpenSSL transport against a local TLS server (verified, untrusted and mismatched certificates, chunked replies). On macOS, the same file checks the `NSURLSession` transport headless (plain http, a refused self-signed certificate, a refused redirect). `installer/tests/test_native_package_linux.py` runs the packaged Linux supervisor against a fake portal: `--link`, a ticket before each phase, the name taking over, unlinking, and the fallbacks. `tests.test_player_settings_portable` covers the portable decoder against zlib's stored, fixed and dynamic blocks, the digest, the settings-file rules, the hard-link view, and the launch hook's first-run options and window, display mode and offline fallback. `tests.test_player_settings_window` drives the settings form and the SDL2 panel with synthetic SDL events into a software renderer (fields, validation, display mode, binding capture from keyboard, mouse and controller, conflicts, clear, scope, sensitivity, reset, save, cancel and an unreadable profile), compiles the Win32 window with MinGW-w64 where available, and on Windows drives the real Win32 window with synthetic messages. Synthetic tests cover native validation/storage, editing, timed display rollback, input ownership, archive preservation and the packaged supervisor's handoff/cleanup. Full game acceptance is a separate check; these tests contain no game data and do not start MAG.
 
 The rendering adapter keeps guest memory dimensions unchanged while increasing Metal color/depth targets, viewport/scissor and partial-clear coordinates. Fragment window positions are converted to guest units before the existing sample-grid and window-origin transforms. Guest readbacks retain their original dimensions and row layout. Native (100%) uses the original backend without wrapping it.
 

@@ -36,11 +36,13 @@ int mag_input_capture_keyboard_owned(void){return owned;}
 void mag_input_desktop_sdl_pump(void* window,int dialog){calls+="pump("+std::to_string(window!=nullptr)+","+std::to_string(dialog)+")";}
 void mag_sdk_pad_sdl_keyboard_sample(void* window,int suppressed){calls+="sdk("+std::to_string(window!=nullptr)+","+std::to_string(suppressed)+")";}
 PS3RecompSDLKeyboardPadState mag_sdk_pad_sdl_keyboard_state(void){return sdk;}
+void mag_player_settings_sdl_pump(void* window){calls+="settings("+std::to_string(window!=nullptr)+")";}
 }
 static void require(bool value,const char* message){if(!value)throw std::runtime_error(message);}
 int main(){try{
     int window=0;ps3recomp_pad_sdl_keyboard_sample(&window,1);ps3recomp_pad_sdl_keyboard_sample(nullptr,0);
-    require(calls=="pump(1,1)sdk(1,1)pump(0,0)sdk(0,0)","the capture pump runs first on every sample, then the SDK's own");
+    require(calls=="pump(1,1)sdk(1,1)settings(1)pump(0,0)sdk(0,0)settings(0)",
+            "the capture pump runs first on every sample, then the SDK's own, then the settings window's F10 watch");
     auto state=ps3recomp_pad_sdl_keyboard_state();
     require(state.buttons==0x0101 && state.analog_lx==0 && state.analog_ly==255 && state.window==1,"without ownership the SDK keyboard pad is unchanged");
     owned=1;state=ps3recomp_pad_sdl_keyboard_state();

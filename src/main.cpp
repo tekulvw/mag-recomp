@@ -45,6 +45,9 @@
 #if defined(MAG_PLAYER_SETTINGS) || defined(MAG_PLAYER_PORTABLE_SETTINGS)
 #include "player_settings_runtime.h"
 #endif
+#if defined(MAG_PLAYER_PORTABLE_SETTINGS)
+#include "player_settings_session.h"
+#endif
 
 #include <stdint.h>
 #include <stdio.h>
@@ -392,6 +395,10 @@ int main(int argc, char** argv)
     }
     setvbuf(stdout, NULL, _IONBF, 0);
     setvbuf(stderr, NULL, _IONBF, 0);
+#if defined(MAG_PLAYER_PORTABLE_SETTINGS)
+    // The settings window runs as its own process of this binary (src/player_settings_session.h).
+    if (int code = 0; mag_player_settings_window_command(argc, argv, &code)) return code;
+#endif
     if (argc < 2) {
         printf("usage: %s <PPU ELF>\n", argv[0]);
         return 2;
