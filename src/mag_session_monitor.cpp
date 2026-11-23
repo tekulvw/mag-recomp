@@ -270,7 +270,7 @@ int64_t g_started_unix = 0;
 
 void poll_audio() {
 #ifdef MAG_SESSION_AUDIO_HOST_STATS
-    ps3recomp_audio_host_stats stats;
+    struct ps3recomp_audio_host_stats stats;
     std::memset(&stats, 0, sizeof stats);
     if (ps3recomp_audio_host_stats(&stats) != 0) return;
     const uint64_t counters[MAG_SESSION_AUDIO_COUNTER_COUNT] = {stats.periods, stats.underruns, stats.starved_frames,
