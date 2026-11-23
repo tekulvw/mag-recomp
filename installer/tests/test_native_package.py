@@ -89,7 +89,8 @@ class NativePackageTests(unittest.TestCase):
             subprocess.run(['/usr/bin/xcrun','clang','-dynamiclib',str(source),'-install_name',str(library),'-o',str(library)],check=True,capture_output=True)
             source=root/'main.c';source.write_text('int fixture(void); int main(void) { return fixture(); }\n')
             binary=root/'fixture'
-            subprocess.run(['/usr/bin/xcrun','clang',str(source),str(library),'-o',str(binary)],check=True,capture_output=True)
+            # Linked as the build links: with a search path into the build machine's tools.
+            subprocess.run(['/usr/bin/xcrun','clang',str(source),str(library),'-Wl,-rpath,'+str(root),'-o',str(binary)],check=True,capture_output=True)
             for folder in ('build','build-engine'):
                 target=workspace/folder/'MagRecomp';shutil.copyfile(binary,target)
                 receipt=target.with_suffix('.receipt.json');record=json.loads(receipt.read_text())
@@ -101,6 +102,8 @@ class NativePackageTests(unittest.TestCase):
             dependencies=subprocess.check_output(['/usr/bin/otool','-L',str(app/'Contents/MacOS/MagRecomp')],text=True)
             self.assertIn('@executable_path/../Frameworks/libfixture.dylib',dependencies)
             self.assertNotIn(str(library),dependencies)
+            commands=subprocess.check_output(['/usr/bin/otool','-l',str(app/'Contents/MacOS/MagRecomp')],text=True).split('\n',1)[1]
+            self.assertNotIn(str(root),commands);self.assertNotIn('LC_RPATH',commands)
             self.assertTrue((app/'Contents/Frameworks/libfixture.dylib').is_file())
 
     def test_existing_destination_and_mismatched_receipts_refused(self):
@@ -132,6 +135,9 @@ class NativePackageTests(unittest.TestCase):
                 if argv[0].endswith('otool') and argv[1]=='-L':
                     dep='/usr/lib/libSystem.B.dylib' if argv[-1].endswith('.dylib') else str(lib)
                     return argv[-1]+':\n\t'+dep+' (compatibility version 1.0.0, current version 1.0.0)\n'
+                if argv[0].endswith('otool') and argv[1]=='-l':
+                    return ('Load command 9\n          cmd LC_RPATH\n      cmdsize 48\n         path /build/managed-tools/prefix/lib (offset 12)\n'
+                            'Load command 10\n          cmd LC_RPATH\n      cmdsize 40\n         path @loader_path/../lib (offset 12)\n')
                 if '-o' in argv:Path(argv[argv.index('-o')+1]).write_bytes(b'supervisor fixture')
                 if argv[0].endswith('codesign') and Path(argv[-1]).is_file():
                     p=Path(argv[-1]);p.write_bytes(p.read_bytes()+b'-signed')
@@ -142,6 +148,8 @@ class NativePackageTests(unittest.TestCase):
             receipt=json.loads((app/'Contents/Resources/package-receipts/launcher.json').read_text())
             self.assertEqual(receipt['binary_sha256'],hashlib.sha256(binary.read_bytes()).hexdigest())
             self.assertTrue(any('-change' in c for c in calls))
+            deleted=[c for c in calls if '-delete_rpath' in c]
+            self.assertTrue(deleted);self.assertTrue(all(c[c.index('-delete_rpath')+1]=='/build/managed-tools/prefix/lib' for c in deleted))
             self.assertTrue((app/'Contents/Frameworks/libfixture.dylib').is_file())
 
     def supervisor_workspace(self, root):

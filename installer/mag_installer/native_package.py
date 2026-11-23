@@ -301,6 +301,11 @@ def package(config, workspace, destination, token=None, events=None):
                 # The build machine's library path is not recorded, only its file name.
                 adjustments.append({'file':str(target.relative_to(destination)),
                                     'from':Path(original).name if original.startswith('/') else original, 'to':replacement})
+            # Every library now loads from the app, so search paths into the build machine
+            # (its managed tools) are dropped; relative ones stay.
+            for rpath in _rpaths(target, token):
+                if not rpath.startswith('@'):
+                    _run_tool(['/usr/bin/install_name_tool', '-delete_rpath', rpath, str(target)], token)
             _run_tool(['/usr/bin/codesign', '--force', '--sign', '-', str(target)], token)
         runtime = {'schema_version':2,'game':os.path.relpath(game,destination),
                    'launcher':'Contents/MacOS/MagRecomp','engine':'Contents/MacOS/MagEngine',
