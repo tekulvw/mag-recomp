@@ -929,6 +929,16 @@ Evidence for the default (the rule for in-repository code on by default, AGENTS.
   turned the camera only while walking. A wake input of one millionth did not wake the soldier.
   Before the attach fix (7.2) the lock was taken and released every frame while the pause menu
   was open.
+- *Where the adapter's frame time goes (Windows, 2026-11-23, `MAG_GAME_CONTROLS_TRACE=1` "trace
+  cost", local Training):* about 0.37 ms per update tick in the hooks, the ~2% that the on/off
+  comparison shows. About 0.16 ms was the handler updates, each reading the system and gameplay
+  routes (two walks of the active UI elements, about 17 updates per tick). About 0.15 ms was the
+  recognitions, each re-reading gameplay availability through a third walk (about 35 per tick).
+  Since then a recognition uses the availability read at the start of its handler update (7.4).
+  Frame rate, main `4a662b0` against main plus that change (same workspace, controls on, 90 s
+  Training holds, server `play.magtest.online`): main 53.99 flips/s (one run), the change 54.85
+  and 54.82 (two runs). This is incomplete: the comparison stopped when the server began to require
+  portal sign-in, and it is to be repeated as three interleaved rounds on `test.magtest.online`.
 - *Correctness:* the synthetic suites in section 11 (adapter, capture core, SDL and Win32 backends,
   settings registration, catalog) and the installer's synthetic toolchain and switch tests
   (`installer/tests/test_managed_tools.py`, `installer/tests/test_player_build.py`). On macOS the
