@@ -4,7 +4,7 @@ The ps3recomp runtime keeps most of its behaviour behind opt-in switches: enviro
 it reads at run time and CMake options it reads at configure time. This page lists every one
 mag-recomp sets, with the value, the platforms, the file that sets it, the reason and how to turn
 it off for a comparison. It applies to the runtime pinned in
-[`profiles/framework.json`](../profiles/framework.json) (`mag-recomp/runtime-2026.11.20-wwsjm`, `18dd188b`).
+[`profiles/framework.json`](../profiles/framework.json) (`mag-recomp/runtime-2026.11.22-npticket`, `e51b0c2d`).
 
 `tools/check_ps3recomp_flags.py` extracts the switches from the sources and fails when this page
 is missing one, lists one nothing sets any more, or gives a value or file the sources no longer
@@ -110,8 +110,8 @@ and the engine. `tools/boot.py` and `tools/handoff.py` set the same ones for dia
 | `PS3RECOMP_SAIL_TIMED_THX` | env | `1` | builds with the movie decoder | `installer/mag_installer/native_package.py`, `tools/boot.py` | Timed Sail pictures. With the decoder but without the three movie switches each movie opens and closes at once and the game waits after the legal screen (#104, #131). | none in players; a build without the decoder never gets it |
 | `PS3RECOMP_SAIL_ATRAC_AUDIO` | env | `1` | builds with the movie decoder | `installer/mag_installer/native_package.py`, `tools/boot.py` | Movie ATRAC audio (#104, #131). | as above |
 | `PS3RECOMP_GCM_CHECKED_REF` | env | `1` | builds with the movie decoder | `installer/mag_installer/native_package.py`, `tools/boot.py` | Checked GCM references, which timed playback needs before it opens a movie (#104, #131). | as above |
-| `PS3_VFS_ROOT` | env | the game files, or the player's server overlay | all | `installer/mag_installer/native_package.py`, `installer/mag_installer/native_package_linux.py`, `installer/mag_installer/native_package_windows.py`, `src/player_settings_portable.cpp`, `src/player_settings_runtime.mm`, `tools/boot.py` | Where the runtime finds `PS3_GAME`. With a server chosen, the player settings point it at a private overlay with the server's address (#11, #125). | required |
-| `PS3_GAMEDATA_ROOT` | env | `home/gamedata` under the installation | all players | `installer/mag_installer/native_package.py`, `installer/mag_installer/native_package_linux.py`, `installer/mag_installer/native_package_windows.py` | Saves and trophies live in the installation, not the launch's log folder, so progress survives every launch. | required |
+| `PS3_VFS_ROOT` | env | the game files (`game` in the MAG folder), or the player's server overlay | all | `installer/mag_installer/native_package.py`, `installer/mag_installer/native_package_linux.py`, `installer/mag_installer/native_package_windows.py`, `src/player_settings_portable.cpp`, `src/player_settings_runtime.mm`, `tools/boot.py` | Where the runtime finds `PS3_GAME`. With a server chosen, the player settings point it at a private overlay with the server's address (#11, #125). | required |
+| `PS3_GAMEDATA_ROOT` | env | `home/gamedata` in the MAG folder | all players | `installer/mag_installer/native_package.py`, `installer/mag_installer/native_package_linux.py`, `installer/mag_installer/native_package_windows.py` | Saves and trophies live in the installation, not the launch's log folder, so progress survives every launch. | required |
 | `PS3_BOOT_PATH` | env | `/dev_bdvd/PS3_GAME/USRDIR/EBOOT.BIN` (launcher), `/dev_bdvd/PS3_GAME/USRDIR/bin/mage_g.self` (engine) | all | `installer/mag_installer/native_package.py`, `installer/mag_installer/native_package_linux.py`, `installer/mag_installer/native_package_windows.py`, `tools/boot.py`, `tools/handoff.py` | The guest path the title sees for its own image; the engine stage is started after the launcher hands off. | required |
 | `PS3_HLE_UNRESOLVED` | env | `halt` | all | `installer/mag_installer/native_package.py`, `installer/mag_installer/native_package_linux.py`, `installer/mag_installer/native_package_windows.py`, `tools/boot.py` | An unimplemented firmware import stops the game with its NID logged (exit 88) instead of carrying on with a made-up result. | none in players |
 | `PS3_SYSCALL_UNRESOLVED` | env | `halt` | all | `installer/mag_installer/native_package.py`, `installer/mag_installer/native_package_linux.py`, `installer/mag_installer/native_package_windows.py`, `tools/boot.py` | The same for an unimplemented system call. | none in players |
@@ -125,7 +125,9 @@ see [player-settings.md](player-settings.md).
 |---|---|---|---|---|---|---|
 | `PS3_NP_ONLINE_ID` | env | the player name | all | `src/player_settings_portable.cpp`, `src/player_settings_runtime.mm`, `tools/boot.py` | The runtime's online ID: the server signs players in by this name (#125). | leave the player name empty |
 | `PS3RECOMP_OSK_INITIAL_TEXT` | env | the player name | all | `src/player_settings_portable.cpp`, `src/player_settings_runtime.mm`, `tools/boot.py` | The sign-in keyboard opens with the name typed in, so the player only confirms it (#125). | leave the player name empty |
-| `PS3_NET_ONLINE` | env | `1` | all | `src/player_settings_portable.cpp`, `src/player_settings_runtime.mm`, `tools/boot.py` | The network reports a live connection, so the title takes its online path; set only when the server overlay is ready, otherwise the game plays offline (#11, #125). | choose no server |
+| `PS3_NET_ONLINE` | env | `1` | all | `src/player_sign_in.h`, `src/player_settings_runtime.mm`, `tools/boot.py` | The network reports a live connection, so the title takes its online path; set only when the server overlay is ready, otherwise the game plays offline (#11, #125). | choose no server |
+| `PS3RECOMP_NP_LOCAL_TICKET` | env | `1` | all | `src/player_sign_in.h`, `src/player_settings_runtime.mm`, `tools/boot.py` | Only with the opt-in `ticket_file` setting on a server (the portal ticket profile), and for a `tools/boot.py` network profile that asks for it: the runtime's local NP ticket provider answers the game's own ticket request, so the game signs in with a ticket instead of the no-ticket profile's name. Without a ticket file the players never set it. | leave `ticket_file` empty |
+| `PS3RECOMP_NP_TICKET_FILE` | env | the `ticket_file` setting | all | `src/player_sign_in.h`, `src/player_settings_runtime.mm` | Only with the opt-in `ticket_file` setting on a server: the local NP ticket provider returns that file's exact bytes (1 to 4096), read at each ticket request, so a launcher can write a fresh portal ticket before every sign-in. A missing, empty or oversized file fails the sign-in visibly instead of falling back to the name (fork #153). | leave `ticket_file` empty |
 | `PS3_AA` | env | the anti-aliasing setting (`fxaa` or off) | macOS | `src/player_settings_runtime.mm` | FXAA on the display buffer; only the Metal backend reads it (#11). | the setting |
 
 ## Build options
@@ -152,7 +154,6 @@ Diagnostic switches that `tools/` sets for its own runs. Packaged players never 
 
 | Switch | Kind | Value | Platforms | Set in | Why | Opt out |
 |---|---|---|---|---|---|---|
-| `PS3RECOMP_NP_LOCAL_TICKET` | env | `1` | all | `tools/boot.py` | A local NP ticket for a network profile that asks for one. | the profile |
 | `PS3_HLE_TRACE` | env | `1` | all | `tools/boot.py` | Firmware import trace in diagnostic boots. | none |
 | `PS3_SCTRACE` | env | `1` or `fail` | all | `tools/boot.py` | System call trace: every call, or only failures. | `--syscall-trace` |
 | `PS3_NET_TRACE` | env | `1` | all | `tools/boot.py` | Socket trace when a network profile uses host sockets. | none |

@@ -65,12 +65,13 @@ class PlayerBuildTests(unittest.TestCase):
         for fail_package in (False, True):
             with self.subTest(fail_package=fail_package), tempfile.TemporaryDirectory() as temp:
                 root = Path(temp).resolve(); source = root / 'inputs'; self.inputs(source)
-                output = root / 'MAG'; cache = root / 'cache'; steps = []
+                output = root / 'MAG'; build = root / 'MAG-build'; cache = root / 'cache'; steps = []
                 kit = {'source_tree': 'source', 'sdks': {role: {'path': 'sdks/' + role, 'revision': 'a' * 40}
                        for role in ('analysis', 'ppu', 'runtime', 'spu')}}
                 def tools(managed, **kwargs):
                     steps.append('tools')
-                    self.assertEqual(managed, output / 'managed-tools')
+                    self.assertFalse(output.exists())  # the MAG folder appears only when complete
+                    self.assertEqual(managed, build / 'managed-tools')
                     return {'root': '/managed', 'python': '/managed/python', 'cmake': '/managed/cmake', 'ninja': '/managed/ninja',
                             'git': '/usr/bin/git', 'ffmpeg': {}, 'prefix': '/managed/prefix'}
                 def native(config_path, native_output, **kwargs):
@@ -81,11 +82,11 @@ class PlayerBuildTests(unittest.TestCase):
                     (native_output / 'workspace').mkdir(parents=True)
                 def package(config, workspace, destination, **kwargs):
                     steps.append('package')
-                    self.assertEqual(workspace, output / 'build-work/workspace')
-                    self.assertEqual(destination, output / 'MAG.app')
+                    self.assertEqual(workspace, build / 'build-work/workspace')
+                    self.assertEqual(destination, build / 'package/MAG.app')
                     if fail_package:
                         raise InstallerError('synthetic package failure')
-                    destination.mkdir()
+                    destination.mkdir(); (destination.parent / 'game').mkdir()
                     return destination
                 with patch.object(player_build, 'readiness', return_value={'ready': True}), \
                      patch.object(player_build, '_manifest', return_value={'kit': {}, 'host': 'macos-arm64'}), \
@@ -101,9 +102,18 @@ class PlayerBuildTests(unittest.TestCase):
                     else:
                         self.assertEqual(player_build.install(root, source, output, cache), output)
                     self.assertEqual(steps, ['tools', 'native', 'package'])
-                    self.assertEqual(json.loads((output / 'build.json').read_text())['state'],
-                                     'incomplete' if fail_package else 'complete')
-                    with self.assertRaisesRegex(InstallerError, 'already exists'):
+                    journal = json.loads((build / 'build.json').read_text())
+                    self.assertEqual(journal['state'], 'incomplete' if fail_package else 'complete')
+                    self.assertEqual((journal['output'], journal['layout']), (str(output), 2))
+                    if fail_package:
+                        self.assertFalse(output.exists())
+                    else:
+                        # The MAG folder holds the product only; the build files are beside it.
+                        self.assertEqual(sorted(p.name for p in output.iterdir()), ['MAG.app', 'game'])
+                        self.assertEqual(journal['app'], str(output / 'MAG.app'))
+                        self.assertFalse((build / 'package').exists())
+                    self.assertTrue({'build.json', 'build-settings.json', 'build-work', 'logs'} <= {p.name for p in build.iterdir()})
+                    with self.assertRaisesRegex(InstallerError, 'already exists' if not fail_package else 'Build files from an earlier MAG build'):
                         player_build.install(root, source, output, cache)
                     self.assertEqual((source / 'PS3_GAME/USRDIR/EBOOT.elf').read_bytes(), b'synthetic input')
 
@@ -128,7 +138,7 @@ class PlayerBuildTests(unittest.TestCase):
                 (native_output / 'workspace').mkdir(parents=True)
             def package(config, workspace, destination, **kwargs):
                 steps.append('package')
-                self.assertEqual(destination, output / 'MAG')
+                self.assertEqual(destination, root / 'MAG-build/package/MAG')
                 destination.mkdir(); return destination
             with patch.object(player_build, 'readiness', return_value={'ready': True}), \
                  patch.object(player_build, '_manifest', return_value={'kit': {}, 'host': 'windows-x86_64'}), \
@@ -142,6 +152,7 @@ class PlayerBuildTests(unittest.TestCase):
                  patch('mag_installer.native_package.package', side_effect=package):
                 self.assertEqual(player_build.install(root, source, output, cache), output)
             self.assertEqual(steps, ['build-tools', 'tools', 'native', 'package'])
+            self.assertTrue((output / 'MAG').is_dir())
 
     def test_missing_prepared_input_prevents_tool_download_and_output_creation(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -189,9 +200,11 @@ class PlayerBuildTests(unittest.TestCase):
                     (work / 'workspace/lifted.txt').write_text('expensive attempt output')
                 stack.enter_context(patch('mag_installer.native_build.install', side_effect=native))
                 package = stack.enter_context(patch('mag_installer.native_package.package', side_effect=failure))
+                build = root / 'MAG-build'
                 with self.assertRaises(type(failure)):
                     player_build.install(root, source, output, cache)
-                original = json.loads((output / 'build.json').read_text())
+                self.assertFalse(output.exists())
+                original = json.loads((build / 'build.json').read_text())
                 manifest['kit'] = {'sha256': 'different'}
                 with self.assertRaisesRegex(InstallerError, 'matching incomplete'):
                     player_build.install(root, source, output, cache, retry=True)
@@ -200,20 +213,24 @@ class PlayerBuildTests(unittest.TestCase):
                 with self.assertRaisesRegex(InstallerError, 'matching incomplete'):
                     player_build.install(root, source, output, cache, retry=True)
                 path.write_bytes(b'synthetic input')
-                (output / 'unrelated').write_text('preserve')
+                (build / 'unrelated').write_text('preserve')
                 with self.assertRaisesRegex(InstallerError, 'Unknown files'):
                     player_build.install(root, source, output, cache, retry=True)
-                (output / 'unrelated').unlink()
+                (build / 'unrelated').unlink()
+                output.mkdir()
+                with self.assertRaisesRegex(InstallerError, 'Move it aside'):
+                    player_build.install(root, source, output, cache, retry=True)
+                output.rmdir()
                 # A killed process leaves 'building'; only the kernel lease may
                 # authorize replay, never the recorded PID or journal alone.
-                stale = json.loads((output / 'build.json').read_text())
+                stale = json.loads((build / 'build.json').read_text())
                 stale['state'] = 'building'
-                (output / 'build.json').write_text(json.dumps(stale))
+                (build / 'build.json').write_text(json.dumps(stale))
                 from mag_installer.pipeline import _exclusive_lock
                 with _exclusive_lock(output.with_name('.MAG.player-lock'), True):
                     with self.assertRaisesRegex(InstallerError, 'Another installer holds'):
                         player_build.install(root, source, output, cache, retry=True)
-                with _exclusive_lock(output / '.build-work.native-lock', True):
+                with _exclusive_lock(build / '.build-work.native-lock', True):
                     with self.assertRaisesRegex(InstallerError, 'Another installer holds'):
                         player_build.install(root, source, output, cache, retry=True)
                 # Cleanup failures retain a retryable journal and original
@@ -221,32 +238,37 @@ class PlayerBuildTests(unittest.TestCase):
                 with patch('pathlib.Path.rename', side_effect=OSError('cleanup interrupted')):
                     with self.assertRaisesRegex(OSError, 'cleanup interrupted'):
                         player_build.install(root, source, output, cache, retry=True)
-                self.assertEqual(json.loads((output / 'build.json').read_text())['state'], 'incomplete')
-                self.assertEqual((output / 'build-work/workspace/lifted.txt').read_text(), 'expensive attempt output')
+                self.assertEqual(json.loads((build / 'build.json').read_text())['state'], 'incomplete')
+                self.assertEqual((build / 'build-work/workspace/lifted.txt').read_text(), 'expensive attempt output')
                 # A retry that fails again keeps the newest failed attempt's output.
                 with self.assertRaises(type(failure)):
                     player_build.install(root, source, output, cache, retry=True)
-                self.assertEqual((output / 'logs/attempts/1/build-work/workspace/lifted.txt').read_text(), 'expensive attempt output')
-                self.assertEqual((output / 'logs/attempts/1/build-work/logs/failure.log').read_text(), 'retained error evidence')
+                self.assertEqual((build / 'logs/attempts/1/build-work/workspace/lifted.txt').read_text(), 'expensive attempt output')
+                self.assertEqual((build / 'logs/attempts/1/build-work/logs/failure.log').read_text(), 'retained error evidence')
+                self.assertTrue((build / 'logs/attempts/1/package').is_dir())  # the unfinished MAG folder stage
                 package.side_effect = lambda config, workspace, destination, **kwargs: destination
                 player_build.install(root, source, output, cache, retry=True)
                 self.assertEqual(verify.call_count, 3)
+                self.assertTrue(output.is_dir())
                 # Older attempts keep logs and journal only: at most one extra output copy.
-                self.assertFalse((output / 'logs/attempts/1/build-work/workspace').exists())
-                self.assertEqual((output / 'logs/attempts/1/build-work/logs/failure.log').read_text(), 'retained error evidence')
-                self.assertEqual((output / 'logs/attempts/2/build-work/workspace/lifted.txt').read_text(), 'expensive attempt output')
-                self.assertEqual(json.loads((output / 'logs/attempts/1/build.json').read_text())['error'], original['error'])
+                self.assertFalse((build / 'logs/attempts/1/build-work/workspace').exists())
+                self.assertEqual((build / 'logs/attempts/1/build-work/logs/failure.log').read_text(), 'retained error evidence')
+                self.assertEqual((build / 'logs/attempts/2/build-work/workspace/lifted.txt').read_text(), 'expensive attempt output')
+                self.assertEqual(json.loads((build / 'logs/attempts/1/build.json').read_text())['error'], original['error'])
+                with self.assertRaisesRegex(InstallerError, 'already exists'):
+                    player_build.install(root, source, output, cache, retry=True)
+                output.rename(root / 'moved MAG')
                 with self.assertRaisesRegex(InstallerError, 'matching incomplete'):
                     player_build.install(root, source, output, cache, retry=True)
 
     def test_unknown_and_symlink_retry_output_rejected(self):
         with tempfile.TemporaryDirectory() as temp:
-            output = Path(temp) / 'MAG'; output.mkdir()
-            with self.assertRaisesRegex(InstallerError, 'Unknown output'):
-                player_build._retry_status(output, {})
-            linked = Path(temp) / 'link'; linked.symlink_to(output, target_is_directory=True)
+            build = Path(temp) / 'MAG-build'; build.mkdir()
+            with self.assertRaisesRegex(InstallerError, 'Unknown build folder'):
+                player_build._retry_status(build, Path(temp) / 'MAG', {})
+            linked = Path(temp) / 'link'; linked.symlink_to(build, target_is_directory=True)
             with self.assertRaisesRegex(InstallerError, 'without symlinks'):
-                player_build._retry_status(linked, {})
+                player_build._retry_status(linked, Path(temp) / 'MAG', {})
 
     def test_linux_route_uses_compilers_ffmpeg_and_mag_directory(self):
         self.assertNotIn('cmake_args', self.linux_route({}))
@@ -300,7 +322,7 @@ class PlayerBuildTests(unittest.TestCase):
             stack.enter_context(patch('mag_installer.native_build.install', side_effect=native))
             package = stack.enter_context(patch('mag_installer.native_package.package', side_effect=lambda config, work, target, **kwargs: target))
             player_build.install(root, source, output, root / 'cache')
-            self.assertEqual(package.call_args.args[2], output / 'MAG')
+            self.assertEqual(package.call_args.args[2], root / 'MAG-build/package/MAG')
             apple.assert_not_called()
         return settings
 
@@ -323,9 +345,10 @@ class PlayerBuildTests(unittest.TestCase):
             with self.assertRaisesRegex(InstallerError, 'wrong input identity'):
                 player_build.install(root, source, output, root / 'cache')
             sdk.assert_not_called(); tools.assert_not_called()
-            rejected = json.loads((output / 'build.json').read_text())
+            build = root / 'MAG-build'
+            rejected = json.loads((build / 'build.json').read_text())
             path.write_bytes(b'corrected synthetic input')
             player_build.install(root, source, output, root / 'cache', retry=True)
-            self.assertEqual(json.loads((output / 'build.json').read_text())['state'], 'complete')
-            self.assertEqual(json.loads((output / 'logs/attempts/1/build.json').read_text()), rejected)
+            self.assertEqual(json.loads((build / 'build.json').read_text())['state'], 'complete')
+            self.assertEqual(json.loads((build / 'logs/attempts/1/build.json').read_text()), rejected)
             self.assertEqual(tools.call_count, 1)

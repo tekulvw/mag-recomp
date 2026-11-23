@@ -1,6 +1,19 @@
 """One player action: validate inputs, acquire tools, build, and package MAG.
 
 The recipe is bundled maintainer data. Players never select SDKs or JSON files.
+
+Layout, in the installation location the player chooses:
+
+- ``MAG``: the self-contained MAG folder: the app (``MAG.app``, or ``MAG/`` holding ``MAG.exe`` or
+  ``MAG``), the game files it reads (``game/``) and, once played, its saves (``home/``) and launch
+  logs (``logs/``). Nothing in it refers to the build folder; it can be moved or copied as a whole.
+- ``MAG-build``: everything the build needs and leaves: its journal (``build.json``), settings,
+  source kit, managed tools, workspace and build logs. A retry reuses it; once MAG works the player
+  may delete it to reclaim space.
+
+Installers before this layout kept the build files inside the MAG folder. The next Build MAG
+moves them out: a failed build's files become the build folder, ready for Retry build; a
+finished build is packaged again from its finished binaries without rebuilding (`_migrate`).
 """
 from __future__ import annotations
 
@@ -14,7 +27,7 @@ from contextlib import nullcontext
 from .model import InstallerError, host_key
 from .native_build import FIRMWARE_SOURCE_STEPS
 from .native_recipe import x86_level_override
-from .pipeline import _exclusive_lock, _write_json, _separate
+from .pipeline import _exclusive_lock, _write_json
 from .safety import Cancellation, contained, file_digest
 
 
@@ -115,13 +128,54 @@ def _binding(inputs, record, token):
     return {'host': record['host'], 'kit': record['kit'], 'input_identities': record.get('input_identities'), 'inputs': identities}
 
 
-def _retry_status(output, binding):
-    if output.is_symlink() or not output.is_dir() or (output / 'build.json').is_symlink():
+BUILD_SUFFIX = '-build'
+# What a build folder may hold. MAG and MAG.app are package stages of a failed build an
+# earlier installer made inside its MAG folder (adopted by _adopt_failed_legacy).
+BUILD_ENTRIES = {'logs', 'build.json', 'build-kit', 'managed-tools', 'build-settings.json', 'build-work', 'package',
+                 'MAG', 'MAG.app', '.build-work.native-lock', 'build.pending', 'build-settings.pending'}
+BUILD_STAGES = ('build-kit', 'build-work', 'package', 'MAG', 'MAG.app')
+# A finished MAG folder of the earlier layout: the build folder's entries plus the player's own.
+LEGACY_ENTRIES = BUILD_ENTRIES | {'home', 'launch-error.log'}
+# The deepest build path below the installation location on Windows: <MAG>-build\build-work.
+WINDOWS_BUILD_RESERVE = len(BUILD_SUFFIX + '\\build-work')
+
+
+def build_folder(output):
+    """The build folder beside a MAG folder."""
+    output = Path(output)
+    return output.with_name(output.name + BUILD_SUFFIX)
+
+
+def app_name(host):
+    return 'MAG.app' if host == 'macos-arm64' else 'MAG'
+
+
+def _read_journal(path):
+    if path.is_symlink() or not path.is_file():
+        return None
+    try:
+        status = json.loads(path.read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return None
+    return status if isinstance(status, dict) and status.get('schema_version') == 2 else None
+
+
+def legacy_journal(output):
+    """The journal of a MAG folder that an earlier installer built with its build files inside it."""
+    output = Path(output)
+    if output.is_symlink() or not output.is_dir():
+        return None
+    status = _read_journal(output / 'build.json')
+    return status if status is not None and status.get('layout', 1) == 1 else None
+
+
+def _retry_status(build, output, binding):
+    if build.is_symlink() or not build.is_dir() or (build / 'build.json').is_symlink():
         raise InstallerError('Retry requires an owned incomplete MAG build folder, without symlinks.')
     try:
-        status = json.loads((output / 'build.json').read_text(encoding='utf-8'))
+        status = json.loads((build / 'build.json').read_text(encoding='utf-8'))
     except (OSError, ValueError) as exc:
-        raise InstallerError('Unknown output folder; no matching MAG retry journal. Existing files are preserved.') from exc
+        raise InstallerError('Unknown build folder; no matching MAG retry journal. Existing files are preserved.') from exc
     if not isinstance(status, dict) or status.get('schema_version') != 2 or status.get('state') not in ('incomplete', 'building') or status.get('output') != str(output):
         raise InstallerError('Retry requires a matching incomplete build with the same input identities, source kit and host. Existing files are preserved.')
     if status.get('binding') != binding:
@@ -139,30 +193,29 @@ def _retry_status(output, binding):
             raise InstallerError('Retry requires a matching incomplete build with the same input identities, source kit and host. Existing files are preserved.')
     if type(status.get('attempt')) is not int or status['attempt'] < 1 or type(status.get('managed_complete')) is not bool:
         raise InstallerError('Unknown retry journal; existing files are preserved.')
-    allowed = {'logs', 'build.json', 'build-kit', 'managed-tools', 'build-settings.json', 'build-work', 'MAG', 'MAG.app', '.build-work.native-lock', 'build.pending', 'build-settings.pending'}
-    if any(p.name not in allowed or p.is_symlink() for p in output.iterdir()):
-        raise InstallerError('Unknown files or symlinks in retry output; existing files are preserved.')
+    if any(p.name not in BUILD_ENTRIES or p.is_symlink() for p in build.iterdir()):
+        raise InstallerError('Unknown files or symlinks in the build folder; existing files are preserved.')
     # Stage directories are renamed intact, so their legitimate SDK/tool symlinks
     # are never followed. Log destinations, which we write into, must be ordinary.
-    if any(p.is_symlink() for p in (output / 'logs').rglob('*')):
+    if any(p.is_symlink() for p in (build / 'logs').rglob('*')):
         raise InstallerError('Retry logs contain symlinks; existing files are preserved.')
     return status
 
 
-def _prepare_retry(output, status, token):
+def _prepare_retry(build, status, token):
     """Retain diagnostics, and move the failed attempt's journal-owned scratch roots
     beside its journal (keeping its output) instead of deleting them.
 
     This is replayable after a power failure: the attempt number changes only
     after all cleanup succeeds, and the original attempt journal is never replaced.
     """
-    native_lock = output / '.build-work.native-lock'
+    native_lock = build / '.build-work.native-lock'
     with (_exclusive_lock(native_lock, True) if native_lock.exists() else nullcontext()):
-        _clean_retry_scratch(output, status, token)
+        _clean_retry_scratch(build, status, token)
 
 
-def _clean_retry_scratch(output, status, token):
-    attempt = output / 'logs' / 'attempts' / str(status['attempt'])
+def _clean_retry_scratch(build, status, token):
+    attempt = build / 'logs' / 'attempts' / str(status['attempt'])
     attempt.mkdir(parents=True, exist_ok=True)
     prior = attempt / 'build.json'
     if not prior.exists():
@@ -170,25 +223,25 @@ def _clean_retry_scratch(output, status, token):
     diagnostics = [('build-settings.json', 'build-settings.json'),
                    ('build-work/native-build.json', 'native-build.json')]
     for stage in ('build', 'build-engine'):
-        parent = output / 'build-work/workspace' / stage
-        if parent.is_symlink() or not parent.resolve().is_relative_to(output.resolve()):
+        parent = build / 'build-work/workspace' / stage
+        if parent.is_symlink() or not parent.resolve().is_relative_to(build.resolve()):
             continue
         for path in parent.glob('*.receipt.json'):
-            diagnostics.append((str(path.relative_to(output)), stage + '-' + path.name))
+            diagnostics.append((str(path.relative_to(build)), stage + '-' + path.name))
     for source, target in diagnostics:
-        path = output / source
+        path = build / source
         if path.is_file() and not path.is_symlink():
             shutil.copy2(path, attempt / target)
-    stages = ['build-kit', 'build-work', 'MAG', 'MAG.app']
+    stages = list(BUILD_STAGES)
     if not status['managed_complete']:
         stages.append('managed-tools')
     # Only the most recent failed attempt keeps its output: older attempts keep
     # their logs and journal, so a series of retries holds at most one extra copy.
-    for older in (output / 'logs' / 'attempts').iterdir():
+    for older in (build / 'logs' / 'attempts').iterdir():
         token.check()
         if older == attempt or older.is_symlink() or not older.is_dir():
             continue
-        for name in ('build-kit', 'build-work', 'MAG', 'MAG.app', 'managed-tools'):
+        for name in (*BUILD_STAGES, 'managed-tools'):
             kept = older / name
             if kept.is_symlink() or not kept.is_dir():
                 continue
@@ -201,7 +254,7 @@ def _clean_retry_scratch(output, status, token):
                     entry.unlink()
     for name in stages:
         token.check()
-        stage = output / name
+        stage = build / name
         if not stage.exists():
             continue
         if stage.is_symlink() or not stage.is_dir():
@@ -221,29 +274,164 @@ def _clean_retry_scratch(output, status, token):
             shutil.copytree(logs, kept / 'logs', dirs_exist_ok=True)
         shutil.rmtree(stage)
     for name in ('build-settings.json', 'build.pending', 'build-settings.pending'):
-        path = output / name
+        path = build / name
         if path.exists():
             path.unlink()
+
+
+def _adopt_failed_legacy(output, build, status, events):
+    """A failed build an earlier installer made inside its MAG folder becomes the build folder.
+
+    Its managed tools record their old absolute location, so the retry rebuilds them.
+    """
+    if status.get('state') not in ('incomplete', 'building') or status.get('output') != str(output):
+        raise InstallerError(f'{output} holds an unknown or mismatched MAG build journal. Existing files are preserved.')
+    unknown = sorted(p.name for p in output.iterdir() if p.name not in BUILD_ENTRIES or p.is_symlink())
+    if unknown:
+        raise InstallerError(f'{output} holds files this installer does not know ({", ".join(unknown)}). Move them aside, then retry. Existing files are preserved.')
+    output.rename(build)
+    status.update(layout=2, build=str(build), managed_complete=False)
+    _write_json(build / 'build.json', status)
+    events({'event': 'layout-migrated', 'build': str(build),
+            'message': f'Moved the earlier failed build out of the MAG folder, to {build}. The retry continues from there.'})
+
+
+def _migrate(root, output, build, status, token, events):
+    """Make a MAG folder that an earlier installer finished self-contained, without rebuilding.
+
+    The finished launcher and engine are packaged again, with the game files linked into the MAG
+    folder; its saves and launch logs stay in it; everything else becomes the build folder. The old
+    app, which read the game from the build files, is removed once the new one is in place.
+    Each phase is journaled, so an interrupted migration continues where it stopped.
+    """
+    host = _manifest(root)['host']
+    binding = status.get('binding') if isinstance(status.get('binding'), dict) else {}
+    if status.get('state') != 'complete':
+        raise InstallerError(f'{output} holds an unfinished build. Use Retry build or build --retry. Existing files are preserved.')
+    if binding.get('host') != host:
+        raise InstallerError(f'{output} was built for {PLAYER_HOSTS.get(binding.get("host"), "another kind of computer")}. Existing files are preserved.')
+    name = app_name(host)
+    unknown = sorted(p.name for p in output.iterdir() if p.name not in LEGACY_ENTRIES or p.is_symlink())
+    if unknown:
+        raise InstallerError(f'{output} holds files this installer does not know ({", ".join(unknown)}). Move them aside, then Build MAG again. Existing files are preserved.')
+    stage = output / 'package'
+    phase = status.get('migration')
+    events({'event': 'stage-start', 'stage': 'migrate-layout',
+            'message': f'Moving the build files out of {output} (no rebuild)'})
+    if phase in (None, 'staging'):
+        old_app, workspace = output / name, output / 'build-work/workspace'
+        for path in (old_app, workspace):
+            if path.is_symlink() or not path.is_dir():
+                raise InstallerError(f'{output} is missing {path.relative_to(output)}, so it cannot be moved to the self-contained layout. Build into a new location. Existing files are preserved.')
+        config = json.loads((output / 'build-settings.json').read_text(encoding='utf-8'))
+        if stage.exists():
+            # Our own interrupted staging, which never holds the player's files yet.
+            if phase != 'staging' or stage.is_symlink() or any((stage / n).exists() for n in ('home', 'logs', 'launch-error.log')):
+                raise InstallerError(f'{stage} is not this installer\'s staging. Existing files are preserved.')
+            shutil.rmtree(stage)
+        status['migration'] = 'staging'
+        _write_json(output / 'build.json', status)
+        from .native_package import package
+        stage.mkdir(mode=0o700)
+        package(config, workspace, stage / name, token=token, events=events)
+        token.check()
+        phase = status['migration'] = 'moving'
+        _write_json(output / 'build.json', status)
+    if phase == 'moving':
+        if not (stage / name).is_dir():
+            raise InstallerError(f'{stage} is incomplete. Existing files are preserved.')
+        # The player's own files: saves, the server overlay and launch logs.
+        for entry in ('home', 'launch-error.log'):
+            if (output / entry).exists() and not (stage / entry).exists():
+                (output / entry).rename(stage / entry)
+        (stage / 'logs').mkdir(exist_ok=True)
+        for launch in sorted((output / 'logs').glob('launch-*')) if (output / 'logs').is_dir() else ():
+            if not launch.is_symlink() and not (stage / 'logs' / launch.name).exists():
+                launch.rename(stage / 'logs' / launch.name)
+        status.update(layout=2, build=str(build), output=str(output), app=str(output / name), migration='swapping')
+        _write_json(output / 'build.json', status)
+        output.rename(build)
+        phase = 'swapping'
+    if phase != 'swapping':
+        raise InstallerError(f'Unknown migration journal in {output}. Existing files are preserved.')
+    return _finish_migration(output, build, status, name, events)
+
+
+def _finish_migration(output, build, status, name, events):
+    """The last migration step: publish the staged MAG folder, then drop the superseded app."""
+    if output.exists() or output.is_symlink():
+        raise InstallerError(f'{output} appeared during the move; the new MAG folder is kept in {build / "package"}.')
+    (build / 'package').rename(output)
+    old_app = build / name
+    if old_app.is_dir() and not old_app.is_symlink():
+        shutil.rmtree(old_app)
+    status.update(migration='complete', migrated_from_layout=1)
+    _write_json(build / 'build.json', status)
+    message = (f'MAG is now self-contained in {output}: move or copy that folder as a whole. Its build files are in '
+               f'{build}; delete that folder to reclaim space. Nothing was rebuilt.')
+    events({'event': 'player-build-complete', 'output': str(output), 'app': str(output / name), 'build': str(build),
+            'logs': str(build / 'logs'), 'migrated': True, 'message': message})
+    return output
+
+
+def _publish(output, build, status, name):
+    """Move the staged MAG folder into place; the journal records each side of the rename."""
+    if output.exists() or output.is_symlink():
+        raise InstallerError(f'{output} already exists; the new MAG folder is kept in {build / "package"}. Move the existing folder aside and retry.')
+    status['state'] = 'publishing'
+    _write_json(build / 'build.json', status)
+    (build / 'package').rename(output)
+    status.update(state='complete', app=str(output / name))
+    _write_json(build / 'build.json', status)
 
 
 def install(root, source, output, cache, token=None, events=None, retry=False):
     token = token or Cancellation()
     events = events or (lambda event: None)
     root, source, output, cache = (Path(p).expanduser().absolute() for p in (root, source, output, cache))
+    build = build_folder(output)
     state = readiness(root)
     if not state['ready']:
         raise InstallerError(state['reason'])
-    if retry and (output.exists() or output.is_symlink()):
-        if output.is_symlink() or not output.parent.is_dir() or output.parent.is_symlink():
-            raise InstallerError('Retry requires an ordinary output folder and parent, without symlinks.')
-        source_real, output_real, cache_real = source.resolve(), output.resolve(), cache.resolve()
-        for writable in (output_real, cache_real):
-            if writable.is_relative_to(source_real) or source_real.is_relative_to(writable):
-                raise InstallerError('Output and cache must be separate from the owned input tree')
-        if cache_real.is_relative_to(output_real) or output_real.is_relative_to(cache_real):
+    if not output.parent.is_dir() or output.parent.is_symlink():
+        raise InstallerError('Choose an installation location inside an existing ordinary folder')
+    lock = output.with_name('.' + output.name + '.player-lock')
+    legacy = legacy_journal(output)
+    if legacy is not None and legacy.get('state') == 'complete' and (build.exists() or build.is_symlink()):
+        raise InstallerError(f'{output} was built by an earlier installer, and {build} already exists, so its build files '
+                             'cannot move there. Move that folder aside, then Build MAG again. Existing files are preserved.')
+    if legacy is not None and legacy.get('state') == 'complete':
+        # A finished MAG folder of the earlier layout: no inputs, tools or compile needed.
+        with _exclusive_lock(lock, True, events):
+            return _migrate(root, output, build, legacy_journal(output) or legacy, token, events)
+    journal_now = _read_journal(build / 'build.json') if build.is_dir() and not build.is_symlink() else None
+    if journal_now is not None and journal_now.get('migration') == 'swapping' and not output.exists() and (build / 'package').is_dir():
+        with _exclusive_lock(lock, True, events):
+            return _finish_migration(output, build, journal_now, app_name(_manifest(root)['host']), events)
+    if journal_now is not None and journal_now.get('state') == 'publishing' and output.is_dir() and not (build / 'package').exists():
+        # Interrupted between moving the MAG folder into place and recording it.
+        with _exclusive_lock(lock, True, events):
+            name = app_name(_manifest(root)['host'])
+            journal_now.update(state='complete', app=str(output / name))
+            _write_json(build / 'build.json', journal_now)
+            events({'event': 'player-build-complete', 'output': str(output), 'app': str(output / name),
+                    'build': str(build), 'logs': str(build / 'logs'), 'message': f'MAG was built in {output}.'})
+            return output
+    if retry and legacy is None and (output.exists() or output.is_symlink()):
+        raise InstallerError(f'{output} already exists; a retry creates a new MAG folder there. Move it aside, then retry. Existing files are preserved.')
+    if not retry:
+        if output.exists() or output.is_symlink():
+            raise InstallerError('Output already exists. Use Retry build or build --retry for a matching failed build.')
+        if build.exists() or build.is_symlink():
+            raise InstallerError(f'Build files from an earlier MAG build are in {build}. Use Retry build for a failed build, '
+                                 'or delete that folder (or choose another installation location) to build again. Existing files are preserved.')
+    source_real, cache_real = source.resolve(), cache.resolve()
+    for writable in (output.resolve(), build.resolve(), cache_real):
+        if writable.is_relative_to(source_real) or source_real.is_relative_to(writable):
+            raise InstallerError('Output and cache must be separate from the owned input tree')
+    for folder in (output.resolve(), build.resolve()):
+        if cache_real.is_relative_to(folder) or folder.is_relative_to(cache_real):
             raise InstallerError('Output and cache must be separate directories')
-    else:
-        _separate(source, output, cache)
     token.check()
     events({'event': 'stage-start', 'stage': 'validate', 'message': 'Checking your game files'})
     inputs = locate_inputs(source)
@@ -251,6 +439,7 @@ def install(root, source, output, cache, token=None, events=None, retry=False):
     host = record.get('host', host_key())
     windows = host == 'windows-x86_64'
     linux = host == 'linux-x86_64'
+    name = app_name(host)
     # A troubleshooting override of the x86-64 code generation level; checked before any download.
     x86_level = x86_level_override(os.environ, host)
     # Keyboard and mouse controls (mouse aim) unless MAG_GAME_CONTROLS=0; also checked before downloads.
@@ -262,31 +451,34 @@ def install(root, source, output, cache, token=None, events=None, retry=False):
     from .native_build import install as build_native, _verify_identities, check_windows_location
     from .native_package import package
     if windows:
-        check_windows_location(output)
-    with _exclusive_lock(output.with_name('.' + output.name + '.player-lock'), retry, events):
-        if output.exists() or output.is_symlink():
-            if not retry:
-                raise InstallerError('Output already exists. Use Retry build or build --retry for a matching failed build.')
-            status = _retry_status(output, binding)
+        check_windows_location(output, WINDOWS_BUILD_RESERVE)
+    with _exclusive_lock(lock, retry, events):
+        if retry:
+            if not build.exists() and not build.is_symlink():
+                legacy = legacy_journal(output)
+                if legacy is None:
+                    raise InstallerError('Retry requires a matching failed build; none was found. Existing files are preserved.')
+                _adopt_failed_legacy(output, build, legacy, events)
+            status = _retry_status(build, output, binding)
             recovering = True
         else:
             recovering = False
-            output.mkdir(mode=0o700)
-            status = {'schema_version': 2, 'state': 'building', 'output': str(output),
+            build.mkdir(mode=0o700)
+            status = {'schema_version': 2, 'layout': 2, 'state': 'building', 'output': str(output), 'build': str(build),
                       'binding': binding, 'attempt': 1, 'managed_complete': False, 'tools_started': False}
-        logs = output / 'logs'; logs.mkdir(exist_ok=True)
-        journal = output / 'build.json'
+        logs = build / 'logs'; logs.mkdir(exist_ok=True)
+        journal = build / 'build.json'
         retry_prepared = False
         checking_inputs = False
         try:
             if recovering:
-                _prepare_retry(output, status, token)
+                _prepare_retry(build, status, token)
                 status.update(state='building', attempt=status['attempt'] + 1, binding=binding)
                 retry_prepared = True
             _write_json(journal, status)
             checking_inputs = True
             events({'event': 'stage-start', 'stage': 'prepare-source', 'logs': str(logs)})
-            kit_root = output / 'build-kit'
+            kit_root = build / 'build-kit'
             if 'embedded' not in record['kit'] and record['kit']:
                 from .native_build import _verify_hash
                 identities = record.get('input_identities')
@@ -309,8 +501,8 @@ def install(root, source, output, cache, token=None, events=None, retry=False):
                 toolchain = ensure_linux_build_tools(cache=cache, token=token, events=events)
             else:
                 ensure_apple_sdk(token=token, events=events)
-            events({'event': 'stage-start', 'stage': 'acquire', 'logs': str(output / 'managed-tools/logs')})
-            managed = bootstrap(output / 'managed-tools', cache=cache, token=token, events=events)
+            events({'event': 'stage-start', 'stage': 'acquire', 'logs': str(build / 'managed-tools/logs')})
+            managed = bootstrap(build / 'managed-tools', cache=cache, token=token, events=events)
             status['managed_complete'] = True
             _write_json(journal, status)
             toolchain_fields = ({'msvc': {key: toolchain[key] for key in ('vcvars', 'clang_cl', 'installation', 'version', 'product')},
@@ -330,9 +522,9 @@ def install(root, source, output, cache, token=None, events=None, retry=False):
                 config['game_controls'] = rust_toolchain(managed['root'], cache=cache, token=token, events=events)
             if x86_level:
                 config['cmake_args'] = x86_level
-            config_path = output / 'build-settings.json'
+            config_path = build / 'build-settings.json'
             _write_json(config_path, config)
-            native_output = output / 'build-work'
+            native_output = build / 'build-work'
             def progress(event):
                 if event.get('event') == 'experimental-local-build-complete':
                     return
@@ -340,14 +532,19 @@ def install(root, source, output, cache, token=None, events=None, retry=False):
             events({'event': 'stage-start', 'stage': 'build', 'logs': str(native_output / 'logs')})
             build_native(config_path, native_output, token=token, events=progress, **({'retry_lock': True} if recovering else {}))
             events({'event': 'stage-start', 'stage': 'package', 'logs': str(native_output / 'logs')})
-            app = package(config, native_output / 'workspace', output / ('MAG' if windows or linux else 'MAG.app'), token=token, events=progress)
+            # The MAG folder is assembled in the build folder and moved into place when complete.
+            stage = build / 'package'
+            stage.mkdir(mode=0o700)
+            package(config, native_output / 'workspace', stage / name, token=token, events=progress)
             token.check()
-            status.update(state='complete', app=str(app), logs=str(native_output / 'logs'))
-            _write_json(journal, status)
-            done = ('MAG was built. Open the installation folder and start MAG\\MAG.exe.' if windows
-                    else ('MAG was built. Open the installation folder and start MAG/MAG.' if linux
-                          else 'MAG.app was built. Open the installation folder to use it.'))
-            events({'event': 'player-build-complete', 'output': str(output), 'app': str(app),
+            status['logs'] = str(native_output / 'logs')
+            _publish(output, build, status, name)
+            app = output / name
+            done = (f'MAG was built. Start {app / "MAG.exe"}.' if windows
+                    else (f'MAG was built. Start {app / "MAG"}.' if linux else f'MAG.app was built in {output}.'))
+            done += (f' That MAG folder is self-contained: move or copy it as a whole. '
+                     f'The build files are in {build}; you may delete that folder once MAG works.')
+            events({'event': 'player-build-complete', 'output': str(output), 'app': str(app), 'build': str(build),
                     'logs': str(native_output / 'logs'), 'message': done})
             return output
         except BaseException as exc:

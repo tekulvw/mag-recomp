@@ -1,9 +1,11 @@
 """Private Linux native package; no Python interpreter is needed at launch.
 
+Layout: <MAG folder>/MAG/{MAG,bin,lib,resources} and the game files in <MAG folder>/game.
 Non-platform ELF dependencies are copied into lib/. The Linux ELF loader, glibc,
 and graphics driver dispatch remain system-provided: build on the oldest supported
-Linux baseline and move the complete installation, not just MAG/. ldd failures
-report missing dependencies before packaging. This never launches game binaries.
+Linux baseline. Nothing refers to the build workspace, so the MAG folder can be moved
+as a whole and the build folder deleted. ldd failures report missing dependencies
+before packaging. This never launches game binaries.
 """
 from __future__ import annotations
 import json
@@ -91,7 +93,9 @@ int main(int argc,char** argv) {
  else fail("Cannot find your configuration folder (set HOME or XDG_CONFIG_HOME)");
  fs::create_directories(settings.parent_path());private_directory(settings);settings/="settings.json";
  char self[65536];auto n=readlink("/proc/self/exe",self,sizeof self-1);if(n<=0||n==(ssize_t)sizeof self-1)fail("Cannot locate MAG executable");self[n]=0;
- fs::path app=fs::path(self).parent_path();root=app.parent_path();auto workspace=(app/MAG_WORKSPACE).lexically_normal();auto vfs=workspace/"local/retail-v1.0";
+ // The game files are in the MAG folder, beside the folder that holds this executable.
+ fs::path app=fs::path(self).parent_path();root=app.parent_path();auto vfs=(app/MAG_GAME_ROOT).lexically_normal();
+ {std::error_code none;if(!fs::is_directory(vfs/"PS3_GAME",none))fail("The game files are missing. Keep the game folder beside the folder that holds MAG: "+(vfs/"PS3_GAME").string());}
  auto launcher=app/"bin/MagRecomp",engine=app/"bin/MagEngine",le=vfs/"PS3_GAME/USRDIR/EBOOT.elf",ee=vfs/"PS3_GAME/USRDIR/bin/mage_g.elf",es=vfs/"PS3_GAME/USRDIR/bin/mage_g.self";
  check(launcher,MAG_LAUNCHER_SHA256);check(engine,MAG_ENGINE_SHA256);check(le,MAG_LAUNCHER_ELF_SHA256);check(ee,MAG_ENGINE_ELF_SHA256);check(es,MAG_ENGINE_SELF_SHA256);auto key=key_hash(le);
  unsigned char random[16];int rng=open("/dev/urandom",O_RDONLY|O_CLOEXEC);if(rng<0)fail("No system random source");size_t got=0;while(got<16){auto c=read(rng,random+got,16-got);if(c<0&&errno==EINTR)continue;if(c<=0)fail("No system randomness");got+=c;}close(rng);auto token=hex(random,16);
@@ -161,59 +165,48 @@ def _copy_dependencies(binaries, destination, token, dynamic_libraries=()):
 
 
 def package(config, workspace, destination, token=None, events=None):
-    """Build <install>/MAG beside its owned workspace without launching anything."""
-    from .native_package import _ordinary, _digest
+    """Build the MAG folder's MAG and game subfolders from a finished workspace; launches nothing."""
+    from .native_package import _ordinary, _digest, check_workspace, stage_game, package_receipt, GAME_FOLDER, WORKSPACE_GAME
     token = token or Cancellation(); events = events or (lambda event: None)
     workspace, destination = Path(workspace).absolute(), Path(destination).absolute()
     if destination.exists() or destination.is_symlink(): raise InstallerError('MAG folder destination already exists')
     if destination.name != 'MAG' or not destination.parent.is_dir(): raise InstallerError('Choose a new MAG folder under the installation directory')
-    root = destination.parent.resolve()
-    workspace_real = workspace.resolve()
-    if workspace.is_symlink() or not workspace.is_dir() or workspace_real == root or not workspace_real.is_relative_to(root):
-        raise InstallerError('Owned workspace must be an ordinary descendant of the installation folder')
-    contained(destination.parent, str(workspace.relative_to(destination.parent)))
-    if workspace_real.is_relative_to(destination.resolve()) or destination.resolve().is_relative_to(workspace_real):
-        raise InstallerError('App and workspace must be separate installation paths')
+    workspace, folder = check_workspace(workspace, destination.parent)
     manifest = json.loads(contained(workspace, 'profiles/retail-v1.0.json').read_text(encoding='utf-8'))
     framework = json.loads(contained(workspace, 'profiles/framework.json').read_text(encoding='utf-8'))
     records, originals = {}, {}
-    for role, folder, image in [('launcher', 'build', 'EBOOT'), ('engine', 'build-engine', 'mage_g')]:
-        binary = _ordinary(contained(workspace, folder + '/MagRecomp'))
+    for role, folder_name, image in [('launcher', 'build', 'EBOOT'), ('engine', 'build-engine', 'mage_g')]:
+        binary = _ordinary(contained(workspace, folder_name + '/MagRecomp'))
         receipt = _ordinary(binary.with_suffix('.receipt.json'))
         record = json.loads(receipt.read_text(encoding='utf-8')); expected = manifest['images'][image]
         if (record.get('binary_sha256') != _digest(binary, token) or record.get('elf_sha256') != expected['elf_sha256'] or record.get('image_name') != image):
             raise InstallerError(f'Native source receipt mismatch: {receipt}')
         if record.get('sdk_revision') not in set(framework['strict_runtime_revisions']) & set(framework['strict_hle_runtime_revisions']):
             raise InstallerError('Packaged runtime must support strict syscall/HLE policies')
-        relative = 'local/retail-v1.0/PS3_GAME/USRDIR/' + ('EBOOT.elf' if role == 'launcher' else 'bin/mage_g.elf')
+        relative = WORKSPACE_GAME + '/PS3_GAME/USRDIR/' + ('EBOOT.elf' if role == 'launcher' else 'bin/mage_g.elf')
         if _digest(_ordinary(contained(workspace, relative)), token) != record['elf_sha256']:
             raise InstallerError(f'Native runtime ELF identity mismatch: {relative}')
         records[role], originals[role] = record, (binary, receipt)
     destination.mkdir(mode=0o700)
     try:
+        game = stage_game(workspace, folder, token, events)
         bin_dir = destination / 'bin'; bin_dir.mkdir()
         resources = destination / 'resources'; resources.mkdir()
-        receipts = resources / 'source-receipts'; receipts.mkdir()
         package_receipts = resources / 'package-receipts'; package_receipts.mkdir()
         for role, name in [('launcher', 'MagRecomp'), ('engine', 'MagEngine')]:
             source, receipt = originals[role]
             shutil.copyfile(source, bin_dir / name)
             (bin_dir / name).chmod(0o755)
-            shutil.copyfile(receipt, receipts / (role + '.json'))
-            record = {key: records[role][key] for key in ('image_name', 'elf_sha256', 'sdk_revision')}
-            record.update(binary_sha256=_digest(bin_dir / name, token), kind='local-packaged-native',
-                          source_receipt_sha256=_digest(receipts / (role + '.json'), token),
-                          original_binary_sha256=records[role]['binary_sha256'])
+            record = package_receipt(records[role], bin_dir / name, receipt, token)
             (package_receipts / (role + '.json')).write_text(json.dumps(record, indent=2) + '\n', encoding='utf-8')
-        workspace_relative = os.path.relpath(workspace, destination)
+        game_relative = Path(os.path.relpath(game, destination)).as_posix()
         engine_self = manifest['images']['mage_g']['source_sha256']
-        runtime = {'schema_version': 1, 'workspace': Path(workspace_relative).as_posix(),
+        runtime = {'schema_version': 2, 'game': game_relative,
                    'launcher': 'bin/MagRecomp', 'engine': 'bin/MagEngine',
                    'engine_self_sha256': engine_self, 'signing': 'unsigned-local'}
-        (resources / 'runtime.json').write_text(json.dumps(runtime, indent=2) + '\n', encoding='utf-8')
         scratch = destination / '.supervisor-build'; scratch.mkdir()
         definitions = {
-            'MAG_WORKSPACE': workspace_relative,
+            'MAG_GAME_ROOT': game_relative,
             'MAG_LAUNCHER_SHA256': _digest(bin_dir / 'MagRecomp', token),
             'MAG_ENGINE_SHA256': _digest(bin_dir / 'MagEngine', token),
             'MAG_LAUNCHER_ELF_SHA256': records['launcher']['elf_sha256'],
@@ -243,8 +236,9 @@ def package(config, workspace, destination, token=None, events=None):
         (resources / 'runtime.json').write_text(json.dumps(runtime, indent=2) + '\n', encoding='utf-8')
         shutil.rmtree(scratch)
         events({'event': 'app-packaged', 'output': str(destination), 'launcher': str(destination / 'MAG'),
-                'message': 'MAG was packaged. Start it with MAG; keep the whole installation folder together.'})
+                'message': 'MAG was packaged. Start it with MAG; its MAG folder is self-contained, so move it as a whole.'})
         return destination
     except BaseException:
         shutil.rmtree(destination, ignore_errors=True)
+        shutil.rmtree(folder / GAME_FOLDER, ignore_errors=True)  # check_workspace: it was not there
         raise

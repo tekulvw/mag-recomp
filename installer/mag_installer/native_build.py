@@ -75,13 +75,17 @@ SUPPORTED_HOSTS = ('macos-arm64', 'windows-x86_64', 'linux-x86_64')
 WINDOWS_MAX_OUTPUT_PATH = 100
 
 
-def check_windows_location(output):
-    """The runtime opens guest files and its ELF argument through narrow APIs."""
+def check_windows_location(output, reserve=0):
+    """The runtime opens guest files and its ELF argument through narrow APIs.
+
+    reserve: characters a caller appends to output for its deepest build folder, so the
+    reported limit is the one that applies to the chosen location."""
     text = str(output)
     if not text.isascii():
         raise InstallerError('Choose an installation location whose path uses only English letters, digits and punctuation (for example C:\\MAG). The game runtime cannot open paths with other characters yet.')
-    if len(text) > WINDOWS_MAX_OUTPUT_PATH:
-        raise InstallerError(f'Choose a shorter installation location (at most {WINDOWS_MAX_OUTPUT_PATH} characters, for example C:\\MAG): Windows build paths would exceed their length limit.')
+    limit = WINDOWS_MAX_OUTPUT_PATH - reserve
+    if len(text) > limit:
+        raise InstallerError(f'Choose a shorter installation location (at most {limit} characters, for example C:\\MAG): Windows build paths would exceed their length limit.')
 
 
 # Inherited variables that would redirect or reconfigure a player build: the
@@ -333,6 +337,41 @@ def _copy_file(source, destination, token):
             outgoing.write(chunk)
 
 
+def link_or_copy(source, destination, token):
+    """Hard-link an ordinary file where its volume allows, otherwise copy it; True when linked.
+
+    A link shares the file's data, so the game files take their space once across the player's
+    game folder, the build workspace and the MAG folder. Nothing here writes into a linked file.
+    Windows keeps the read-only attribute per file, not per link, and a read-only link could not
+    be deleted with its folder, so read-only files are copied there.
+    """
+    source = _ordinary(source, False)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if destination.exists() or destination.is_symlink():
+        raise InstallerError(f'Destination already exists: {destination}')
+    if os.name != 'nt' or source.stat().st_mode & stat.S_IWRITE:
+        try:
+            os.link(source, destination)
+            return True
+        except FileExistsError:
+            raise
+        except OSError:
+            pass  # another volume, or a file system without hard links
+    _copy_file(source, destination, token)
+    return False
+
+
+def link_tree(source, destination, token, skip=()):
+    """Mirror an ordinary directory tree file by file with link_or_copy; returns the counts."""
+    source = _ordinary(source, True)
+    destination.mkdir(parents=True)
+    counts = {'linked': 0, 'copied': 0}
+    for path in _files(source, token):
+        if path.resolve() in skip: continue
+        counts['linked' if link_or_copy(path, destination / path.relative_to(source), token) else 'copied'] += 1
+    return counts
+
+
 def _validate_receipts(workspace, runtime_revision, token=None):
     manifest = json.loads((workspace / 'profiles/retail-v1.0.json').read_text(encoding='utf-8'))
     results = []
@@ -379,13 +418,14 @@ def install(config_path, output, resume=False, token=None, events=None, retry_lo
             events({'event': 'stage-start', 'stage': 'copy-inputs'})
             # The player layout keeps the decrypted ELFs inside PS3_GAME; they are
             # copied once, explicitly, to their fixed workspace names below.
+            # Hard links where the volume allows: the build only reads these files.
             prepared = {Path(config[key]).resolve() for key in ('eboot_elf', 'engine_elf')}
-            for path in _files(disc, token):
-                if path.resolve() in prepared: continue
-                _copy_file(path, workspace / 'local/retail-v1.0/PS3_GAME' / path.relative_to(disc), token)
+            counts = link_tree(disc, workspace / 'local/retail-v1.0/PS3_GAME', token, skip=prepared)
             for key, relative in (('eboot_elf', 'EBOOT.elf'), ('engine_elf', 'bin/mage_g.elf')):
-                _copy_file(Path(config[key]), workspace / 'local/retail-v1.0/PS3_GAME/USRDIR' / relative, token)
-            _copy_file(Path(config['firmware']), workspace / 'local/firmware/libsre.prx', token)
+                counts['linked' if link_or_copy(Path(config[key]), workspace / 'local/retail-v1.0/PS3_GAME/USRDIR' / relative, token) else 'copied'] += 1
+            counts['linked' if link_or_copy(Path(config['firmware']), workspace / 'local/firmware/libsre.prx', token) else 'copied'] += 1
+            events({'event': 'inputs-staged', **counts,
+                    'message': f'Game files in the build workspace: {counts["linked"]} linked, {counts["copied"]} copied'})
             # Each checkout goes to its pinned repository-relative path, where the
             # profiles and tools look for it (as tools/fetch_ps3recomp.py lays it out).
             for role, pin in framework_pins(workspace).items():

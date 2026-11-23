@@ -4,6 +4,7 @@
 #include "player_settings_portable.h"
 #include "player_settings_runtime.h"
 #include "player_server_overlay_portable.h"
+#include "player_sign_in.h"
 #include <cctype>
 #include <cstdio>
 #include <cstdlib>
@@ -42,7 +43,31 @@ bool parse_object(const std::string &s, std::map<std::string, Value> &out, std::
                 if (e == '"' || e == '\\' || e == '/') value += e;
                 else if (e == 'n') value += '\n'; else if (e == 't') value += '\t';
                 else if (e == 'r') value += '\r'; else if (e == 'b') value += '\b'; else if (e == 'f') value += '\f';
-                else return false;  // \u escapes are not needed for any valid setting.
+                else if (e == 'u') {  // Other tools may escape a path's non-ASCII characters.
+                    auto hex = [&](unsigned &unit) {
+                        if (i + 4 >= s.size()) return false;
+                        unit = 0;
+                        for (int k = 0; k < 4; ++k) {
+                            char h = s[++i];
+                            if (!std::isxdigit((unsigned char)h)) return false;
+                            unit = unit * 16 + unsigned(std::isdigit((unsigned char)h) ? h - '0' : (std::tolower((unsigned char)h) - 'a' + 10));
+                        }
+                        return true;
+                    };
+                    unsigned code = 0, low = 0;
+                    if (!hex(code) || (code >= 0xDC00 && code < 0xE000)) return false;
+                    if (code >= 0xD800 && code < 0xDC00) {
+                        if (i + 2 >= s.size() || s[i + 1] != '\\' || s[i + 2] != 'u') return false;
+                        i += 2;
+                        if (!hex(low) || low < 0xDC00 || low >= 0xE000) return false;
+                        code = 0x10000 + ((code - 0xD800) << 10) + (low - 0xDC00);
+                    }
+                    if (code < 0x80) value += char(code);
+                    else if (code < 0x800) { value += char(0xC0 | code >> 6); value += char(0x80 | (code & 0x3F)); }
+                    else if (code < 0x10000) { value += char(0xE0 | code >> 12); value += char(0x80 | (code >> 6 & 0x3F)); value += char(0x80 | (code & 0x3F)); }
+                    else { value += char(0xF0 | code >> 18); value += char(0x80 | (code >> 12 & 0x3F)); value += char(0x80 | (code >> 6 & 0x3F)); value += char(0x80 | (code & 0x3F)); }
+                }
+                else return false;
             } else value += c;
         }
         return false;
@@ -89,6 +114,18 @@ void export_variable(const char *name, const std::string &value) {
 #ifdef _WIN32
     _putenv_s(name, value.c_str());
     SetEnvironmentVariableA(name, value.c_str());  // Native readers use the process block.
+#else
+    setenv(name, value.c_str(), 1);
+#endif
+}
+
+// A UTF-8 value that may hold characters outside the ANSI code page (a path): wide on Windows.
+void export_utf8_variable(const char *name, const std::string &value) {
+#ifdef _WIN32
+    std::wstring wide_name(name, name + std::strlen(name));
+    const auto wide = fs::path(std::u8string(value.begin(), value.end())).wstring();
+    _wputenv_s(wide_name.c_str(), wide.c_str());
+    SetEnvironmentVariableW(wide_name.c_str(), wide.c_str());
 #else
     setenv(name, value.c_str(), 1);
 #endif
@@ -211,9 +248,12 @@ bool mag::parse_portable_settings(const std::string &json, PortableSettings &set
     auto version = values.find("schema_version");
     if (version != values.end() && (version->second.text || version->second.number != 1)) { error = "This settings version is not supported."; return false; }
     if (!text("server_address", parsed.server_address) || !text("player_name", parsed.player_name) ||
-        !port("tcp_port", parsed.tcp_port) || !port("udp_port", parsed.udp_port))
+        !port("tcp_port", parsed.tcp_port) || !port("udp_port", parsed.udp_port) ||
+        !text("ticket_file", parsed.ticket_file))
         return false;
-    if (!check_server_address(parsed.server_address, error) || !check_player_name(parsed.player_name, error)) return false;
+    if (!check_server_address(parsed.server_address, error) || !check_player_name(parsed.player_name, error) ||
+        !check_ticket_file(parsed.ticket_file, error))
+        return false;
     settings = parsed;
     return true;
 }
@@ -221,7 +261,8 @@ bool mag::parse_portable_settings(const std::string &json, PortableSettings &set
 std::string mag::format_portable_settings(const PortableSettings &s) {
     return "{\n  \"schema_version\": 1,\n  \"server_address\": " + quoted(s.server_address) +
            ",\n  \"tcp_port\": " + std::to_string(s.tcp_port) + ",\n  \"udp_port\": " + std::to_string(s.udp_port) +
-           ",\n  \"player_name\": " + quoted(s.player_name) + "\n}\n";
+           ",\n  \"player_name\": " + quoted(s.player_name) +
+           (s.ticket_file.empty() ? std::string() : ",\n  \"ticket_file\": " + quoted(s.ticket_file)) + "\n}\n";
 }
 
 extern "C" int mag_player_settings_prepare(void) {
@@ -267,7 +308,10 @@ extern "C" int mag_player_settings_prepare(void) {
     }
     say("server " + (settings.server_address.empty() ? std::string("(game default)") : settings.server_address) +
         ", player " + (settings.player_name.empty() ? std::string("(default)") : settings.player_name) +
+        (settings.ticket_file.empty() ? std::string() : ", ticket file " + settings.ticket_file) +
         " (settings: " + file.string() + ")");
+    if (!settings.ticket_file.empty() && settings.server_address.empty())
+        say("The ticket file is used only on a server; this launch has none.");
     if (!settings.player_name.empty()) {
         // The runtime takes the online ID from this, and the sign-in keyboard opens with it typed in.
         export_variable("PS3_NP_ONLINE_ID", settings.player_name);
@@ -283,10 +327,11 @@ extern "C" int mag_player_settings_prepare(void) {
 #else
             export_variable("PS3_VFS_ROOT", result.root.string());
 #endif
-            export_variable("PS3_NET_ONLINE", "1");
-            export_variable("MAG_LOCAL_NO_TICKET", "1");
-            // In this no-ticket profile the launcher signs in to the server with the player's name.
-            export_variable("MAG_LOCAL_ACCOUNT_NAME", settings.player_name);
+            // No ticket file: the no-ticket profile signs in with the player's name. A ticket file
+            // selects the portal ticket profile instead (player_sign_in.h).
+            for (const auto &[name, value] : mag::server_sign_in_environment(settings.player_name, settings.ticket_file))
+                if (name == "PS3RECOMP_NP_TICKET_FILE") export_utf8_variable(name.c_str(), value);
+                else export_variable(name.c_str(), value);
         } else {
             // Visible, and never a hang: the game starts offline instead.
             say("Cannot use server " + settings.server_address + ": " + result.message + " Playing offline.");

@@ -53,7 +53,7 @@ python3 -m venv .venv
 
 | Checkout | Tag | Commit | Role |
 | --- | --- | --- | --- |
-| `local/ps3recomp-runtime` | `mag-recomp/runtime-2026.11.20-wwsjm` | `18dd188` | Runtime SDK passed to CMake as `PS3RECOMP_DIR` |
+| `local/ps3recomp-runtime` | `mag-recomp/runtime-2026.11.22-npticket` | `e51b0c2` | Runtime SDK passed to CMake as `PS3RECOMP_DIR` |
 | `local/ps3recomp-lifter-5244db9` | `mag-recomp/lifter-spu-2026.10.07` | `5244db9` | Inventory and launcher/engine SPU lifting |
 | `local/ps3recomp-lifter-dfa7073` | `mag-recomp/lifter-ppu-2026.10.12` | `dfa7073` | PPU and firmware lifting |
 | `local/ps3recomp-spu-programs` | `mag-recomp/spu-programs-2026.10.21` | `4c5c05f` | Lifting every embedded engine SPU program |
@@ -381,7 +381,7 @@ the configure options and `installer/mag_installer/managed_tools.py` for the pin
 - **Paths.** Keep the build and installation path ASCII-only and short. The runtime opens guest
   files and its ELF argument through narrow-character APIs, and long build paths exceed Windows'
   length limit. The installer refuses an installation path with non-ASCII characters or more than
-  100 characters.
+  83 characters, which keeps its deepest build folder (`MAG-build\build-work`) within 100.
 
 ## Extending a build
 

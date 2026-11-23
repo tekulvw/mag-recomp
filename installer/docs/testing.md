@@ -21,13 +21,16 @@ Windows, SmartScreen may say "Windows protected your PC" (More info → Run anyw
 
 Prepare the input folder as described in the [installer README](../README.md), start the installer
 (on Windows a console window opens beside the wizard and carries the CLI output), choose the input
-folder and a new installation folder, and click **Build MAG**. Expect a long build: the engine's
+folder and an installation location, and click **Build MAG**. Expect a long build: the engine's
 lifted sources are large and two compile jobs run by default. Roughly 40 GB of free space is
 needed, plus several GB for Visual Studio Build Tools on Windows if they are not installed yet.
 
-The result is `<installation>/MAG.app` on macOS or `<installation>\MAG\MAG.exe` on Windows. On Linux the result is `<installation>/MAG/MAG`. Start
-it from there. Launch logs are written under `<installation>/logs/launch-*/`, and a startup failure
-also to `<installation>/launch-error.log`.
+The result is a self-contained `MAG` folder in that location: `MAG/MAG.app` on macOS,
+`MAG\MAG\MAG.exe` on Windows or `MAG/MAG/MAG` on Linux, with the game files in `MAG/game`. Start it
+from there. Launch logs are written under `MAG/logs/launch-*/`, and a startup failure also to
+`MAG/launch-error.log`. Everything the build used is in `MAG-build` beside it (see
+[What goes where](../README.md#what-goes-where)); MAG still starts after `MAG` is moved and
+`MAG-build` deleted, and reports missing game files if `MAG/game` is gone.
 
 On Linux, start MAG from a graphical desktop session. The `MAG` supervisor starts the game from a
 fixed environment and passes on only the desktop session's display, audio and session-bus
@@ -36,18 +39,17 @@ variables (`DISPLAY`, `WAYLAND_DISPLAY`, `XDG_RUNTIME_DIR`, `DBUS_SESSION_BUS_AD
 the game. `MAG/lib` holds the libraries the executables link, FFmpeg included. The C library, the
 dynamic loader and the graphics driver's OpenGL, EGL and Vulkan dispatch come from the system, as do
 the desktop libraries SDL loads at run time (X11 or Wayland, ALSA or PulseAudio, udev). The game
-reads its files from the workspace beside `MAG`, so move the whole installation folder, not just
-`MAG`.
+reads its files from `MAG/game`, so move the whole `MAG` folder, not just its `MAG` subfolder.
 
 If a build fails or is cancelled, select **Retry build** with the same game and installation
 folders. Inputs are reverified before tools are installed or downloaded. Completed managed
-dependencies and verified cached downloads are reused; older logs are retained in `logs/attempts/`.
+dependencies and verified cached downloads are reused; older logs are retained in `MAG-build/logs/attempts/`.
 A different kit or changed game input requires a new destination.
 
 ## What to report
 
-- Build failures: the stage the wizard names, its log under `<installation>/build-work/logs/` (or
-  `<installation>/managed-tools/logs/` for tool setup), and `<installation>/build.json`.
+- Build failures: the stage the wizard names, its log under `MAG-build/build-work/logs/` (or
+  `MAG-build/managed-tools/logs/` for tool setup), and `MAG-build/build.json`.
 - Runtime problems: `launcher.log` and `engine.log` from the launch directory.
 
 Logs come from your own game run: check them before sharing, and never attach game files,

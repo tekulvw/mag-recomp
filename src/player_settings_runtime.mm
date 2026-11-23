@@ -85,9 +85,17 @@ int mag_player_settings_prepare(void) { @autoreleasepool {
             }else{
                 setenv("PS3_VFS_ROOT",overlay.fileSystemRepresentation,1);
                 setenv("PS3_NET_ONLINE","1",1);
-                // The existing retail compatibility hook honors the configured
-                // no-ticket setting after the launcher's own ticket override.
-                setenv("MAG_LOCAL_NO_TICKET","1",1);
+                NSString *ticket=settings[@"ticket_file"];
+                if(ticket.length){
+                    // Opt-in portal ticket profile (player_sign_in.h): the game keeps the NP
+                    // ticket setting its init turns on, and the runtime returns this file's bytes.
+                    setenv("PS3RECOMP_NP_LOCAL_TICKET","1",1);
+                    setenv("PS3RECOMP_NP_TICKET_FILE",ticket.fileSystemRepresentation,1);
+                }else{
+                    // The existing retail compatibility hook honors the configured
+                    // no-ticket setting after the launcher's own ticket override.
+                    setenv("MAG_LOCAL_NO_TICKET","1",1);
+                }
             }
         }
         setenv("PS3_AA",[settings[@"anti_aliasing"] UTF8String],1);

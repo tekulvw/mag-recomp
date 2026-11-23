@@ -59,6 +59,18 @@ int main(int argc, char **argv) { @autoreleasepool {
         NSMutableDictionary *s = defaults.mutableCopy; s[@"player_name"] = bad;
         assert(!MAGSettingsValidate(s, &error));
     }
+    // The optional ticket file: kept when set, never written when absent or empty.
+    assert(![[NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil] containsString:@"ticket_file"]);
+    NSMutableDictionary *ticketed = normalized.mutableCopy; ticketed[@"ticket_file"] = @"/var/mag/portal tïcket.bin";
+    assert(MAGSettingsSave(path, ticketed, &error));
+    assert([MAGSettingsLoad(path, &exists, &error) isEqual:ticketed]);
+    ticketed[@"ticket_file"] = @"";
+    assert([MAGSettingsValidate(ticketed, &error) isEqual:normalized]);
+    for (id bad in @[@"relative/ticket.bin", @"/bad\nline", @7, [@"/" stringByPaddingToLength:1025 withString:@"x" startingAtIndex:0]]) {
+        NSMutableDictionary *s = normalized.mutableCopy; s[@"ticket_file"] = bad;
+        assert(!MAGSettingsValidate(s, &error));
+    }
+    assert(MAGSettingsSave(path, normalized, &error));
     NSMutableDictionary *nameless = normalized.mutableCopy; [nameless removeObjectForKey:@"player_name"];
     assert([MAGSettingsValidate(nameless, &error)[@"player_name"] isEqual:@""]);
     NSMutableDictionary *unsupported = defaults.mutableCopy; unsupported[@"unknown"] = @100;
