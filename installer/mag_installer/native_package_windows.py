@@ -32,6 +32,7 @@ _SUPERVISOR = r'''
 #include <string.h>
 #include <wchar.h>
 #include "supervisor_config.h"
+#include "player_portal_win32.h"
 #ifndef MAG_RUNTIME_DEFAULTS  /* a config written before packaged defaults existed: none */
 #define MAG_RUNTIME_DEFAULTS {{NULL, NULL}}
 #endif
@@ -180,7 +181,7 @@ static int valid_player_name(const wchar_t *name) {
 /* name-rule-end */
 
 /* A small modal window that asks for the player name; user32 only, no resources. */
-typedef struct { HWND edit, error; wchar_t *out; int cap, done, ok; } NamePrompt;
+typedef struct { HWND edit, error; wchar_t *out; int cap, done, ok; const wchar_t *settings, *server; } NamePrompt;
 static LRESULT CALLBACK name_prompt_proc(HWND window, UINT message, WPARAM w, LPARAM l) {
     NamePrompt *state = (NamePrompt *)GetWindowLongPtrW(window, GWLP_USERDATA);
     switch (message) {
@@ -197,8 +198,12 @@ static LRESULT CALLBACK name_prompt_proc(HWND window, UINT message, WPARAM w, LP
                                   236, 108, 80, 26, window, (HMENU)(INT_PTR)IDOK, NULL, NULL);
         HWND cancel = CreateWindowExW(0, L"BUTTON", L"Cancel", WS_CHILD | WS_VISIBLE | WS_TABSTOP,
                                       328, 108, 80, 26, window, (HMENU)(INT_PTR)IDCANCEL, NULL, NULL);
-        HWND all[] = {label, state->edit, state->error, ok, cancel};
-        for (int i = 0; i < 5; i++) SendMessageW(all[i], WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+        /* With an account portal, linking the account supplies its name instead. */
+        HWND link = CreateWindowExW(0, L"BUTTON", L"Link Account\x2026", WS_CHILD | WS_TABSTOP |
+                                    (mag_portal_applies(state->settings, state->server) ? WS_VISIBLE : 0),
+                                    12, 108, 120, 26, window, (HMENU)(INT_PTR)102, NULL, NULL);
+        HWND all[] = {label, state->edit, state->error, ok, cancel, link};
+        for (int i = 0; i < 6; i++) SendMessageW(all[i], WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
         SetFocus(state->edit);
         return 0; }
     case WM_COMMAND:
@@ -209,6 +214,13 @@ static LRESULT CALLBACK name_prompt_proc(HWND window, UINT message, WPARAM w, LP
             return 0;
         }
         if (LOWORD(w) == IDCANCEL) { DestroyWindow(window); return 0; }
+        if (LOWORD(w) == 102) {
+            EnableWindow(window, FALSE);
+            int linked = mag_portal_link_dialog(state->settings, state->server);
+            EnableWindow(window, TRUE);
+            if (linked) { state->ok = 2; DestroyWindow(window); } else SetForegroundWindow(window);
+            return 0;
+        }
         break;
     case WM_CLOSE: DestroyWindow(window); return 0;
     case WM_DESTROY:
@@ -220,8 +232,9 @@ static LRESULT CALLBACK name_prompt_proc(HWND window, UINT message, WPARAM w, LP
     }
     return DefWindowProcW(window, message, w, l);
 }
-static int ask_player_name(wchar_t *out, int cap) {
-    NamePrompt state = {0}; state.out = out; state.cap = cap; out[0] = 0;
+/* 1: a name was chosen; 2: the account was linked instead; 0: cancelled. */
+static int ask_player_name(wchar_t *out, int cap, const wchar_t *settings, const wchar_t *server) {
+    NamePrompt state = {0}; state.out = out; state.cap = cap; out[0] = 0; state.settings = settings; state.server = server;
     WNDCLASSW type = {0};
     type.lpfnWndProc = name_prompt_proc; type.hInstance = GetModuleHandleW(NULL);
     type.hCursor = LoadCursorW(NULL, IDC_ARROW); type.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
@@ -240,23 +253,63 @@ static int ask_player_name(wchar_t *out, int cap) {
     return state.ok;
 }
 
+/* Account messages: kept in the launch's supervisor.log, and shown unless --no-prompt. */
+static void notice(const wchar_t *logs, const wchar_t *message, int prompt, UINT icon) {
+    wchar_t path[MAX_PATH]; join(path, logs, L"supervisor.log");
+    HANDLE file = CreateFileW(path, FILE_APPEND_DATA, FILE_SHARE_READ, NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (file != INVALID_HANDLE_VALUE) {
+        char utf8[4096]; int n = WideCharToMultiByte(CP_UTF8, 0, message, -1, utf8, sizeof utf8 - 1, NULL, NULL);
+        DWORD written; if (n > 1) { utf8[n - 1] = '\n'; WriteFile(file, utf8, (DWORD)n, &written, NULL); } CloseHandle(file);
+    }
+    if (prompt) MessageBoxW(NULL, message, L"MAG account", MB_OK | icon);
+}
+/* Before each phase: a fresh ticket from the linked account (src/player_portal_win32.cpp), or the
+ * name sign-in when there is none. The launcher phase also takes the account's player name. */
+static void portal_phase(const wchar_t *settings, const wchar_t *server, const wchar_t *ticket, int launcher, const wchar_t *logs, int prompt) {
+    wchar_t name[32], message[1024];
+    int state = mag_portal_phase(settings, server, ticket, launcher, name, 32, message, 1024);
+    SetEnvironmentVariableW(L"MAG_PLAYER_PORTAL_TICKET", NULL);
+    if (state == MAG_PORTAL_READY) {
+        set_env(L"MAG_PLAYER_PORTAL_TICKET", ticket);
+        if (launcher && name[0]) set_env(L"MAG_PLAYER_SET_NAME", name);
+    }
+    if (state == MAG_PORTAL_STOP) fail(message, NULL);
+    if (message[0]) notice(logs, message, prompt, state == MAG_PORTAL_READY ? MB_ICONINFORMATION : MB_ICONWARNING);
+}
+
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR arguments, int show) {
     (void)instance; (void)previous; (void)arguments; (void)show;
     /* First-run choices; the game validates and saves them in the player's settings file. */
-    static const wchar_t *usage = L"Usage: MAG.exe [--server <hostname or IPv4>] [--name <player name>] [--no-prompt]";
+    static const wchar_t *usage = L"Usage: MAG.exe [--server <hostname or IPv4>] [--name <player name>] [--no-prompt] | MAG.exe --link | MAG.exe --unlink";
     const wchar_t *server = NULL, *player = NULL;
+    int account = 0;  /* --link 1, --unlink 2: manage the account link, then exit */
     int prompt = 1;  /* --no-prompt: never ask (automation); a missing name then stops with its message */
     int argc = 0; LPWSTR *argv = CommandLineToArgvW(GetCommandLineW(), &argc);
     if (!argv) fail(L"Cannot read the command line", NULL);
     for (int i = 1; i < argc; i++) {
         const wchar_t *a = argv[i], **target = NULL; size_t prefix = 0;
         if (!wcscmp(a, L"--no-prompt")) { prompt = 0; continue; }
+        if (!wcscmp(a, L"--link")) { account = 1; continue; }
+        if (!wcscmp(a, L"--unlink")) { account = 2; continue; }
         if (!wcsncmp(a, L"--server", 8)) { target = &server; prefix = 8; }
         else if (!wcsncmp(a, L"--name", 6)) { target = &player; prefix = 6; }
         if (!target) fail(usage, a);
         if (a[prefix] == L'=') *target = a + prefix + 1;
         else if (!a[prefix] && i + 1 < argc) *target = argv[++i];
         else fail(usage, a);
+    }
+    if (account) {
+        /* The link lives next to the settings file, outside the installation. */
+        wchar_t appdata[MAX_PATH], config[MAX_PATH], settings[MAX_PATH], message[1024];
+        DWORD length = GetEnvironmentVariableW(L"APPDATA", appdata, MAX_PATH);
+        if (!length || length >= MAX_PATH) fail(L"Cannot find your application data folder (APPDATA)", NULL);
+        join(config, appdata, L"MAG");
+        if (!CreateDirectoryW(config, NULL) && GetLastError() != ERROR_ALREADY_EXISTS) fail(L"Cannot create the settings folder", config);
+        join(settings, config, L"settings.json");
+        if (account == 1) return mag_portal_link_dialog(settings, server) ? 0 : 1;
+        int ok = mag_portal_unlink(settings, message, 1024);
+        MessageBoxW(NULL, message, L"MAG account", MB_OK | (ok ? MB_ICONINFORMATION : MB_ICONERROR));
+        return ok ? 0 : 1;
     }
     wchar_t self[MAX_PATH], app[MAX_PATH];
     DWORD n = GetModuleFileNameW(NULL, self, MAX_PATH);
@@ -337,6 +390,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR arguments, int
     limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
     if (!job || !SetInformationJobObject(job, JobObjectExtendedLimitInformation, &limits, sizeof limits)) fail(L"Cannot create the process job", NULL);
 
+    wchar_t ticket[MAX_PATH]; join(ticket, player_root, L"portal-ticket.bin");
+    portal_phase(settings, server, ticket, 1, logs, prompt);
     join(log, logs, L"launcher.log");
     DWORD result = run(job, launcher, launcher_elf, logs, log);
     /* A server needs a player name. When the game reports none, ask for one, then start again:
@@ -344,10 +399,12 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR arguments, int
     wchar_t marker[MAX_PATH]; join(marker, player_root, L"needs-player-name");
     for (int attempt = 2; result != 90 && prompt && attempt <= 4 && GetFileAttributesW(marker) != INVALID_FILE_ATTRIBUTES; attempt++) {
         wchar_t chosen[32], again[64];
-        if (!ask_player_name(chosen, 16)) break;  /* Cancel: the launch message below explains */
+        int answer = ask_player_name(chosen, 16, settings, server);
+        if (!answer) break;  /* Cancel: the launch message below explains */
         DeleteFileW(marker);
         { wchar_t note[MAX_PATH]; join(note, player_root, L"launch-message.txt"); DeleteFileW(note); }
-        set_env(L"MAG_PLAYER_SET_NAME", chosen);
+        if (answer == 2) portal_phase(settings, server, ticket, 1, logs, prompt);  /* linked: the account's name */
+        else set_env(L"MAG_PLAYER_SET_NAME", chosen);
         swprintf(again, 64, L"launcher-%d.log", attempt);
         join(log, logs, again);
         result = run(job, launcher, launcher_elf, logs, log);
@@ -376,6 +433,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR arguments, int
         L"MAG_PLAYER_SETUP", L"MAG_PLAYER_SET_SERVER", L"MAG_PLAYER_SET_NAME"};
     for (size_t i = 0; i < sizeof cleared / sizeof cleared[0]; i++) SetEnvironmentVariableW(cleared[i], NULL);
     set_env(L"PS3_BOOT_PATH", L"/dev_bdvd/PS3_GAME/USRDIR/bin/mage_g.self");
+    /* The engine signs in again (MAS, statistics) with its own fresh ticket. */
+    portal_phase(settings, NULL, ticket, 0, logs, prompt);
     join(log, logs, L"engine.log");
     return (int)run(job, engine, engine_elf, logs, log);
 }
@@ -395,17 +454,39 @@ def _c_hex(value):
     return '"' + value + '"'
 
 
+# Portable sources the supervisor compiles with it: the account link (HTTPS through WinHTTP) and
+# the settings rules, from the workspace's own source.
+SUPERVISOR_SOURCES = ('player_portal.h', 'player_portal.cpp', 'player_portal_winhttp.cpp', 'player_portal_win32.h',
+                      'player_portal_win32.cpp', 'player_settings_portable.h', 'player_settings_file.cpp', 'player_sign_in.h')
+
+
+def copy_supervisor_sources(source, scratch):
+    """Copy SUPERVISOR_SOURCES from a source tree's src folder into the supervisor's build folder."""
+    from .native_package import _ordinary
+    for name in SUPERVISOR_SOURCES:
+        shutil.copyfile(_ordinary(contained(source, 'src/' + name)), Path(scratch) / name)
+
+
 def _compile(clang_cl, environment, source_dir, output, token):
-    token.check()
-    argv = [clang_cl, '/nologo', '/O2', '/MT', '/W3', '/DUNICODE', '/D_UNICODE', str(source_dir / 'supervisor.c'),
-            f'/Fe{output}', f'/Fo{source_dir / "supervisor.obj"}', '/link', '/SUBSYSTEM:WINDOWS', 'bcrypt.lib', 'user32.lib', 'shell32.lib', 'gdi32.lib']
-    try:
-        result = subprocess.run(argv, cwd=source_dir, env=environment, stdin=subprocess.DEVNULL,
-                                capture_output=True, text=True, timeout=300)
-    except (OSError, subprocess.SubprocessError) as exc:
-        raise InstallerError(f'Cannot compile the MAG supervisor: {exc}') from exc
-    if result.returncode or not Path(output).is_file():
-        raise InstallerError('MAG supervisor compilation failed: ' + (result.stdout + result.stderr)[-3000:])
+    def tool(argv):
+        token.check()
+        try:
+            result = subprocess.run(argv, cwd=source_dir, env=environment, stdin=subprocess.DEVNULL,
+                                    capture_output=True, text=True, timeout=300)
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise InstallerError(f'Cannot compile the MAG supervisor: {exc}') from exc
+        if result.returncode:
+            raise InstallerError('MAG supervisor compilation failed: ' + (result.stdout + result.stderr)[-3000:])
+    # The C++ sources first (C++20, exceptions), then the C supervisor linked with them.
+    portable = [name for name in SUPERVISOR_SOURCES if name.endswith('.cpp')]
+    tool([clang_cl, '/nologo', '/O2', '/MT', '/W3', '/EHsc', '/std:c++20', '/DUNICODE', '/D_UNICODE', '/c',
+          *[str(source_dir / name) for name in portable], f'/Fo{source_dir}\\'])
+    tool([clang_cl, '/nologo', '/O2', '/MT', '/W3', '/DUNICODE', '/D_UNICODE', str(source_dir / 'supervisor.c'),
+          *[str(source_dir / name.replace('.cpp', '.obj')) for name in portable],
+          f'/Fe{output}', f'/Fo{source_dir / "supervisor.obj"}', '/link', '/SUBSYSTEM:WINDOWS',
+          'bcrypt.lib', 'user32.lib', 'shell32.lib', 'gdi32.lib', 'winhttp.lib'])
+    if not Path(output).is_file():
+        raise InstallerError('MAG supervisor compilation produced no MAG.exe')
 
 
 def package(config, workspace, destination, token=None, events=None, environment=None):
@@ -478,6 +559,7 @@ def package(config, workspace, destination, token=None, events=None, environment
                                                       for key, value in sorted(playback_environment(records).items()))
             + '{NULL, NULL}}\n', encoding='utf-8')
         (scratch / 'supervisor.c').write_text(_SUPERVISOR, encoding='utf-8')
+        copy_supervisor_sources(workspace, scratch)
         _compile(config['msvc']['clang_cl'], environment, scratch, destination / 'MAG.exe', token)
         shutil.rmtree(scratch)
         events({'event': 'app-packaged', 'output': str(destination), 'launcher': str(destination / 'MAG.exe'),

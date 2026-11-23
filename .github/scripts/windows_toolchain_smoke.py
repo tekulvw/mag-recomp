@@ -74,6 +74,7 @@ def main():
         ''.join(f'#define {n} "{"0" * 64}"\n' for n in ('MAG_LAUNCHER_SHA256', 'MAG_ENGINE_SHA256',
                 'MAG_LAUNCHER_ELF_SHA256', 'MAG_ENGINE_ELF_SHA256', 'MAG_ENGINE_SELF_SHA256')))
     (scratch / 'supervisor.c').write_text(native_package_windows._SUPERVISOR)
+    native_package_windows.copy_supervisor_sources(ROOT, scratch)  # the account link and settings rules
     native_package_windows._compile(toolchain['clang_cl'], env, scratch, scratch / 'MAG.exe', token)
     print('Windows toolchain route verified (no game data)', flush=True)
     return 0

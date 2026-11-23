@@ -1,6 +1,8 @@
 #import "player_settings_runtime.h"
 #import "player_settings_macos.h"
 #import "player_server_overlay.h"
+#import "player_portal_macos.h"
+#include "player_portal.h"
 #include "player_input_desktop.h"
 #ifdef MAG_INPUT_RUST
 #import "player_controls_macos.h"
@@ -22,6 +24,10 @@ static NSString *environment(const char *key) {
 }
 static void showError(NSString *message) {
     NSAlert *alert=[NSAlert new];alert.messageText=@"MAG could not apply settings";alert.informativeText=message;
+    [alert addButtonWithTitle:@"OK"];[NSApp activateIgnoringOtherApps:YES];[alert runModal];
+}
+static void showNotice(NSString *message) {
+    NSAlert *alert=[NSAlert new];alert.messageText=@"MAG account";alert.informativeText=message;
     [alert addButtonWithTitle:@"OK"];[NSApp activateIgnoringOtherApps:YES];[alert runModal];
 }
 // The game's settings archive cannot take the server setting. Changing settings
@@ -46,6 +52,7 @@ int mag_player_settings_prepare(void) { @autoreleasepool {
         [controller setControlsPane:controlsController view:controlsController.view];
     }
 #endif
+    [controller setAccountLinker:[[MAGPortalAccount alloc] initWithSettingsPath:path]];
     controller.editingChanged=^(BOOL editing){mag_player_set_input_blocked(editing);mag_input_desktop_refresh();};
     BOOL launcherPhase=environment("MAG_PLAYER_SETUP")!=nil;
     BOOL setup=error||environment("MAG_PLAYER_SHOW_SETTINGS")||(!exists&&environment("MAG_PLAYER_SETUP"));
@@ -61,6 +68,23 @@ int mag_player_settings_prepare(void) { @autoreleasepool {
             BOOL snapshotExists=NO;settings=MAGSettingsLoad(snapshot,&snapshotExists,&error);
             if(!settings||!snapshotExists){showError(error.localizedDescription?:@"The launch settings snapshot is missing.");return -1;}
         }
+        // A linked portal account: a fresh ticket for this phase, which signs in with the account's
+        // name (src/player_portal.h). Not linked: the no-ticket profile, as before.
+        NSString *accountName=nil,*accountMessage=nil;BOOL accountFailed=NO;
+        NSString *portalTicket=MAGPortalLaunchTicket(path,owned,settings,&accountName,&accountMessage,&accountFailed);
+        if(portalTicket&&![accountName isEqual:settings[@"player_name"]]){
+            NSMutableDictionary *named=[settings mutableCopy];NSString *previous=settings[@"player_name"];named[@"player_name"]=accountName;
+            if(launcherPhase){
+                if(!MAGSettingsSave(path,named,&error)||!MAGSettingsSave(snapshot,named,&error)){showError(error.localizedDescription);return -1;}
+                [controller adoptSettings:named];
+                showNotice(previous.length?[NSString stringWithFormat:@"You play as %@, the name on your linked account (MAG had %@). MAG saved it as your player name.",accountName,previous]
+                                          :[NSString stringWithFormat:@"You play as %@, the name on your linked account.",accountName]);
+            }
+            settings=named;
+        }else if(accountFailed){
+            if(!mag::portal::fall_back_to_name_sign_in){showError(accountMessage);return -1;}
+            showNotice([accountMessage stringByAppendingString:@" This time MAG signs in with your player name instead."]);
+        }else if(accountMessage.length)fprintf(stderr,"[mag settings] %s\n",accountMessage.UTF8String);
         if(launcherPhase&&[settings[@"server_address"] length]&&![settings[@"player_name"] length]){
             // The server signs players in by this name; without one the launcher can never connect.
             showError(@"Enter a player name to play on a server. It is the name you sign in with.");setup=YES;continue;
@@ -85,7 +109,7 @@ int mag_player_settings_prepare(void) { @autoreleasepool {
             }else{
                 setenv("PS3_VFS_ROOT",overlay.fileSystemRepresentation,1);
                 setenv("PS3_NET_ONLINE","1",1);
-                NSString *ticket=settings[@"ticket_file"];
+                NSString *ticket=[settings[@"ticket_file"] length]?settings[@"ticket_file"]:portalTicket;
                 if(ticket.length){
                     // Opt-in portal ticket profile (player_sign_in.h): the game keeps the NP
                     // ticket setting its init turns on, and the runtime returns this file's bytes.

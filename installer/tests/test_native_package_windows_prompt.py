@@ -37,8 +37,10 @@ class WindowsNamePromptTests(unittest.TestCase):
         # Asked only while interactive, after a failed launcher stage whose game asked for a name.
         self.assertIn('result != 90 && prompt', loop)
         self.assertIn('GetFileAttributesW(marker) != INVALID_FILE_ATTRIBUTES', loop)
-        self.assertIn('if (!ask_player_name(chosen, 16)) break;', loop)
-        self.assertIn('set_env(L"MAG_PLAYER_SET_NAME", chosen);', loop)
+        self.assertIn('int answer = ask_player_name(chosen, 16, settings, server);\n        if (!answer) break;', loop)
+        self.assertIn('else set_env(L"MAG_PLAYER_SET_NAME", chosen);', loop)
+        # Linking from the prompt instead fetches a ticket, whose account name the launcher saves.
+        self.assertIn('if (answer == 2) portal_phase(settings, server, ticket, 1, logs, prompt);', loop)
         # The chosen name never reaches the engine as a first-run option.
         self.assertIn('L"MAG_PLAYER_SET_NAME"};', source)
 
@@ -52,8 +54,23 @@ class WindowsNamePromptTests(unittest.TestCase):
     def test_supervisor_links_the_prompt_libraries(self):
         import inspect
         compile_source = inspect.getsource(windows._compile)
-        for library in ('user32.lib', 'gdi32.lib', 'shell32.lib'):  # windows, the dialog font, the command line
+        for library in ('user32.lib', 'gdi32.lib', 'shell32.lib', 'winhttp.lib'):  # windows, font, command line, portal
             self.assertIn(library, compile_source)
+
+    def test_account_link_and_a_ticket_before_each_phase(self):
+        source = windows._SUPERVISOR
+        self.assertIn('if (!wcscmp(a, L"--link")) { account = 1; continue; }', source)
+        self.assertIn('if (!wcscmp(a, L"--unlink")) { account = 2; continue; }', source)
+        # Account commands exit before any game file is checked or a launch folder is made.
+        self.assertLess(source.index('if (account) {'), source.index('check(launcher, MAG_LAUNCHER_SHA256)'))
+        launcher = source.index('portal_phase(settings, server, ticket, 1, logs, prompt);\n    join(log, logs, L"launcher.log");')
+        engine = source.index('portal_phase(settings, NULL, ticket, 0, logs, prompt);\n    join(log, logs, L"engine.log");')
+        self.assertLess(launcher, engine)
+        phase = source[source.index('static void portal_phase('):source.index('int WINAPI wWinMain(')]
+        self.assertIn('SetEnvironmentVariableW(L"MAG_PLAYER_PORTAL_TICKET", NULL);', phase)  # never a stale ticket
+        self.assertIn('if (launcher && name[0]) set_env(L"MAG_PLAYER_SET_NAME", name);', phase)
+        self.assertIn('if (prompt) MessageBoxW', source[source.index('static void notice('):])  # --no-prompt: logged only
+        self.assertTrue(all((windows.Path(__file__).resolve().parents[2] / 'src' / name).is_file() for name in windows.SUPERVISOR_SOURCES))
 
 
 if __name__ == '__main__':

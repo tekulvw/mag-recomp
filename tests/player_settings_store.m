@@ -71,6 +71,21 @@ int main(int argc, char **argv) { @autoreleasepool {
         assert(!MAGSettingsValidate(s, &error));
     }
     assert(MAGSettingsSave(path, normalized, &error));
+    // The optional portal address: normalised like src/player_portal.cpp, kept when set.
+    NSMutableDictionary *portaled = normalized.mutableCopy; portaled[@"portal_url"] = @" HTTPS://Portal.Example.org:443/base/ ";
+    NSDictionary *checked = MAGSettingsValidate(portaled, &error);
+    assert([checked[@"portal_url"] isEqual:@"https://portal.example.org/base"]);
+    assert(MAGSettingsSave(path, checked, &error) && [MAGSettingsLoad(path, &exists, &error) isEqual:checked]);
+    portaled[@"portal_url"] = @"http://127.0.0.1:8080";
+    assert([MAGSettingsValidate(portaled, &error)[@"portal_url"] isEqual:@"http://127.0.0.1:8080"]);
+    portaled[@"portal_url"] = @"";
+    assert([MAGSettingsValidate(portaled, &error) isEqual:normalized]);
+    for (id bad in @[@"http://portal.example.org", @"portal.example.org", @"https://u@p.example.org", @"https://p.example.org/?x=1",
+                     @"https://p.example.org/#f", @"https://p.example.org:0", @"ftp://p.example.org", @3]) {
+        NSMutableDictionary *s = normalized.mutableCopy; s[@"portal_url"] = bad;
+        assert(!MAGSettingsValidate(s, &error));
+    }
+    assert(MAGSettingsSave(path, normalized, &error));
     NSMutableDictionary *nameless = normalized.mutableCopy; [nameless removeObjectForKey:@"player_name"];
     assert([MAGSettingsValidate(nameless, &error)[@"player_name"] isEqual:@""]);
     NSMutableDictionary *unsupported = defaults.mutableCopy; unsupported[@"unknown"] = @100;

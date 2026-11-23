@@ -58,7 +58,12 @@ static NSStackView *row(NSString *title,NSString *hint,NSView *control) {
     id<MAGControlsSettingsPane> _controlsPane;
     NSTextField *_server,*_name,*_tcp,*_udp,*_errorLabel,*_status,*_countdown;
     NSPopUpButton *_mode,*_resolution,*_rendering,*_aa;
-    NSButton *_applyButton,*_cancelButton,*_playButton,*_advancedButton;
+    NSButton *_applyButton,*_cancelButton,*_playButton,*_advancedButton,*_accountButton;
+    NSStackView *_accountRow;
+    NSBox *_accountSeparator;
+    NSTextField *_accountStatus;
+    id<MAGAccountLinking> _linker;
+    BOOL _linking;
     NSArray<NSControl*> *_fields;
     BOOL _startup,_needsSave,_firstDisplay,_recovery;
     NSDictionary *_pending;
@@ -101,6 +106,12 @@ static NSStackView *row(NSString *title,NSString *hint,NSView *control) {
     add(connection,row(@"Game server",@"Hostname or IPv4 address",_server));add(connection,separator());
     _name=[NSTextField textFieldWithString:@""];_name.placeholderString=@"Default";_name.identifier=@"player_name";_name.delegate=self;
     add(connection,row(@"Player name",@"Your name on the server, typed in for you at sign-in",_name));add(connection,separator());
+    _accountStatus=label(@"",11,YES);_accountStatus.identifier=@"account_status";
+    _accountButton=[NSButton buttonWithTitle:@"Link Account…" target:self action:@selector(account:)];_accountButton.identifier=@"account_link";
+    _accountRow=row(@"Account",@"",_accountButton);
+    [(NSStackView *)_accountRow.arrangedSubviews.firstObject addArrangedSubview:_accountStatus];
+    add(connection,_accountRow);_accountSeparator=separator();add(connection,_accountSeparator);
+    _accountRow.hidden=YES;_accountSeparator.hidden=YES;
     _advancedButton=[NSButton buttonWithTitle:@"▸ Advanced connection settings" target:self action:@selector(toggleAdvanced:)];
     _advancedButton.bordered=NO;_advancedButton.alignment=NSTextAlignmentLeft;_advancedButton.font=[NSFont systemFontOfSize:11];
     add(connection,_advancedButton);
@@ -114,7 +125,7 @@ static NSStackView *row(NSString *title,NSString *hint,NSView *control) {
     }
     [_tcp.widthAnchor constraintEqualToAnchor:_udp.widthAnchor].active=YES;
     add(connection,_ports);_ports.hidden=YES;add(_general,group(connection));
-    add(_general,label(@"Community servers use no PSN ticket. Blank keeps game settings. Changes apply next launch.",11,YES));
+    add(_general,label(@"Without a linked account, servers sign in by name. Blank keeps game settings. Changes apply next launch.",11,YES));
     _errorLabel=label(@"",12,NO);_errorLabel.textColor=NSColor.systemRedColor;_errorLabel.identifier=@"settings_error";_errorLabel.hidden=YES;
     NSView *gap=[NSView new];[gap.heightAnchor constraintEqualToConstant:6].active=YES;add(_general,gap);
     heading=label(@"Graphics",14,NO);heading.font=[NSFont boldSystemFontOfSize:14];add(_general,heading);
@@ -178,6 +189,7 @@ static NSStackView *row(NSString *title,NSString *hint,NSView *control) {
 - (NSDictionary *)draft:(NSError **)error {
     NSMutableDictionary *draft=MAGSettingsDefaults().mutableCopy;draft[@"server_address"]=_server.stringValue;draft[@"player_name"]=_name.stringValue;
     if(_settings[@"ticket_file"])draft[@"ticket_file"]=_settings[@"ticket_file"];  // no control for it yet; keep it
+    if(_settings[@"portal_url"])draft[@"portal_url"]=_settings[@"portal_url"];    // edited in the file; keep it
     for(NSArray *pair in @[@[@"tcp_port",_tcp],@[@"udp_port",_udp]]) {
         NSString *text=[((NSTextField*)pair[1]).stringValue stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet];
         if(text.length&&[text rangeOfCharacterFromSet:[NSCharacterSet characterSetWithCharactersInString:@"0123456789"].invertedSet].location!=NSNotFound){
@@ -199,6 +211,49 @@ static NSStackView *row(NSString *title,NSString *hint,NSView *control) {
     NSDictionary *draft=[self draft:NULL];BOOL dirty=_section.selectedSegment==1?[_controlsPane controlsDirty]:(_needsSave||![draft isEqual:self.settings]);
     _applyButton.enabled=dirty;_resolution.enabled=_mode.indexOfSelectedItem==0;
     _status.stringValue=dirty?@"Unsaved changes":@"No unsaved changes";
+    [self refreshAccount];
+}
+- (void)setAccountLinker:(id<MAGAccountLinking>)linker {_linker=linker;[self refreshAccount];[self fit];}
+- (void)adoptSettings:(NSDictionary *)settings {self.settings=settings;[self fill:settings];[self changed:nil];}
+- (NSString *)accountPortal {
+    NSString *server=[_server.stringValue stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    return [_linker portalForServer:server portalURL:_settings[@"portal_url"]?:@""];
+}
+// The Account row: the link to the portal of the server being edited, or why there is none.
+- (void)refreshAccount {
+    BOOL shown=_linker!=nil;
+    if(_accountRow.hidden==shown){_accountRow.hidden=!shown;_accountSeparator.hidden=!shown;}
+    if(!shown||_linking)return;
+    NSString *portal=[self accountPortal],*name=portal?[_linker linkedNameForPortal:portal]:nil;
+    _accountButton.enabled=portal!=nil;
+    _accountButton.title=name?@"Unlink":@"Link Account…";
+    if(!portal)_accountStatus.stringValue=@"Accounts are for play.magtest.online";
+    else if(!name)_accountStatus.stringValue=[@"Sign in with your account at " stringByAppendingString:portal];
+    else if(!name.length)_accountStatus.stringValue=@"Linked · claim a player name on the account page";
+    else _accountStatus.stringValue=[NSString stringWithFormat:@"Linked as %@",name];
+}
+- (void)account:(id)sender {
+    if(_linking){[_linker cancelLink];return;}
+    NSString *portal=[self accountPortal];if(!portal)return;
+    if([_linker linkedNameForPortal:portal]){
+        NSString *message=nil;
+        if(![_linker unlink:&message])[self showError:message];
+        else{_errorLabel.hidden=YES;_accountStatus.stringValue=message;_accountButton.title=@"Link Account…";}
+        [self fit];return;
+    }
+    _linking=YES;_accountButton.title=@"Cancel";_errorLabel.hidden=YES;_accountStatus.stringValue=@"Contacting the account portal…";
+    __weak MAGSettingsController *weak=self;
+    [_linker startLinkWithPortal:portal progress:^(NSString *message){
+        MAGSettingsController *me=weak;if(me){me->_accountStatus.stringValue=message;[me fit];}
+    } finished:^(BOOL linked,NSString *message){
+        MAGSettingsController *me=weak;if(!me)return;
+        me->_linking=NO;[me refreshAccount];
+        if(!linked){if(message.length)[me showError:message];return;}
+        // The account's name is the one MAG signs in with; offer it in the field for Apply.
+        NSString *name=[me->_linker linkedNameForPortal:portal];
+        if(name.length&&![name isEqual:me->_name.stringValue]){me->_name.stringValue=name;[me changed:nil];}
+        [me fit];
+    }];
 }
 - (void)toggleAdvanced:(id)sender {
     _ports.hidden=!_ports.hidden;_advancedButton.title=_ports.hidden?@"▸ Advanced connection settings":@"▾ Advanced connection settings";[self fit];
