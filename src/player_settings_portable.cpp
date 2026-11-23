@@ -133,7 +133,8 @@ extern "C" int mag_player_settings_prepare(void) {
         { std::error_code none; fs::remove(owned / "needs-player-name", none); }  // a fresh check each launch
         {
             // First launch (or Shift held on Windows): the settings window, before the game starts.
-            // Command-line choices skip it; they are the scripted route.
+            // Command-line choices and MAG_SKIP_SETUP skip it (the Windows supervisor opens setup
+            // itself at every launch, then sets it); they are the scripted route.
             std::error_code none;
             const bool present = fs::exists(fs::symlink_status(file, none));
             if (!variable("MAG_PLAYER_SET_SERVER") && !variable("MAG_PLAYER_SET_NAME") && mag_player_settings_setup_wanted(present))
@@ -189,6 +190,10 @@ extern "C" int mag_player_settings_prepare(void) {
     if (settings.display_mode == "borderless") {
         // The Vulkan game window opens borderless at the desktop size.
         export_variable("PS3RECOMP_VK_FULLSCREEN", "1");
+    } else {
+        // Windowed: the game window's size in physical pixels, which the window seam applies
+        // (player_settings_session.h).
+        export_variable("MAG_PLAYER_OUTPUT_SIZE", std::to_string(settings.output_width) + "x" + std::to_string(settings.output_height));
     }
     if (!settings.player_name.empty()) {
         // The runtime takes the online ID from this, and the sign-in keyboard opens with it typed in.

@@ -6,8 +6,9 @@
  * - in game, F10 in the game window opens it (mag_player_settings_open); gameplay input is held
  *   while it is open, and saved controls apply to the running game when it closes. Connection
  *   and display changes apply at the next launch.
- * - the launcher opens it before the game starts on the first launch, or while Shift is held at
- *   launch on Windows (mag_player_settings_setup).
+ * - before the game starts, setup (with Play MAG): on Windows the packaged supervisor opens it at
+ *   every launch (`MagEngine --mag-player-settings-setup`) and sets MAG_SKIP_SETUP for the
+ *   launcher; elsewhere the launcher opens it on the first launch (mag_player_settings_setup).
  * Inert unless the packaged supervisor supplies MAG_PLAYER_SETTINGS_PATH. */
 #ifdef __cplusplus
 extern "C" {
@@ -26,11 +27,15 @@ int mag_player_settings_is_open(void);
 /* Launcher, before the game starts: runs the window (from the engine binary the supervisor
  * names) and waits. Returns 1 when the player saved, 0 when cancelled or unavailable. */
 int mag_player_settings_setup(void);
-/* Whether setup should open at this launch: no settings file yet, or (Windows) Shift is held. */
+/* Whether the launcher should open setup: never with MAG_SKIP_SETUP; otherwise when there is no
+ * settings file yet, or (Windows) Shift is held. */
 int mag_player_settings_setup_wanted(int settings_exist);
 
 /* Window seams (with the controls adapter's pump seams): F10 in the game window. */
 #ifdef _WIN32
+/* The game window as it is attached: kept for the settings window's display preview, and sized to
+ * the saved output resolution (MAG_PLAYER_OUTPUT_SIZE, set by the launch settings) when windowed. */
+void mag_player_settings_win32_window(void* window);
 /* One message of the game window's pump; nonzero when it was F10 and has been handled. F10 is
  * otherwise the Windows menu key, and its default handling would stall the game window. */
 int mag_player_settings_win32_message(const void* msg);
