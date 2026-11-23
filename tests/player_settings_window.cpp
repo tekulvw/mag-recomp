@@ -1,6 +1,7 @@
 // Synthetic driver for the Windows/Linux settings form and the SDL2 settings panel: synthetic
 // SDL events into the real panel, drawn into a software renderer; no window or display.
 #include "player_controls_settings.h"
+#include "player_portal.h"
 #include "player_settings_form.h"
 #include "player_settings_sdl_panel.h"
 #include <cstdio>
@@ -15,6 +16,22 @@ namespace fs = std::filesystem;
 // The launch hook's window entry points are not part of this driver.
 extern "C" int mag_player_settings_setup_wanted(int) { return 0; }
 extern "C" int mag_player_settings_setup(void) { return 0; }
+
+// The account portal: a link approved at the first poll, as Rook_9 (no network).
+namespace mag::portal {
+class FakeTransport final : public Transport {
+public:
+    Response post(const std::string& url, const std::string&, const Headers&) override {
+        if (url.find("/device/start") != std::string::npos)
+            return {200, "{\"device_code\":\"mgl_code\",\"user_code\":\"BCDF-GHJK\",\"verification_uri\":\"https://magtest.online/link\","
+                         "\"verification_uri_complete\":\"https://magtest.online/link?code=BCDF-GHJK\",\"expires_in\":600,\"interval\":1}", ""};
+        if (url.find("/device/token") != std::string::npos)
+            return {200, "{\"device_token\":\"mgd_synthetic_token\",\"player_name\":\"Rook_9\"}", ""};
+        return {404, "{}", ""};
+    }
+};
+std::unique_ptr<Transport> make_platform_transport() { return std::make_unique<FakeTransport>(); }
+}  // namespace mag::portal
 
 static int failures = 0;
 #define CHECK(condition) do { if (!(condition)) { std::printf("FAIL %s:%d %s\n", __FILE__, __LINE__, #condition); ++failures; } } while (0)
@@ -56,14 +73,6 @@ static SDL_Event trigger(Uint8 axis, double value) {
     return e;
 }
 static SettingsPanel::State send(SettingsPanel& panel, const SDL_Event& e) { return panel.handle(e, now += 10); }
-// Tab until the named item has focus.
-static bool reach(SettingsPanel& panel, const std::string& name) {
-    for (int i = 0; i < 200; ++i) {
-        if (panel.focused() == name) return true;
-        send(panel, key(SDL_SCANCODE_TAB));
-    }
-    return false;
-}
 static std::string read(const fs::path& path) {
     std::ifstream in(path, std::ios::binary);
     std::ostringstream text;
@@ -71,22 +80,42 @@ static std::string read(const fs::path& path) {
     return text.str();
 }
 static void draw(SettingsPanel& panel) {
-    SDL_Surface* surface = SDL_CreateRGBSurfaceWithFormat(0, SettingsPanel::width, SettingsPanel::height, 32, SDL_PIXELFORMAT_RGBA32);
+    const int height = panel.height();
+    SDL_Surface* surface = SDL_CreateRGBSurfaceWithFormat(0, SettingsPanel::width, height, 32, SDL_PIXELFORMAT_RGBA32);
     SDL_Renderer* renderer = SDL_CreateSoftwareRenderer(surface);
     SDL_Texture* font = SettingsPanel::make_font(renderer);
     CHECK(font != nullptr);
     panel.draw(renderer, font);
     SDL_RenderPresent(renderer);
-    // The current page's tab is highlighted; the background is the panel colour.
+    // The macOS light window background, and a group box's white fill beside its first row.
     auto pixel = [&](int x, int y) { return static_cast<Uint32*>(surface->pixels)[y * (surface->pitch / 4) + x]; };
     Uint8 r, g, b, a;
-    SDL_GetRGBA(pixel(10 + panel.page() * 250 + 2, 12), surface->format, &r, &g, &b, &a);
-    CHECK(r == 70 && g == 110 && b == 170);
-    SDL_GetRGBA(pixel(SettingsPanel::width - 2, SettingsPanel::height / 2), surface->format, &r, &g, &b, &a);
-    CHECK(r == 32 && g == 34 && b == 38);
+    SDL_GetRGBA(pixel(2, 2), surface->format, &r, &g, &b, &a);
+    CHECK(r == 236 && g == 236 && b == 236);
     SDL_DestroyTexture(font);
     SDL_DestroyRenderer(renderer);
     SDL_FreeSurface(surface);
+}
+// Where a display change would show: records what the panel asked for.
+struct FakeDisplay : SettingsDisplay {
+    std::vector<std::string> calls;
+    bool fit = true;
+    bool fits(const PortableSettings&) override { return fit; }
+    void preview(const PortableSettings& s) override {
+        calls.push_back(s.display_mode == "borderless" ? "borderless" : "windowed " + std::to_string(s.output_width));
+    }
+    void restore() override { calls.push_back("restore"); }
+    void kept() override { calls.push_back("kept"); }
+};
+static void type_into(SettingsPanel& panel, const std::string& name, const char* value) {
+    CHECK(panel.focus(name));
+    for (int i = 0; i < 40; ++i) send(panel, key(SDL_SCANCODE_BACKSPACE));
+    send(panel, typed(value));
+}
+static void click(SettingsPanel& panel, const std::string& name, Uint8 button = SDL_BUTTON_LEFT) {
+    const SDL_Rect r = panel.rect(name);
+    CHECK(r.w > 0);
+    send(panel, mouse(button, r.x + r.w / 2, r.y + r.h / 2));
 }
 
 // A small synthetic catalog: two on-foot actions and one system button.
@@ -94,6 +123,9 @@ static void register_controls(const fs::path& folder) {
     ControlsSettingsRegistration registration;
     registration.path = folder / "controls.json";
     registration.actions = {{1, "Move forward", 1, 3}, {2, "Fire", 1, 7}, {3, "Start", 17, 7, "Native menu / command buttons"}};
+    // More groups than the list shows at once, as the game's catalog has; unbound by default.
+    for (ActionId id = 10; id < 26; ++id)
+        registration.actions.push_back({id, "Group action " + std::to_string(id), 1, 7, id < 18 ? "Commands" : "Vehicles"});
     registration.defaults.bindings = {{{InputSource::Keyboard, 26}, 1}, {{InputSource::Mouse, 0}, 2},
                                       {{InputSource::Controller, 10}, 2}, {{InputSource::Keyboard, 41}, 3, 17},
                                       {{InputSource::Controller, 6}, 3, 17}};
@@ -106,27 +138,46 @@ static void general(const fs::path& folder) {
     std::string error;
     CHECK(settings_form_load(settings, form, error));
     CHECK(form.server == "play.magtest.online" && form.tcp_port.empty() && !form.controls);
-    SettingsPanel panel(form, settings, true, "");
-    CHECK(panel.focused() == "tab:0");
-    send(panel, key(SDL_SCANCODE_TAB, KMOD_CTRL));  // only General without controls
-    CHECK(panel.page() == 0);
-    CHECK(reach(panel, "text:0"));
-    for (int i = 0; i < 40; ++i) send(panel, key(SDL_SCANCODE_BACKSPACE));
-    send(panel, typed("Example.org"));
-    send(panel, key(SDL_SCANCODE_TAB));
-    send(panel, typed("12a34567"));  // digits only, at most five
-    CHECK(form.tcp_port == "12345");
-    CHECK(reach(panel, "text:3"));
-    send(panel, typed("ab"));
-    // A name that breaks the rule is refused, and nothing is written.
-    CHECK(send(panel, key(SDL_SCANCODE_S, KMOD_CTRL)) == SettingsPanel::State::Open);
-    CHECK(panel.status().find("player name") != std::string::npos && !fs::exists(settings));
-    send(panel, typed("cd_7"));
-    CHECK(reach(panel, "choice:0"));
+    FakeDisplay display;
+    SettingsWindowOptions setup;
+    setup.setup = true;
+    SettingsPanel panel(form, settings, setup, &display);
+    // The macOS panel's General page: no Controls segment without a catalog; no file yet, so Apply is on.
+    CHECK(!panel.shown("segment:general") && panel.focused() == "text:server");
+    CHECK(panel.label("button:play") == "Play MAG" && panel.enabled("button:play"));
+    CHECK(panel.enabled("button:apply") && panel.status() == "Unsaved changes");
+    CHECK(panel.account_status() == "Sign in with your account at https://magtest.online");
+    CHECK(!panel.enabled("choice:rendering") && !panel.enabled("choice:aa"));
+    CHECK(panel.label("choice:output") == "1280 \xC3\x97 720");
+    type_into(panel, "text:server", "Example.org");
+    CHECK(panel.account_status() == "Accounts are for play.magtest.online" && !panel.enabled("button:account"));
+    // Advanced connection settings: the ports, with the macOS messages.
+    CHECK(!panel.shown("text:tcp"));
+    click(panel, "link:advanced");
+    CHECK(panel.shown("text:tcp") && panel.label("link:advanced").find("Advanced") != std::string::npos);
+    type_into(panel, "text:tcp", "12a");
+    type_into(panel, "text:name", "ab");
+    click(panel, "button:play");
+    CHECK(panel.error() == "Ports must contain digits, or be blank for the game default.");
+    type_into(panel, "text:tcp", "12345");
+    click(panel, "button:play");
+    CHECK(panel.error().find("player name") != std::string::npos && !fs::exists(settings));
+    type_into(panel, "text:name", "");
+    click(panel, "button:play");
+    CHECK(panel.error() == "Enter a player name to play on a server. It is the name you sign in with.");
+    type_into(panel, "text:name", "abcd_7");
+    // Borderless: the output size is the desktop's; Play first confirms the display.
+    CHECK(panel.focus("choice:display"));
     send(panel, key(SDL_SCANCODE_RIGHT));
-    CHECK(form.borderless);
+    CHECK(form.borderless && !panel.enabled("choice:output"));
     draw(panel);
-    CHECK(reach(panel, "button:Save and play"));
+    CHECK(panel.focus("text:name"));
+    CHECK(send(panel, key(SDL_SCANCODE_RETURN)) == SettingsPanel::State::Open);  // Enter in a field is Play MAG here
+    CHECK(panel.pending() && panel.shown("button:keep") && !panel.enabled("text:server"));
+    CHECK(display.calls == std::vector<std::string>{"borderless"} && !fs::exists(settings));
+    click(panel, "button:keep");
+    CHECK(!panel.pending() && display.calls.back() == "kept" && panel.status().find("Saved") == 0);
+    CHECK(panel.focus("text:name"));
     CHECK(send(panel, key(SDL_SCANCODE_RETURN)) == SettingsPanel::State::Saved);
     const std::string saved = read(settings);
     CHECK(saved.find("\"server_address\": \"example.org\"") != std::string::npos);
@@ -134,25 +185,73 @@ static void general(const fs::path& folder) {
     CHECK(saved.find("\"player_name\": \"abcd_7\"") != std::string::npos);
     CHECK(saved.find("\"display_mode\": \"borderless\"") != std::string::npos);
 
-    // A server without a name, and a port out of range, are refused by the form.
+    // In game: a windowed size previews, then Revert or the 15 seconds bring the old display back.
     SettingsForm again;
     CHECK(settings_form_load(settings, again, error) && again.borderless && again.tcp_port == "12345");
-    again.player_name.clear();
-    CHECK(!settings_form_save(settings, again, error) && error.find("player name") != std::string::npos);
-    again.player_name = "Rook_7";
-    again.udp_port = "70000";
-    CHECK(!settings_form_save(settings, again, error) && error.find("Ports") != std::string::npos);
-    CHECK(read(settings) == saved);
-    // Cancel (Escape) changes nothing.
-    SettingsPanel cancel(again, settings, false, "");
-    CHECK(send(cancel, key(SDL_SCANCODE_ESCAPE)) == SettingsPanel::State::Cancelled);
-    CHECK(read(settings) == saved);
-    // A damaged settings file is reported and replaced only by an explicit save.
+    FakeDisplay game;
+    SettingsPanel ingame(again, settings, SettingsWindowOptions{}, &game);
+    CHECK(!ingame.shown("button:play") && !ingame.enabled("button:apply") && ingame.status() == "No unsaved changes");
+    CHECK(ingame.focus("choice:display"));
+    send(ingame, key(SDL_SCANCODE_LEFT));
+    click(ingame, "choice:output");
+    CHECK(ingame.choosing());
+    send(ingame, key(SDL_SCANCODE_DOWN));
+    send(ingame, key(SDL_SCANCODE_RETURN));
+    CHECK(!ingame.choosing() && again.output == 1 && ingame.enabled("button:apply"));
+    click(ingame, "button:apply");
+    CHECK(ingame.pending() && game.calls == std::vector<std::string>{"windowed 1920"});
+    click(ingame, "button:revert");
+    CHECK(!ingame.pending() && game.calls.back() == "restore" && ingame.status() == "Display changes reverted");
+    CHECK(again.borderless && read(settings) == saved);
+    send(ingame, key(SDL_SCANCODE_LEFT));
+    click(ingame, "button:apply");
+    CHECK(ingame.pending());
+    ingame.tick(now + 16000);
+    CHECK(!ingame.pending() && game.calls.back() == "restore" && read(settings) == saved);
+    game.fit = false;
+    send(ingame, key(SDL_SCANCODE_LEFT));
+    click(ingame, "button:apply");
+    CHECK(!ingame.pending() && ingame.error().find("does not fit") != std::string::npos);
+    // Cancel (Escape) discards it; nothing was saved, so the window reports Cancelled.
+    CHECK(send(ingame, key(SDL_SCANCODE_ESCAPE)) == SettingsPanel::State::Cancelled);
+    CHECK(again.borderless && read(settings) == saved);
+
+    // The Account row: link through a fake portal, then unlink.
+    std::ofstream(settings) << "{\"server_address\": \"play.magtest.online\", \"player_name\": \"Rook_7\"}";
+    SettingsForm account;
+    CHECK(settings_form_load(settings, account, error));
+    SettingsPanel linking(account, settings, SettingsWindowOptions{}, &game);
+    std::string opened;
+    linking.open_page = [&](const std::string& url) { opened = url; };
+    CHECK(linking.label("button:account") == "Link Account\xE2\x80\xA6");
+    click(linking, "button:account");
+    CHECK(linking.label("button:account") == "Cancel");
+    for (int i = 0; i < 400 && linking.account_status().find("Linked as") == std::string::npos; ++i) {
+        SDL_Delay(10);
+        linking.tick(now += 10);
+    }
+    CHECK(linking.account_status() == "Linked as Rook_9" && linking.label("button:account") == "Unlink");
+    CHECK(opened == "https://magtest.online/link?code=BCDF-GHJK" && account.player_name == "Rook_9");
+    CHECK(fs::exists(folder / "portal-link.json"));
+    click(linking, "button:account");
+    CHECK(linking.account_status().find("Unlinked here") == 0 && !fs::exists(folder / "portal-link.json"));
+    CHECK(linking.enabled("button:apply"));  // the account's name waits for Apply
+    click(linking, "button:apply");
+    CHECK(read(settings).find("\"player_name\": \"Rook_9\"") != std::string::npos);
+    CHECK(send(linking, key(SDL_SCANCODE_ESCAPE)) == SettingsPanel::State::Saved);  // Apply saved something
+
+    // A damaged settings file: Play waits until Apply replaces it.
     std::ofstream(settings) << "{broken";
     SettingsForm damaged;
     CHECK(!settings_form_load(settings, damaged, error) && damaged.server == "play.magtest.online");
-    CHECK(read(settings) == "{broken");
-    std::printf("general: fields, validation, display mode, cancel, damaged file\n");
+    SettingsWindowOptions recovery = setup;
+    recovery.notice = "damaged";
+    SettingsPanel fixing(damaged, settings, recovery, &display);
+    CHECK(!fixing.enabled("button:play") && fixing.error() == "damaged" && read(settings) == "{broken");
+    type_into(fixing, "text:name", "Rook_7");
+    click(fixing, "button:apply");
+    CHECK(fixing.enabled("button:play") && read(settings).find("Rook_7") != std::string::npos);
+    std::printf("general: fields, validation, account, display preview, keep, revert, timeout, cancel, damaged file\n");
 }
 
 // The General page as the macOS panel and the Win32 window edit it: Apply writes General alone,
@@ -220,102 +319,97 @@ static void controls(const fs::path& folder) {
     SettingsForm form;
     std::string error;
     CHECK(settings_form_load(settings, form, error) && form.controls);
-    SettingsPanel panel(form, settings, false, "");
+    SettingsPanel panel(form, settings, SettingsWindowOptions{});
+    int saved_controls = 0;
+    panel.controls_saved = [&] { ++saved_controls; };
     uint64_t held = 1;  // Cross / A held when a capture begins
     panel.held_controller = [&] { return held; };
-    send(panel, key(SDL_SCANCODE_TAB, KMOD_CTRL));
-    CHECK(panel.page() == 1);
-    auto rows = settings_form_rows(form, SettingsDevice::KeyboardMouse, settings_scope_on_foot);
-    // Start is a system button: it applies on foot and in menus.
-    CHECK(rows.size() == 3 && rows[0].slot[0] == "W" && rows[1].slot[0] == "Left mouse" && rows[1].slot[1] == "Unbound");
-    CHECK(rows[2].label == "Start" && rows[2].slot[0] == "Escape");
+    click(panel, "segment:controls");
+    CHECK(panel.controls_page() && panel.label("button:apply") == "Apply controls" && !panel.enabled("button:apply"));
+    CHECK(panel.hint() == "Choose a binding, then press a key or button. Escape cancels capture.");
+    // Start is a system button: it applies on foot and in menus, under its group.
+    CHECK(panel.label("slot:0:0") == "W" && panel.label("slot:1:0") == "Left mouse" && panel.label("slot:1:1") == "Unbound");
+    CHECK(panel.label("slot:2:0") == "Escape");
     // Fire, secondary: Q.
-    CHECK(reach(panel, "slot:1:1"));
-    send(panel, key(SDL_SCANCODE_RETURN));
-    CHECK(panel.capturing());
+    click(panel, "slot:1:1");
+    CHECK(panel.capturing() && panel.hint() == "Press a key or mouse button. Escape cancels.");
     send(panel, key(SDL_SCANCODE_Q));
-    CHECK(!panel.capturing());
-    rows = settings_form_rows(form, SettingsDevice::KeyboardMouse, settings_scope_on_foot);
-    CHECK(rows[1].slot[1] == "Q");
-    // Move forward, primary: Q again is a conflict; Keep leaves it, Replace takes it.
-    CHECK(reach(panel, "slot:0:0"));
-    send(panel, key(SDL_SCANCODE_RETURN));
+    CHECK(!panel.capturing() && panel.label("slot:1:1") == "Q" && panel.hint() == "Binding changed. Apply controls to save.");
+    CHECK(panel.enabled("button:apply") && panel.status() == "Unsaved changes");
+    // Move forward, primary: Q again asks; Cancel leaves it, Replace takes it.
+    click(panel, "slot:0:0");
     send(panel, key(SDL_SCANCODE_Q));
-    CHECK(panel.asking() && panel.status().find("Fire") != std::string::npos);
-    send(panel, key(SDL_SCANCODE_N));
-    CHECK(!panel.asking());
-    CHECK(settings_form_rows(form, SettingsDevice::KeyboardMouse, settings_scope_on_foot)[0].slot[0] == "W");
-    send(panel, key(SDL_SCANCODE_RETURN));
-    send(panel, key(SDL_SCANCODE_Q));
-    send(panel, key(SDL_SCANCODE_Y));
-    rows = settings_form_rows(form, SettingsDevice::KeyboardMouse, settings_scope_on_foot);
-    CHECK(rows[0].slot[0] == "Q" && rows[1].slot[1] == "Unbound");
-    // A mouse button, Escape and the 15-second timeout.
-    send(panel, key(SDL_SCANCODE_RETURN));
-    send(panel, mouse(SDL_BUTTON_RIGHT));
-    CHECK(settings_form_rows(form, SettingsDevice::KeyboardMouse, settings_scope_on_foot)[0].slot[0] == "Right mouse");
-    send(panel, key(SDL_SCANCODE_RETURN));
+    CHECK(panel.asking() && panel.question() == "Replace existing binding?");
     send(panel, key(SDL_SCANCODE_ESCAPE));
-    CHECK(!panel.capturing() && panel.status().find("cancelled") != std::string::npos);
+    CHECK(!panel.asking() && panel.label("slot:0:0") == "W");
+    click(panel, "slot:0:0");
+    send(panel, key(SDL_SCANCODE_Q));
     send(panel, key(SDL_SCANCODE_RETURN));
+    CHECK(panel.label("slot:0:0") == "Q" && panel.label("slot:1:1") == "Unbound");
+    // A mouse button, Escape and the 15-second timeout.
+    click(panel, "slot:0:0");
+    send(panel, mouse(SDL_BUTTON_RIGHT));
+    CHECK(panel.label("slot:0:0") == "Right mouse");
+    click(panel, "slot:0:0");
+    send(panel, key(SDL_SCANCODE_ESCAPE));
+    CHECK(!panel.capturing() && panel.hint() == "Binding capture canceled.");
+    click(panel, "slot:0:0");
     CHECK(panel.tick(now + 16000) == SettingsPanel::State::Open && !panel.capturing());
-    // Clearing a slot.
-    send(panel, key(SDL_SCANCODE_DELETE));
-    CHECK(settings_form_rows(form, SettingsDevice::KeyboardMouse, settings_scope_on_foot)[0].slot[0] == "Unbound");
+    CHECK(panel.hint() == "No binding received. Choose a binding to try again.");
+    // Clearing a slot with its x.
+    click(panel, "clear:0:0");
+    CHECK(panel.label("slot:0:0") == "Unbound" && !panel.enabled("clear:0:0"));
     // Sensitivity, inversion and mode.
-    CHECK(reach(panel, "slider"));
+    CHECK(panel.focus("slider"));
     send(panel, key(SDL_SCANCODE_RIGHT));
     send(panel, key(SDL_SCANCODE_RIGHT));
     CHECK(settings_form_mouse_sensitivity(form) > 1.09 && settings_form_mouse_sensitivity(form) < 1.11);
-    CHECK(reach(panel, "check"));
-    send(panel, key(SDL_SCANCODE_SPACE));
+    click(panel, "check:invert");
     CHECK(form.profile.mouse.invert_y);
-    CHECK(reach(panel, "choice:2"));
+    CHECK(panel.focus("choice:mode"));
     send(panel, key(SDL_SCANCODE_RIGHT));
     CHECK(form.profile.mode == InputMode::KBM);
-    // The menu scope lists only actions that apply there.
-    CHECK(reach(panel, "choice:1"));
+    // The menu scope lists only actions that apply there, and hides the mouse row.
+    CHECK(panel.focus("choice:scope"));
     send(panel, key(SDL_SCANCODE_RIGHT));
-    CHECK(settings_form_rows(form, SettingsDevice::KeyboardMouse, settings_scope_menu).size() == 1);
-    CHECK(reach(panel, "slot:0:0") && !reach(panel, "slot:1:0"));
-    CHECK(reach(panel, "choice:1"));
+    CHECK(panel.label("slot:0:0") == "Escape" && !panel.shown("slot:1:0") && !panel.shown("slider"));
     send(panel, key(SDL_SCANCODE_LEFT));  // back to on foot
     draw(panel);
+    // Many actions in several groups scroll, and a focused binding scrolls into view.
+    const std::string last = "slot:" + std::to_string(2 + 16) + ":0";
+    CHECK(panel.scroll_limit() > 0 && !panel.shown(last));
+    CHECK(panel.focus(last) && panel.shown(last) && panel.scroll() > 0);
+    send(panel, SDL_Event{});
     // Controller page: held buttons bind only after a release; Guide is reserved; triggers use hysteresis.
-    send(panel, key(SDL_SCANCODE_TAB, KMOD_CTRL));
-    CHECK(panel.page() == 2);
-    CHECK(reach(panel, "slot:0:1"));
-    send(panel, key(SDL_SCANCODE_RETURN));
+    click(panel, "segment:controller");
+    CHECK(panel.controller() && panel.label("button:reset") == "Reset Controller" && !panel.shown("slider"));
+    click(panel, "slot:0:1");
     send(panel, pad(SDL_CONTROLLERBUTTONDOWN, SDL_CONTROLLER_BUTTON_A));
-    CHECK(panel.capturing());
+    CHECK(panel.capturing() && panel.hint() == "Release held controls, then press a controller button. Escape cancels.");
     send(panel, pad(SDL_CONTROLLERBUTTONDOWN, SDL_CONTROLLER_BUTTON_GUIDE));
     CHECK(panel.capturing());
     send(panel, pad(SDL_CONTROLLERBUTTONUP, SDL_CONTROLLER_BUTTON_A));
     send(panel, pad(SDL_CONTROLLERBUTTONDOWN, SDL_CONTROLLER_BUTTON_A));
-    CHECK(!panel.capturing());
-    auto pads = settings_form_rows(form, SettingsDevice::Controller, settings_scope_on_foot);
-    CHECK(pads.size() == 2 && pads[0].slot[0] == "R1 / RB" && pads[0].slot[1] == "Cross / A");
+    CHECK(!panel.capturing() && panel.label("slot:0:0") == "R1 / RB" && panel.label("slot:0:1") == "Cross / A");
     held = 0;
-    send(panel, key(SDL_SCANCODE_RETURN));
+    click(panel, "slot:0:1");
     send(panel, trigger(SDL_CONTROLLER_AXIS_TRIGGERRIGHT, .5));
     CHECK(panel.capturing());
     send(panel, trigger(SDL_CONTROLLER_AXIS_TRIGGERRIGHT, .6));
-    CHECK(!panel.capturing());
-    CHECK(settings_form_rows(form, SettingsDevice::Controller, settings_scope_on_foot)[0].slot[1] == "R2 / RT");
-    CHECK(form.profile.controller_remap);
-    // Reset asks first; Keep changes nothing, Reset restores this device only.
-    CHECK(reach(panel, "button:Reset controller"));
-    send(panel, key(SDL_SCANCODE_RETURN));
-    CHECK(panel.asking());
+    CHECK(!panel.capturing() && panel.label("slot:0:1") == "R2 / RT" && form.profile.controller_remap);
+    // Reset asks first; Cancel changes nothing, Reset restores this device only.
+    click(panel, "button:reset");
+    CHECK(panel.asking() && panel.question() == "Reset controller bindings?");
     send(panel, key(SDL_SCANCODE_ESCAPE));
-    CHECK(settings_form_rows(form, SettingsDevice::Controller, settings_scope_on_foot)[0].slot[1] == "R2 / RT");
+    CHECK(panel.label("slot:0:1") == "R2 / RT");
+    click(panel, "button:reset");
     send(panel, key(SDL_SCANCODE_RETURN));
-    send(panel, key(SDL_SCANCODE_RETURN));
-    CHECK(settings_form_rows(form, SettingsDevice::Controller, settings_scope_on_foot)[0].slot[1] == "Unbound");
-    CHECK(settings_form_rows(form, SettingsDevice::KeyboardMouse, settings_scope_on_foot)[0].slot[0] == "Unbound");
+    CHECK(panel.label("slot:0:1") == "Unbound");
     draw(panel);
-    CHECK(send(panel, key(SDL_SCANCODE_S, KMOD_CTRL)) == SettingsPanel::State::Saved);
-    // Saved: the controls service reads back what the panel chose.
+    // Apply controls saves only the controls, and tells the game.
+    click(panel, "button:apply");
+    CHECK(saved_controls == 1 && panel.hint() == "Controls saved. They take effect at the next input update.");
+    CHECK(!panel.enabled("button:apply"));
     const auto profile = mag_controls_settings_load();
     CHECK(profile.mouse.invert_y && profile.mode == InputMode::KBM);
     CHECK(profile.mouse.radians_per_count > .00109 && profile.mouse.radians_per_count < .00111);
@@ -323,20 +417,28 @@ static void controls(const fs::path& folder) {
     for (const auto& b : profile.bindings)
         if (b.action == 1 && b.control.source == InputSource::Keyboard) forward_unbound = false;
     CHECK(forward_unbound);  // an explicit clear survives the save
-    // An unreadable controls profile: Save refuses until Reset reviews the defaults.
+    CHECK(send(panel, key(SDL_SCANCODE_ESCAPE)) == SettingsPanel::State::Saved);
+    // An unreadable controls profile: Reset reviews the defaults before anything replaces it.
     std::ofstream(folder / "controls.json") << "{broken";
     SettingsForm damaged;
     CHECK(settings_form_load(settings, damaged, error) && !damaged.controls_error.empty());
     CHECK(!settings_form_save(settings, damaged, error) && error.find("Reset") != std::string::npos);
+    SettingsPanel recovering(damaged, settings, SettingsWindowOptions{});
+    click(recovering, "segment:controls");
+    CHECK(recovering.hint().find("Use Reset to review defaults") != std::string::npos && !recovering.enabled("slot:0:0"));
+    click(recovering, "button:reset");
+    CHECK(recovering.question() == "Replace the unreadable controls profile?");
+    send(recovering, key(SDL_SCANCODE_RETURN));
+    CHECK(recovering.hint() == "Defaults ready. Apply controls to replace the unreadable profile, or Cancel to preserve it.");
     CHECK(read(folder / "controls.json") == "{broken");
-    CHECK(settings_form_reset(damaged, SettingsDevice::KeyboardMouse, error));
-    CHECK(settings_form_save(settings, damaged, error));
+    click(recovering, "button:apply");
     CHECK(mag_controls_settings_load().bindings.size() == 5);
-    std::printf("controls: capture, conflict, clear, scope, mouse, controller, reset, save, recovery\n");
+    std::printf("controls: capture, conflict, clear, scope, groups and scrolling, mouse, controller, reset, apply, recovery\n");
 }
 
 int main(int argc, char** argv) {
     if (argc != 2) return 2;
+    std::setvbuf(stdout, nullptr, _IONBF, 0);  // a hang still shows how far it got
     const fs::path folder = argv[1];
     general(folder / "general");
     general_apply(folder / "apply");

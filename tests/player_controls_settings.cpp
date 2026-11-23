@@ -46,4 +46,19 @@ int main(int argc,char**argv) {
     mag_controls_settings_save(migrated);auto unbound=mag_controls_settings_load();
     assert(unbound.catalog_revision==1 && std::none_of(unbound.bindings.begin(),unbound.bindings.end(),[](auto b){return b.action==3;}));
     mag_controls_settings_unregister();
+    // A profile saved by an older catalog binds an action (9) the catalog has since retired: it
+    // loads only while registered as retired, and the upgrade removes it.
+    auto old_profile=unbound;old_profile.bindings.push_back({{InputSource::Keyboard,16},9});
+    const ActionId old_catalog[]={1,2,3,9};
+    assert(mag_controls_save_profile(reg.path,old_profile,old_catalog));
+    mag_controls_settings_register(reg);
+    rejected=false;try{(void)mag_controls_settings_load();}catch(...){rejected=true;}assert(rejected);
+    mag_controls_settings_unregister();
+    reg.retired={9};
+    reg.upgrade=[](ControlsProfile& p){if(p.catalog_revision==1){std::erase_if(p.bindings,[](auto b){return b.action==9;});p.catalog_revision=2;}};
+    reg.defaults.catalog_revision=2;
+    mag_controls_settings_register(reg);auto retired=mag_controls_settings_load();
+    assert(retired.catalog_revision==2 && std::none_of(retired.bindings.begin(),retired.bindings.end(),[](auto b){return b.action==9;}));
+    mag_controls_settings_save(retired);
+    mag_controls_settings_unregister();
 }

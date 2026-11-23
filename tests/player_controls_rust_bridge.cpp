@@ -36,17 +36,17 @@ static void interaction(){
     uint64_t duration=0;
     for(uint64_t sequence=1;sequence<=4;++sequence){auto k=frame(sequence);auto o=offered(k,2);
         require(o.down&&o.physical_duration_ns>=duration,"E hold disappeared or duration went backwards");duration=o.physical_duration_ns;
-        auto gameplay=mag_controls_recognize(k,10,100,2,1,false,config);
-        auto hud=mag_controls_recognize(k,20,200,2,1,false,config);
+        auto gameplay=*mag_controls_recognize(k,10,100,2,1,false,config);
+        auto hud=*mag_controls_recognize(k,20,200,2,1,false,config);
         require((gameplay.events&ControlWhileDown)&&(hud.events&ControlWhileDown),"gameplay/HUD did not both see continuous E");
-        auto repeated=mag_controls_recognize(k,10,100,2,1,false,config);
+        auto repeated=*mag_controls_recognize(k,10,100,2,1,false,config);
         require(repeated.events==gameplay.events&&repeated.elapsed_ns==gameplay.elapsed_ns,"repeat getter advanced recognition");
         mag_controls_observe(k,2,o);mag_controls_retire_frame(k);
     }
     mag_controls_push_event({{InputSource::Keyboard,8},false,time_ns()});auto k=frame(5);auto up=offered(k,2);
     require(!up.down,"E release did not become observable");
-    auto gameplay=mag_controls_recognize(k,10,100,2,0,false,config);
-    auto hud=mag_controls_recognize(k,20,200,2,0,false,config);
+    auto gameplay=*mag_controls_recognize(k,10,100,2,0,false,config);
+    auto hud=*mag_controls_recognize(k,20,200,2,0,false,config);
     require((gameplay.events&ControlUp)&&(hud.events&ControlUp),"E release failed to reach gameplay and HUD independently");
     mag_controls_observe(k,2,up);mag_controls_retire_frame(k);
 }

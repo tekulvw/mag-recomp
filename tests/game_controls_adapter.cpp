@@ -32,6 +32,7 @@ uint64_t time_ns() {
 struct Memory {
     std::map<uint32_t, uint8_t> bytes;  // Mapped bytes only; anything else is unreadable.
     unsigned reads = 0;
+    void (*on_read)(uint32_t address) = nullptr;  // Lets a test act "from another thread" mid-event.
     void map(uint32_t address, uint32_t size) {
         for (uint32_t i = 0; i < size; ++i) bytes.try_emplace(address + i, 0);
     }
@@ -49,6 +50,7 @@ struct Memory {
     static bool read(void* user, uint32_t address, void* output, size_t size) {
         auto& m = *static_cast<Memory*>(user);
         ++m.reads;
+        if (m.on_read) m.on_read(address);
         for (size_t i = 0; i < size; ++i) {
             const auto it = m.bytes.find(uint32_t(address + i));
             if (it == m.bytes.end()) return false;
@@ -1009,20 +1011,20 @@ void situational_actions() {
     // Downed: the player's handler also watches Bleedout, on Reload's channel (14).
     const uint32_t bleed = watch(h.m, Handler, 0, Bleedout, 14);
     require(h.idle_tick() == Attached, "a situational token sharing a channel blocked attachment");
-    mag_controls_push_event({{InputSource::Keyboard, 27}, true, time_ns()});  // X: Bleed out.
+    mag_controls_push_event({{InputSource::Keyboard, 40}, true, time_ns()});  // Return: Bleed out.
     h.begin_tick();
     h.enter_handler();
     require(h.recognize_record(bleed, Handler), "Bleedout stayed native");
-    require(mag_guest_tuple_value(h.tuple_at(bleed)) == 1.0f, "Bleedout not pressed by X");
-    require(!h.recognize(Reload), "X pressed Reload, which shares the channel");
+    require(mag_guest_tuple_value(h.tuple_at(bleed)) == 1.0f, "Bleedout not pressed by Return");
+    require(!h.recognize(Reload), "Return pressed Reload, which shares the channel");
     h.end_poll();
     h.enter_actor();
     h.end_tick();
-    mag_controls_push_event({{InputSource::Keyboard, 27}, false, time_ns()});
+    mag_controls_push_event({{InputSource::Keyboard, 40}, false, time_ns()});
     h.idle_tick();
 
-    // A HUD prompt's own handler (a gameplay route) watching Confirm on Jump's channel: Return
-    // confirms; Space (Jump) no longer does.
+    // A HUD prompt's own handler (a gameplay route) watching Confirm on Jump's channel: X confirms,
+    // as it does in menus; Space (Jump) does not.
     uint32_t record = 0;
     const uint32_t route = route_handler(h.m, record);
     h.m.put32(record, Confirm);
@@ -1039,18 +1041,32 @@ void situational_actions() {
     h.enter_actor();
     h.end_tick();
     mag_controls_push_event({{InputSource::Keyboard, 44}, false, time_ns()});
-    mag_controls_push_event({{InputSource::Keyboard, 40}, true, time_ns()});  // Return.
+    mag_controls_push_event({{InputSource::Keyboard, 27}, true, time_ns()});  // X.
     h.begin_tick();
     h.enter_handler();
     h.fire(Hook::HandlerExit);
     h.enter_handler(route);
     require(h.recognize_record(record, route) && mag_guest_tuple_value(h.tuple_at(record)) == 1.0f,
-            "Return did not confirm the prompt");
+            "X did not confirm the prompt");
     h.fire(Hook::HandlerExit);
     h.end_poll();
     h.enter_actor();
     h.end_tick();
-    mag_controls_push_event({{InputSource::Keyboard, 40}, false, time_ns()});
+    mag_controls_push_event({{InputSource::Keyboard, 27}, false, time_ns()});
+
+    // The command screen is watched on the Select button (13): Tab presses it, as the controller's
+    // Select does.
+    const uint32_t command = watch(h.m, Handler, 2, 0xC6DCD89F, 13);
+    require(h.idle_tick() == Attached, "the command screen token blocked attachment");
+    mag_controls_push_event({{InputSource::Keyboard, 43}, true, time_ns()});  // Tab.
+    h.begin_tick();
+    h.enter_handler();
+    require(h.recognize_record(command, Handler) && mag_guest_tuple_value(h.tuple_at(command)) == 1.0f,
+            "Tab did not press the command screen");
+    h.end_poll();
+    h.enter_actor();
+    h.end_tick();
+    mag_controls_push_event({{InputSource::Keyboard, 43}, false, time_ns()});
 
     // Another registered handler (a vehicle's, say) watching Change seats: V presses it while the
     // player is on foot, and the adapter gives it back when it lets go.
@@ -1120,7 +1136,7 @@ void prompt_queries() {
     Harness h;
     const uint64_t revision = mag_controls_profile_revision();
     const auto bleed = mag_controls_action_bindings(Bleedout, InputContext::OnFoot);
-    require(bleed.size() == 1 && bleed[0].control == PhysicalControl{InputSource::Keyboard, 27}, "Bleed out is X");
+    require(bleed.size() == 1 && bleed[0].control == PhysicalControl{InputSource::Keyboard, 40}, "Bleed out is Return");
     require(mag_controls_action_bindings(Bleedout, InputContext::Menu).empty(), "Bleed out bound in menus");
     const auto start = mag_controls_action_bindings(Start, InputContext::Menu);
     require(start.size() == 1 && start[0].control.code == 41, "controller bindings listed without a remap");
@@ -1141,12 +1157,45 @@ void prompt_queries() {
     require(mag_controls_last_device() == InputDevice::Controller, "a release changed the device");
 }
 
+// Another thread (the window's) may withdraw the attached frame at any moment: a focus or mouse
+// capture change starts a new capture generation. Mid-recognition that is not an error: the game
+// recognizes the control, nothing is published, and the next poll attaches as usual.
+void withdrawn_frame() {
+    Harness h;
+    require(h.idle_tick() == Attached, "first tick did not attach on foot");
+    mag_controls_push_event({{InputSource::Keyboard, 44}, true, time_ns()});  // Space: Jump.
+    h.begin_tick();
+    h.enter_handler();
+    const auto before = h.tuple(Jump);
+    static bool withdrawn;
+    withdrawn = false;
+    h.m.on_read = [](uint32_t address) {
+        // While the adapter reads the tuning record (after its frame check), the window loses focus.
+        if (!withdrawn && address == Tuning + 0x18) {
+            withdrawn = true;
+            mag_controls_set_window_capture(false, false);
+        }
+    };
+    require(!h.recognize(Jump), "a withdrawn frame was published");
+    require(withdrawn, "the withdrawal did not happen mid-recognition");
+    h.m.on_read = nullptr;
+    require(h.status().find("rejected") == std::string::npos, "a withdrawn frame was treated as an error");
+    require(h.tuple(Jump) == before && h.cpu.gpr[11] == 0xDEAD, "a withdrawn frame changed the control or registers");
+    require(!h.recognize(Jump), "the rest of the poll was not left to the game");
+    h.end_poll();
+    h.enter_actor();
+    h.end_tick();
+    mag_controls_set_window_capture(true, false);
+    require(h.idle_tick() == Attached, "the next poll did not attach");
+    require(capture_on, "desktop capture was dropped");
+}
+
 int main(int argc, char** argv) {
     const std::map<std::string, void (*)()> scenarios = {
         {"owner", owner_resolution}, {"lists", malformed_lists}, {"routes", routes}, {"tick", full_tick},
         {"route", route_recognition},
         {"mouse", mouse_look},       {"assist", aim_assist},     {"lifecycle", lifecycle},
-        {"threads", threads_and_errors}, {"menu", menu_holds_look},
+        {"threads", threads_and_errors}, {"menu", menu_holds_look}, {"withdrawn", withdrawn_frame},
         {"menu-pad", menu_keyboard_pad}, {"situational", situational_actions}, {"census", census},
         {"prompt-queries", prompt_queries}};
     try {
