@@ -365,10 +365,12 @@ else()
         target_link_libraries(${PROJECT_NAME} PRIVATE user32 gdi32 comctl32 xinput shell32 winhttp)
     else()
         # The window's Account row links through the portal over OpenSSL, as ./MAG --link does.
-        target_sources(${PROJECT_NAME} PRIVATE src/player_settings_sdl.cpp src/player_settings_account.cpp
+        # player_settings_sdl_x11.cpp: the window's second activation request on X11, through the
+        # libX11 SDL already loaded (dlopen), so the game links no X11 library itself.
+        target_sources(${PROJECT_NAME} PRIVATE src/player_settings_sdl.cpp src/player_settings_sdl_x11.cpp src/player_settings_account.cpp
             src/player_portal_openssl.cpp)
         find_package(OpenSSL REQUIRED COMPONENTS SSL Crypto)
-        target_link_libraries(${PROJECT_NAME} PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+        target_link_libraries(${PROJECT_NAME} PRIVATE OpenSSL::SSL OpenSSL::Crypto ${CMAKE_DL_LIBS})
         # The panel draws with the SDK's public-domain bitmap font (libs/misc/osk_font8x8.h).
         set_source_files_properties(src/player_settings_sdl.cpp TARGET_DIRECTORY ${PROJECT_NAME}
             PROPERTIES INCLUDE_DIRECTORIES "${PS3RECOMP_DIR}")

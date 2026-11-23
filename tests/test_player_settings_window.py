@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -59,6 +60,7 @@ class SdlSettingsPanelTests(unittest.TestCase):
                         '-I' + str(ROOT / 'src'), '-I' + str(SDK), '-I' + str(cls.root),
                         *[f for f in cls.sdl if not f.startswith('-l') and not f.startswith('-L') and f != '-framework'],
                         str(ROOT / 'tests/player_settings_window.cpp'), str(ROOT / 'src/player_settings_sdl.cpp'),
+                        str(ROOT / 'src/player_settings_sdl_x11.cpp'),
                         str(ROOT / 'src/player_settings_account.cpp'),
                         *[str(ROOT / s) for s in FORM], str(cls.root / 'cargo/release/libmag_input.a'),
                         *[f for f in cls.sdl if f.startswith(('-l', '-L', '-Wl'))], *link, '-o', str(cls.binary)],
@@ -70,6 +72,43 @@ class SdlSettingsPanelTests(unittest.TestCase):
                                     env={**os.environ, 'SDL_VIDEODRIVER': 'dummy'})
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn('settings window checks passed', result.stdout)
+
+
+@unittest.skipUnless(sys.platform.startswith('linux'), 'X11: SDL\'s X11 driver and libX11')
+class SdlSettingsWindowX11Tests(unittest.TestCase):
+    """The settings window's second activation request on X11, sent to a private Xvfb server."""
+
+    def test_pager_activation_request_reaches_the_root_window(self):
+        compiler = shutil.which('clang++') or shutil.which('g++')
+        sdl = sdl_flags()
+        if not compiler or sdl is None or not shutil.which('Xvfb'):
+            self.skipTest('C++20, SDL2 and libX11 development files and Xvfb required')
+        with tempfile.TemporaryDirectory(prefix='mag-settings-x11-') as tmp:
+            root = Path(tmp)
+            binary = root / 'activation'
+            build = subprocess.run([compiler, '-std=c++20', '-Wall', '-Wextra', '-Werror', '-pthread', '-I' + str(ROOT / 'src'),
+                                    *[f for f in sdl if not f.startswith(('-l', '-L', '-Wl'))],
+                                    str(ROOT / 'tests/player_settings_x11_activation.cpp'), str(ROOT / 'src/player_settings_sdl_x11.cpp'),
+                                    *[f for f in sdl if f.startswith(('-l', '-L', '-Wl'))], '-lX11', '-ldl', '-o', str(binary)],
+                                   capture_output=True, text=True, timeout=300)
+            if build.returncode and 'X11/Xlib.h' in build.stderr:
+                self.skipTest('libX11 development files required')
+            self.assertEqual(build.returncode, 0, build.stderr)
+            display = ':' + str(90 + os.getpid() % 100)
+            server = subprocess.Popen(['Xvfb', display, '-screen', '0', '640x480x24', '-nolisten', 'tcp'],
+                                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            self.addCleanup(server.wait)
+            self.addCleanup(server.terminate)
+            env = {**os.environ, 'DISPLAY': display, 'SDL_VIDEODRIVER': 'x11'}
+            for _ in range(50):
+                result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=60, env=env)
+                if result.returncode != 77:
+                    break
+                time.sleep(0.1)  # the server is still starting
+            if result.returncode == 77:
+                self.skipTest('no X server came up')
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn('x11 activation checks passed', result.stdout)
 
 
 class Win32SettingsWindowTests(unittest.TestCase):

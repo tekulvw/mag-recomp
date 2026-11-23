@@ -9,6 +9,7 @@
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <vector>
 
 using namespace mag;
 namespace fs = std::filesystem;
@@ -436,6 +437,53 @@ static void controls(const fs::path& folder) {
     std::printf("controls: capture, conflict, clear, scope, groups and scrolling, mouse, controller, reset, apply, recovery\n");
 }
 
+// The window comes forward: SDL's raise, then on X11 alone a second, pager-style request.
+static void forward() {
+    struct Fake {
+        std::string driver = "x11", calls;
+        std::vector<bool> focus;  // answers to each wait, in order
+        bool sent = true;
+        SettingsForwardHooks hooks() {
+            SettingsForwardHooks h;
+            h.driver = [this] { return driver; };
+            h.raise = [this] { calls += "raise "; };
+            h.focused = [this](unsigned ms) {
+                calls += "wait" + std::to_string(ms) + " ";
+                const bool now = !focus.empty() && focus.front();
+                if (!focus.empty()) focus.erase(focus.begin());
+                return now;
+            };
+            h.activate_x11 = [this] { calls += "x11 "; return sent; };
+            return h;
+        }
+    };
+    Fake granted;
+    granted.focus = {true};
+    CHECK(settings_bring_forward(granted.hooks()) == SettingsForward::Focused && granted.calls == "raise wait250 ");
+    Fake refused;
+    refused.focus = {false, true};
+    CHECK(settings_bring_forward(refused.hooks(), 100) == SettingsForward::FocusedOnRetry &&
+          refused.calls == "raise wait100 x11 wait100 ");
+    Fake stubborn;
+    stubborn.focus = {false, false};
+    CHECK(settings_bring_forward(stubborn.hooks()) == SettingsForward::NotFocused && stubborn.calls == "raise wait250 x11 wait250 ");
+    Fake unsent;
+    unsent.focus = {false, true};
+    unsent.sent = false;
+    CHECK(settings_bring_forward(unsent.hooks()) == SettingsForward::NotFocused && unsent.calls == "raise wait250 x11 ");
+    Fake wayland;
+    wayland.driver = "wayland";
+    wayland.focus = {false, true};
+    CHECK(settings_bring_forward(wayland.hooks()) == SettingsForward::NotFocused && wayland.calls == "raise wait250 ");
+    const SettingsX11Activation request;
+    CHECK(request.source == 2 && request.timestamp == 0 && request.requestor == 0);  // a pager, CurrentTime
+    // Not an X11 window (the dummy driver): nothing is sent.
+    SDL_Window* window = SDL_CreateWindow("forward", 0, 0, 32, 32, SDL_WINDOW_HIDDEN);
+    CHECK(window && !settings_activate_x11(window) && !settings_activate_x11(nullptr));
+    if (window) SDL_DestroyWindow(window);
+    std::printf("forward: raise, focus wait, the X11 retry, other drivers\n");
+}
+
 int main(int argc, char** argv) {
     if (argc != 2) return 2;
     std::setvbuf(stdout, nullptr, _IONBF, 0);  // a hang still shows how far it got
@@ -444,6 +492,7 @@ int main(int argc, char** argv) {
     general_apply(folder / "apply");
     fs::create_directories(folder / "controls");
     controls(folder / "controls");
+    forward();
     if (failures) { std::printf("%d failure(s)\n", failures); return 1; }
     std::printf("settings window checks passed\n");
     return 0;
