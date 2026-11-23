@@ -15,7 +15,8 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 SDK = Path(os.environ.get('MAG_TEST_SDK') or ROOT / 'local/ps3recomp-runtime')
-FORM = ['src/player_settings_form.cpp', 'src/player_settings_portable.cpp', 'src/player_server_overlay_portable.cpp',
+FORM = ['src/player_settings_form.cpp', 'src/player_settings_portable.cpp', 'src/player_settings_file.cpp',
+        'src/player_portal.cpp', 'src/player_server_overlay_portable.cpp',
         'src/player_archive.cpp', 'src/player_inflate.cpp', 'src/player_sha256.cpp',
         'src/player_controls_settings.cpp', 'src/player_controls_store.cpp', 'src/player_controls_rust.cpp',
         'src/player_preferences_file.cpp']

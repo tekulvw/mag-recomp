@@ -337,7 +337,10 @@ if(APPLE)
 else()
     # Windows and Linux players choose their server and name in a settings file. Inert unless
     # the packaged supervisor supplies MAG_PLAYER_SETTINGS_PATH (src/player_settings_portable.cpp).
-    target_sources(${PROJECT_NAME} PRIVATE src/player_settings_portable.cpp src/player_server_overlay_portable.cpp
+    # The supervisor fetches portal tickets (src/player_portal.cpp); the game only checks the
+    # portal_url setting and applies the ticket file it is given.
+    target_sources(${PROJECT_NAME} PRIVATE src/player_settings_portable.cpp src/player_settings_file.cpp
+        src/player_portal.cpp src/player_server_overlay_portable.cpp
         src/player_archive.cpp src/player_inflate.cpp src/player_sha256.cpp)
     set_source_files_properties(src/player_archive.cpp TARGET_DIRECTORY ${PROJECT_NAME}
         PROPERTIES COMPILE_DEFINITIONS MAG_PLAYER_ARCHIVE_NO_ZLIB=1)

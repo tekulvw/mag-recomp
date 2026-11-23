@@ -98,6 +98,15 @@ You build MAG on your own computer from your own copy; nothing game-derived is e
    A name has 3 to 15 letters, digits, `-` or `_`, and starts with a letter. MAG remembers it, and
    types it in for you when the game asks you to sign in: just confirm it. On Linux that sign-in box
    is a small text window. [Player settings](docs/player-settings.md) has the details.
+
+   **Optional: link your magtest.online account.** Then MAG signs in with your account and its
+   name. Claim a name at https://magtest.online/account first. Then open the link page MAG shows
+   and enter its code:
+   - **macOS:** **MAG → Settings…**, then **Link Account…** in the Account row.
+   - **Windows:** run `MAG.exe --link`, or click **Link Account…** when MAG asks for a name.
+   - **Linux:** run `./MAG --link` from the MAG folder.
+
+   `--unlink` (or **Unlink** on macOS) undoes it. See [Account link](docs/player-settings.md#account-link).
 6. **Use a controller, or the keyboard.** A standard USB or Bluetooth gamepad works on every system
    and is the recommended way to play. On Windows and Linux the keyboard also works as a controller
    while the game window has focus and no controller is connected (set `PAD_NO_KEYBOARD=1` to turn

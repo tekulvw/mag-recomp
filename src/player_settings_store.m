@@ -43,8 +43,33 @@ NSDictionary *MAGSettingsValidate(id value, NSError **error) {
         [ticket rangeOfCharacterFromSet:NSCharacterSet.controlCharacterSet].location != NSNotFound))))
         return invalid(error, @"The ticket file must be an absolute path of at most 1024 bytes.");
     if (ticket && ![ticket length]) [normalized removeObjectForKey:@"ticket_file"];
+    // Optional, and never written unless set: the account portal (src/player_portal.h has the
+    // same rule). https, or plain http for localhost in tests; no user, query or fragment.
+    id portal = normalized[@"portal_url"];
+    if (portal && ![portal isKindOfClass:NSString.class]) return invalid(error, @"The portal address must be an https:// URL.");
+    if (portal) {
+        NSString *url = [portal stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+        if (url.length) {
+            NSURLComponents *parts = [NSURLComponents componentsWithString:url];
+            NSString *scheme = parts.scheme.lowercaseString, *host = parts.host.lowercaseString;
+            NSCharacterSet *hostCharacters = [NSCharacterSet characterSetWithCharactersInString:@"abcdefghijklmnopqrstuvwxyz0123456789-."];
+            BOOL ok = parts && url.length <= 256 && host.length && host.length <= 253 && !parts.user && !parts.password && !parts.query &&
+                      !parts.fragment && [host rangeOfCharacterFromSet:hostCharacters.invertedSet].location == NSNotFound &&
+                      ![host hasPrefix:@"."] && ![host hasSuffix:@"."] && ![host hasPrefix:@"-"] &&
+                      [url rangeOfCharacterFromSet:[NSCharacterSet characterSetWithCharactersInString:@" \\?#"]].location == NSNotFound &&
+                      (!parts.port || (parts.port.integerValue >= 1 && parts.port.integerValue <= 65535)) &&
+                      ([scheme isEqual:@"https"] || ([scheme isEqual:@"http"] && ([host isEqual:@"localhost"] || [host isEqual:@"127.0.0.1"])));
+            if (!ok) return invalid(error, @"The portal address must be an https:// URL without a query, such as https://magtest.online.");
+            NSInteger port = parts.port ? parts.port.integerValue : 0;
+            if (port == ([scheme isEqual:@"https"] ? 443 : 80)) port = 0;
+            NSString *path = parts.percentEncodedPath ?: @"";
+            while ([path hasSuffix:@"/"]) path = [path substringToIndex:path.length - 1];
+            normalized[@"portal_url"] = [NSString stringWithFormat:@"%@://%@%@%@", scheme, host,
+                                         port ? [NSString stringWithFormat:@":%ld", (long)port] : @"", path];
+        } else [normalized removeObjectForKey:@"portal_url"];
+    }
     d = normalized;
-    if (d.count != MAGSettingsDefaults().count + (d[@"ticket_file"] ? 1 : 0))
+    if (d.count != MAGSettingsDefaults().count + (d[@"ticket_file"] ? 1 : 0) + (d[@"portal_url"] ? 1 : 0))
         return invalid(error, @"Settings contain missing or unsupported fields.");
     if (![d[@"server_address"] isKindOfClass:NSString.class]) return invalid(error, @"Enter a server hostname or IPv4 address.");
     NSString *host = [d[@"server_address"] stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet].lowercaseString;

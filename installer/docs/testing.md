@@ -41,6 +41,13 @@ dynamic loader and the graphics driver's OpenGL, EGL and Vulkan dispatch come fr
 the desktop libraries SDL loads at run time (X11 or Wayland, ALSA or PulseAudio, udev). The game
 reads its files from `MAG/game`, so move the whole `MAG` folder, not just its `MAG` subfolder.
 
+To sign in with a magtest.online account, run `./MAG --link` once (and `./MAG --unlink` to undo it);
+on Windows, `MAG.exe --link` or **Link Account…** in the name window; on macOS, the Account row in
+MAG Settings. On Linux and Windows the supervisor itself talks to the portal over HTTPS before each
+phase (Linux through the `libssl` it links, from `libssl-dev` with `ca-certificates`; Windows through
+WinHTTP). Account messages go to the terminal on Linux, and to a message box and the launch's
+`supervisor.log` on Windows. See [Account link](../../docs/player-settings.md#account-link).
+
 If a build fails or is cancelled, select **Retry build** with the same game and installation
 folders. Inputs are reverified before tools are installed or downloaded. Completed managed
 dependencies and verified cached downloads are reused; older logs are retained in `MAG-build/logs/attempts/`.
