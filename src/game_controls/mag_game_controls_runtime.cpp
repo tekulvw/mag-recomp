@@ -22,6 +22,7 @@
 #include <mutex>
 #include <stdexcept>
 #include <string>
+bool mag_game_prompts_hook(MagControlsHook, ppu_context*) noexcept;  // mag_game_controls_prompts_runtime.cpp
 namespace {
 std::unique_ptr<MagGameControlsAdapter> adapter;
 std::atomic<uint64_t> sessions{};
@@ -143,6 +144,9 @@ void trace_cost(MagControlsHook event, std::chrono::steady_clock::time_point sta
 }
 bool hook_owned(MagControlsHook event, ppu_context* ctx) noexcept;
 bool hook(MagControlsHook event, ppu_context* ctx) noexcept {
+    // Button prompts (section 12) run on whichever thread asks for UI text.
+    if (event == MagControlsHook::PromptText || event == MagControlsHook::PromptTextDone)
+        return mag_game_prompts_hook(event, ctx);
     if (!trace_hooks) return hook_owned(event, ctx);
     const auto start = std::chrono::steady_clock::now();
     const bool owned_before = owner_thread.load(std::memory_order_acquire) == (ctx ? ctx->thread_id : UINT64_MAX);
