@@ -32,7 +32,7 @@ SEAM_FIXTURE = r'''#include "libs/input/pad_sdl_keyboard.h"
 static std::string calls;static int owned=0;
 static PS3RecompSDLKeyboardPadState sdk={0x0101,0,255,10,20,1};
 extern "C" {
-int mag_input_capture_keyboard_owned(void){return owned;}
+int mag_input_capture_keyboard_pad_muted(void){return owned;}
 void mag_input_desktop_sdl_pump(void* window,int dialog){calls+="pump("+std::to_string(window!=nullptr)+","+std::to_string(dialog)+")";}
 void mag_sdk_pad_sdl_keyboard_sample(void* window,int suppressed){calls+="sdk("+std::to_string(window!=nullptr)+","+std::to_string(suppressed)+")";}
 PS3RecompSDLKeyboardPadState mag_sdk_pad_sdl_keyboard_state(void){return sdk;}
@@ -48,6 +48,12 @@ int main(){try{
     owned=1;state=ps3recomp_pad_sdl_keyboard_state();
     require(state.buttons==0 && state.analog_lx==128 && state.analog_ly==128 && state.analog_rx==128 && state.analog_ry==128,"ownership neutralizes the keyboard pad");
     require(state.window==1,"the window keeps controller port 0 as before");
+    owned=0;sdk.buttons=0x0101;sdk.analog_lx=0;state=ps3recomp_pad_sdl_keyboard_state();
+    require(state.buttons==0 && state.analog_lx==128,"keys held across the unmute wait for a release");
+    sdk.buttons=0x0100;sdk.analog_lx=128;state=ps3recomp_pad_sdl_keyboard_state();
+    require(state.buttons==0,"still held");
+    sdk.buttons=0x0101;state=ps3recomp_pad_sdl_keyboard_state();
+    require(state.buttons==0x0001,"a released key counts again; the still-held one waits");
     sdk.window=0;require(ps3recomp_pad_sdl_keyboard_state().window==0,"no window, no port");
     return 0;}catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}
 '''
@@ -66,7 +72,7 @@ def sdl_flags():
 
 
 class SdlKeyboardSeamTests(unittest.TestCase):
-    def test_pump_runs_before_the_sdk_sample_and_ownership_neutralizes_the_keyboard_pad(self):
+    def test_pump_runs_before_the_sdk_sample_and_a_muted_keyboard_pad_is_neutral(self):
         cc = shutil.which('clang') or shutil.which('gcc')
         cxx = shutil.which('clang++') or shutil.which('g++')
         if not cc or not cxx:

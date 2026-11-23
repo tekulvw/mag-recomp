@@ -77,6 +77,9 @@ class GameControlsAdapterTests(unittest.TestCase):
     def test_a_menu_holding_look_releases_the_mouse_lock_until_look_returns(self):
         self.run_scenario('menu')
 
+    def test_in_match_menus_keep_the_legacy_keyboard_pad_live(self):
+        self.run_scenario('menu-pad')
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.6.0](https://github.com/tekulvw/mag-recomp/compare/v0.5.6...v0.6.0) (2026-11-23)
+
+
+### Features
+
+* **installer:** build keyboard and mouse controls into player builds ([#228](https://github.com/tekulvw/mag-recomp/issues/228)) ([d702743](https://github.com/tekulvw/mag-recomp/commit/d7027439fb0fce6b6d798293f2baf1a457a08270))
+* **player:** link the launcher to a magtest.online portal account ([#226](https://github.com/tekulvw/mag-recomp/issues/226)) ([4a3faad](https://github.com/tekulvw/mag-recomp/commit/4a3faad332a62108ed1f53a061e5c135df8cb637))
+* **player:** settings window on Windows and Linux, opened with F10 ([#229](https://github.com/tekulvw/mag-recomp/issues/229)) ([69cb00a](https://github.com/tekulvw/mag-recomp/commit/69cb00aeadc1a28e289808a7f899b4a3b894e875))
+* **sdk:** pin runtime-2026.11.22-npticket and add an opt-in portal ticket sign-in profile ([#224](https://github.com/tekulvw/mag-recomp/issues/224)) ([af53c3c](https://github.com/tekulvw/mag-recomp/commit/af53c3c05e444e2ee3abfadfe0f56a51a79060bb))
+
+
+### Bug Fixes
+
+* **installer:** make the MAG folder self-contained ([#227](https://github.com/tekulvw/mag-recomp/issues/227)) ([cc77ba9](https://github.com/tekulvw/mag-recomp/commit/cc77ba9d96fc3697193ff99e8e0c6a2bfa6b2efd))
+* **sdk:** pin runtime-2026.11.22-kbshared so Windows uses the Linux keyboard layout ([#230](https://github.com/tekulvw/mag-recomp/issues/230)) ([bbc054f](https://github.com/tekulvw/mag-recomp/commit/bbc054f10d35d7af6278aa07bf58b56cefb27be8))
+
 ## [0.5.6](https://github.com/tekulvw/mag-recomp/compare/v0.5.5...v0.5.6) (2026-11-22)
 
 

@@ -163,9 +163,9 @@ void mag_win32_xinput_capture(const MagXInputGamepad* in, MagXInputCapture* out)
     out->axes[5] = trigger(in->right_trigger);
 }
 
-int16_t mag_win32_keyboard_fallback_state(int16_t system_state, int keyboard_owned)
+int16_t mag_win32_keyboard_fallback_state(int16_t system_state, int keyboard_pad_muted)
 {
-    return keyboard_owned ? 0 : system_state;
+    return keyboard_pad_muted ? 0 : system_state;
 }
 
 int mag_win32_raw_input_admitted(int window_focused, int press_or_motion)
