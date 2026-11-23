@@ -3,7 +3,8 @@
 A one-button wizard that builds mag-recomp on the player's own computer from the player's own
 BCUS98110 v1.0 copy: **choose your game folder and an installation folder → Build MAG**. It runs the
 same steps as [BUILDING.md](../BUILDING.md) (prepare inputs, inventory, lift, compile) and packages the
-result as `MAG.app` on macOS, `MAG\MAG.exe` on Windows, or `MAG/MAG` on Linux.
+result in a self-contained `MAG` folder: `MAG.app` on macOS, `MAG\MAG.exe` on Windows, or `MAG/MAG` on
+Linux, beside the game files it reads.
 
 New macOS builds include the [compact native settings panel](../docs/player-settings.md).
 It opens on first launch; use **MAG → Settings…** during play or hold **Option** on launch for recovery.
@@ -12,7 +13,7 @@ The installer contains tooling only: this directory, a source kit with this repo
 sources and profiles, and the four ps3recomp checkouts pinned in `profiles/framework.json` (MIT).
 It never contains game files, firmware, decrypted executables, generated or lifted code, or a built
 launcher or engine. Everything game-derived is created on the player's machine, inside the chosen
-installation folder, and must not be shared.
+installation location, and must not be shared.
 
 | Host | Status |
 | --- | --- |
@@ -45,15 +46,41 @@ Need help installing? Ask in the [MAG Recomp Discord](https://discord.gg/HBB95hU
    macOS, `~/.config/rpcs3/` on Linux, and in its own folder on Windows (then `dev_flash/sys/external/`). What is checked is the module's SHA-256, not the release; the 4.93 and 4.86
    modules are accepted, and the 4.93 steps are verified end to end. Sony only hosts the latest release. The installer shows the same steps when
    the file is missing or refused.
-2. Start the installer, choose that folder and a new installation folder, then click **Build MAG**.
-3. Keep the installation folder together: the app reads its game files from the private workspace
-   beside it.
-   Your saves and trophies are in its `home/gamedata` folder, so keep that folder (and back it up)
-   when you move or rebuild MAG.
+2. Start the installer, choose that folder and where to install (**Install inside**), then click
+   **Build MAG**.
+3. Play from the new `MAG` folder. It is self-contained: the app, the game files it reads (`game/`),
+   and, once you play, your saves and trophies (`home/gamedata`) and launch logs (`logs/`). Nothing
+   in it refers to anything outside it, so you can move or copy the whole folder elsewhere. Back up
+   `home/gamedata`, and keep it when you rebuild MAG.
 
-The installer downloads pinned Python, CMake and Ninja (plus MinGit on Windows) into the
-installation folder; players install neither Python nor a package manager. The operating system
-vendor owns the compiler:
+### What goes where
+
+Inside the installation location you chose:
+
+| Folder | Holds | Needed to play |
+| --- | --- | --- |
+| `MAG` | `MAG.app` (macOS), `MAG\MAG.exe` (Windows) or `MAG/MAG` (Linux) with its libraries; `game/`, the game files the game reads; `home/` and `logs/` once you play | yes |
+| `MAG-build` | the build journal (`build.json`) and settings, the source kit, the managed tools, the build workspace and the build logs | no |
+
+The game files are hard links where the volume allows: your game folder, the build workspace and
+`MAG/game` then share one copy on disk, and deleting any of them leaves the others intact (a file
+edited in place changes in all of them; MAG checks its executables' identities at every start). Where
+links are not possible (another drive, a file system without them, or a read-only file on Windows),
+they are copied. A **Retry build** reuses `MAG-build`; once MAG works you may delete it to reclaim
+space. The firmware module is only used to build, so it stays in `MAG-build`.
+
+Installers before this layout kept the build files inside the `MAG` folder, whose app read its game
+files from there. Such a `MAG` folder keeps working as it is. Selecting the same location and
+clicking **Build MAG** moves it to the layout above without rebuilding: its finished launcher and
+engine are packaged again with `MAG/game`, its saves and launch logs stay in `MAG`, and everything
+else becomes `MAG-build`. Files the installer does not know in that folder, or an existing
+`MAG-build`, stop the move with nothing changed. An earlier failed build in the `MAG` folder becomes
+`MAG-build` when you click **Retry build**; its managed tools are then rebuilt, because they record
+their old location.
+
+The installer downloads pinned Python, CMake and Ninja (plus MinGit on Windows) into `MAG-build`;
+players install neither Python nor a package manager. The operating system vendor owns the
+compiler:
 
 - **macOS** uses Apple's Command Line Tools. If they are missing, Build MAG opens Apple's standard
   installer and continues once it finishes. SDL2, glslang, SPIRV-Cross and FFmpeg are built from
@@ -61,7 +88,8 @@ vendor owns the compiler:
 - **Windows** uses Visual Studio Build Tools (MSVC x64 tools, C++ Clang, Windows SDK). If no
   installation has them, Build MAG downloads Microsoft's bootstrapper, checks that it is validly
   signed by Microsoft, and runs it with its own progress window, license and UAC prompt. Choose an
-  installation path that is ASCII and at most 100 characters, such as `C:\MAG`. The executables use
+  installation path that is ASCII and at most 83 characters, such as `C:\MAG`, so that the deepest
+  build folder (`MAG-build\build-work`) stays within Windows' path limit. The executables use
   the static C runtime. MAG presents through Vulkan: glslang and the Vulkan headers are built from
   pinned sources, and the Vulkan loader comes with the GPU driver. Movies play through a pinned
   prebuilt FFmpeg 9 (LGPL shared build), whose DLLs and licence are packaged beside MAG.
@@ -94,10 +122,11 @@ Two optional fallbacks cover longer outages:
   static copy of a cache folder therefore works as a mirror.
 
 Progress, cancellation, *Open output* and *Open logs* are in the wizard. On failure, use **Retry build**
-to keep the same installation folder. The installer checks your inputs again, reuses verified
+to keep the same installation location. The installer checks your inputs again, reuses verified
 downloads and completed tool dependencies, and rebuilds unfinished work. Earlier logs remain under
-`logs/attempts/`, and the most recent failed attempt's output is kept beside its logs there (older
-attempts keep only their logs). Changed inputs, a different installer kit, and unknown output folders are preserved
+`MAG-build/logs/attempts/`, and the most recent failed attempt's output is kept beside its logs there (older
+attempts keep only their logs). The `MAG` folder appears only when the build is complete. Changed
+inputs, a different installer kit, and unknown output folders are preserved
 and require a new destination. From the command line, use `build --retry` with the same paths. See
 [docs/testing.md](docs/testing.md) for what to report.
 

@@ -93,7 +93,7 @@ def main():
     scratch.mkdir(exist_ok=True)
     digest = '0' * 64
     (scratch / 'supervisor_config.h').write_text(
-        '#define MAG_WORKSPACE ' + supervisor._c_wide('..\\build-work\\workspace') + '\n' +
+        '#define MAG_GAME_ROOT ' + supervisor._c_wide('..\\game') + '\n' +
         ''.join(f'#define {name} "{digest}"\n' for name in ('MAG_LAUNCHER_SHA256', 'MAG_ENGINE_SHA256',
                 'MAG_LAUNCHER_ELF_SHA256', 'MAG_ENGINE_ELF_SHA256', 'MAG_ENGINE_SELF_SHA256')))
     (scratch / 'supervisor.c').write_text(supervisor._SUPERVISOR)

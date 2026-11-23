@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import shutil
 import struct
 import subprocess
 import sys
@@ -20,17 +21,21 @@ class LinuxPackageTests(unittest.TestCase):
 
     def test_dispatch_layout_and_receipts(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root=Path(tmp); workspace=self.fixture(root)
+            root=Path(tmp).resolve(); workspace=self.fixture(root/'build'); folder=root/'MAG'; folder.mkdir()
             def tool(argv, token):
                 if '-o' in argv:
                     Path(argv[argv.index('-o')+1]).write_bytes(b'native supervisor')
                 return ''
             with patch('mag_installer.native_package._run_tool',side_effect=tool):
-                app=package({'host':'linux-x86_64'},workspace,root/'MAG')
+                app=package({'host':'linux-x86_64'},workspace,folder/'MAG')
             self.assertTrue(os.access(app/'MAG',os.X_OK))
             self.assertTrue(os.access(app/'bin/MagEngine',os.X_OK))
-            self.assertEqual(json.loads((app/'resources/runtime.json').read_text())['workspace'],'../workspace')
-            self.assertEqual((app/'resources/source-receipts/launcher.json').read_bytes(),(workspace/'build/MagRecomp.receipt.json').read_bytes())
+            runtime=json.loads((app/'resources/runtime.json').read_text())
+            self.assertEqual(runtime['game'],'../game');self.assertNotIn('workspace',runtime)
+            self.assertTrue((folder/'game/PS3_GAME/USRDIR/EBOOT.elf').samefile(workspace/'local/retail-v1.0/PS3_GAME/USRDIR/EBOOT.elf'))
+            self.assertFalse((app/'resources/source-receipts').exists())
+            receipt=json.loads((app/'resources/package-receipts/launcher.json').read_text())
+            self.assertEqual(receipt['source_receipt_sha256'],hashlib.sha256((workspace/'build/MagRecomp.receipt.json').read_bytes()).hexdigest())
             self.assertFalse((app/'.supervisor-build').exists())
             with self.assertRaises(InstallerError):
                 package({'host':'linux-x86_64'},workspace,app)
@@ -39,7 +44,7 @@ class LinuxPackageTests(unittest.TestCase):
         from mag_installer.native_package_linux import _copy_dependencies
         from mag_installer.safety import Cancellation
         with tempfile.TemporaryDirectory() as tmp:
-            root=Path(tmp);lib=root/'lib';lib.mkdir()
+            root=Path(tmp).resolve();lib=root/'lib';lib.mkdir()
             codec=root/'libavcodec.so.63.1';codec.write_bytes(b'codec')
             utility=root/'libavutil.so.61';utility.write_bytes(b'utility')
             calls=[]
@@ -61,7 +66,7 @@ class LinuxPackageTests(unittest.TestCase):
         from mag_installer.native_package_linux import _copy_dependencies
         from mag_installer.safety import Cancellation
         with tempfile.TemporaryDirectory() as tmp:
-            root=Path(tmp);source=root/'managed';source.mkdir();dest=root/'lib';dest.mkdir()
+            root=Path(tmp).resolve();source=root/'managed';source.mkdir();dest=root/'lib';dest.mkdir()
             helper=source/'libfixture_helper.so.1'
             (root/'helper.c').write_text('int helper(void){return 17;}')
             subprocess.run(['cc','-shared','-fPIC',str(root/'helper.c'),'-Wl,-soname,libfixture_helper.so.1','-o',str(helper)],check=True,timeout=30)
@@ -71,7 +76,6 @@ class LinuxPackageTests(unittest.TestCase):
             _copy_dependencies([],dest,Cancellation(),[dynamic])
             (root/'probe.c').write_text('#include <dlfcn.h>\nint main(void){void* h=dlopen("libfixture_codec.so.63",RTLD_NOW);if(!h)return 91;int(*fn)(void)=dlsym(h,"fixture");return fn?fn():92;}')
             subprocess.run(['cc',str(root/'probe.c'),'-ldl','-o',str(root/'probe')],check=True,timeout=30)
-            import shutil
             shutil.rmtree(source)
             result=subprocess.run([str(root/'probe')],env=dict(os.environ,LD_LIBRARY_PATH=str(dest)),capture_output=True,text=True,timeout=5)
             self.assertEqual(result.returncode,17,result.stderr)
@@ -79,7 +83,7 @@ class LinuxPackageTests(unittest.TestCase):
     @unittest.skipUnless(sys.platform=='linux','requires Linux ELF loader and OpenSSL development headers')
     def test_native_supervisor_handoff_relocation_and_identity(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root=Path(tmp); install=root/'install';install.mkdir();workspace=self.fixture(install)
+            root=Path(tmp).resolve(); install=root/'install';install.mkdir();workspace=self.fixture(root/'build')
             disc=workspace/'local/retail-v1.0/PS3_GAME/USRDIR'
             elf=bytearray(136);elf[:7]=b'\x7fELF\x02\x02\x01'
             struct.pack_into('>Q',elf,32,64);struct.pack_into('>HH',elf,54,56,1)
@@ -117,7 +121,8 @@ int main(void) {
             manifest['images']['mage_g']['source_sha256']=digest(disc/'bin/mage_g.self')
             (workspace/'profiles/retail-v1.0.json').write_text(json.dumps(manifest))
             package({'host':'linux-x86_64'},workspace,install/'MAG')
-            moved=root/'relocated installation';install.rename(moved)
+            # Self-contained: the moved MAG folder starts with its build folder deleted.
+            moved=root/'relocated installation';install.rename(moved);shutil.rmtree(root/'build')
             env=dict(os.environ,DISPLAY=':fixture',PS3_DIAGNOSTIC_TEST='1',MAG_DIAGNOSTIC_TEST='1',XDG_CONFIG_HOME=str(root/'config'))
             run=subprocess.run([str(moved/'MAG/MAG'),'--server','example.org'],env=env,capture_output=True,text=True,timeout=15)
             self.assertEqual(run.returncode,23,run.stderr)
@@ -131,3 +136,6 @@ int main(void) {
             (moved/'MAG/bin/MagEngine').write_bytes(b'changed')
             run=subprocess.run([str(moved/'MAG/MAG')],env=env,capture_output=True,text=True,timeout=15)
             self.assertEqual(run.returncode,1);self.assertIn('identity changed',run.stderr)
+            shutil.rmtree(moved/'game')
+            run=subprocess.run([str(moved/'MAG/MAG')],env=env,capture_output=True,text=True,timeout=15)
+            self.assertEqual(run.returncode,1);self.assertIn('game files are missing',run.stderr)
