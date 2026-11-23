@@ -223,6 +223,7 @@ static void in_game(const fs::path& folder) {
         click(window, IdControls);
         CHECK(item(window, IdApply) == "Apply controls" && !visible(window, IdServer) && visible(window, IdRows));
         CHECK(binding(window, 0, 0) == "W" && binding(window, 1, 1) == "Unbound");
+        CHECK(shown(GetDlgItem(GetDlgItem(window, IdRows), IdBinding)) && shown(GetDlgItem(GetDlgItem(window, IdRows), IdBinding + 1)));
         post_click(window, IdBinding + 1 * 4 + 1 * 2);
         CHECK(wait_text(window, IdHint, "Press a key"));
         PostMessageW(window, WM_KEYDOWN, 'Q', LPARAM(1 | (0x10 << 16)));

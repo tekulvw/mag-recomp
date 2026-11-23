@@ -598,6 +598,7 @@ void rebuild_rows() {
         }
         y += 31;
     }
+    for (HWND h : s->binding_controls) show(h, true);  // created hidden, as every control is
     s->rows_height = y + 4;
     s->rows_scroll = 0;
     // The list is 305 points tall, less its sunken edge.
