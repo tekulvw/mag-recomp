@@ -190,7 +190,7 @@ whether a controller button may be remapped to it, system channel for system but
 | `0xEAB2ACF1` | D-pad left (commands) | yes | 2 |
 | `0x3D898BBF` | D-pad right (commands) | yes | 3 |
 
-**Situational actions** (catalog revision 2) are gameplay actions the game watches only in some
+**Situational actions** (catalog revision 2, defaults revised in 3) are gameplay actions the game watches only in some
 situations: when the player is downed, on an on-screen prompt, in a command menu or in a vehicle.
 They are keyboard and mouse only (a controller presses them natively), *optional* (never required
 for the channel contract, 7.4) and recognized by their own token wherever the game watches them
@@ -198,22 +198,40 @@ for the channel contract, 7.4) and recognized by their own token wherever the ga
 
 | Token | Name | Label | Default key |
 | --- | --- | --- | --- |
-| `0x33E32A99` | os_enter | Confirm (on-screen prompts) | Return |
+| `0x33E32A99` | os_enter | Confirm (on-screen prompts) | X |
 | `0x75453127` | os_cancel | Back (on-screen prompts) | Backspace |
-| `0x40FEEC35` | bleedout | Bleed out (when downed) | X |
-| `0xC6DCD89F` | commandscreen | Command screen | M |
+| `0x40FEEC35` | bleedout | Bleed out (when downed) | Return |
 | `0xA79B7198` | tcm_abilities | Tactical menu: abilities | 1 |
 | `0x6B7B7C6C` | tcm_frago | Tactical menu: FRAGO | 2 |
 | `0xF69D4193` | tcm_voicechat | Tactical menu: voice chat | 3 |
 | `0x74700E10` | vseatnext | Change seats | V |
 | `0xE3DD5118` | vsmoke | Smoke screen | B |
 
-The default keys are not yet verified against the game: which handler watches each token, on
-which channel and in which context comes from a census of a hosted match (`MAG_GAME_CONTROLS_TRACE`,
-section 4).
+A census of a hosted match (`MAG_GAME_CONTROLS_TRACE`, section 4) placed them: the local player's
+handler watches bleedout (on the Cross button) and vseatnext (Triangle) in every state; deploy and
+prompt screens watch os_enter (Cross) and os_cancel (Circle) on their own UI handlers, as gameplay
+routes before the first spawn and as menus (served by the keyboard pad, 8.2) on the map after a
+death. X confirms in both, matching the keyboard pad's Cross key. Back is Backspace on foot: the
+pad's Circle key, C, is Crouch there. vsmoke and the tactical menu tokens were not seen; their
+defaults are unconfirmed.
+
+**Vehicles** are not yet observed. The census saw no separate vehicle handler, and the local
+player's handler stays enabled in every movement state seen, so vehicles likely run on foot with
+it. Mouse look there is an open question: it is supported only in the movement states of 2.2, and
+the state a vehicle seat uses is unknown.
+
+**Catalog revision 3** retires the command screen action (`0xC6DCD89F`, commandscreen): the game
+watches it on the Select button, so its token is an alias of Select and Tab presses it, as the
+controller's Select does. Upgrading a revision 2 profile moves Confirm from Return to X and Bleed
+out from X to Return only where the player left those defaults and the new key is free (otherwise
+the old key stays), removes the command screen's default M, and turns a key the player chose for
+the command screen into an on-foot Select key where Select has room for it. Loading accepts
+bindings to retired actions (`mag_game_controls_retired_actions`, the settings registration's
+`retired`) so that a revision 2 file still loads; the upgrade removes them before validation.
 
 Token aliases (a watched token that stands for a catalog action): `0x68C3570D` is Aim,
-`0x9716C7A1` is Crouch/prone, `0x71C8F2F0` (contaction, the held form) is Interact. Every other token stands for itself.
+`0x9716C7A1` is Crouch/prone, `0x71C8F2F0` (contaction, the held form) is Interact, `0xC6DCD89F`
+(commandscreen) is Select. Every other token stands for itself.
 
 Look tokens (the four look-axis channels): `0xC8A3E21D`, `0x941734A2`, `0x661CB595`, `0xC34F3A66`.
 
@@ -601,6 +619,10 @@ Returns false (the game recognizes the control itself) unless every step below a
      (`mag_controls_seed_recognizer`), without events.
 9. Recognize (`mag_controls_recognize`) with the current handler as consumer, the entry's id, the
    value, blocked = r5 nonzero or the starting block, the configuration and the native contribution.
+   The engine may report that the frame is gone: another thread (the window's) began a new capture
+   generation since step 1, for example when the mouse lock follows a menu or the window loses
+   focus. That is not an error: forget the entry and return false (the game recognizes the
+   control). Receipts, acceptance and mouse acceptance on a withdrawn frame likewise do nothing.
 10. Publish the result as the tuple (value, elapsed seconds, phase number, event bits) in one
     16-byte write at `n+0x0C` (failure is an error). Set r3 to the event bits, r11 to 0, and make
     `n` the current control.
@@ -938,8 +960,35 @@ Evidence for the default (the rule for in-repository code on by default, AGENTS.
   ([player-controls-settings.md](player-controls-settings.md)); aim assist is denied only under the
   engine's KBM policy (section 7.6). Any adapter error cancels and the game proceeds natively
   (section 4, "Failures").
-- *Not yet recorded:* an in-game check of mouse aim in Training on Windows and Linux, and a frame
-  rate comparison with and without `MAG_GAME_CONTROLS`. Record them here when they are run.
+- *In game on Windows (2026-11-23, RTX 5090 / Ryzen 9 9950X3D, one client, local Training).* The build
+  came from main `bbc054f` through the installer's local recipe route, with the controls built and
+  the installer's own pinned Rust toolchain. Each check ran through the Windows FPS lane with
+  injected Win32 input (`SendInput`/`keybd_event`) and frame dumps.
+  - Keyboard and the on-foot bindings work: W moved the player (frame change 20.3 against 2.5 for
+    one idle second), Escape opened the pause menu and closed it again, focus loss released keys,
+    and a key held across refocus stayed ignored until pressed again.
+  - Mouse look did not turn the camera in that build. 1000 counts of relative motion changed the
+    frame by 2.3, the same as an idle second, before and after the menu. Through the pause menu the
+    capture log alternated "mouse locked" and "mouse released (menu, or the lock could not be
+    applied)" hundreds of times. Both are fixed since: the soldier at rest needed the wake input
+    (7.5) and the attach step re-requested the lock under a menu (7.2). The check after the fix is
+    the "Mouse look on Windows" entry above.
+  - The settings window opened on F10 in the HUD as its own process, saved, and the engine applied
+    the saved controls to the running game.
+- *Frame rate, controls on against `MAG_GAME_CONTROLS=0` (same binary, three interleaved rounds of 90
+  s Training holds, 6 of 6 runs left Training normally, presents up to 151 per second):*
+
+  | Round | On: flips/s mean / median | Off: flips/s mean / median |
+  | --- | --- | --- |
+  | 1 | 53.69 / 53.80 | 54.88 / 55.91 |
+  | 2 | 54.39 / 54.45 | 55.72 / 55.84 |
+  | 3 | 54.26 / 54.31 | 55.17 / 55.24 |
+  | Mean of means | 54.11 | 55.26 (+2.1%) |
+
+  Off was faster in every round (+0.9 to +1.3 flips/s). The p95 frame time was 19.5-19.9 ms with
+  the controls on and 19.4 ms off. The adapter attached in every "on" run and reported itself off
+  in every "off" run. On Windows the default costs about 2% of guest frame rate.
+- *Not yet recorded:* the same checks on Linux.
 
 ## 11. Tests
 
@@ -1009,7 +1058,9 @@ Each placeholder is resolved on its own, from the live profile, every time a mov
    them (the front end and in-match menus) read that pad (section 8.2). A movie often fetches a
    menu's text while the player is still on foot (the pause menu's footer arrives with the HUD), so
    the context at request time cannot choose; the on-foot Confirm and Back bindings of section 2.3
-   are not shown.
+   are not shown. With the revision 3 defaults on-foot Confirm is X as well, so confirm prompts are
+   right everywhere; on-foot Back stays Backspace (C is Crouch on foot), so a Back prompt on the
+   deploy screen before the first spawn shows C while Backspace goes back there.
 2. Any other catalog action: its first keyboard or mouse binding among its on-foot bindings, in
    profile order (`mag_controls_action_bindings`).
 3. Anything else (no catalog action, only controller bindings) stays a placeholder, so the movie

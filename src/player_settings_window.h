@@ -17,6 +17,9 @@ struct SettingsWindowOptions {
     // in), and an event to signal whenever controls are saved, so the game applies them at once.
     void* game_window = nullptr;
     void* controls_saved = nullptr;
+    // Linux: a pipe to the game process, for the display preview ("display ...") and saved
+    // controls ("controls"); -1 before the game (a preview window stands in).
+    int game_events = -1;
 };
 // Shows the window until the player closes it. Saved: setup chose Play MAG, or (in game) something
 // was saved; Cancelled: setup was cancelled, or nothing was saved.

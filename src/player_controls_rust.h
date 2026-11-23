@@ -24,12 +24,15 @@ struct ControlRecognition {
 };
 struct ControlOffer {uint64_t pulse_id{},physical_duration_ns{};bool down{};uint32_t source_mask{};};
 std::optional<ControlOffer> mag_controls_offer(InputFrameKey,ActionId);
-ControlRecognition mag_controls_recognize(InputFrameKey,uint64_t consumer,uint64_t control,ActionId,
+// The frame of a key can be withdrawn at any moment by another thread: a window focus or mouse
+// capture change starts a new capture generation. These calls then do nothing and report it
+// (nullopt or false) instead of failing; the caller leaves the control to the game.
+std::optional<ControlRecognition> mag_controls_recognize(InputFrameKey,uint64_t consumer,uint64_t control,ActionId,
     double normalized_value,bool blocked,const ControlRecognitionConfig&,std::optional<bool> native_contribution=std::nullopt);
-void mag_controls_seed_recognizer(InputFrameKey,uint64_t consumer,uint64_t control,ActionId,ControlRecognition previous,const ControlRecognitionConfig&);
+bool mag_controls_seed_recognizer(InputFrameKey,uint64_t consumer,uint64_t control,ActionId,ControlRecognition previous,const ControlRecognitionConfig&);
 // Explicit completion receipt; pure reads/recognition do not consume a pulse.
-void mag_controls_observe(InputFrameKey,ActionId,const ControlOffer&);
-void mag_controls_accept_action(InputFrameKey,ActionId,const ControlOffer&);
-void mag_controls_accept_mouse(InputFrameKey);
+bool mag_controls_observe(InputFrameKey,ActionId,const ControlOffer&);
+bool mag_controls_accept_action(InputFrameKey,ActionId,const ControlOffer&);
+bool mag_controls_accept_mouse(InputFrameKey);
 void mag_controls_forget_consumer(uint64_t consumer);
 }

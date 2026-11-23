@@ -38,7 +38,8 @@ bool mag_controls_settings_available(){std::lock_guard lock(mutex);return regist
 ControlsSettingsRegistration mag_controls_settings_registration(){std::lock_guard lock(mutex);if(!registration)throw std::runtime_error("Controls are unavailable in this runtime.");return *registration;}
 ControlsProfile mag_controls_settings_load(){
     const auto r=mag_controls_settings_registration();
-    auto p=std::filesystem::exists(r.path)?mag_controls_load_profile(r.path,catalog(r)):r.defaults;
+    auto loadable=catalog(r);loadable.insert(loadable.end(),r.retired.begin(),r.retired.end());
+    auto p=std::filesystem::exists(r.path)?mag_controls_load_profile(r.path,loadable):r.defaults;
     // Schema1/native profiles did not store editable controller defaults. Fill
     // them only while Native still owns digital buttons; explicit unbound stays empty.
     if(r.upgrade)r.upgrade(p);

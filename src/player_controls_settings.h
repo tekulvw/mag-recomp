@@ -21,6 +21,9 @@ struct ControlsSettingsRegistration {
     std::function<void(const ControlsProfile&)> validate;
     std::function<void(const ControlsProfile&)> apply;
     std::function<void(ControlsProfile&)> upgrade; // Pure, copied in-memory catalog migration.
+    // Actions an older catalog had: loading a saved profile accepts bindings to them, and upgrade
+    // must remove them (saving and validation never accept them).
+    std::vector<ActionId> retired;
 };
 void mag_controls_settings_register(ControlsSettingsRegistration);
 void mag_controls_settings_unregister();

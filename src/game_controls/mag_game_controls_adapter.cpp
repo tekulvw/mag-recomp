@@ -959,8 +959,15 @@ struct MagGameControlsAdapter::State {
         // Step 9.
         const bool blocked = cpu.gpr[5] != 0 || entry.start_blocked;
         entry.start_blocked = false;
-        const auto result = mag_controls_recognize(*sample_key, handler, entry.id, action, value, blocked, tune.config,
-                                                   native_contribution);
+        const auto recognized = mag_controls_recognize(*sample_key, handler, entry.id, action, value, blocked, tune.config,
+                                                       native_contribution);
+        if (!recognized) {
+            // Another thread withdrew the frame (a focus or mouse-capture change began a new capture
+            // generation): the game recognizes this control, and the entry starts afresh next time.
+            entries.erase(n);
+            return false;
+        }
+        const auto& result = *recognized;
 
         // Step 10.
         const uint32_t bits = game_event_bits(result.events);

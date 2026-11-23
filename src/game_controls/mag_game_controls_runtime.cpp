@@ -73,6 +73,8 @@ void register_settings(const std::filesystem::path& path, uint64_t session) {
     registration.upgrade = mag_game_controls_upgrade_profile;
     registration.mode_override = startup_mode();
     registration.actions = mag_game_controls_descriptors();
+    const auto retired = mag_game_controls_retired_actions();
+    registration.retired.assign(retired.begin(), retired.end());
     if (session) {
         {
             std::lock_guard lock(settings_lifetime);
@@ -189,6 +191,8 @@ void start(const char*) {
     if (!path.empty()) {
         std::vector<mag::ActionId> catalog;
         for (const auto& binding : profile.bindings) catalog.push_back(binding.action);
+        // A profile saved by an older catalog may bind retired actions; the upgrade below removes them.
+        for (const auto action : mag_game_controls_retired_actions()) catalog.push_back(action);
         std::sort(catalog.begin(), catalog.end());
         catalog.erase(std::unique(catalog.begin(), catalog.end()), catalog.end());
         if (std::filesystem::exists(path)) profile = mag::mag_controls_load_profile(path, catalog);
