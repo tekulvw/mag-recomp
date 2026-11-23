@@ -130,8 +130,7 @@ You build MAG on your own computer from your own copy; nothing game-derived is e
    objectives), C crouches (hold for prone), Q and G cycle weapons and equipment, F is melee, Escape
    is Start, Tab is Select and the arrow keys are the D-pad. Press **F10** to change them, or the
    mouse sensitivity, in the settings window. To build without them, set `MAG_GAME_CONTROLS=0`
-   before starting the installer. On Windows, mouse look does not turn the camera yet; use a
-   controller's right stick to aim.
+   before starting the installer.
 
 **If a download fails** (for example during a GitHub outage), retry later. Or point the installer
 at a folder of previously downloaded tools with `build --cache <folder>`, or at a mirror with

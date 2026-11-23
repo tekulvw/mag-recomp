@@ -941,11 +941,12 @@ Evidence for the default (the rule for in-repository code on by default, AGENTS.
   - Keyboard and the on-foot bindings work: W moved the player (frame change 20.3 against 2.5 for
     one idle second), Escape opened the pause menu and closed it again, focus loss released keys,
     and a key held across refocus stayed ignored until pressed again.
-  - **Mouse look did not turn the camera.** 1000 counts of relative motion changed the frame by
-    2.3, the same as an idle second, before and after the menu. Through the pause menu the capture
-    log alternated "mouse locked" and "mouse released (menu, or the lock could not be applied)"
-    hundreds of times, and the status stayed "a menu holds look" at times in plain Training. The
-    same smoke test on 2026-11-09 showed the same result. Not fixed yet.
+  - Mouse look did not turn the camera in that build. 1000 counts of relative motion changed the
+    frame by 2.3, the same as an idle second, before and after the menu. Through the pause menu the
+    capture log alternated "mouse locked" and "mouse released (menu, or the lock could not be
+    applied)" hundreds of times. Both are fixed since: the soldier at rest needed the wake input
+    (7.5) and the attach step re-requested the lock under a menu (7.2). The check after the fix is
+    the "Mouse look on Windows" entry above.
   - The settings window opened on F10 in the HUD as its own process, saved, and the engine applied
     the saved controls to the running game.
 - *Frame rate, controls on against `MAG_GAME_CONTROLS=0` (same binary, three interleaved rounds of 90
@@ -960,8 +961,7 @@ Evidence for the default (the rule for in-repository code on by default, AGENTS.
 
   Off was faster in every round (+0.9 to +1.3 flips/s). The p95 frame time was 19.5-19.9 ms with
   the controls on and 19.4 ms off. The adapter attached in every "on" run and reported itself off
-  in every "off" run. On Windows the default costs about 2% of guest frame rate, and mouse aim
-  does not work there yet.
+  in every "off" run. On Windows the default costs about 2% of guest frame rate.
 - *Not yet recorded:* the same checks on Linux.
 
 ## 11. Tests
