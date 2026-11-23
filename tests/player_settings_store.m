@@ -108,5 +108,14 @@ int main(int argc, char **argv) { @autoreleasepool {
     assert([[NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil] isEqual:@"{broken"]);
     assert(MAGSettingsSave(path, defaults, &error));
     assert([MAGSettingsLoad(path, &exists, &error) isEqual:defaults]);
+    // Setup opens at every launch of the launcher, saved settings or not; MAG_SKIP_SETUP opts out,
+    // and a damaged file or --settings always opens it.
+    unsetenv("MAG_SKIP_SETUP"); unsetenv("MAG_PLAYER_SHOW_SETTINGS");
+    assert(MAGSettingsSetupWanted(YES, NO) && !MAGSettingsSetupWanted(NO, NO) && MAGSettingsSetupWanted(NO, YES));
+    setenv("MAG_SKIP_SETUP", "1", 1);
+    assert(!MAGSettingsSetupWanted(YES, NO) && MAGSettingsSetupWanted(YES, YES));
+    setenv("MAG_SKIP_SETUP", "0", 1); assert(MAGSettingsSetupWanted(YES, NO));
+    setenv("MAG_SKIP_SETUP", "1", 1); setenv("MAG_PLAYER_SHOW_SETTINGS", "1", 1); assert(MAGSettingsSetupWanted(YES, NO));
+    unsetenv("MAG_SKIP_SETUP"); unsetenv("MAG_PLAYER_SHOW_SETTINGS");
     puts("settings validation and persistence passed");
 } }

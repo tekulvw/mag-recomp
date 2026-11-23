@@ -5,9 +5,11 @@
 #include "player_controls_settings.h"
 #endif
 #include "player_settings_form.h"
+#include "player_settings_text.h"
 #include "player_settings_window.h"
 #include <atomic>
 #include <cerrno>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -15,9 +17,14 @@
 #include <filesystem>
 #include <string>
 #include <thread>
+#include <vector>
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
+#include <algorithm>
 #else
 #include <SDL2/SDL.h>
 #include <spawn.h>
@@ -36,6 +43,9 @@ namespace fs = std::filesystem;
 
 namespace {
 std::atomic<bool> s_open{false};
+#ifdef _WIN32
+std::atomic<HWND> s_game_window{nullptr};
+#endif
 
 void say(const std::string& message) { std::fprintf(stderr, "[mag settings] %s\n", message.c_str()); }
 
@@ -72,11 +82,13 @@ void hold_input(bool held) {
 #endif
 }
 
-// Starts `binary` with one switch and waits for it. -1 when it could not start.
-int run_window_process(const fs::path& binary, const char* argument) {
+// Starts `binary` with these switches and waits for it. -1 when it could not start. On Windows,
+// `signalled` runs (on this thread) each time `event` is set while the window is open.
+int run_window_process(const fs::path& binary, const std::string& arguments, void* event = nullptr,
+                       void (*signalled)() = nullptr) {
 #ifdef _WIN32
     std::wstring command = L"\"" + binary.wstring() + L"\" ";
-    for (const char* c = argument; *c; ++c) command += wchar_t(*c);
+    for (char c : arguments) command += wchar_t(c);
     STARTUPINFOW startup{};
     startup.cb = sizeof startup;
     PROCESS_INFORMATION process{};
@@ -86,16 +98,29 @@ int run_window_process(const fs::path& binary, const char* argument) {
                         &startup, &process))
         return -1;
     CloseHandle(process.hThread);
+    HANDLE waits[2] = {process.hProcess, HANDLE(event)};
+    while (event && WaitForMultipleObjects(2, waits, FALSE, INFINITE) == WAIT_OBJECT_0 + 1)
+        if (signalled) signalled();
     WaitForSingleObject(process.hProcess, INFINITE);
     DWORD code = 1;
     GetExitCodeProcess(process.hProcess, &code);
     CloseHandle(process.hProcess);
     return int(code);
 #else
+    (void)event;
+    (void)signalled;
     const std::string path = binary.string();
-    char* argv[] = {const_cast<char*>(path.c_str()), const_cast<char*>(argument), nullptr};
+    std::vector<std::string> words;
+    for (size_t at = 0; at < arguments.size();) {
+        const size_t end = std::min(arguments.find(' ', at), arguments.size());
+        if (end > at) words.push_back(arguments.substr(at, end - at));
+        at = end + 1;
+    }
+    std::vector<char*> argv = {const_cast<char*>(path.c_str())};
+    for (auto& word : words) argv.push_back(word.data());
+    argv.push_back(nullptr);
     pid_t child = 0;
-    if (posix_spawn(&child, path.c_str(), nullptr, nullptr, argv, environ) != 0) return -1;
+    if (posix_spawn(&child, path.c_str(), nullptr, nullptr, argv.data(), environ) != 0) return -1;
     int status = 0;
     while (waitpid(child, &status, 0) < 0)
         if (errno != EINTR) return -1;
@@ -104,6 +129,8 @@ int run_window_process(const fs::path& binary, const char* argument) {
 }
 
 // After a save: the running game takes the saved controls now (the rest waits for the next launch).
+void apply_saved_controls();
+void controls_saved() { apply_saved_controls(); }
 void apply_saved_controls() {
 #ifndef MAG_PLAYER_SETTINGS_CONTROLS
     say("saved; server and display changes apply at the next launch");
@@ -124,7 +151,17 @@ void apply_saved_controls() {
 extern "C" int mag_player_settings_window_command(int argc, char** argv, int* code) {
     if (argc < 2 || (std::strcmp(argv[1], MAG_PLAYER_SETTINGS_SWITCH) && std::strcmp(argv[1], MAG_PLAYER_SETTINGS_SETUP_SWITCH)))
         return 0;
-    const bool setup = !std::strcmp(argv[1], MAG_PLAYER_SETTINGS_SETUP_SWITCH);
+    mag::SettingsWindowOptions options;
+    options.setup = !std::strcmp(argv[1], MAG_PLAYER_SETTINGS_SETUP_SWITCH);
+    // Optional switches: the game window, the event that tells the game controls were saved, and
+    // why setup opened again (the launcher needs a player name).
+    for (int i = 2; i < argc; ++i) {
+        const std::string option = argv[i];
+        const auto value = [&](const char* name) { return option.rfind(name, 0) == 0 ? option.substr(std::strlen(name)) : std::string(); };
+        if (!value("--game-window=").empty()) options.game_window = reinterpret_cast<void*>(std::strtoull(value("--game-window=").c_str(), nullptr, 16));
+        if (!value("--controls-event=").empty()) options.controls_saved = reinterpret_cast<void*>(std::strtoull(value("--controls-event=").c_str(), nullptr, 16));
+        if (option == "--notice=player-name") options.notice = MAG_SETTINGS_NAME_NEEDED;
+    }
     const fs::path settings = path_variable("MAG_PLAYER_SETTINGS_PATH");
     if (settings.empty()) {
         say("The settings window needs MAG_PLAYER_SETTINGS_PATH (start MAG from its own launcher).");
@@ -138,10 +175,10 @@ extern "C" int mag_player_settings_window_command(int argc, char** argv, int* co
         say(std::string("controls are unavailable in the settings window: ") + e.what());
     }
     mag::SettingsForm form;
-    std::string notice;
-    if (!mag::settings_form_load(settings, form, notice))
-        notice = settings.string() + ": " + notice + " Saving replaces it.";
-    switch (mag::settings_window_run(form, settings, setup, notice)) {
+    std::string problem;
+    if (!mag::settings_form_load(settings, form, problem))
+        options.notice = settings.string() + ": " + problem + " " MAG_SETTINGS_RECOVERY_PLAY;
+    switch (mag::settings_window_run(form, settings, options)) {
     case mag::SettingsWindowResult::Saved: *code = 0; break;
     case mag::SettingsWindowResult::Cancelled: *code = 3; break;
     default: *code = 1; break;
@@ -160,9 +197,24 @@ extern "C" void mag_player_settings_open(void) {
     hold_input(true);
     say("settings window opened; gameplay input is held until it closes");
     std::thread([self] {
-        const int code = run_window_process(self, MAG_PLAYER_SETTINGS_SWITCH);
+        std::string arguments = MAG_PLAYER_SETTINGS_SWITCH;
+        void* event = nullptr;
+#ifdef _WIN32
+        // The window previews display changes on the game window, and says when it saved controls.
+        SECURITY_ATTRIBUTES inherit{sizeof inherit, nullptr, TRUE};
+        event = CreateEventW(&inherit, FALSE, FALSE, nullptr);
+        char handles[96];
+        std::snprintf(handles, sizeof handles, " --game-window=%llx --controls-event=%llx",
+                      static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(s_game_window.load())),
+                      static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(event)));
+        arguments += handles;
+#endif
+        const int code = run_window_process(self, arguments, event, controls_saved);
+#ifdef _WIN32
+        if (event) CloseHandle(event);
+#endif
         if (code < 0) say("the settings window could not start");
-        else if (code == 0) apply_saved_controls();
+        else if (code == 0) apply_saved_controls();  // also after General: harmless when unchanged
         else say(code == 3 ? "settings window closed without saving" : "the settings window failed; see the log above");
         hold_input(false);
         s_open.store(false, std::memory_order_release);
@@ -170,6 +222,8 @@ extern "C" void mag_player_settings_open(void) {
 }
 
 extern "C" int mag_player_settings_setup_wanted(int settings_exist) {
+    // The packaged supervisor opens setup itself (Windows), or the caller asked for none.
+    if (const char* skip = std::getenv("MAG_SKIP_SETUP"); skip && *skip && std::strcmp(skip, "0")) return 0;
 #ifdef _WIN32
     if (GetAsyncKeyState(VK_SHIFT) & 0x8000) return 1;
 #endif
@@ -182,11 +236,49 @@ extern "C" int mag_player_settings_setup(void) {
     if (engine.empty()) return 0;
     say("opening the settings window before the game starts");
     const int code = run_window_process(engine, MAG_PLAYER_SETTINGS_SETUP_SWITCH);
+    if (code == 3) say("setup was cancelled; continuing with the saved settings");
     if (code < 0) say("the settings window could not start; continuing with the saved settings");
     return code == 0;
 }
 
 #ifdef _WIN32
+// The game window as it opens: remembered for the display preview, and sized to the saved output
+// resolution (physical pixels, centred on its monitor) when it is windowed. A size that does not
+// fit the monitor's work area is left to the runtime.
+extern "C" void mag_player_settings_win32_window(void* window) {
+    HWND hwnd = static_cast<HWND>(window);
+    const HWND previous = s_game_window.exchange(hwnd);
+    if (!hwnd || hwnd == previous) return;
+    const char* size = std::getenv("MAG_PLAYER_OUTPUT_SIZE");
+    unsigned width = 0, height = 0;
+    if (!size || std::sscanf(size, "%ux%u", &width, &height) != 2 || !width || !height) return;
+    using SetThread = HANDLE(WINAPI*)(HANDLE);
+    using Adjust = BOOL(WINAPI*)(LPRECT, DWORD, BOOL, DWORD, UINT);
+    using GetDpi = UINT(WINAPI*)(HWND);
+    HMODULE user32 = GetModuleHandleW(L"user32.dll");
+    const auto set_thread = reinterpret_cast<SetThread>(reinterpret_cast<void*>(GetProcAddress(user32, "SetThreadDpiAwarenessContext")));
+    const auto adjust = reinterpret_cast<Adjust>(reinterpret_cast<void*>(GetProcAddress(user32, "AdjustWindowRectExForDpi")));
+    const auto get_dpi = reinterpret_cast<GetDpi>(reinterpret_cast<void*>(GetProcAddress(user32, "GetDpiForWindow")));
+    HANDLE previous_context = set_thread ? set_thread(HANDLE(LONG_PTR(-4))) : nullptr;  // physical pixels
+    const DWORD style = DWORD(GetWindowLongPtrW(hwnd, GWL_STYLE)), ex_style = DWORD(GetWindowLongPtrW(hwnd, GWL_EXSTYLE));
+    if (!(style & WS_POPUP)) {
+        RECT frame = {0, 0, LONG(width), LONG(height)};
+        if (adjust && get_dpi) adjust(&frame, style, FALSE, ex_style, get_dpi(hwnd));
+        else AdjustWindowRectEx(&frame, style, FALSE, ex_style);
+        MONITORINFO monitor{};
+        monitor.cbSize = sizeof monitor;
+        GetMonitorInfoW(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &monitor);
+        const RECT& area = monitor.rcWork;
+        const LONG w = frame.right - frame.left, h = frame.bottom - frame.top;
+        if (w <= area.right - area.left && h <= area.bottom - area.top)
+            SetWindowPos(hwnd, nullptr, area.left + (area.right - area.left - w) / 2, area.top + (area.bottom - area.top - h) / 2, w, h,
+                         SWP_NOZORDER | SWP_NOACTIVATE);
+        else
+            say(std::string("the output resolution ") + size + " does not fit this display; keeping the window's size");
+    }
+    if (set_thread && previous_context) set_thread(previous_context);
+}
+
 extern "C" int mag_player_settings_win32_message(const void* message) {
     const MSG* msg = static_cast<const MSG*>(message);
     if (!msg || msg->wParam != VK_F10) return 0;

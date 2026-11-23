@@ -41,6 +41,7 @@ int main(int argc,char**argv){@autoreleasepool{
     assert(MAGSettingsSave(path,settings,&error));
     setenv("MAG_PLAYER_SETTINGS_PATH",path.fileSystemRepresentation,1);
     setenv("MAG_PLAYER_OVERLAY_ROOT",root.fileSystemRepresentation,1);setenv("MAG_PLAYER_SETUP","1",1);
+    setenv("MAG_SKIP_SETUP","1",1);  // setup opens at every launch; this fixture plays straight in
     assert(mag_player_settings_prepare()==1);assert(!strcmp(getenv("PS3_AA"),"fxaa"));
     assert(!strcmp(getenv("MAG_PLAYER_RENDER_SCALE"),"200"));
     // A later settings edit must not change the launcher-to-engine snapshot.
