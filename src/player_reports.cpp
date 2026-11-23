@@ -3,6 +3,7 @@
 #include "player_gzip.h"
 #include <algorithm>
 #include <cctype>
+#include <cerrno>
 #include <chrono>
 #include <cmath>
 #include <cstdio>

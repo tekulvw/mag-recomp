@@ -37,8 +37,12 @@ _SUPERVISOR = r'''
 #include <wchar.h>
 #include "supervisor_config.h"
 #include "player_portal_win32.h"
+#include "player_reports_win32.h"
 #ifndef MAG_RUNTIME_DEFAULTS  /* a config written before packaged defaults existed: none */
 #define MAG_RUNTIME_DEFAULTS {{NULL, NULL}}
+#endif
+#ifndef MAG_VERSION
+#define MAG_VERSION "unknown"
 #endif
 
 static wchar_t g_root[MAX_PATH] = L".";
@@ -46,6 +50,8 @@ static wchar_t g_root[MAX_PATH] = L".";
 static void fail(const wchar_t *message, const wchar_t *detail) {
     wchar_t text[4096];
     swprintf(text, 4096, L"MAG could not start: %ls%ls%ls\n", message, detail ? L": " : L"", detail ? detail : L"");
+    /* The session's report (player_reports_win32.h) is decided before the message waits for the player. */
+    mag_reports_end(text);
     wchar_t path[MAX_PATH + 32];
     swprintf(path, MAX_PATH + 32, L"%ls\\launch-error.log", g_root);
     HANDLE file = CreateFileW(path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
@@ -238,6 +244,9 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR arguments, int
     /* MAG_SKIP_SETUP=1 from the caller: no setup window, as with --no-prompt (read before the
      * inherited MAG_ variables are dropped). */
     wchar_t skip[8] = L""; GetEnvironmentVariableW(L"MAG_SKIP_SETUP", skip, 8);
+    /* MAG_REPORTS=0 from the caller: no performance and error reports (test automation). */
+    wchar_t reports[8] = L""; GetEnvironmentVariableW(L"MAG_REPORTS", reports, 8);
+    const wchar_t *send_logs = NULL;  /* --send-reports <launch log folder>: the detached report sender */
     const wchar_t *server = NULL, *player = NULL, *portal_url = NULL;
     int account = 0;  /* --link 1, --unlink 2, --link-token 3: manage the account link, then exit */
     int prompt = 1;  /* --no-prompt: never ask (automation): no setup window, and a missing name stops with its message */
@@ -249,6 +258,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR arguments, int
         if (!wcscmp(a, L"--link")) { account = 1; continue; }
         if (!wcscmp(a, L"--unlink")) { account = 2; continue; }
         if (!wcscmp(a, L"--link-token")) { account = 3; continue; }
+        if (!wcscmp(a, L"--send-reports") && i + 1 < argc) { send_logs = argv[++i]; continue; }
         if (!wcsncmp(a, L"--server", 8)) { target = &server; prefix = 8; }
         else if (!wcsncmp(a, L"--name", 6)) { target = &player; prefix = 6; }
         else if (!wcsncmp(a, L"--portal-url", 12)) { target = &portal_url; prefix = 12; }
@@ -283,6 +293,13 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR arguments, int
     if (!n || n >= MAX_PATH) fail(L"Cannot locate MAG.exe", NULL);
     lstrcpyW(app, self); *wcsrchr(app, L'\\') = 0;
     join(g_root, app, L"..");
+    if (send_logs) {
+        wchar_t appdata[MAX_PATH], config[MAX_PATH], settings[MAX_PATH];
+        DWORD length = GetEnvironmentVariableW(L"APPDATA", appdata, MAX_PATH);
+        if (!length || length >= MAX_PATH) return 1;
+        join(config, appdata, L"MAG"); join(settings, config, L"settings.json");
+        return mag_reports_send(g_root, send_logs, settings);
+    }
     wchar_t vfs[MAX_PATH], launcher[MAX_PATH], engine[MAX_PATH];
     wchar_t launcher_elf[MAX_PATH], engine_elf[MAX_PATH], engine_self[MAX_PATH];
     /* The game files are in the MAG folder, beside the folder that holds MAG.exe. */
@@ -351,6 +368,13 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR arguments, int
     set_env(L"MAG_PLAYER_SETTINGS_PATH", settings);
     set_env(L"MAG_PLAYER_OVERLAY_ROOT", player_root);
     set_env(L"MAG_PLAYER_SETUP", L"1");
+    /* The session summary (src/mag_session_monitor.h) and the settings window's Send report
+     * request go to this launch's log folder; the report is decided when the session ends. */
+    set_env(L"MAG_SESSION_DIR", logs);
+    { wchar_t request_marker[MAX_PATH], receipts[MAX_PATH];
+      join(request_marker, logs, L"report-requested"); set_env(L"MAG_REPORT_REQUEST", request_marker);
+      join(receipts, app, L"resources\\package-receipts");
+      mag_reports_begin(self, g_root, logs, settings, receipts, MAG_VERSION, reports[0] && !wcscmp(reports, L"0")); }
     /* This supervisor opens setup itself, below; the launcher never does. */
     set_env(L"MAG_SKIP_SETUP", L"1");
     if (server) set_env(L"MAG_PLAYER_SET_SERVER", server);
@@ -366,20 +390,21 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR arguments, int
      * one click. Command-line choices, --no-prompt and MAG_SKIP_SETUP go straight in. */
     if (prompt && !server && !player && !(skip[0] && wcscmp(skip, L"0"))) {
         DWORD chosen = run_settings(job, engine, logs, NULL);
-        if (chosen == 3) return 0;  /* Cancel: the player chose not to play */
+        if (chosen == 3) { mag_reports_end(NULL); return 0; }  /* Cancel: the player chose not to play */
         if (chosen) notice(logs, L"The settings window could not open; starting with the saved settings.", 0, MB_ICONWARNING);
     }
     wchar_t ticket[MAX_PATH]; join(ticket, player_root, L"portal-ticket.bin");
     portal_phase(settings, server, ticket, 1, logs, prompt);
     join(log, logs, L"launcher.log");
     DWORD result = run(job, launcher, launcher_elf, logs, log);
+    mag_reports_launcher_exit(result);
     /* A server needs a player name. When the game reports none, the settings window asks for it
      * (or for the account link, which supplies it), then the launcher starts again. */
     wchar_t marker[MAX_PATH]; join(marker, player_root, L"needs-player-name");
     for (int attempt = 2; result != 90 && prompt && attempt <= 4 && GetFileAttributesW(marker) != INVALID_FILE_ATTRIBUTES; attempt++) {
         wchar_t again[64];
         DWORD answer = run_settings(job, engine, logs, L"--notice=player-name");
-        if (answer == 3) return 0;  /* Cancel: the player chose not to play */
+        if (answer == 3) { mag_reports_end(NULL); return 0; }  /* Cancel: the player chose not to play */
         if (answer) break;  /* no window: the launch message below explains */
         DeleteFileW(marker);
         { wchar_t note[MAX_PATH]; join(note, player_root, L"launch-message.txt"); DeleteFileW(note); }
@@ -387,6 +412,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR arguments, int
         swprintf(again, 64, L"launcher-%d.log", attempt);
         join(log, logs, again);
         result = run(job, launcher, launcher_elf, logs, log);
+        mag_reports_launcher_exit(result);
     }
     DeleteFileW(marker);
     if (result != 90) {
@@ -395,9 +421,10 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR arguments, int
         if (GetFileAttributesW(note) != INVALID_FILE_ATTRIBUTES) {
             DWORD size; unsigned char *text = read_file(note, &size); wchar_t message[2048];
             int n = MultiByteToWideChar(CP_UTF8, 0, (const char *)text, (int)(size < 4000 ? size : 4000), message, 2047);
-            message[n > 0 ? n : 0] = 0; free(text); DeleteFileW(note); fail(message, NULL);
+            message[n > 0 ? n : 0] = 0; free(text); DeleteFileW(note); mag_reports_player_stop(); fail(message, NULL);
         }
         if (result) fail(L"The game stopped before it started. Details are in", log);
+        mag_reports_end(NULL);
         return 0;
     }
 
@@ -415,7 +442,10 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR arguments, int
     /* The engine signs in again (MAS, statistics) with its own fresh ticket. */
     portal_phase(settings, NULL, ticket, 0, logs, prompt);
     join(log, logs, L"engine.log");
-    return (int)run(job, engine, engine_elf, logs, log);
+    DWORD code = run(job, engine, engine_elf, logs, log);
+    mag_reports_engine_exit(code);
+    mag_reports_end(NULL);
+    return (int)code;
 }
 '''
 
@@ -436,7 +466,9 @@ def _c_hex(value):
 # Portable sources the supervisor compiles with it: the account link (HTTPS through WinHTTP) and
 # the settings rules, from the workspace's own source.
 SUPERVISOR_SOURCES = ('player_portal.h', 'player_portal.cpp', 'player_portal_winhttp.cpp', 'player_portal_win32.h',
-                      'player_portal_win32.cpp', 'player_settings_portable.h', 'player_settings_file.cpp', 'player_settings_text.h', 'player_sign_in.h')
+                      'player_portal_win32.cpp', 'player_settings_portable.h', 'player_settings_file.cpp', 'player_settings_text.h', 'player_sign_in.h',
+                      'player_reports.h', 'player_reports.cpp', 'player_reports_win32.h', 'player_reports_win32.cpp',
+                      'player_gzip.h', 'player_gzip.cpp')
 
 
 def copy_supervisor_sources(source, scratch):
@@ -467,14 +499,14 @@ def _compile(clang_cl, environment, source_dir, output, token):
     tool([clang_cl, '/nologo', '/MT', str(source_dir / 'supervisor.obj'),
           *[str(source_dir / name.replace('.cpp', '.obj')) for name in portable],
           f'/Fe{output}', '/link', '/SUBSYSTEM:WINDOWS',
-          'bcrypt.lib', 'user32.lib', 'shell32.lib', 'gdi32.lib', 'winhttp.lib'])
+          'bcrypt.lib', 'user32.lib', 'shell32.lib', 'gdi32.lib', 'winhttp.lib', 'advapi32.lib'])
     if not Path(output).is_file():
         raise InstallerError('MAG supervisor compilation produced no MAG.exe')
 
 
 def package(config, workspace, destination, token=None, events=None, environment=None):
     """Build the MAG folder's MAG and game subfolders from a finished workspace; launches nothing."""
-    from .native_package import _ordinary, _digest, check_workspace, stage_game, package_receipt, GAME_FOLDER, WORKSPACE_GAME
+    from .native_package import _ordinary, _digest, check_workspace, stage_game, package_receipt, product_version, GAME_FOLDER, WORKSPACE_GAME
     token = token or Cancellation(); events = events or (lambda event: None)
     workspace, destination = Path(workspace).absolute(), Path(destination).absolute()
     if destination.exists() or destination.is_symlink(): raise InstallerError('MAG folder destination already exists')
@@ -532,6 +564,7 @@ def package(config, workspace, destination, token=None, events=None, environment
             '#define MAG_LAUNCHER_ELF_SHA256 ' + _c_hex(records['launcher']['elf_sha256']) + '\n'
             '#define MAG_ENGINE_ELF_SHA256 ' + _c_hex(records['engine']['elf_sha256']) + '\n'
             '#define MAG_ENGINE_SELF_SHA256 ' + _c_hex(engine_self) + '\n'
+            '#define MAG_VERSION "' + product_version(workspace) + '"\n'
             '#define MAG_RUNTIME_DEFAULTS {' + ''.join('{' + _c_wide(key) + ', ' + _c_wide(value) + '}, '
                                                       for key, value in sorted(playback_environment(records).items()))
             + '{NULL, NULL}}\n', encoding='utf-8')

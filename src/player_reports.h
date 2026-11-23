@@ -92,7 +92,7 @@ struct Session {
     std::string version;   // the product version (1 to 64 characters)
     fs::path logs;         // this launch's log folder
     fs::path settings;     // settings.json (send_reports; server, portal and display settings)
-    fs::path queue;        // the report queue folder (<MAG folder>/home/reports)
+    fs::path queue;        // the report queue folder (home/reports in the MAG folder)
     fs::path receipts;     // the package receipts folder (launcher.json, engine.json)
     long long launcher_exit = -1, engine_exit = -1;  // -1: that phase did not run
     std::string launch_error;  // the supervisor stopped the launch with this message

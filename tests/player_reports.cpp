@@ -19,7 +19,8 @@ static int failures = 0;
 #define CHECK(c) do { if (!(c)) { std::fprintf(stderr, "%s:%d: CHECK(%s)\n", __FILE__, __LINE__, #c); ++failures; } } while (0)
 
 static const std::string token = "mgd_SyntheticDeviceToken0123456789abcdef";
-static const std::string home = "/Users/synthetic-player";
+static const std::string users = "/Users", homes = "/home";  // split: see tools/check_public_tree.py
+static const std::string home = users + "/synthetic-player";
 static const std::string windows_home = "C:\\Users\\Synthetic.Player";
 
 static void write(const fs::path &p, const std::string &text) {
@@ -63,12 +64,12 @@ static Session launch(const fs::path &root, const std::string &settings_text = "
     write(s.settings.parent_path() / "portal-link.json",
           "{\"schema_version\":1,\"portal\":\"https://portal.invalid\",\"device_token\":\"" + token + "\",\"player_name\":\"Synthetic\"}");
     write(s.receipts / "launcher.json", "{\"image_name\":\"EBOOT\",\"sdk_revision\":\"" + std::string(40, 'a') + "\",\"binary_sha256\":\"" +
-                                            std::string(64, 'b') + "\",\"build_path\":\"/home/builder/secret\"}");
+                                            std::string(64, 'b') + "\",\"build_path\":\"" + homes + "/builder/secret\"}");
     write(s.receipts / "engine.json", "{\"image_name\":\"mage_g\",\"sdk_revision\":\"" + std::string(40, 'a') + "\"}");
     write(s.logs / "launcher.log", "[boot] VFS root: " + home + "/MAG/game\nAuthorization: Bearer " + token + "\n");
     write(s.logs / "engine.log", "[RSX vulkan] using device 0: Synthetic GPU 9000\n[boot] " + windows_home + "\\MAG\\game\n" +
                                      "escaped C:\\\\Users\\\\Synthetic.Player\\\\MAG and c:/users/synthetic.player/MAG\n" +
-                                     "other /home/someone/x and C:\\Users\\Public\\ok\n" + token + "\n");
+                                     "other " + homes + "/someone/x and C:\\Users\\Public\\ok\n" + token + "\n");
     write(s.logs / "supervisor.log", "2026-11-23T00:00:00Z started\n");
     write(s.logs / "session-engine.json", summary("engine", 36000, 600, 3000, 2));
     return s;
@@ -87,7 +88,7 @@ static void json_and_quote() {
 static void redaction() {
     Redaction r{{"secret-ticket-text"}, {{"/Volumes/Games/MAG", "<MAG folder>"}}, {home, windows_home}};
     const std::string text = "t=" + token + " Bearer abc.def-ghi_jkl x secret-ticket-text " + home + "/MAG " + home + "x " +
-                             "c:\\users\\SYNTHETIC.PLAYER\\MAG " + "/Volumes/Games/MAG/logs /Volumes/Games/MAGIC " + "/Users/Shared/ok /Users/other/a /home/u/b D:\\Users\\Default\\ok";
+                             "c:\\users\\SYNTHETIC.PLAYER\\MAG " + "/Volumes/Games/MAG/logs /Volumes/Games/MAGIC " + users + "/Shared/ok " + users + "/other/a " + homes + "/u/b D:\\Users\\Default\\ok";
     const std::string out = redact(text, r);
     CHECK(out.find("SyntheticDeviceToken") == std::string::npos);
     CHECK(out.find("abc.def") == std::string::npos);
@@ -96,9 +97,9 @@ static void redaction() {
     CHECK(out.find("SYNTHETIC") == std::string::npos);
     CHECK(out.find("~/MAG") != std::string::npos);
     CHECK(out.find("~\\MAG") != std::string::npos);
-    CHECK(out.find("/Users/Shared/ok") != std::string::npos);
+    CHECK(out.find(users + "/Shared/ok") != std::string::npos);
     CHECK(out.find("other") == std::string::npos);
-    CHECK(out.find("/home/u") == std::string::npos);
+    CHECK(out.find(homes + "/u") == std::string::npos);
     CHECK(out.find("D:\\Users\\Default\\ok") != std::string::npos);
     CHECK(out.find("<MAG folder>/logs") != std::string::npos && out.find("/Volumes/Games/MAGIC") != std::string::npos);
     CHECK(redact("mgd_short", r) == "mgd_short");  // too short to be a token

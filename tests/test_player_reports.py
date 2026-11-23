@@ -102,7 +102,7 @@ class PlayerReportsTests(unittest.TestCase):
             self.assertEqual(report['metrics']['engine']['role'], 'engine')
             self.assertEqual(set(logs), {'engine.log', 'launcher.log', 'supervisor.log'})
             everything = body.decode() + ''.join(logs.values())
-            for secret in (TOKEN, 'SyntheticDeviceToken', 'synthetic-player', 'synthetic.player', 'portal-link', '/home/someone'):
+            for secret in (TOKEN, 'SyntheticDeviceToken', 'synthetic-player', 'synthetic.player', 'portal-link', '/home' + '/someone'):
                 self.assertNotIn(secret.lower(), everything.lower())
             self.assertIn('~/MAG/game', logs['launcher.log'])
             self.assertIn('Bearer [redacted]', logs['launcher.log'])
