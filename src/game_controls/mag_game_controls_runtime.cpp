@@ -1,6 +1,7 @@
 /* Lifetime of the game controls adapter (docs/native-controls.md, section 4): settings
  * registration, preferences, the hook callback and the extension callbacks. Compiled only with
  * MAG_GAME_CONTROLS; MAG_GAME_CONTROLS=0 in the environment turns it off at run time. */
+#include "mag_session_monitor.h"
 #include "mag_extension.h"
 #include "mag_game_controls_adapter.h"
 #include "mag_game_controls_catalog.h"
@@ -172,6 +173,9 @@ bool hook_owned(MagControlsHook event, ppu_context* ctx) noexcept {
         if (last_status != visible) {
             std::fprintf(stderr, "[game-controls] %s\n", visible);
             last_status = visible;
+            // The session summary's phase: on foot is a match; the native menu buttons are menus.
+            if (attached) mag_session_set_phase(MAG_SESSION_PHASE_MATCH);
+            else if (!std::strcmp(status, "native menu buttons attached")) mag_session_set_phase(MAG_SESSION_PHASE_MENU);
         }
     }
     return handled;

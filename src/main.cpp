@@ -42,6 +42,7 @@
 #include "macos_runloop.h"
 #include "mag_extension.h"
 #include "mag_frame_clock.h"
+#include "mag_session_monitor.h"
 #if defined(MAG_PLAYER_SETTINGS) || defined(MAG_PLAYER_PORTABLE_SETTINGS)
 #include "player_settings_runtime.h"
 #endif
@@ -218,6 +219,9 @@ static void present_guest_frame(const CellGcmFlipReceipt& receipt)
     /* This thread increments and guest threads read, so interlocked rather
      * than a volatile ++, which on arm64 is neither atomic nor a fence. */
     LONG count = InterlockedIncrement(&g_frames_presented);
+    /* Present-to-present timing for the session summary: a clock read and a few relaxed
+     * counters (src/mag_session_monitor.h). */
+    mag_session_frame_presented();
     if (count <= 3 || count % 120 == 0)
         fprintf(stderr, "[mag] guest frame presented %ld\n", (long)count);
 }
@@ -293,7 +297,9 @@ static DWORD WINAPI frame_clock(LPVOID)
 #endif
             if (pump_result != 0) {
                 /* A blocked guest may never unwind. End the owned host
-                 * session without running teardown against live workers. */
+                 * session without running teardown against live workers.
+                 * _Exit skips atexit, so the session summary is written first. */
+                mag_session_monitor_finish("window_closed");
                 _Exit(0);
             }
             /* Present on a guest flip. A present on a fixed clock can catch the
@@ -479,6 +485,9 @@ int main(int argc, char** argv)
     }
 
     if (auto start = mag_extension()->start) start(argv[1]);
+    /* The session performance monitor: the launcher image (EBOOT) is the front end, mage_g the
+     * engine. It writes its summary only where the supervisor's MAG_SESSION_DIR says. */
+    mag_session_monitor_start(strstr(argv[1], "mage_g") ? "engine" : "launcher");
     derive_vfs_root(argv[1]);
     printf("[boot] VFS root: %s\n", ppu_vfs_root);
     /* Our runner always uses a private disc-layout overlay. */
