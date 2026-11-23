@@ -63,7 +63,8 @@ Inside the installation location you chose:
 | `MAG-build` | the build journal (`build.json`) and settings, the source kit, the managed tools, the build workspace and the build logs | no |
 
 The game files are hard links where the volume allows: your game folder, the build workspace and
-`MAG/game` then share one copy on disk, and deleting any of them leaves the others intact. Where
+`MAG/game` then share one copy on disk, and deleting any of them leaves the others intact (a file
+edited in place changes in all of them; MAG checks its executables' identities at every start). Where
 links are not possible (another drive, a file system without them, or a read-only file on Windows),
 they are copied. A **Retry build** reuses `MAG-build`; once MAG works you may delete it to reclaim
 space. The firmware module is only used to build, so it stays in `MAG-build`.

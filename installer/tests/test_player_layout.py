@@ -132,6 +132,21 @@ class PlayerLayoutTests(LayoutFixture, unittest.TestCase):
                 game = json.loads((moved / name / 'runtime.json').read_text())['game']
                 self.assertTrue((moved / name / game / 'PS3_GAME').resolve().is_dir())
 
+    def test_publish_interrupted_after_the_rename_is_recorded_on_the_next_run(self):
+        with tempfile.TemporaryDirectory() as temp, ExitStack() as stack:
+            root = Path(temp).resolve(); source = root / 'inputs'; self.inputs(source)
+            output, build = root / 'MAG', root / 'MAG-build'
+            self.patches(stack)
+            player_build.install(root, source, output, root / 'cache')
+            journal = json.loads((build / 'build.json').read_text())
+            journal['state'] = 'publishing'; journal.pop('app')  # power lost right after the rename
+            (build / 'build.json').write_text(json.dumps(journal))
+            events = []
+            self.assertEqual(player_build.install(root, source, output, root / 'cache', events=events.append), output)
+            journal = json.loads((build / 'build.json').read_text())
+            self.assertEqual((journal['state'], journal['app']), ('complete', str(output / 'MAG.app')))
+            self.assertEqual(events[-1]['event'], 'player-build-complete')
+
     def test_finished_legacy_folder_moves_to_the_new_layout_without_rebuilding(self):
         for host, name in (('macos-arm64', 'MAG.app'), ('windows-x86_64', 'MAG'), ('linux-x86_64', 'MAG')):
             with self.subTest(host=host), tempfile.TemporaryDirectory() as temp, ExitStack() as stack:
@@ -181,6 +196,12 @@ class PlayerLayoutTests(LayoutFixture, unittest.TestCase):
             self.assertTrue((output / 'MAG.app/Contents/old-app.txt').is_file())
             self.assertEqual((output / 'home/gamedata/save.dat').read_text(), 'synthetic save')
             self.assertEqual(json.loads((output / 'build.json').read_text())['migration'], 'staging')
+            # Interrupted after packaging, while the player's files move: it carries on from there.
+            with patch.object(Path, 'rename', side_effect=OSError('synthetic interruption')):
+                with self.assertRaisesRegex(OSError, 'synthetic interruption'):
+                    player_build.install(root, root / 'absent', output, root / 'cache')
+            self.assertEqual(json.loads((output / 'build.json').read_text())['migration'], 'moving')
+            self.assertEqual((output / 'home/gamedata/save.dat').read_text(), 'synthetic save')
             # Interrupted after the build files moved: the next Build MAG finishes the swap.
             with patch.object(player_build, '_finish_migration', side_effect=OSError('synthetic power loss')):
                 with self.assertRaisesRegex(OSError, 'power loss'):
