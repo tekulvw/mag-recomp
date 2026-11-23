@@ -63,6 +63,14 @@ Inside the installation location you chose:
 | `MAG` | `MAG.app` (macOS), `MAG\MAG.exe` (Windows) or `MAG/MAG` (Linux) with its libraries; `game/`, the game files the game reads; `home/` and `logs/` once you play | yes |
 | `MAG-build` | the build journal (`build.json`) and settings, the source kit, the managed tools, the build workspace and the build logs | no |
 
+Each launch writes its logs to `MAG/logs/launch-*`: `launcher.log`, `engine.log`, `supervisor.log`,
+and the engine's session summaries (`session-launcher.json`, `session-engine.json`: frame pacing,
+slow frames, hitches and audio timing). When you have linked an account, MAG sends a performance and
+error report to that account's portal after a session that crashed, failed to start or ran badly, or
+when you press **Send report** in MAG Settings. Reports waiting to be sent are kept in
+`home/reports` inside the MAG folder. Turn reports off in MAG Settings → General → Reports. See
+[Reports](../docs/player-settings.md#reports) for exactly what a report holds and when one is sent.
+
 The game files are hard links where the volume allows: your game folder, the build workspace and
 `MAG/game` then share one copy on disk, and deleting any of them leaves the others intact (a file
 edited in place changes in all of them; MAG checks its executables' identities at every start). Where
