@@ -174,4 +174,27 @@ private:
     std::shared_ptr<Mailbox> mailbox_;
     std::string account_status_, account_button_;
 };
+
+// Bringing the settings window to the front with the keyboard, as the Windows window does with
+// SetForegroundWindow. F10 starts it as another process, and a window manager's focus-stealing
+// prevention may otherwise leave it behind the game window (in front of nothing when the game is
+// borderless). The window asks SDL to raise it and give it input focus, and waits briefly for the
+// focus. X11: SDL's raise is a _NET_ACTIVE_WINDOW request with the window's own user time, which a
+// new window does not have yet, so a strict window manager may refuse it; then the window asks
+// once more as a pager does (source 2, current time), which window managers honour. Wayland: SDL
+// asks the compositor through xdg-activation without an input serial, and only the compositor
+// decides; there is no second request to make. Each step is a hook, so tests drive the order.
+enum class SettingsForward { Focused, FocusedOnRetry, NotFocused };
+struct SettingsForwardHooks {
+    std::function<std::string()> driver;      // SDL's video driver name
+    std::function<void()> raise;              // SDL_RaiseWindow and SDL_SetWindowInputFocus
+    std::function<bool(unsigned ms)> focused; // whether the window has input focus within `ms`
+    std::function<bool()> activate_x11;       // the pager-style _NET_ACTIVE_WINDOW; false: not sent
+};
+SettingsForward settings_bring_forward(const SettingsForwardHooks& hooks, unsigned wait_ms = 250);
+// The data of that X11 request: source indication, timestamp, requestor's active window.
+struct SettingsX11Activation { long source = 2, timestamp = 0, requestor = 0; };
+// Sends it for an SDL window on the X11 driver (player_settings_sdl_x11.cpp). False when the
+// window is not an X11 window or libX11 cannot be reached.
+bool settings_activate_x11(SDL_Window* window);
 }  // namespace mag

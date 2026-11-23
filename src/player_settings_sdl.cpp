@@ -1110,6 +1110,13 @@ private:
 };
 }  // namespace
 
+SettingsForward settings_bring_forward(const SettingsForwardHooks& hooks, unsigned wait_ms) {
+    hooks.raise();
+    if (hooks.focused(wait_ms)) return SettingsForward::Focused;
+    if (hooks.driver() != "x11" || !hooks.activate_x11()) return SettingsForward::NotFocused;
+    return hooks.focused(wait_ms) ? SettingsForward::FocusedOnRetry : SettingsForward::NotFocused;
+}
+
 SettingsWindowResult settings_window_run(SettingsForm& form, const std::filesystem::path& settings,
                                          const SettingsWindowOptions& options) {
     SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "nearest");
@@ -1156,6 +1163,32 @@ SettingsWindowResult settings_window_run(SettingsForm& form, const std::filesyst
         return held;
     };
     const Uint32 window_id = SDL_GetWindowID(window);
+    SettingsForwardHooks forward;
+    forward.driver = [] { const char* name = SDL_GetCurrentVideoDriver(); return std::string(name ? name : ""); };
+    forward.raise = [window] {
+        SDL_RaiseWindow(window);
+        SDL_SetWindowInputFocus(window);  // X11 only; elsewhere SDL says it is unsupported
+    };
+    forward.focused = [window](unsigned ms) {
+        const Uint64 end = SDL_GetTicks64() + ms;
+        do {
+            SDL_PumpEvents();  // focus changes arrive as events; they stay queued for the loop below
+            if (SDL_GetWindowFlags(window) & SDL_WINDOW_INPUT_FOCUS) return true;
+            SDL_Delay(10);
+        } while (SDL_GetTicks64() < end);
+        return false;
+    };
+    forward.activate_x11 = [window] { return settings_activate_x11(window); };
+    switch (settings_bring_forward(forward)) {
+    case SettingsForward::Focused: break;
+    case SettingsForward::FocusedOnRetry:
+        std::fprintf(stderr, "[mag settings] the window manager gave the settings window focus on the second request\n");
+        break;
+    case SettingsForward::NotFocused:
+        std::fprintf(stderr, "[mag settings] the settings window did not get the keyboard (%s); click it to type\n",
+                     forward.driver().c_str());
+        break;
+    }
     SDL_StartTextInput();
     SettingsPanel::State state = SettingsPanel::State::Open;
     while (state == SettingsPanel::State::Open) {
