@@ -18,6 +18,8 @@ For a custom server, the runner creates a private temporary view of the player's
 - **Format:** 3 to 15 letters, digits, `-` or `_`, starting with a letter. 15 is the length of the retail sign-in name field.
 - **Blank** keeps the runtime's default name, and is only possible without a server.
 
+**Ticket file** (`ticket_file`, optional, experimental) selects the portal ticket profile for a server instead of the no-ticket profile. It is an absolute path, in the settings file on every platform; the macOS window has no control for it yet and keeps it when you apply other changes. With it set, the launch does not restore `UseNPTicket=0`: the game keeps the NP ticket setting its own launcher init turns on, requests a ticket as it would on a PS3, and the runtime's local ticket provider returns that file's exact bytes (`PS3RECOMP_NP_LOCAL_TICKET`, `PS3RECOMP_NP_TICKET_FILE`). The file is read at each ticket request, so whatever writes it should replace it atomically with a fresh ticket before the game signs in; a missing, empty or oversized (over 4096 bytes) file fails the sign-in visibly. The player name is still required: it is the online ID, which the ticket request must match. A blank or absent value keeps the no-ticket profile, and the settings file is written without the key. Fetching the ticket from the portal is a later step; until then, put a ticket there yourself. See [ps3recomp-flags.md](ps3recomp-flags.md) for the runtime switches.
+
 ## Graphics
 
 - **Display mode:** Windowed or borderless fullscreen. Borderless uses the desktop size.
@@ -51,7 +53,7 @@ MAG --server play.example.org --name Rook_7        # Linux, from the MAG folder
 MAG.exe --server play.example.org --name Rook_7    # Windows
 ```
 
-A server needs a player name. On Windows, MAG asks for it in a small window the first time and remembers it (`--no-prompt` turns the window off for automation). On Linux, the launch stops and says to add `--name`. You can also edit the file. It uses the macOS file's connection fields: `server_address`, `tcp_port`, `udp_port` (0 for the game default) and `player_name`. Other keys are ignored, and the same validation rules apply. A damaged file is never overwritten. It is reported in `logs/launch-*/launcher.log`, and that launch plays offline.
+A server needs a player name. On Windows, MAG asks for it in a small window the first time and remembers it (`--no-prompt` turns the window off for automation). On Linux, the launch stops and says to add `--name`. You can also edit the file. It uses the macOS file's connection fields: `server_address`, `tcp_port`, `udp_port` (0 for the game default), `player_name` and the optional `ticket_file`. Other keys are ignored, and the same validation rules apply. A damaged file is never overwritten. It is reported in `logs/launch-*/launcher.log`, and that launch plays offline.
 
 The game builds the same connection override as macOS (`src/player_settings_portable.cpp`, `src/player_server_overlay_portable.cpp`). The private view of the game files lives in `home/player/server/vfs`, inside the installation. It holds real folders and hard links to the original files, plus the one rewritten archive, so it costs no copy and it is rebuilt whenever the server changes. MAG and its game files must be on the same drive, which an installer-built folder always is.
 

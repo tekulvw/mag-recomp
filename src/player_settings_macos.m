@@ -177,6 +177,7 @@ static NSStackView *row(NSString *title,NSString *hint,NSView *control) {
 }
 - (NSDictionary *)draft:(NSError **)error {
     NSMutableDictionary *draft=MAGSettingsDefaults().mutableCopy;draft[@"server_address"]=_server.stringValue;draft[@"player_name"]=_name.stringValue;
+    if(_settings[@"ticket_file"])draft[@"ticket_file"]=_settings[@"ticket_file"];  // no control for it yet; keep it
     for(NSArray *pair in @[@[@"tcp_port",_tcp],@[@"udp_port",_udp]]) {
         NSString *text=[((NSTextField*)pair[1]).stringValue stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet];
         if(text.length&&[text rangeOfCharacterFromSet:[NSCharacterSet characterSetWithCharactersInString:@"0123456789"].invertedSet].location!=NSNotFound){

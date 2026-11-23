@@ -74,7 +74,8 @@ void mag_sre_func_210174F8(ppu_context*) {}
 void mag_sre_func_210178D8(ppu_context*) {}
 extern "C" void mag_register_handoff() {}
 extern "C" void ps3_load_prx_modules();
-int main() {
+int main(int argc, char**) {
+    if (argc > 1) setenv("PS3RECOMP_NP_TICKET_FILE","/ticket.bin",1); // conflicts with the no-ticket hook
     setenv("MAG_TRACE_MOVIE","1",1); // Invalid/unloaded engine pins must prevent registration.
     setenv("MAG_TRACE_STARTUP_UI","1",1);
     setenv("MAG_TRACE_FRONTEND","1",1);
@@ -96,3 +97,6 @@ int main() {
                 capture_output=True,text=True,timeout=30)
             self.assertEqual(result.returncode,0,result.stderr)
             subprocess.run([str(tmp/'check')],check=True,timeout=5)
+            # The launcher refuses a ticket file together with the no-ticket hook; the engine has neither.
+            conflict=subprocess.run([str(tmp/'check'),'conflict'],capture_output=True,text=True,timeout=5)
+            self.assertEqual(conflict.returncode,89 if launcher else 0,conflict.stderr)
