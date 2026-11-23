@@ -53,13 +53,28 @@ struct Observed {
     bool warp = false;  // motion SDL reported for the backend's own centring warp
 };
 
-// Opt-in diagnostics (MAG_GAME_CONTROLS_TRACE=1): after each acquisition of the mouse lock, the
-// next motion events with their SDL deltas, whether they reached the controls, and the epochs.
+// Opt-in diagnostics (MAG_GAME_CONTROLS_TRACE=1, any value but empty or 0, as on Windows): each
+// acquisition, release or failure of the mouse lock; after each acquisition the next motion events
+// with their SDL deltas, whether they reached the controls, and the epochs; and about once a second
+// what became of the motion SDL reported, with the same counts as the Win32 backend.
 constexpr int kTraceMotions = 20;
 bool trace_enabled() {
     const char* value = std::getenv("MAG_GAME_CONTROLS_TRACE");
-    return value && !std::strcmp(value, "1");
+    return value && *value && std::strcmp(value, "0");
 }
+struct MotionTrace {
+    bool on = trace_enabled();
+    std::chrono::steady_clock::time_point next{};
+    unsigned reports{}, accepted{}, other_window{}, not_installed{}, not_ready{}, not_relative{}, stale{},
+        lock_lost{}, mouse_requests_on{}, mouse_requests_off{};
+};
+// Window thread only.
+MotionTrace& motion_trace() {
+    static MotionTrace trace;
+    return trace;
+}
+// Mouse-look requests come from the adapter's thread.
+std::atomic<unsigned> g_mouse_requests_on{0}, g_mouse_requests_off{0};
 
 class SdlPlatform final : public DesktopCapturePlatform {
 public:
@@ -77,6 +92,7 @@ public:
         if (!on) {
             SDL_SetRelativeMouseMode(SDL_FALSE);
             if (window) SDL_SetWindowGrab(window, SDL_FALSE);
+            if (motion_trace().on) std::fprintf(stderr, "[game-controls] trace lock released\n");
             return true;
         }
         // SDL ignores warps while relative mode is on, so (re)acquire in this order: leave
@@ -87,6 +103,13 @@ public:
             center_pointer();
         }
         if (SDL_SetRelativeMouseMode(SDL_TRUE) == 0) {
+            if (motion_trace().on) {
+                int x = 0, y = 0, w = 0, h = 0;
+                if (window) SDL_GetWindowPosition(window, &x, &y), SDL_GetWindowSize(window, &w, &h);
+                const char* driver = SDL_GetCurrentVideoDriver();
+                std::fprintf(stderr, "[game-controls] trace lock acquired: window %dx%d at %d,%d (driver %s) grab=%d\n", w, h,
+                             x, y, driver ? driver : "?", window && SDL_GetWindowGrab(window) ? 1 : 0);
+            }
             tracing = trace_enabled();
             if (tracing) {
                 trace_left = kTraceMotions;
@@ -95,6 +118,7 @@ public:
             return true;
         }
         if (window) SDL_SetWindowGrab(window, SDL_FALSE);
+        if (motion_trace().on) std::fprintf(stderr, "[game-controls] trace lock failed: %s\n", SDL_GetError());
         // Not available here (for example a compositor without relative pointer support):
         // report it and stop asking until the window changes.
         relative_refused = true;
@@ -256,6 +280,18 @@ void deliver(Backend& b, const Observed& item) {
         const bool foreign = e.motion.which == SDL_TOUCH_MOUSEID || e.motion.windowID != id;
         const bool accepted = !foreign && !item.warp &&
                               b.core.mouse_motion(double(e.motion.xrel), -double(e.motion.yrel), item.stamp);
+        // The centring warp is never look input; SDL's zero-length motion (leaving relative mode)
+        // is no motion at all.
+        if (!item.warp && (e.motion.xrel || e.motion.yrel)) {
+            auto& trace = motion_trace();
+            ++trace.reports;
+            if (accepted) ++trace.accepted;
+            else if (foreign) ++trace.other_window;
+            else if (!b.core.installed()) ++trace.not_installed;
+            else if (!b.core.ready()) ++trace.not_ready;
+            else if (!b.core.relative()) ++trace.not_relative;
+            else ++trace.stale;
+        }
         if (b.platform.trace_left > 0) {
             --b.platform.trace_left;
             std::fprintf(stderr, "[game-controls] trace motion xrel=%d yrel=%d %s epoch=%u current=%u\n",
@@ -271,6 +307,27 @@ void deliver(Backend& b, const Observed& item) {
     default:
         break;
     }
+}
+
+// About once a second, with MAG_GAME_CONTROLS_TRACE: what became of the motion SDL reported since
+// the last line (the counts of the Win32 backend, plus motion for another window), the lock losses
+// found and the mouse-look requests the adapter made. Silent while nothing happened.
+void trace_summary(Backend& b) {
+    auto& trace = motion_trace();
+    const auto now = std::chrono::steady_clock::now();
+    if (now < trace.next) return;
+    trace.mouse_requests_on = g_mouse_requests_on.exchange(0, std::memory_order_relaxed);
+    trace.mouse_requests_off = g_mouse_requests_off.exchange(0, std::memory_order_relaxed);
+    if (trace.on && (trace.reports || trace.lock_lost || trace.mouse_requests_on || trace.mouse_requests_off))
+        std::fprintf(stderr,
+                     "[game-controls] trace motion: reports=%u accepted=%u other_window=%u not_installed=%u "
+                     "not_ready=%u not_relative=%u stale_epoch=%u lock_lost=%u mouse_requests on/off=%u/%u "
+                     "(ready=%d relative=%d)\n",
+                     trace.reports, trace.accepted, trace.other_window, trace.not_installed, trace.not_ready,
+                     trace.not_relative, trace.stale, trace.lock_lost, trace.mouse_requests_on, trace.mouse_requests_off,
+                     b.core.ready(), b.core.relative());
+    trace = MotionTrace{};  // reads the variable again, so a running game can be traced from now on
+    trace.next = now + std::chrono::seconds(1);
 }
 
 void pump(Backend& b, SDL_Window* window, bool dialog) {
@@ -299,6 +356,7 @@ void pump(Backend& b, SDL_Window* window, bool dialog) {
     // Something else (the window manager, another grab) took the lock or the pointer left the
     // window: put the pointer back and re-apply the lock at this refresh. Logged once per loss.
     if (b.core.relative() && !b.platform.lock_held()) {
+        ++motion_trace().lock_lost;
         if (!b.lock_lost_reported) {
             std::fprintf(stderr, "[game-controls] mouse lock lost; re-applying\n");
             b.lock_lost_reported = true;
@@ -311,6 +369,7 @@ void pump(Backend& b, SDL_Window* window, bool dialog) {
     b.core.refresh();
     if (const char* change = desktop_capture_transition(was_ready, was_relative, b.core.ready(), b.core.relative()))
         std::fprintf(stderr, "[game-controls] %s\n", change);
+    trace_summary(b);
     const int on = b.core.installed() ? 1 : 0;
     if (on != b.reported) {
         if (b.reported >= 0 || on)
@@ -365,7 +424,10 @@ extern "C" void mag_input_desktop_set_enabled(int enabled) {
         !waiting_reported.exchange(true))
         std::fprintf(stderr, "[game-controls] desktop capture requested; waiting for the SDL game window\n");
 }
-extern "C" void mag_input_desktop_set_mouse_enabled(int enabled) { backend().core.request_mouse(enabled != 0); }
+extern "C" void mag_input_desktop_set_mouse_enabled(int enabled) {
+    if (backend().core.request_mouse(enabled != 0))
+        (enabled ? g_mouse_requests_on : g_mouse_requests_off).fetch_add(1, std::memory_order_relaxed);
+}
 // Requests apply at the window's next pump, every frame.
 extern "C" void mag_input_desktop_refresh(void) {}
 extern "C" int mag_input_desktop_raw_mouse_available(void) { return backend().core.raw_mouse_available(); }
