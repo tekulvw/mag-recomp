@@ -207,7 +207,7 @@ class PlayerLayoutTests(LayoutFixture, unittest.TestCase):
                 with self.assertRaisesRegex(OSError, 'power loss'):
                     player_build.install(root, root / 'absent', output, root / 'cache')
             self.assertFalse(output.exists())
-            self.assertEqual((build / 'package/home/gamedata/save.dat').read_text(), 'synthetic save')
+            self.assertEqual((build / 'package' / 'home' / 'gamedata' / 'save.dat').read_text(), 'synthetic save')
             self.assertEqual(json.loads((build / 'build.json').read_text())['migration'], 'swapping')
             player_build.install(root, root / 'absent', output, root / 'cache')
             self.assertEqual((output / 'home/gamedata/save.dat').read_text(), 'synthetic save')
