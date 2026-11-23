@@ -36,4 +36,8 @@ public:
     const char* status() const noexcept;
     // Validates and copies; installed at the next outermost update tick.
     void request_profile(const mag::ControlsProfile&);
+    // Diagnostics (MAG_GAME_CONTROLS_TRACE): each distinct description of a handler the game
+    // updates (its role, the input context, the local player's movement state and every watched
+    // token with its channel) is passed to `sink` once. Null turns it off. Never changes behaviour.
+    void set_census(void (*sink)(const char* line));
 };

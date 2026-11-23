@@ -29,6 +29,8 @@ struct ControlsState {
     bool sample_invalidated=false;
     unsigned sample_revoked_sources=0;
     std::optional<HostInputFrame> frame;
+    InputDevice last_device=InputDevice::None;
+    uint64_t profile_revision=0;
     std::map<std::pair<uint64_t,uint32_t>,uint64_t> retired;
 };
 ControlsState& controls() { static ControlsState state; return state; }
@@ -235,6 +237,7 @@ void mag_controls_configure(const ControlsProfile& profile) {
     auto& state=controls(); std::lock_guard lock(state.mutex);
     release_locked(state);
     state.profile=profile;
+    ++state.profile_revision;
     for(const auto& b:profile.bindings) state.actions.try_emplace(b.action);
     if(profile.mode!=InputMode::Controller) {
         // Revocation is immediate even when the next sample cannot attach.
@@ -269,6 +272,7 @@ void mag_controls_set_controller_connection(bool connected) {
 void mag_controls_push_event(const PhysicalInputEvent& event) {
     if(!mag_controls_gameplay_source_allowed(InputPolicy{},event.control.source)) throw std::invalid_argument("invalid physical source");
     auto& state=controls(); std::lock_guard lock(state.mutex);
+    if(event.down) state.last_device=event.control.source==InputSource::Controller?InputDevice::Controller:InputDevice::KeyboardMouse;
     if(event.down) state.physical_down.insert(event.control); else state.physical_down.erase(event.control);
     if(state.blocked.contains(event.control)) {
         if(!event.down) state.blocked.erase(event.control);
@@ -291,6 +295,9 @@ void mag_controls_push_relative_mouse(double dx,double dy) {
 }
 void mag_controls_push_mouse(int64_t dx,int64_t dy) {mag_controls_push_relative_mouse(double(dx),double(dy));}
 namespace {
+bool deflected(const ControllerAxes& a) {
+    return std::max({std::abs(a.move_x),std::abs(a.move_y),std::abs(a.look_x),std::abs(a.look_y)})>0.5;
+}
 ControllerAxes normalize_axes(const ControllerAxes& input) {
     ControllerAxes axes=input;
     for(double* value:{&axes.move_x,&axes.move_y,&axes.look_x,&axes.look_y,&axes.left_trigger,&axes.right_trigger})
@@ -306,13 +313,17 @@ void mag_controls_push_controller_axes(const ControllerAxes& input,bool neutral)
     const auto axes=normalize_axes(input);
     auto& state=controls(); std::lock_guard lock(state.mutex);
     if(!enabled(state) || !state.capture.controller_connected) return;
+    if(deflected(axes)) state.last_device=InputDevice::Controller;
     if(neutral) state.controller_axes_rearmed=true;
     if(state.controller_axes_rearmed) state.controller_axes=axes;
 }
 void mag_controls_capture_controller_axes(const ControllerAxes& input) {
     const auto axes=normalize_axes(input);
     auto& state=controls(); std::lock_guard lock(state.mutex);
-    if(enabled(state) && state.capture.controller_connected) state.controller_axes=axes;
+    if(enabled(state) && state.capture.controller_connected) {
+        state.controller_axes=axes;
+        if(deflected(axes)) state.last_device=InputDevice::Controller;
+    }
 }
 
 namespace {
@@ -450,6 +461,16 @@ bool mag_controls_frame_valid(InputFrameKey key,uint64_t generation) {
     auto& state=controls(); std::lock_guard lock(state.mutex);
     return state.frame && state.frame->key==key && state.generation==generation && enabled(state);
 }
+InputDevice mag_controls_last_device() {auto& state=controls();std::lock_guard lock(state.mutex);return state.last_device;}
+std::vector<ControlBinding> mag_controls_action_bindings(ActionId action,InputContext context) {
+    auto& state=controls();std::lock_guard lock(state.mutex);std::vector<ControlBinding> result;
+    for(const auto& b:state.profile.bindings)
+        if(b.action==action && (b.contexts&uint32_t(context)) && (b.control.source!=InputSource::Controller || state.profile.controller_remap))
+            result.push_back(b);
+    return result;
+}
+bool mag_controls_controller_remapped() {auto& state=controls();std::lock_guard lock(state.mutex);return state.profile.controller_remap;}
+uint64_t mag_controls_profile_revision() {auto& state=controls();std::lock_guard lock(state.mutex);return state.profile_revision;}
 uint64_t mag_controls_current_generation() {auto& state=controls();std::lock_guard lock(state.mutex);return state.generation;}
 InputPolicy mag_controls_current_policy() {
     auto& state=controls(); std::lock_guard lock(state.mutex); return state.policy;
