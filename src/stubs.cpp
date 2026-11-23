@@ -418,6 +418,12 @@ extern "C" void ps3_load_prx_modules(void) {
     mag_load_queue_firmware();
 #ifdef MAG_LAUNCHER_HOOKS
     mag_register_handoff();
+    // The portal ticket profile needs no hook: retail init turns UseNPTicket on. The no-ticket
+    // hook would turn it off again and send the name instead of the ticket, so refuse both.
+    if (getenv("MAG_LOCAL_NO_TICKET") && getenv("PS3RECOMP_NP_TICKET_FILE")) {
+        fprintf(stderr,"[mag-net] MAG_LOCAL_NO_TICKET and PS3RECOMP_NP_TICKET_FILE select different sign-in profiles\n");
+        exit(89);
+    }
     if (getenv("MAG_TRACE_NETWORK") || getenv("MAG_LOCAL_NO_TICKET")) {
         ppu_register_function(0x14AD0,ticket_settings_trace);
         ppu_register_function(0x2D6530,ticket_use_trace);

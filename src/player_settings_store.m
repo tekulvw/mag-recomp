@@ -36,8 +36,16 @@ NSDictionary *MAGSettingsValidate(id value, NSError **error) {
     if (!normalized[@"render_scale"]) normalized[@"render_scale"] = @100;
     // The player name came later still; empty keeps the runtime's default name.
     if (!normalized[@"player_name"]) normalized[@"player_name"] = @"";
+    // Optional, and never written unless set: sign in with this file's ticket.
+    id ticket = normalized[@"ticket_file"];
+    if (ticket && (![ticket isKindOfClass:NSString.class] || ([ticket length] && (![ticket hasPrefix:@"/"] ||
+        [ticket lengthOfBytesUsingEncoding:NSUTF8StringEncoding] > 1024 ||
+        [ticket rangeOfCharacterFromSet:NSCharacterSet.controlCharacterSet].location != NSNotFound))))
+        return invalid(error, @"The ticket file must be an absolute path of at most 1024 bytes.");
+    if (ticket && ![ticket length]) [normalized removeObjectForKey:@"ticket_file"];
     d = normalized;
-    if (d.count != MAGSettingsDefaults().count) return invalid(error, @"Settings contain missing or unsupported fields.");
+    if (d.count != MAGSettingsDefaults().count + (d[@"ticket_file"] ? 1 : 0))
+        return invalid(error, @"Settings contain missing or unsupported fields.");
     if (![d[@"server_address"] isKindOfClass:NSString.class]) return invalid(error, @"Enter a server hostname or IPv4 address.");
     NSString *host = [d[@"server_address"] stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet].lowercaseString;
     if (host.length > 253) return invalid(error, @"The server address is too long.");

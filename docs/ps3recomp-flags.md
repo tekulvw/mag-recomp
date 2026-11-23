@@ -118,7 +118,8 @@ see [player-settings.md](player-settings.md).
 |---|---|---|---|---|---|---|
 | `PS3_NP_ONLINE_ID` | env | the player name | all | `src/player_settings_portable.cpp`, `src/player_settings_runtime.mm`, `tools/boot.py` | The runtime's online ID: the server signs players in by this name (#125). | leave the player name empty |
 | `PS3RECOMP_OSK_INITIAL_TEXT` | env | the player name | all | `src/player_settings_portable.cpp`, `src/player_settings_runtime.mm`, `tools/boot.py` | The sign-in keyboard opens with the name typed in, so the player only confirms it (#125). | leave the player name empty |
-| `PS3_NET_ONLINE` | env | `1` | all | `src/player_settings_portable.cpp`, `src/player_settings_runtime.mm`, `tools/boot.py` | The network reports a live connection, so the title takes its online path; set only when the server overlay is ready, otherwise the game plays offline (#11, #125). | choose no server |
+| `PS3_NET_ONLINE` | env | `1` | all | `src/player_sign_in.h`, `src/player_settings_runtime.mm`, `tools/boot.py` | The network reports a live connection, so the title takes its online path; set only when the server overlay is ready, otherwise the game plays offline (#11, #125). | choose no server |
+| `PS3RECOMP_NP_LOCAL_TICKET` | env | `1` | all | `src/player_sign_in.h`, `src/player_settings_runtime.mm`, `tools/boot.py` | Only with the opt-in `ticket_file` setting on a server (the portal ticket profile), and for a `tools/boot.py` network profile that asks for it: the runtime's local NP ticket provider answers the game's own ticket request, so the game signs in with a ticket instead of the no-ticket profile's name. Without a ticket file the players never set it. | leave `ticket_file` empty |
 | `PS3_AA` | env | the anti-aliasing setting (`fxaa` or off) | macOS | `src/player_settings_runtime.mm` | FXAA on the display buffer; only the Metal backend reads it (#11). | the setting |
 
 ## Build options
@@ -145,7 +146,6 @@ Diagnostic switches that `tools/` sets for its own runs. Packaged players never 
 
 | Switch | Kind | Value | Platforms | Set in | Why | Opt out |
 |---|---|---|---|---|---|---|
-| `PS3RECOMP_NP_LOCAL_TICKET` | env | `1` | all | `tools/boot.py` | A local NP ticket for a network profile that asks for one. | the profile |
 | `PS3_HLE_TRACE` | env | `1` | all | `tools/boot.py` | Firmware import trace in diagnostic boots. | none |
 | `PS3_SCTRACE` | env | `1` or `fail` | all | `tools/boot.py` | System call trace: every call, or only failures. | `--syscall-trace` |
 | `PS3_NET_TRACE` | env | `1` | all | `tools/boot.py` | Socket trace when a network profile uses host sockets. | none |
@@ -158,6 +158,7 @@ Diagnostic switches that `tools/` sets for its own runs. Packaged players never 
 
 | Switch | Kind | Value | Platforms | Set in | Why | Opt out |
 |---|---|---|---|---|---|---|
+| `PS3RECOMP_NP_TICKET_FILE` | env | the `ticket_file` setting | all | `src/player_sign_in.h`, `src/player_settings_runtime.mm` | Only with the opt-in `ticket_file` setting on a server: the local NP ticket provider returns that file's exact bytes, read at each ticket request, so a launcher can write a fresh portal ticket before every sign-in. The pinned runtime does not read it yet; it is read from fork commit `f5ec257c` (branch `feat/np-ticket-file`), and the row moves up to Player settings with the pin that includes it. Until then a ticket profile sends the lowercase name payload instead. | leave `ticket_file` empty |
 | `PS3RECOMP_STRICT_HLE` | env | `1` | all | `tools/probe_edge_queue.py` | The edge-queue probe asks for strict HLE. The pinned runtime no longer reads this name; strict handling comes from `PS3_HLE_UNRESOLVED` and `PS3_SYSCALL_UNRESOLVED`. | no effect |
 
 ## Runtime defaults mag-recomp relies on

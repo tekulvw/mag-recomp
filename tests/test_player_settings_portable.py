@@ -111,6 +111,32 @@ class PortablePlayerSettingsTests(unittest.TestCase):
                         {'player_name': '7up'}, {'player_name': 'a' * 16}, {'player_name': 'bad name'},
                         '{"tcp_port": 1.5}', '{"a": 1, "a": 2}', '[]', '{"a": 1} x', '{"a" 1}'):
                 self.assertIsNone(parse(bad)[0], bad)
+            # The optional ticket file: an absolute UTF-8 path, written back only when set.
+            ticket = str(pathlib.Path(tmp).resolve() / 'portal tïcket.bin')
+            settings, _ = parse({'server_address': 'x.org', 'player_name': 'Rook_7', 'ticket_file': ticket})
+            self.assertEqual(settings['ticket_file'], ticket)  # escaped by json.dumps, kept as UTF-8
+            path.write_text(json.dumps({'ticket_file': ticket}, ensure_ascii=False), encoding='utf-8')
+            self.assertEqual(json.loads(self.run_driver('parse', path).stdout)['ticket_file'], ticket)
+            self.assertEqual(parse({'ticket_file': '/\U0001F3AE/t'})[0]['ticket_file'], '/\U0001F3AE/t')  # a surrogate pair
+            for bad in ('{"ticket_file": "/\\ud83c"}', '{"ticket_file": "/\\udfae"}', '{"ticket_file": "/\\u12"}'):
+                self.assertIsNone(parse(bad)[0], bad)
+            self.assertEqual(parse({'ticket_file': ''})[0], parse({})[0])
+            self.assertNotIn('ticket_file', parse({})[0])
+            for bad in ({'ticket_file': 'relative/ticket.bin'}, {'ticket_file': 7}, {'ticket_file': '/a\nb'},
+                        {'ticket_file': '/' + 'x' * 1024}):
+                self.assertIsNone(parse(bad)[0], bad)
+
+    def test_server_sign_in_profiles(self):
+        def profile(name, ticket):
+            result = self.run_driver('sign-in', name, ticket)
+            self.assertEqual(result.returncode, 0)
+            return [line.split('=', 1) for line in result.stdout.decode().splitlines()]
+        # Without a ticket file: exactly the community no-ticket profile, as before.
+        self.assertEqual(profile('Rook_7', ''), [['PS3_NET_ONLINE', '1'], ['MAG_LOCAL_NO_TICKET', '1'],
+                                                 ['MAG_LOCAL_ACCOUNT_NAME', 'Rook_7']])
+        # With one: the game keeps its NP ticket setting and the runtime returns the file's bytes.
+        self.assertEqual(profile('Rook_7', '/tmp/t.bin'), [['PS3_NET_ONLINE', '1'], ['PS3RECOMP_NP_LOCAL_TICKET', '1'],
+                                                          ['PS3RECOMP_NP_TICKET_FILE', '/tmp/t.bin']])
 
     def vfs(self, root, script):
         vfs = root / 'vfs'; source = vfs / ARCHIVE; source.parent.mkdir(parents=True)
@@ -195,6 +221,17 @@ class PortablePlayerSettingsTests(unittest.TestCase):
             # A non-retail archive never hangs or fails the launch: it is reported, and play is offline.
             self.assertIn('Playing offline', err)
             self.assertEqual((values['PS3_VFS_ROOT'], values['PS3_NET_ONLINE'], values['MAG_LOCAL_ACCOUNT_NAME']), (str(vfs), '', ''))
+            self.assertEqual((values['PS3RECOMP_NP_LOCAL_TICKET'], values['PS3RECOMP_NP_TICKET_FILE']), ('', ''))
+            # A ticket file is kept in the file and the engine's snapshot; with no server it does nothing.
+            ticketed = json.loads(saved); ticketed.update(server_address='', ticket_file=str(root / 'ticket.bin'))
+            settings.write_text(json.dumps(ticketed))
+            code, values, err = self.prepare(root, **common, MAG_PLAYER_SETUP='1', MAG_PLAYER_SET_NAME='Rook_8')
+            self.assertEqual(code, 0, err); self.assertIn('only on a server', err)
+            self.assertEqual(json.loads(settings.read_text())['ticket_file'], str(root / 'ticket.bin'))
+            self.assertEqual(json.loads((owned / 'launch-settings.json').read_text())['ticket_file'], str(root / 'ticket.bin'))
+            self.assertEqual((values['PS3_NET_ONLINE'], values['PS3RECOMP_NP_LOCAL_TICKET'], values['MAG_LOCAL_NO_TICKET']), ('', '', ''))
+            settings.write_text(saved)
+            self.assertEqual(self.prepare(root, **common, MAG_PLAYER_SETUP='1')[0], 0)
             # The engine phase applies the launcher's snapshot, not a file edited meanwhile.
             settings.write_text(json.dumps({'player_name': 'Other'}))
             code, values, _ = self.prepare(root, **common)
