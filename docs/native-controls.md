@@ -939,10 +939,20 @@ Evidence for the default (the rule for in-repository code on by default, AGENTS.
   routes (two walks of the active UI elements, about 17 updates per tick). About 0.15 ms was the
   recognitions, each re-reading gameplay availability through a third walk (about 35 per tick).
   Since then a recognition uses the availability read at the start of its handler update (7.4).
-  Frame rate, main `4a662b0` against main plus that change (same workspace, controls on, 90 s
-  Training holds, server `play.magtest.online`): main 53.99 flips/s (one run), the change 54.85
-  and 54.82 (two runs). This is incomplete: the comparison stopped when the server began to require
-  portal sign-in, and it is to be repeated as three interleaved rounds on `test.magtest.online`.
+  Frame rate, main `4a662b0` against main plus that change (same workspace, controls on, three
+  interleaved rounds of 90 s Training holds, server `play.magtest.online` with name sign-in; two
+  runs that hung at sign-in were discarded and rerun):
+
+  | Round | Main: flips/s mean / median | With the change: flips/s mean / median |
+  | --- | --- | --- |
+  | 1 | 53.99 / 54.02 | 54.85 / 54.84 |
+  | 2 | 53.70 / 53.77 | 54.82 / 55.23 |
+  | 3 | 54.02 / 54.24 | 54.32 / 54.57 |
+  | Mean of means | 53.90 | 54.66 (+1.4%) |
+
+  The change was faster in every round (+0.30 to +1.12 flips/s); p95 frame time 19.2-19.6 ms
+  against 19.7-20.0 ms. This recovers most of the ~2% the controls cost against
+  `MAG_GAME_CONTROLS=0`.
 - *Correctness:* the synthetic suites in section 11 (adapter, capture core, SDL and Win32 backends,
   settings registration, catalog) and the installer's synthetic toolchain and switch tests
   (`installer/tests/test_managed_tools.py`, `installer/tests/test_player_build.py`). On macOS the
