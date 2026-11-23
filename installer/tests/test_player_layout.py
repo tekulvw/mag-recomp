@@ -77,7 +77,10 @@ class LayoutFixture:
                                   return_value={k: 'C:/VS/' + k for k in ('vcvars', 'clang_cl', 'installation', 'version', 'product')}))
         stack.enter_context(patch('mag_installer.managed_tools.ensure_linux_build_tools', return_value={'cc': 'cc', 'cxx': 'c++'}))
         tools = stack.enter_context(patch('mag_installer.managed_tools.bootstrap', return_value={
-            'python': 'python', 'cmake': 'cmake', 'ninja': 'ninja', 'git': 'git', 'ffmpeg': {}}))
+            'root': 'managed', 'python': 'python', 'cmake': 'cmake', 'ninja': 'ninja', 'git': 'git', 'ffmpeg': {}}))
+        # No test downloads the pinned Rust toolchain for the game controls.
+        stack.enter_context(patch('mag_installer.managed_tools.rust_toolchain',
+                                  return_value={'cargo': 'cargo', 'rustc': 'rustc'}))
         def default_native(config, work, **kwargs):
             (work / 'workspace').mkdir(parents=True)
         stack.enter_context(patch('mag_installer.native_build.install', side_effect=native or default_native))

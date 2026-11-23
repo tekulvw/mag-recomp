@@ -76,6 +76,10 @@ the D3D12 backend.
 installer writes `cmake_args` only when `MAG_X86_LEVEL` is set in its own environment (Windows and
 Linux), as a troubleshooting override of the x86-64 code generation level.
 
+The player installer always writes `game_controls` (the pinned Rust `cargo` and `rustc` it
+downloads, [native-controls.md](../../docs/native-controls.md) section 10), unless
+`MAG_GAME_CONTROLS=0` is set in its own environment.
+
 ## Result
 
 The workspace must stay at the chosen path: receipts record absolute paths. Completion means both
