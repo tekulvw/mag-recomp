@@ -20,11 +20,12 @@
 #include <memory>
 #include <mutex>
 #include <stdexcept>
+#include <string>
 namespace {
 std::unique_ptr<MagGameControlsAdapter> adapter;
 std::atomic<uint64_t> sessions{};
 std::atomic<uint64_t> owner_thread{UINT64_MAX};
-const char* last_status = nullptr;
+std::string last_status;  // what was printed last (statuses may name an error)
 std::mutex settings_lifetime;
 uint64_t settings_session{};
 std::atomic<bool> explicit_apply{false};
@@ -112,7 +113,7 @@ bool hook(MagControlsHook event, ppu_context* ctx) noexcept {
         const bool attached = !std::strcmp(status, "on-foot Rust input attached") ||
             !std::strcmp(status, "on-foot mouse prepared");
         const char* visible = attached ? "on-foot controls attached" : status;
-        if (!last_status || std::strcmp(last_status, visible)) {
+        if (last_status != visible) {
             std::fprintf(stderr, "[game-controls] %s\n", visible);
             last_status = visible;
         }
@@ -143,7 +144,7 @@ void start(const char*) {
     mag_game_controls_upgrade_profile(profile);
     if (auto mode = startup_mode()) profile.mode = *mode;
     owner_thread.store(UINT64_MAX, std::memory_order_release);
-    last_status = nullptr;
+    last_status.clear();
     adapter = std::make_unique<MagGameControlsAdapter>(MagGameControlsMemory{nullptr, read, write}, ++sessions,
                                                        profile, capture, mouse_capture);
     register_settings(path, sessions.load());

@@ -6,8 +6,6 @@
 #include <stdexcept>
 static PS3RecompMacOSPadState keyboard={0x1234,0,255,1,254};
 extern "C" {
-void mag_input_capture_set_keyboard_owner(int);
-int mag_input_capture_keyboard_owned(void);
 PS3RecompMacOSPadState mag_sdk_pad_macos_state() {return keyboard;}
 uint16_t mag_sdk_pad_macos_buttons() {return keyboard.buttons;}
 Uint8 SDL_GameControllerGetButton(SDL_GameController*,SDL_GameControllerButton) {return 1;}
@@ -50,5 +48,20 @@ int main() {try {
     (void)ps3recomp_pad_macos_state();
     keyboard={0x1234,0,255,1,254};
     check(ps3recomp_pad_macos_state().buttons==keyboard.buttons && ps3recomp_pad_macos_buttons()==keyboard.buttons,"releasing ownership restores fresh frontend keyboard input");
+    // An in-match menu: the keyboard stays owned but the pad is live; keys held from gameplay wait
+    // for a release, fresh ones count.
+    mag_input_capture_set_keyboard_owner(1);
+    check(ps3recomp_pad_macos_state().buttons==0,"on foot the pad is muted");
+    mag_input_capture_set_keyboard_pad_live(1);
+    keyboard={0x0001,0,128,128,128};
+    auto menu=ps3recomp_pad_macos_state();
+    check(menu.buttons==0 && menu.analog_lx==128,"a key held from gameplay does not press in the menu");
+    keyboard={0x0010,128,128,128,128};
+    check(ps3recomp_pad_macos_state().buttons==0x0010,"a fresh press counts in the menu");
+    keyboard={0x0011,128,128,128,128};
+    check(ps3recomp_pad_macos_state().buttons==0x0011,"the earlier key counts after its release");
+    mag_input_capture_set_keyboard_pad_live(0);
+    check(ps3recomp_pad_macos_state().buttons==0,"back on foot the pad is muted again");
+    mag_input_capture_set_keyboard_owner(0);
     return 0;
 }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}
