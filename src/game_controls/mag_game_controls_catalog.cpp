@@ -9,7 +9,9 @@ constexpr ActionId Fire = 0x58de09cf, Aim = 0xc07aa75a, Jump = 0xa7b30616, Sprin
     CycleEquipment = 0xcb535315, Melee = 0xdb59e9a9, Start = 0x163aab24, Select = 0x0a7fd35e,
     DpadUp = 0xa5bc1361, DpadDown = 0x8c2adba2, DpadLeft = 0xeab2acf1, DpadRight = 0x3d898bbf,
     Forward = 0xb164d156, Backward = 0x93115ec5, Left = 0x44533986, Right = 0xf3468eb5;
-// Situational actions (catalog revision 2), named by the game's prompt placeholders.
+// Situational actions (catalog revision 2), named by the game's prompt placeholders. Command
+// screen was one in revision 2; the game watches it on the Select button, so from revision 3 its
+// token stands for Select (Tab presses both, as the controller's Select does).
 constexpr ActionId Confirm = 0x33e32a99 /* os_enter */, Cancel = 0x75453127 /* os_cancel */,
     Bleedout = 0x40feec35 /* bleedout */, CommandScreen = 0xc6dcd89f /* commandscreen */,
     TacticalAbilities = 0xa79b7198 /* tcm_abilities */, TacticalFrago = 0x6b7b7c6c /* tcm_frago */,
@@ -30,12 +32,12 @@ constexpr MagGameControlsAction catalog[] = {
     {Confirm, "Confirm (on-screen prompts)", false, -1, true, 2, Prompts},
     {Cancel, "Back (on-screen prompts)", false, -1, true, 2, Prompts},
     {Bleedout, "Bleed out (when downed)", false, -1, true, 2, Prompts},
-    {CommandScreen, "Command screen", false, -1, true, 2, Commands},
     {TacticalAbilities, "Tactical menu: abilities", false, -1, true, 2, Commands},
     {TacticalFrago, "Tactical menu: FRAGO", false, -1, true, 2, Commands},
     {TacticalVoice, "Tactical menu: voice chat", false, -1, true, 2, Commands},
     {SeatNext, "Change seats", false, -1, true, 2, Vehicles},
     {Smoke, "Smoke screen", false, -1, true, 2, Vehicles}};
+constexpr ActionId retired[] = {CommandScreen};
 constexpr uint32_t look_tokens[] = {0xc8a3e21d, 0x941734a2, 0x661cb595, 0xc34f3a66};
 // Contexts a binding may use: on foot for gameplay actions; on foot and menu for system buttons.
 constexpr uint32_t OnFoot = uint32_t(InputContext::OnFoot);
@@ -46,6 +48,7 @@ bool remappable_controller_code(uint32_t code) { return code <= 4 || (code >= 6 
 }  // namespace
 
 std::span<const MagGameControlsAction> mag_game_controls_actions() { return catalog; }
+std::span<const ActionId> mag_game_controls_retired_actions() { return retired; }
 
 const MagGameControlsAction* mag_game_controls_action(ActionId id) {
     for (const auto& entry : catalog)
@@ -58,6 +61,7 @@ ActionId mag_game_controls_token_action(uint32_t token) {
     case 0x68c3570d: return Aim;
     case 0x9716c7a1: return Stance;
     case 0x71c8f2f0: return Interact;  // contaction: the held form of action
+    case CommandScreen: return Select;  // watched on the Select button
     default: return token;
     }
 }
@@ -111,9 +115,10 @@ ControlsProfile mag_game_controls_default_profile() {
     for (auto [code, id] : {std::pair{6u, Start}, {4u, Select}, {11u, DpadUp}, {12u, DpadDown},
                             {13u, DpadLeft}, {14u, DpadRight}})
         profile.bindings.push_back({{InputSource::Controller, code}, id, SystemContexts});
-    // Situational actions (keyboard only; a controller presses them natively): Return and Backspace
-    // for on-screen prompts, X to bleed out, M and 1 2 3 for commands, V and B in vehicles.
-    for (auto [code, id] : {std::pair{40u, Confirm}, {42u, Cancel}, {27u, Bleedout}, {16u, CommandScreen},
+    // Situational actions (keyboard only; a controller presses them natively): X confirms on-screen
+    // prompts as it does in menus (the SDK keyboard pad's Cross), Backspace goes back (C, the pad's
+    // Circle, is Crouch on foot), Return bleeds out, 1 2 3 for the tactical menu, V and B in vehicles.
+    for (auto [code, id] : {std::pair{27u, Confirm}, {42u, Cancel}, {40u, Bleedout},
                             {30u, TacticalAbilities}, {31u, TacticalFrago}, {32u, TacticalVoice},
                             {25u, SeatNext}, {5u, Smoke}})
         profile.bindings.push_back({{InputSource::Keyboard, code}, id});
@@ -154,10 +159,66 @@ void mag_game_controls_validate_profile(const ControlsProfile& profile) {
     }
 }
 
+namespace {
+bool uses_on_foot(const ControlsProfile& profile, PhysicalControl control) {
+    return std::any_of(profile.bindings.begin(), profile.bindings.end(),
+                       [&](const auto& b) { return b.control == control && (b.contexts & OnFoot); });
+}
+// Revision 2 to 3: Confirm moves from Return to X and Bleed out from X to Return, each only where
+// the player left the old default and the new key is free; Command screen is retired, and a key
+// the player chose for it becomes an on-foot key for Select where Select has room for it.
+void upgrade_from_revision_2(ControlsProfile& profile) {
+    const auto at = [&](ActionId action, uint32_t code) {
+        return std::find_if(profile.bindings.begin(), profile.bindings.end(), [&](const auto& b) {
+            return b.action == action && b.control == PhysicalControl{InputSource::Keyboard, code} && b.contexts == OnFoot;
+        });
+    };
+    struct Move { ActionId action; uint32_t from, to; };
+    std::vector<Move> moving;
+    for (Move move : {Move{Confirm, 40, 27}, Move{Bleedout, 27, 40}}) {
+        const auto it = at(move.action, move.from);
+        if (it == profile.bindings.end()) continue;
+        profile.bindings.erase(it);
+        moving.push_back(move);
+    }
+    std::vector<ControlBinding> commands;
+    for (auto it = profile.bindings.begin(); it != profile.bindings.end();) {
+        if (it->action != CommandScreen) { ++it; continue; }
+        if (!(it->control == PhysicalControl{InputSource::Keyboard, 16} && it->contexts == OnFoot)) commands.push_back(*it);
+        it = profile.bindings.erase(it);
+    }
+    for (const auto& move : moving) {
+        if (uses_on_foot(profile, {InputSource::Keyboard, move.to})) {
+            // The new key is taken: keep the old one rather than leave the action unbound.
+            if (!uses_on_foot(profile, {InputSource::Keyboard, move.from}))
+                profile.bindings.push_back({{InputSource::Keyboard, move.from}, move.action});
+            continue;
+        }
+        profile.bindings.push_back({{InputSource::Keyboard, move.to}, move.action});
+    }
+    for (auto binding : commands) {
+        const auto select_keys = std::count_if(profile.bindings.begin(), profile.bindings.end(), [&](const auto& b) {
+            return b.action == Select && b.control.source != InputSource::Controller && (b.contexts & OnFoot);
+        });
+        if (select_keys >= 2 || uses_on_foot(profile, binding.control)) continue;
+        binding.action = Select;
+        binding.contexts = OnFoot;
+        profile.bindings.push_back(binding);
+    }
+}
+}  // namespace
+
 void mag_game_controls_upgrade_profile(ControlsProfile& profile) {
     if (profile.catalog_revision > MagGameControlsCatalogRevision)
         throw std::invalid_argument("Controls catalog is newer than this build");
     if (profile.catalog_revision == MagGameControlsCatalogRevision) return;
+    if (profile.catalog_revision == 2) {
+        upgrade_from_revision_2(profile);
+        profile.catalog_revision = MagGameControlsCatalogRevision;
+        return;
+    }
+    // Before revision 2 no retired action existed; drop any stray one defensively.
+    std::erase_if(profile.bindings, [](const auto& b) { return !mag_game_controls_action(b.action); });
     for (auto binding : mag_game_controls_default_profile().bindings) {
         if (mag_game_controls_action(binding.action)->revision <= profile.catalog_revision) continue;
         const bool present = std::any_of(profile.bindings.begin(), profile.bindings.end(), [&](const auto& b) {

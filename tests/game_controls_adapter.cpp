@@ -1009,20 +1009,20 @@ void situational_actions() {
     // Downed: the player's handler also watches Bleedout, on Reload's channel (14).
     const uint32_t bleed = watch(h.m, Handler, 0, Bleedout, 14);
     require(h.idle_tick() == Attached, "a situational token sharing a channel blocked attachment");
-    mag_controls_push_event({{InputSource::Keyboard, 27}, true, time_ns()});  // X: Bleed out.
+    mag_controls_push_event({{InputSource::Keyboard, 40}, true, time_ns()});  // Return: Bleed out.
     h.begin_tick();
     h.enter_handler();
     require(h.recognize_record(bleed, Handler), "Bleedout stayed native");
-    require(mag_guest_tuple_value(h.tuple_at(bleed)) == 1.0f, "Bleedout not pressed by X");
-    require(!h.recognize(Reload), "X pressed Reload, which shares the channel");
+    require(mag_guest_tuple_value(h.tuple_at(bleed)) == 1.0f, "Bleedout not pressed by Return");
+    require(!h.recognize(Reload), "Return pressed Reload, which shares the channel");
     h.end_poll();
     h.enter_actor();
     h.end_tick();
-    mag_controls_push_event({{InputSource::Keyboard, 27}, false, time_ns()});
+    mag_controls_push_event({{InputSource::Keyboard, 40}, false, time_ns()});
     h.idle_tick();
 
-    // A HUD prompt's own handler (a gameplay route) watching Confirm on Jump's channel: Return
-    // confirms; Space (Jump) no longer does.
+    // A HUD prompt's own handler (a gameplay route) watching Confirm on Jump's channel: X confirms,
+    // as it does in menus; Space (Jump) does not.
     uint32_t record = 0;
     const uint32_t route = route_handler(h.m, record);
     h.m.put32(record, Confirm);
@@ -1039,18 +1039,32 @@ void situational_actions() {
     h.enter_actor();
     h.end_tick();
     mag_controls_push_event({{InputSource::Keyboard, 44}, false, time_ns()});
-    mag_controls_push_event({{InputSource::Keyboard, 40}, true, time_ns()});  // Return.
+    mag_controls_push_event({{InputSource::Keyboard, 27}, true, time_ns()});  // X.
     h.begin_tick();
     h.enter_handler();
     h.fire(Hook::HandlerExit);
     h.enter_handler(route);
     require(h.recognize_record(record, route) && mag_guest_tuple_value(h.tuple_at(record)) == 1.0f,
-            "Return did not confirm the prompt");
+            "X did not confirm the prompt");
     h.fire(Hook::HandlerExit);
     h.end_poll();
     h.enter_actor();
     h.end_tick();
-    mag_controls_push_event({{InputSource::Keyboard, 40}, false, time_ns()});
+    mag_controls_push_event({{InputSource::Keyboard, 27}, false, time_ns()});
+
+    // The command screen is watched on the Select button (13): Tab presses it, as the controller's
+    // Select does.
+    const uint32_t command = watch(h.m, Handler, 2, 0xC6DCD89F, 13);
+    require(h.idle_tick() == Attached, "the command screen token blocked attachment");
+    mag_controls_push_event({{InputSource::Keyboard, 43}, true, time_ns()});  // Tab.
+    h.begin_tick();
+    h.enter_handler();
+    require(h.recognize_record(command, Handler) && mag_guest_tuple_value(h.tuple_at(command)) == 1.0f,
+            "Tab did not press the command screen");
+    h.end_poll();
+    h.enter_actor();
+    h.end_tick();
+    mag_controls_push_event({{InputSource::Keyboard, 43}, false, time_ns()});
 
     // Another registered handler (a vehicle's, say) watching Change seats: V presses it while the
     // player is on foot, and the adapter gives it back when it lets go.
@@ -1120,7 +1134,7 @@ void prompt_queries() {
     Harness h;
     const uint64_t revision = mag_controls_profile_revision();
     const auto bleed = mag_controls_action_bindings(Bleedout, InputContext::OnFoot);
-    require(bleed.size() == 1 && bleed[0].control == PhysicalControl{InputSource::Keyboard, 27}, "Bleed out is X");
+    require(bleed.size() == 1 && bleed[0].control == PhysicalControl{InputSource::Keyboard, 40}, "Bleed out is Return");
     require(mag_controls_action_bindings(Bleedout, InputContext::Menu).empty(), "Bleed out bound in menus");
     const auto start = mag_controls_action_bindings(Start, InputContext::Menu);
     require(start.size() == 1 && start[0].control.code == 41, "controller bindings listed without a remap");
