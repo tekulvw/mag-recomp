@@ -95,6 +95,11 @@ void register_settings(const std::filesystem::path& path, uint64_t session) {
     }
     mag::mag_controls_settings_register(std::move(registration));
 }
+void census(const char* line) { std::fprintf(stderr, "[game-controls] %s\n", line); }
+bool tracing() {
+    const char* value = std::getenv("MAG_GAME_CONTROLS_TRACE");
+    return value && !std::strcmp(value, "1");
+}
 void capture(bool on) { mag_input_desktop_set_enabled(on); }
 void mouse_capture(bool on) { mag_input_desktop_set_mouse_enabled(on); }
 bool waiting(const char* status) {
@@ -147,6 +152,7 @@ void start(const char*) {
     last_status.clear();
     adapter = std::make_unique<MagGameControlsAdapter>(MagGameControlsMemory{nullptr, read, write}, ++sessions,
                                                        profile, capture, mouse_capture);
+    if (tracing()) adapter->set_census(census);
     register_settings(path, sessions.load());
     mag_game_controls_install_hooks(hook);
     std::fprintf(stderr, "[game-controls] registered; controller sticks keep the native response; awaiting the local player\n");

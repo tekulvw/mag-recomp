@@ -90,6 +90,9 @@ class PlayerControlsTests(unittest.TestCase):
     def test_action_transitions_preserve_physical_timestamps_and_short_pulses(self):
         subprocess.run([str(self.binary), 'action-time'], check=True)
 
+    def test_prompt_queries_report_bindings_device_and_revision(self):
+        subprocess.run([str(self.binary), 'prompt-queries'], check=True)
+
 
 if __name__ == '__main__':
     unittest.main()

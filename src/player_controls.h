@@ -121,6 +121,18 @@ struct ConsumptionLedger {
 struct ActionFrameView { std::vector<ActionValue> values; std::vector<ActionEvent> events; };
 void mag_controls_validate_profile(const ControlsProfile& profile);
 void mag_controls_configure(const ControlsProfile& profile);
+// Read-only queries for on-screen prompts; any thread.
+enum class InputDevice { None, KeyboardMouse, Controller };
+// The device of the last press: a key, mouse button, controller button or trigger, or a stick pushed
+// past half way. Mouse motion alone does not count, so prompts do not flicker while aiming.
+InputDevice mag_controls_last_device();
+// The configured profile's bindings for an action that are active in a context, in profile order
+// (a source's primary before its secondary). Controller bindings are included only while the
+// profile remaps the controller; otherwise the game's own button stands.
+std::vector<ControlBinding> mag_controls_action_bindings(ActionId action, InputContext context);
+bool mag_controls_controller_remapped();
+// Advances on every configure, so cached prompts can tell a rebinding happened.
+uint64_t mag_controls_profile_revision();
 void mag_controls_set_capture_state(const InputCaptureState& state);
 // Independent producers update only the fields they own.
 void mag_controls_set_window_capture(bool focused,bool mouse_captured);
