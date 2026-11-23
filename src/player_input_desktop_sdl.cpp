@@ -116,14 +116,26 @@ public:
         SDL_WarpMouseInWindow(window, w / 2, h / 2);
         warping.store(false, std::memory_order_release);
     }
+    // Whether the video driver reports the pointer and the window in screen coordinates; set when
+    // the window attaches.
+    bool global_pointer = false;
     // While captured: is the lock still in place, with the pointer inside the window?
     bool lock_held() {
-        if (!window || !SDL_GetRelativeMouseMode() || !SDL_GetWindowGrab(window)) return false;
-        int x = 0, y = 0, wx = 0, wy = 0, w = 0, h = 0;
-        SDL_GetGlobalMouseState(&x, &y);
-        SDL_GetWindowPosition(window, &wx, &wy);
-        SDL_GetWindowSize(window, &w, &h);
-        return w <= 0 || h <= 0 || (x >= wx && y >= wy && x < wx + w && y < wy + h);
+        if (!window) return false;
+        SdlLockProbe probe;
+        probe.relative = SDL_GetRelativeMouseMode();
+        probe.grabbed = SDL_GetWindowGrab(window);
+        probe.global_pointer = global_pointer;
+        SDL_GetWindowSize(window, &probe.width, &probe.height);
+        if (global_pointer) {
+            SDL_GetGlobalMouseState(&probe.pointer_x, &probe.pointer_y);
+            SDL_GetWindowPosition(window, &probe.window_x, &probe.window_y);
+        } else {
+            SDL_GetMouseState(&probe.pointer_x, &probe.pointer_y);
+            const SDL_Window* focus = SDL_GetMouseFocus();
+            probe.other_window = focus && focus != window;
+        }
+        return sdl_desktop_lock_held(probe);
     }
     DesktopPressedState pressed() override {
         DesktopPressedState state;
@@ -269,6 +281,8 @@ void pump(Backend& b, SDL_Window* window, bool dialog) {
         b.core.window_changed();
         b.platform.window = window;
         b.platform.relative_refused = false;
+        const char* driver = window ? SDL_GetCurrentVideoDriver() : nullptr;
+        b.platform.global_pointer = driver && !std::strcmp(driver, "x11");
         b.window.store(window, std::memory_order_release);
         b.window_id.store(window ? SDL_GetWindowID(window) : 0, std::memory_order_release);
     }
@@ -316,6 +330,15 @@ uint32_t sdl_desktop_mouse_index(uint8_t sdl_button) {
     case SDL_BUTTON_X2: return 4;
     default: return sdl_button ? uint32_t(sdl_button) - 1 : 0;
     }
+}
+
+bool sdl_desktop_lock_held(const SdlLockProbe& p) {
+    if (!p.relative || !p.grabbed) return false;
+    if (p.width <= 0 || p.height <= 0) return true;
+    if (p.global_pointer)
+        return p.pointer_x >= p.window_x && p.pointer_y >= p.window_y && p.pointer_x < p.window_x + p.width &&
+               p.pointer_y < p.window_y + p.height;
+    return !p.other_window && p.pointer_x >= 0 && p.pointer_y >= 0 && p.pointer_x < p.width && p.pointer_y < p.height;
 }
 }  // namespace mag
 

@@ -111,6 +111,37 @@ class SdlSettingsWindowX11Tests(unittest.TestCase):
             self.assertIn('x11 activation checks passed', result.stdout)
 
 
+@unittest.skipUnless(sys.platform.startswith('linux'), 'the Linux settings session (its own binary through /proc/self/exe)')
+class SdlSettingsSessionTests(unittest.TestCase):
+    """The Linux game's side of the settings window: F10 in the game window starts the window's
+    process, which previews a display change and saves controls over the events pipe; the game
+    window's pump applies the preview and undoes it when the window closes."""
+
+    def test_f10_preview_controls_and_restore(self):
+        compiler = shutil.which('clang++') or shutil.which('g++')
+        sdl = sdl_flags()
+        if not compiler or sdl is None:
+            self.skipTest('C++20 and SDL2 development files required')
+        with tempfile.TemporaryDirectory(prefix='mag-settings-session-') as tmp:
+            root = Path(tmp)
+            binary = root / 'session'
+            subprocess.run([compiler, '-std=c++20', '-Wall', '-Wextra', '-Werror', '-pthread', '-DMAG_PLAYER_INPUT_HOLD=1',
+                            '-I' + str(ROOT / 'src'), *[f for f in sdl if not f.startswith(('-l', '-L', '-Wl'))],
+                            str(ROOT / 'tests/player_settings_session_sdl.cpp'), str(ROOT / 'src/player_settings_session.cpp'),
+                            *[f for f in sdl if f.startswith(('-l', '-L', '-Wl'))], '-o', str(binary)],
+                           check=True, timeout=300)
+            (root / 'MAG').mkdir()
+            env = {**os.environ, 'SDL_VIDEODRIVER': 'dummy', 'MAG_PLAYER_SETTINGS_PATH': str(root / 'MAG/settings.json'),
+                   'MAG_PLAYER_OUTPUT_SIZE': '200x100'}
+            result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=60, env=env)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn('settings session checks passed', result.stdout)
+            self.assertEqual(result.stderr.count('[mag settings] settings window opened'), 1, result.stderr)
+            # "controls" from the window: the game applies saved controls at once (this build has none).
+            self.assertIn('[mag settings] saved; server and display changes apply at the next launch', result.stderr)
+            self.assertIn('[mag settings] settings window closed without saving', result.stderr)
+
+
 class Win32SettingsWindowTests(unittest.TestCase):
     """The Win32 window: compiled by MinGW-w64 off Windows; built and driven on Windows."""
 
