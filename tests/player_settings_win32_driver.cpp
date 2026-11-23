@@ -52,6 +52,14 @@ static void press_key(HWND window, UINT vk, UINT scan) {
     PostMessageW(window, WM_KEYDOWN, vk, LPARAM(1 | (scan << 16)));
     settle(window);
 }
+// What the window's status line says, for the log when a check fails.
+static void note(HWND window, const char* step) {
+    wchar_t text[512] = {};
+    GetWindowTextW(GetDlgItem(window, 300), text, 512);
+    const LRESULT row = SendMessageW(GetDlgItem(window, IdList), LVM_GETNEXTITEM, WPARAM(-1), LVNI_SELECTED);
+    std::printf("[driver] %s: status \"%ls\", selected row %d, foreground %d\n", step, text, int(row),
+                GetForegroundWindow() == window);
+}
 static std::string read(const fs::path& path) {
     std::ifstream in(path, std::ios::binary);
     std::ostringstream text;
@@ -100,12 +108,15 @@ int main(int argc, char** argv) {
         PostMessageW(window, WM_COMMAND, IdSetSecondary, 0);
         settle(window);
         press_key(window, 'Q', 0x10);
+        note(window, "fire secondary Q");
         select_row(window, 0);
         PostMessageW(window, WM_COMMAND, IdSetPrimary, 0);
         settle(window);
+        note(window, "forward primary capture");
         PostMessageW(window, WM_KEYDOWN, 'Q', LPARAM(1 | (0x10 << 16)));
         HWND question = wait_window(L"#32770", L"Replace binding?");
         CHECK(question != nullptr);
+        if (!question) note(window, "no conflict question");
         if (question) PostMessageW(question, WM_COMMAND, IDYES, 0);
         settle(window);
         // A mouse button, and Escape cancelling a capture.
@@ -114,6 +125,7 @@ int main(int argc, char** argv) {
         settle(window);
         PostMessageW(window, WM_RBUTTONDOWN, MK_RBUTTON, 0);
         settle(window);
+        note(window, "fire secondary right mouse");
         PostMessageW(window, WM_COMMAND, IdSetPrimary, 0);
         settle(window);
         press_key(window, VK_ESCAPE, 0x01);
