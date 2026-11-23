@@ -87,6 +87,15 @@ u32 depthSnapshot(void*u,u32 h,u32 w,u32 ht) {
     const Image im={w,ht,dimension(w),dimension(ht),4};
     return remember(original.depth_snapshot(u,h,im.pw,im.ph),im);
 }
+// A guest texture that reads a depth target's bytes as colour covers the
+// target's top-left guest rectangle. The backend builds the view from the
+// top-left of the image it holds, which is the physical one, so ask for the
+// same rectangle on the physical grid: the view then covers the guest area at
+// the scaled resolution, like every other image read from a scaled target.
+template<class Backend> u32 depthWordsView(void*u,u32 depth,u32 w,u32 h,u32 remap,u32 format) {
+    const Image im={w,h,dimension(w),dimension(h),4};
+    return remember(static_cast<Backend&>(original).depth_z24_view(u,depth,im.pw,im.ph,remap,format),im);
+}
 template<class Backend> u32 depthAsColor(void*u,u32 h,u32 w,u32 ht,u32 format) {
     const Image im={w,ht,dimension(w),dimension(ht),format==0x92?2u:4u};
     return remember(static_cast<Backend&>(original).depth_as_color(u,h,im.pw,im.ph,format),im);
@@ -115,8 +124,7 @@ void colorWrite(void*u,u32 h,u32 x,u32 y,u32 w,u32 ht,const void *rows,u32 pitch
 // Fragment coordinates remain in guest pixels. This runs before the existing
 // RSX AA-grid and window-origin transforms, preserving both those conventions
 // and the fractional locations of the additional host samples.
-u32 pipeline(void*u,const char *vs,const char *ps,const rsx_be_render_state *state,
-             const rsx_vertex_layout_plan *layout,u32 stride,rsx_be_format fmt,u32 count) {
+std::string guestFragment(const char *ps) {
     std::string text=ps;
     if(text.find("input.position")!=std::string::npos){
         const size_t main=text.find("main(PSInput input)");
@@ -125,7 +133,17 @@ u32 pipeline(void*u,const char *vs,const char *ps,const rsx_be_render_state *sta
         char line[96];std::snprintf(line,sizeof line,"\n    input.position.xy /= %.2f;\n",percent/100.0);
         text.insert(body+1,line);
     }
-    return original.pipeline_create(u,vs,text.c_str(),state,layout,stride,fmt,count);
+    return text;
+}
+u32 pipeline(void*u,const char *vs,const char *ps,const rsx_be_render_state *state,
+             const rsx_vertex_layout_plan *layout,u32 stride,rsx_be_format fmt,u32 count) {
+    return original.pipeline_create(u,vs,guestFragment(ps).c_str(),state,layout,stride,fmt,count);
+}
+// Host-format vertex streams build the same fragment programs through their
+// own entry point; their fragment coordinates need the same guest grid.
+template<class Backend> u32 hostPipeline(void*u,const char *vs,const char *ps,const rsx_be_render_state *state,
+             const rsx_vertex_layout_plan *layout,const u8 *formats,rsx_be_format fmt,u32 count) {
+    return static_cast<Backend&>(original).pipeline_create_host(u,vs,guestFragment(ps).c_str(),state,layout,formats,fmt,count);
 }
 struct Region { u32 x,y,w,h; };
 Region readRegion(const Image &im,u32 x,u32 y,u32 w,u32 h,u32 pitch) {
@@ -163,6 +181,10 @@ template<class Backend> void optionalCallbacks(Backend &target,const Backend &so
         if(source.clear_color_rect)target.clear_color_rect=colorRect<Backend>;
     if constexpr(requires { source.clear_depth_stencil_rect; })
         if(source.clear_depth_stencil_rect)target.clear_depth_stencil_rect=depthRect<Backend>;
+    if constexpr(requires { source.depth_z24_view; })
+        if(source.depth_z24_view)target.depth_z24_view=depthWordsView<Backend>;
+    if constexpr(requires { source.pipeline_create_host; })
+        if(source.pipeline_create_host)target.pipeline_create_host=hostPipeline<Backend>;
 }
 void shutdown(void*u){if(original.shutdown)original.shutdown(u);images.clear();}
 }

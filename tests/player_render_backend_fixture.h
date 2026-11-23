@@ -28,6 +28,8 @@ typedef struct rsx_draw_backend {
  int (*depth_readback)(void*,u32,u32,u32,u32,u32,float*,u32);
  int (*depth_store_z24)(void*,u32,u32,u32,u8*,u32);
  u32 (*depth_z24_texture)(void*,u32,u32,u32,u32);
+ u32 (*depth_z24_view)(void*,u32,u32,u32,u32,u32);
+ u32 (*pipeline_create_host)(void*,const char*,const char*,const rsx_be_render_state*,const rsx_vertex_layout_plan*,const u8*,rsx_be_format,u32);
 } rsx_draw_backend;
 #ifdef __cplusplus
 extern "C" {
