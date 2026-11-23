@@ -80,7 +80,7 @@ class Win32SettingsWindowTests(unittest.TestCase):
             self.skipTest('MinGW-w64 cross compiler')
         with tempfile.TemporaryDirectory() as folder:
             sources = ('src/player_settings_win32.cpp', 'src/player_settings_session.cpp', 'src/player_settings_form.cpp',
-                       'tests/player_settings_win32_driver.cpp')
+                       'src/player_settings_account.cpp', 'tests/player_settings_win32_driver.cpp')
             for source in sources:
                 for controls in ([], ['-DMAG_PLAYER_SETTINGS_CONTROLS=1', '-DMAG_PLAYER_INPUT_HOLD=1']):
                     result = subprocess.run([compiler, '-std=c++20', '-Wall', '-Wextra', '-Werror', '-Wno-unknown-pragmas',
@@ -107,9 +107,9 @@ class Win32SettingsWindowTests(unittest.TestCase):
             subprocess.run([compiler, '/nologo', '/std:c++20', '/EHsc', '/W3', '/WX', '/MT', '/DUNICODE', '/D_UNICODE',
                             '/DMAG_PLAYER_ARCHIVE_NO_ZLIB=1', '/DMAG_PLAYER_SETTINGS_CONTROLS=1', '/D_CRT_SECURE_NO_WARNINGS', '/I' + str(ROOT / 'src'), '/I' + str(root),
                             str(ROOT / 'tests/player_settings_win32_driver.cpp'), str(ROOT / 'src/player_settings_win32.cpp'),
-                            str(root / 'map.obj'), *[str(ROOT / s) for s in FORM],
+                            str(ROOT / 'src/player_settings_account.cpp'), str(root / 'map.obj'), *[str(ROOT / s) for s in FORM],
                             '/Fo' + str(root) + '\\', '/Fe' + str(binary), '/link', '/SUBSYSTEM:CONSOLE', str(root / 'cargo/release/mag_input.lib'),
-                            'user32.lib', 'gdi32.lib', 'comctl32.lib', 'xinput.lib', 'userenv.lib', 'ws2_32.lib',
+                            'user32.lib', 'gdi32.lib', 'comctl32.lib', 'xinput.lib', 'shell32.lib', 'userenv.lib', 'ws2_32.lib',
                             'bcrypt.lib', 'ntdll.lib', 'advapi32.lib', 'dbghelp.lib'], check=True, timeout=300)
             result = subprocess.run([str(binary), str(root / 'work')], capture_output=True, text=True, timeout=60)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)

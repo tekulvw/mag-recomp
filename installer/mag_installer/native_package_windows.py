@@ -165,92 +165,31 @@ static DWORD run(HANDLE job, const wchar_t *binary, const wchar_t *elf, const wc
     return code;
 }
 
-/* The player name rule, as the game's settings apply it (src/player_settings_portable.cpp). */
-/* name-rule-begin */
-static int valid_player_name(const wchar_t *name) {
-    size_t length = 0;
-    for (const wchar_t *p = name; *p; ++p, ++length) {
-        wchar_t c = *p;
-        int letter = (c >= L'a' && c <= L'z') || (c >= L'A' && c <= L'Z');
-        int digit = c >= L'0' && c <= L'9';
-        if (length == 0 ? !letter : !(letter || digit || c == L'-' || c == L'_')) return 0;
-        if (length >= 15) return 0;
+/* The settings window (MagEngine --mag-player-settings-setup, src/player_settings_session.h): the
+ * same window F10 opens in game, with Play MAG, before the game starts. 0: Play MAG; 3: cancelled;
+ * anything else: it could not open (no desktop, say), and the launch goes on with the saved settings. */
+static DWORD run_settings(HANDLE job, const wchar_t *engine, const wchar_t *logs, const wchar_t *notice) {
+    wchar_t log[MAX_PATH]; join(log, logs, L"settings.log");
+    SECURITY_ATTRIBUTES inherit = {sizeof inherit, NULL, TRUE};
+    HANDLE output = CreateFileW(log, FILE_APPEND_DATA, FILE_SHARE_READ, &inherit, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    STARTUPINFOW startup = {sizeof startup};
+    startup.dwFlags = STARTF_USESTDHANDLES;
+    startup.hStdInput = NULL; startup.hStdOutput = output; startup.hStdError = output;
+    wchar_t command[MAX_PATH * 2];
+    swprintf(command, MAX_PATH * 2, L"\"%ls\" --mag-player-settings-setup%ls%ls", engine, notice ? L" " : L"", notice ? notice : L"");
+    PROCESS_INFORMATION process;
+    AllowSetForegroundWindow(ASFW_ANY);
+    if (!CreateProcessW(engine, command, NULL, NULL, TRUE, CREATE_SUSPENDED, NULL, logs, &startup, &process)) {
+        if (output != INVALID_HANDLE_VALUE) CloseHandle(output);
+        return 1;
     }
-    return length >= 3;
-}
-/* name-rule-end */
-
-/* A small modal window that asks for the player name; user32 only, no resources. */
-typedef struct { HWND edit, error; wchar_t *out; int cap, done, ok; const wchar_t *settings, *server; } NamePrompt;
-static LRESULT CALLBACK name_prompt_proc(HWND window, UINT message, WPARAM w, LPARAM l) {
-    NamePrompt *state = (NamePrompt *)GetWindowLongPtrW(window, GWLP_USERDATA);
-    switch (message) {
-    case WM_CREATE: {
-        state = (NamePrompt *)((CREATESTRUCTW *)l)->lpCreateParams;
-        SetWindowLongPtrW(window, GWLP_USERDATA, (LONG_PTR)state);
-        HWND label = CreateWindowExW(0, L"STATIC", L"Choose a player name (3\x2013" L"15 letters, digits, - or _, starting with a letter)",
-                                     WS_CHILD | WS_VISIBLE, 12, 12, 396, 36, window, NULL, NULL, NULL);
-        state->edit = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
-                                      12, 52, 396, 24, window, (HMENU)(INT_PTR)100, NULL, NULL);
-        SendMessageW(state->edit, EM_LIMITTEXT, 15, 0);
-        state->error = CreateWindowExW(0, L"STATIC", L"", WS_CHILD | WS_VISIBLE, 12, 82, 396, 20, window, NULL, NULL, NULL);
-        HWND ok = CreateWindowExW(0, L"BUTTON", L"OK", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
-                                  236, 108, 80, 26, window, (HMENU)(INT_PTR)IDOK, NULL, NULL);
-        HWND cancel = CreateWindowExW(0, L"BUTTON", L"Cancel", WS_CHILD | WS_VISIBLE | WS_TABSTOP,
-                                      328, 108, 80, 26, window, (HMENU)(INT_PTR)IDCANCEL, NULL, NULL);
-        /* With an account portal, linking the account supplies its name instead. */
-        HWND link = CreateWindowExW(0, L"BUTTON", L"Link Account\x2026", WS_CHILD | WS_TABSTOP |
-                                    (mag_portal_applies(state->settings, state->server) ? WS_VISIBLE : 0),
-                                    12, 108, 120, 26, window, (HMENU)(INT_PTR)102, NULL, NULL);
-        HWND all[] = {label, state->edit, state->error, ok, cancel, link};
-        for (int i = 0; i < 6; i++) SendMessageW(all[i], WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
-        SetFocus(state->edit);
-        return 0; }
-    case WM_COMMAND:
-        if (LOWORD(w) == IDOK) {
-            GetWindowTextW(state->edit, state->out, state->cap);
-            if (valid_player_name(state->out)) { state->ok = 1; DestroyWindow(window); }
-            else SetWindowTextW(state->error, L"That name does not follow the rules above.");
-            return 0;
-        }
-        if (LOWORD(w) == IDCANCEL) { DestroyWindow(window); return 0; }
-        if (LOWORD(w) == 102) {
-            EnableWindow(window, FALSE);
-            int linked = mag_portal_link_dialog(state->settings, state->server);
-            EnableWindow(window, TRUE);
-            if (linked) { state->ok = 2; DestroyWindow(window); } else SetForegroundWindow(window);
-            return 0;
-        }
-        break;
-    case WM_CLOSE: DestroyWindow(window); return 0;
-    case WM_DESTROY:
-        if (state) state->done = 1;
-        /* A sent OK/Cancel (BM_CLICK from an accessibility tool) destroys the window inside
-         * GetMessageW; post a thread message so the modal loop wakes and sees done. */
-        PostMessageW(NULL, WM_NULL, 0, 0);
-        return 0;
-    }
-    return DefWindowProcW(window, message, w, l);
-}
-/* 1: a name was chosen; 2: the account was linked instead; 0: cancelled. */
-static int ask_player_name(wchar_t *out, int cap, const wchar_t *settings, const wchar_t *server) {
-    NamePrompt state = {0}; state.out = out; state.cap = cap; out[0] = 0; state.settings = settings; state.server = server;
-    WNDCLASSW type = {0};
-    type.lpfnWndProc = name_prompt_proc; type.hInstance = GetModuleHandleW(NULL);
-    type.hCursor = LoadCursorW(NULL, IDC_ARROW); type.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
-    type.lpszClassName = L"MAGNamePrompt";
-    RegisterClassW(&type);
-    RECT area = {0, 0, 420, 146}; AdjustWindowRect(&area, WS_CAPTION | WS_SYSMENU, FALSE);
-    int width = area.right - area.left, height = area.bottom - area.top;
-    HWND window = CreateWindowExW(WS_EX_DLGMODALFRAME | WS_EX_TOPMOST, L"MAGNamePrompt", L"MAG", WS_CAPTION | WS_SYSMENU | WS_VISIBLE,
-                                  (GetSystemMetrics(SM_CXSCREEN) - width) / 2, (GetSystemMetrics(SM_CYSCREEN) - height) / 2,
-                                  width, height, NULL, NULL, type.hInstance, &state);
-    if (!window) return 0;
-    SetForegroundWindow(window);
-    MSG message;
-    while (!state.done && GetMessageW(&message, NULL, 0, 0) > 0)
-        if (!IsDialogMessageW(window, &message)) { TranslateMessage(&message); DispatchMessageW(&message); }
-    return state.ok;
+    AssignProcessToJobObject(job, process.hProcess);
+    ResumeThread(process.hThread); CloseHandle(process.hThread);
+    WaitForSingleObject(process.hProcess, INFINITE);
+    DWORD code = 1; GetExitCodeProcess(process.hProcess, &code);
+    CloseHandle(process.hProcess);
+    if (output != INVALID_HANDLE_VALUE) CloseHandle(output);
+    return code;
 }
 
 /* Account messages: kept in the launch's supervisor.log, and shown unless --no-prompt. */
@@ -281,9 +220,12 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR arguments, int
     (void)instance; (void)previous; (void)arguments; (void)show;
     /* First-run choices; the game validates and saves them in the player's settings file. */
     static const wchar_t *usage = L"Usage: MAG.exe [--server <hostname or IPv4>] [--name <player name>] [--no-prompt] | MAG.exe --link | MAG.exe --unlink";
+    /* MAG_SKIP_SETUP=1 from the caller: no setup window, as with --no-prompt (read before the
+     * inherited MAG_ variables are dropped). */
+    wchar_t skip[8] = L""; GetEnvironmentVariableW(L"MAG_SKIP_SETUP", skip, 8);
     const wchar_t *server = NULL, *player = NULL;
     int account = 0;  /* --link 1, --unlink 2: manage the account link, then exit */
-    int prompt = 1;  /* --no-prompt: never ask (automation); a missing name then stops with its message */
+    int prompt = 1;  /* --no-prompt: never ask (automation): no setup window, and a missing name stops with its message */
     int argc = 0; LPWSTR *argv = CommandLineToArgvW(GetCommandLineW(), &argc);
     if (!argv) fail(L"Cannot read the command line", NULL);
     for (int i = 1; i < argc; i++) {
@@ -384,6 +326,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR arguments, int
     set_env(L"MAG_PLAYER_SETTINGS_PATH", settings);
     set_env(L"MAG_PLAYER_OVERLAY_ROOT", player_root);
     set_env(L"MAG_PLAYER_SETUP", L"1");
+    /* This supervisor opens setup itself, below; the launcher never does. */
+    set_env(L"MAG_SKIP_SETUP", L"1");
     if (server) set_env(L"MAG_PLAYER_SET_SERVER", server);
     if (player) set_env(L"MAG_PLAYER_SET_NAME", player);
 
@@ -393,21 +337,28 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR arguments, int
     limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
     if (!job || !SetInformationJobObject(job, JobObjectExtendedLimitInformation, &limits, sizeof limits)) fail(L"Cannot create the process job", NULL);
 
+    /* Setup at every launch: the settings window, filled with the saved settings, so Play MAG is
+     * one click. Command-line choices, --no-prompt and MAG_SKIP_SETUP go straight in. */
+    if (prompt && !server && !player && !(skip[0] && wcscmp(skip, L"0"))) {
+        DWORD chosen = run_settings(job, engine, logs, NULL);
+        if (chosen == 3) return 0;  /* Cancel: the player chose not to play */
+        if (chosen) notice(logs, L"The settings window could not open; starting with the saved settings.", 0, MB_ICONWARNING);
+    }
     wchar_t ticket[MAX_PATH]; join(ticket, player_root, L"portal-ticket.bin");
     portal_phase(settings, server, ticket, 1, logs, prompt);
     join(log, logs, L"launcher.log");
     DWORD result = run(job, launcher, launcher_elf, logs, log);
-    /* A server needs a player name. When the game reports none, ask for one, then start again:
-     * the launcher validates and saves it as if it came from --name. */
+    /* A server needs a player name. When the game reports none, the settings window asks for it
+     * (or for the account link, which supplies it), then the launcher starts again. */
     wchar_t marker[MAX_PATH]; join(marker, player_root, L"needs-player-name");
     for (int attempt = 2; result != 90 && prompt && attempt <= 4 && GetFileAttributesW(marker) != INVALID_FILE_ATTRIBUTES; attempt++) {
-        wchar_t chosen[32], again[64];
-        int answer = ask_player_name(chosen, 16, settings, server);
-        if (!answer) break;  /* Cancel: the launch message below explains */
+        wchar_t again[64];
+        DWORD answer = run_settings(job, engine, logs, L"--notice=player-name");
+        if (answer == 3) return 0;  /* Cancel: the player chose not to play */
+        if (answer) break;  /* no window: the launch message below explains */
         DeleteFileW(marker);
         { wchar_t note[MAX_PATH]; join(note, player_root, L"launch-message.txt"); DeleteFileW(note); }
-        if (answer == 2) portal_phase(settings, server, ticket, 1, logs, prompt);  /* linked: the account's name */
-        else set_env(L"MAG_PLAYER_SET_NAME", chosen);
+        portal_phase(settings, server, ticket, 1, logs, prompt);  /* linked meanwhile: the account's ticket and name */
         swprintf(again, 64, L"launcher-%d.log", attempt);
         join(log, logs, again);
         result = run(job, launcher, launcher_elf, logs, log);
@@ -433,7 +384,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR arguments, int
     check(engine, MAG_ENGINE_SHA256); check(engine_elf, MAG_ENGINE_ELF_SHA256); check(engine_self, MAG_ENGINE_SELF_SHA256);
     const wchar_t *cleared[] = {L"MAG_HANDOFF_REQUEST", L"MAG_HANDOFF_TOKEN", L"MAG_ENGINE_BINARY", L"MAG_ENGINE_ELF",
         L"MAG_ENGINE_SELF", L"MAG_ENGINE_BINARY_SHA256", L"MAG_ENGINE_ELF_SHA256", L"MAG_ENGINE_SELF_SHA256", L"MAG_ENGINE_KEY_SHA256",
-        L"MAG_PLAYER_SETUP", L"MAG_PLAYER_SET_SERVER", L"MAG_PLAYER_SET_NAME"};
+        L"MAG_PLAYER_SETUP", L"MAG_PLAYER_SET_SERVER", L"MAG_PLAYER_SET_NAME", L"MAG_SKIP_SETUP"};
     for (size_t i = 0; i < sizeof cleared / sizeof cleared[0]; i++) SetEnvironmentVariableW(cleared[i], NULL);
     set_env(L"PS3_BOOT_PATH", L"/dev_bdvd/PS3_GAME/USRDIR/bin/mage_g.self");
     /* The engine signs in again (MAS, statistics) with its own fresh ticket. */
@@ -460,7 +411,7 @@ def _c_hex(value):
 # Portable sources the supervisor compiles with it: the account link (HTTPS through WinHTTP) and
 # the settings rules, from the workspace's own source.
 SUPERVISOR_SOURCES = ('player_portal.h', 'player_portal.cpp', 'player_portal_winhttp.cpp', 'player_portal_win32.h',
-                      'player_portal_win32.cpp', 'player_settings_portable.h', 'player_settings_file.cpp', 'player_sign_in.h')
+                      'player_portal_win32.cpp', 'player_settings_portable.h', 'player_settings_file.cpp', 'player_settings_text.h', 'player_sign_in.h')
 
 
 def copy_supervisor_sources(source, scratch):

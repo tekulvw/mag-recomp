@@ -4,6 +4,8 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <stdlib.h>
+#include <string.h>
 #include <unistd.h>
 
 static id invalid(NSError **error, NSString *message) {
@@ -113,6 +115,12 @@ NSDictionary *MAGSettingsValidate(id value, NSError **error) {
     normalized[@"server_address"] = host;
     normalized[@"player_name"] = name;
     return normalized.copy;
+}
+
+BOOL MAGSettingsSetupWanted(BOOL launcherPhase, BOOL damaged) {
+    const char *show = getenv("MAG_PLAYER_SHOW_SETTINGS"), *skip = getenv("MAG_SKIP_SETUP");
+    if (damaged || (show && *show)) return YES;
+    return launcherPhase && !(skip && *skip && strcmp(skip, "0"));
 }
 
 NSDictionary *MAGSettingsLoad(NSString *path, BOOL *exists, NSError **error) {
