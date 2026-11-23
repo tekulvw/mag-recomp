@@ -133,7 +133,10 @@ int main(int argc, char** argv) {
         SendMessageW(window, WM_COMMAND, IdSetSecondary, 0);
         PostMessageW(window, WM_RBUTTONDOWN, MK_RBUTTON, 0);
         CHECK(wait_status(window, "Bound Right mouse"));
+        // The chosen action stays selected after a binding changes.
+        CHECK(SendMessageW(GetDlgItem(window, IdList), LVM_GETNEXTITEM, WPARAM(-1), LVNI_SELECTED) == 1);
         SendMessageW(window, WM_COMMAND, IdSetPrimary, 0);
+        CHECK(status_contains(window, "Press a key"));
         PostMessageW(window, WM_KEYDOWN, VK_ESCAPE, LPARAM(1 | (0x01 << 16)));
         CHECK(wait_status(window, "cancelled"));
         note(window, "before save");

@@ -97,6 +97,9 @@ void label(const wchar_t* text, int x, int y, int w, std::vector<HWND>* group) {
 
 void fill_rows() {
     HWND list = item(IdList);
+    // Keep the chosen action selected across a refresh (after each binding change).
+    const int selected = ListView_GetNextItem(list, -1, LVNI_SELECTED);
+    const ActionId keep = selected >= 0 && size_t(selected) < s_window->rows.size() ? s_window->rows[size_t(selected)].action : 0;
     ListView_DeleteAllItems(list);
     s_window->rows = settings_form_rows(*s_window->form, page_device(), page_scope());
     int index = 0;
@@ -109,6 +112,7 @@ void fill_rows() {
         ListView_InsertItem(list, &entry);
         ListView_SetItemText(list, index, 1, first.data());
         ListView_SetItemText(list, index, 2, second.data());
+        if (keep && row.action == keep) ListView_SetItemState(list, index, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
         ++index;
     }
     const bool controller = page_device() == SettingsDevice::Controller;
