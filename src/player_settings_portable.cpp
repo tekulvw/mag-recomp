@@ -2,6 +2,7 @@
 // supplies MAG_PLAYER_SETTINGS_PATH. The launcher phase (MAG_PLAYER_SETUP) applies first-run
 // options, saves the file and a snapshot for the engine; both phases then apply the same snapshot.
 #include "player_settings_portable.h"
+#include "player_settings_session.h"
 #include "player_settings_runtime.h"
 #include "player_server_overlay_portable.h"
 #include "player_sign_in.h"
@@ -227,6 +228,26 @@ bool mag::check_player_name(const std::string &name, std::string &error) {
     return ok;
 }
 
+bool mag::check_display_mode(const std::string &mode, std::string &error) {
+    if (mode == "windowed" || mode == "borderless") return true;
+    error = "The display mode must be \"windowed\" or \"borderless\".";
+    return false;
+}
+
+bool mag::load_portable_settings(const fs::path &path, PortableSettings &settings, bool &exists, std::string &error) {
+    std::string text;
+    settings = PortableSettings{};
+    if (!read_file(path, text, exists, error)) return false;
+    return !exists || parse_portable_settings(text, settings, error);
+}
+
+bool mag::save_portable_settings(const fs::path &path, const PortableSettings &settings, std::string &error) {
+    // The same rules as reading: what this writes, the next launch accepts.
+    PortableSettings checked;
+    if (!parse_portable_settings(format_portable_settings(settings), checked, error)) return false;
+    return write_file(path, format_portable_settings(checked), error);
+}
+
 bool mag::parse_portable_settings(const std::string &json, PortableSettings &settings, std::string &error) {
     std::map<std::string, Value> values;
     if (!parse_object(json, values, error)) return false;
@@ -249,10 +270,10 @@ bool mag::parse_portable_settings(const std::string &json, PortableSettings &set
     if (version != values.end() && (version->second.text || version->second.number != 1)) { error = "This settings version is not supported."; return false; }
     if (!text("server_address", parsed.server_address) || !text("player_name", parsed.player_name) ||
         !port("tcp_port", parsed.tcp_port) || !port("udp_port", parsed.udp_port) ||
-        !text("ticket_file", parsed.ticket_file))
+        !text("ticket_file", parsed.ticket_file) || !text("display_mode", parsed.display_mode))
         return false;
     if (!check_server_address(parsed.server_address, error) || !check_player_name(parsed.player_name, error) ||
-        !check_ticket_file(parsed.ticket_file, error))
+        !check_ticket_file(parsed.ticket_file, error) || !check_display_mode(parsed.display_mode, error))
         return false;
     settings = parsed;
     return true;
@@ -262,7 +283,8 @@ std::string mag::format_portable_settings(const PortableSettings &s) {
     return "{\n  \"schema_version\": 1,\n  \"server_address\": " + quoted(s.server_address) +
            ",\n  \"tcp_port\": " + std::to_string(s.tcp_port) + ",\n  \"udp_port\": " + std::to_string(s.udp_port) +
            ",\n  \"player_name\": " + quoted(s.player_name) +
-           (s.ticket_file.empty() ? std::string() : ",\n  \"ticket_file\": " + quoted(s.ticket_file)) + "\n}\n";
+           (s.ticket_file.empty() ? std::string() : ",\n  \"ticket_file\": " + quoted(s.ticket_file)) +
+           (s.display_mode == "windowed" ? std::string() : ",\n  \"display_mode\": " + quoted(s.display_mode)) + "\n}\n";
 }
 
 extern "C" int mag_player_settings_prepare(void) {
@@ -275,6 +297,14 @@ extern "C" int mag_player_settings_prepare(void) {
     std::string text, error; bool exists = false;
     if (launcher) {
         { std::error_code none; fs::remove(owned / "needs-player-name", none); }  // a fresh check each launch
+        {
+            // First launch (or Shift held on Windows): the settings window, before the game starts.
+            // Command-line choices skip it; they are the scripted route.
+            std::error_code none;
+            const bool present = fs::exists(fs::symlink_status(file, none));
+            if (!variable("MAG_PLAYER_SET_SERVER") && !variable("MAG_PLAYER_SET_NAME") && mag_player_settings_setup_wanted(present))
+                mag_player_settings_setup();
+        }
         if (!read_file(file, text, exists, error) || (exists && !mag::parse_portable_settings(text, settings, error))) {
             // Never guess a server from a damaged file: say so, and play offline this launch.
             say(file.string() + ": " + error + " Playing offline; fix or delete the file to choose a server.");
@@ -312,6 +342,10 @@ extern "C" int mag_player_settings_prepare(void) {
         " (settings: " + file.string() + ")");
     if (!settings.ticket_file.empty() && settings.server_address.empty())
         say("The ticket file is used only on a server; this launch has none.");
+    if (settings.display_mode == "borderless") {
+        // The Vulkan game window opens borderless at the desktop size.
+        export_variable("PS3RECOMP_VK_FULLSCREEN", "1");
+    }
     if (!settings.player_name.empty()) {
         // The runtime takes the online ID from this, and the sign-in keyboard opens with it typed in.
         export_variable("PS3_NP_ONLINE_ID", settings.player_name);

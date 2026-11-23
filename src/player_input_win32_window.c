@@ -10,8 +10,10 @@
  * - the per-message call lets the backend observe the message first. It only ever withholds a
  *   press of Escape that the window would treat as quit while the adapter owns the keyboard
  *   (player_input_desktop_win32.h); everything else goes on to the keyboard's dialog and the
- *   window, as before. */
+ *   window, as before. Before that, F10 opens the settings window (player_settings_session.h) and
+ *   is withheld: the window's default handling of F10 would enter its menu mode and stall the pump. */
 #include "player_input_desktop_win32.h"
+#include "player_settings_session.h"
 #include "libs/misc/osk_native.h"
 
 #if !defined(_WIN32) || !defined(OSK_NATIVE_HAS_WIN32_HOST)
@@ -32,6 +34,7 @@ void mag_player_win32_pump(void)
 
 int mag_player_win32_message(void* message)
 {
+    if (mag_player_settings_win32_message(message)) return 1;
     if (mag_input_desktop_win32_message(message, osk_native_win32_input_active())) return 1;
     return osk_native_win32_handle_message(message);
 }

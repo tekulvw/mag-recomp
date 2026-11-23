@@ -12,6 +12,17 @@
 #include <string>
 #include <vector>
 
+// The settings window (player_settings_session.cpp) is not part of this driver: a stand-in reports
+// when the launch would open it, and may play the player saving a file.
+extern "C" int mag_player_settings_setup_wanted(int settings_exist) { return !settings_exist; }
+extern "C" int mag_player_settings_setup(void) {
+    std::cerr << "[driver] settings window opened\n";
+    const char *saved = std::getenv("MAG_TEST_WINDOW_SAVES");
+    if (!saved) return 0;
+    std::ofstream(std::getenv("MAG_PLAYER_SETTINGS_PATH")) << saved;
+    return 1;
+}
+
 static std::vector<uint8_t> load(const char *path) {
     std::ifstream in(path, std::ios::binary);
     return {std::istreambuf_iterator<char>(in), {}};
@@ -44,7 +55,7 @@ int main(int argc, char **argv) {
     if (mode == "prepare") {
         int result = mag_player_settings_prepare();
         for (const char *name : {"PS3_VFS_ROOT", "PS3_NET_ONLINE", "MAG_LOCAL_NO_TICKET", "PS3_NP_ONLINE_ID", "PS3RECOMP_OSK_INITIAL_TEXT", "MAG_LOCAL_ACCOUNT_NAME",
-                                 "PS3RECOMP_NP_LOCAL_TICKET", "PS3RECOMP_NP_TICKET_FILE"}) {
+                                 "PS3RECOMP_NP_LOCAL_TICKET", "PS3RECOMP_NP_TICKET_FILE", "PS3RECOMP_VK_FULLSCREEN"}) {
             const char *value = std::getenv(name);
             std::cout << name << '=' << (value ? value : "") << '\n';
         }

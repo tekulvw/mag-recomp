@@ -74,6 +74,22 @@ jobs:
         env:
           MAG_TEST_SDK: ${{ github.workspace }}/local/ps3recomp-runtime
         run: python -m unittest tests.test_native_edgegeom tests.test_payload_override_hooks tests.test_extension_registry -v
+  settings-window-windows:
+    # The Win32 settings window, driven with synthetic messages; the python jobs run its SDL2 panel
+    # and form tests on Linux and macOS.
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: ./.github/actions/windows-llvm
+      - name: Pinned Rust toolchain
+        run: rustup toolchain install 1.99.0 --profile minimal
+      - name: Settings window tests
+        run: python -m unittest tests.test_player_settings_window -v
   python:
     # Required check. Runs on the self-hosted Linux runners so pull requests are gated without
     # hosted minutes; tests that need macOS skip themselves here and run in python-macos below.
