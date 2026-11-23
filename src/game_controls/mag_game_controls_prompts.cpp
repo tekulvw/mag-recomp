@@ -23,12 +23,9 @@ bool mag_game_prompts_keyboard(const MagGamePromptSources& sources) {
     const InputPolicy policy = sources.policy ? sources.policy() : InputPolicy{};
     if (policy.mode == InputMode::KBM) return true;
     if (policy.mode == InputMode::Controller) return false;
-    switch (sources.last_device ? sources.last_device() : InputDevice::None) {
-    case InputDevice::KeyboardMouse: return true;
-    case InputDevice::Controller: return false;
-    case InputDevice::None: break;
-    }
-    return !policy.controller_connected;
+    // Before any press, keyboard and mouse: a connected controller counts only once it has sent a
+    // button, trigger or stick press (Windows reports an idle XInput pad on many PCs).
+    return (sources.last_device ? sources.last_device() : InputDevice::None) != InputDevice::Controller;
 }
 
 std::string mag_game_prompts_label(std::string_view name, const MagGamePromptSources& sources) {

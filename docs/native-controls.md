@@ -991,8 +991,14 @@ and keep their icons.
 Keyboard and mouse when the profile mode is KBM; the controller when it is Controller. In Auto the
 device of the last press decides (`mag_controls_last_device`: a key or mouse button, or a controller
 button, trigger or a stick pushed past half way; mouse motion alone never switches, so the prompts
-do not change while aiming). Before any press, a connected controller means the controller,
-otherwise keyboard and mouse.
+do not change while aiming). Before any press it is keyboard and mouse, even with a controller
+connected: a controller counts only once it has sent a press (Windows reports an idle XInput pad on
+many PCs, and a controller player presses a button in the front end anyway).
+
+A movie fetches its text when it builds a screen or prompt, so a device change shows in prompts
+fetched after it; text already fetched (the HUD's is fetched at spawn) keeps its form until the
+movie fetches it again. The game offers no cheap way, known from the outside, to make every movie
+fetch its text again, so nothing forces it.
 
 ### 12.3 Labels
 

@@ -17,7 +17,7 @@
 // What a prompt decision reads. The runtime fills it from the input engine; tests fill it directly.
 struct MagGamePromptSources {
     std::function<mag::InputDevice()> last_device;
-    std::function<mag::InputPolicy()> policy;  // mode and controller connection
+    std::function<mag::InputPolicy()> policy;  // the profile mode
     std::function<std::vector<mag::ControlBinding>(mag::ActionId, mag::InputContext)> bindings;
     std::function<std::string(mag::PhysicalControl)> label;
     // Optional diagnostics (MAG_GAME_CONTROLS_TRACE=1): one line per text that holds a placeholder.

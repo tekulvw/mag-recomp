@@ -59,7 +59,7 @@ void device() {
     w.policy.controller_connected = false;
     require(mag_game_prompts_keyboard(s), "no press and no controller: keyboard");
     w.policy.controller_connected = true;
-    require(!mag_game_prompts_keyboard(s), "no press with a controller: controller");
+    require(mag_game_prompts_keyboard(s), "an idle connected controller does not count before a press");
     w.device = InputDevice::KeyboardMouse;
     require(mag_game_prompts_keyboard(s), "a key press switches to keyboard");
     w.device = InputDevice::Controller;
