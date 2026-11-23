@@ -281,7 +281,15 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
       - name: Linux build and GUI dependencies
-        run: sudo apt-get update && sudo apt-get install -y clang lld build-essential git pkg-config python3-tk libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxfixes-dev libxss-dev libwayland-dev libxkbcommon-dev libasound2-dev libpulse-dev libudev-dev libgl1-mesa-dev libvulkan-dev libssl-dev zlib1g-dev libvulkan1 mesa-vulkan-drivers libsdl2-dev glslang-dev glslang-tools spirv-tools libspirv-cross-c-shared-dev libavcodec-dev libavformat-dev libavutil-dev libswscale-dev xvfb
+        run: |
+          pkgs="clang lld build-essential git pkg-config python3-tk libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxfixes-dev libxss-dev libwayland-dev libxkbcommon-dev libasound2-dev libpulse-dev libudev-dev libgl1-mesa-dev libvulkan-dev libssl-dev zlib1g-dev libvulkan1 mesa-vulkan-drivers libsdl2-dev glslang-dev glslang-tools spirv-tools libspirv-cross-c-shared-dev libavcodec-dev libavformat-dev libavutil-dev libswscale-dev xvfb"
+          for attempt in 1 2 3; do
+            sudo apt-get -o Acquire::Retries=5 update && sudo apt-get -o Acquire::Retries=5 install -y $pkgs && exit 0
+            # The runner image's git-core PPA has returned 503s; after a failure use Ubuntu's own packages.
+            sudo rm -f /etc/apt/sources.list.d/git-core-ubuntu-ppa-*
+            sleep 20
+          done
+          exit 1
       - name: Unit tests
         working-directory: installer
         run: python -m unittest discover -s tests
