@@ -1,0 +1,302 @@
+// Synthetic tests of the performance and error reports (src/player_reports.h). Every input is made
+// up here: logs, summaries, receipts, settings and device tokens.
+// Usage: player_reports selftest <empty scratch folder>
+//        player_reports build <empty scratch folder>   (prints the queued report's path)
+//        player_reports send <queue> <settings file>    (the platform transport; prints the line)
+#include "player_reports.h"
+#include "player_gzip.h"
+#include <cstdio>
+#include <cstdlib>
+#include <deque>
+#include <fstream>
+#include <iostream>
+#include <sstream>
+
+using namespace mag::reports;
+using mag::portal::Headers;
+using mag::portal::Response;
+static int failures = 0;
+#define CHECK(c) do { if (!(c)) { std::fprintf(stderr, "%s:%d: CHECK(%s)\n", __FILE__, __LINE__, #c); ++failures; } } while (0)
+
+static const std::string token = "mgd_SyntheticDeviceToken0123456789abcdef";
+static const std::string home = "/Users/synthetic-player";
+static const std::string windows_home = "C:\\Users\\Synthetic.Player";
+
+static void write(const fs::path &p, const std::string &text) {
+    fs::create_directories(p.parent_path());
+    std::ofstream(p, std::ios::binary) << text;
+}
+static std::string read(const fs::path &p) { std::ifstream in(p, std::ios::binary); std::ostringstream b; b << in.rdbuf(); return b.str(); }
+
+struct FakeTransport : mag::portal::Transport {
+    std::deque<Response> replies;
+    std::vector<std::pair<std::string, Headers>> requests;
+    Response post(const std::string &url, const std::string &, const Headers &headers) override {
+        requests.emplace_back(url, headers);
+        if (replies.empty()) return {0, "", "no reply"};
+        Response r = replies.front(); replies.pop_front(); return r;
+    }
+    void add(int status, int retry_after = -1) { Response r{status, "{}", ""}; r.retry_after = retry_after; replies.push_back(r); }
+};
+
+static std::string summary(const char *role, long long frames, double seconds, long long over_50, long long over_250,
+                           const std::string &audio = "{\"available\": false}") {
+    return std::string("{\"schema_version\": 1, \"role\": \"") + role + "\", \"state\": \"ended\", \"frames\": {\"count\": " +
+           std::to_string(frames) + ", \"seconds\": " + std::to_string(seconds) + ", \"slow\": {\"over_33ms\": " + std::to_string(over_50) +
+           ", \"over_50ms\": " + std::to_string(over_50) + ", \"over_100ms\": 0, \"over_250ms\": " + std::to_string(over_250) +
+           "}, \"histogram_ms\": [[16.5, " + std::to_string(frames) + "]]}, \"minutes\": [], \"hitches\": [], \"audio\": " + audio + "}\n";
+}
+
+// A launch folder like the supervisors make, with logs that mention secrets and home folders.
+static Session launch(const fs::path &root, const std::string &settings_text = "{\"schema_version\":1,\"server_address\":\"play.magtest.online\",\"player_name\":\"Synthetic\"}") {
+    Session s;
+    s.platform = "linux";
+    s.version = "0.7.0";
+    s.logs = root / "logs/launch-0123456789abcdef0123456789abcdef";
+    s.settings = root / "config/settings.json";
+    s.queue = root / "home/reports";
+    s.receipts = root / "resources/package-receipts";
+    s.backend = "Vulkan";
+    s.system = {{"os", "Synthetic OS 1"}, {"cpu", "Synthetic CPU"}, {"cpu_threads", "8"}};
+    s.redaction.homes = {home, windows_home};
+    write(s.settings, settings_text);
+    write(s.settings.parent_path() / "portal-link.json",
+          "{\"schema_version\":1,\"portal\":\"https://portal.invalid\",\"device_token\":\"" + token + "\",\"player_name\":\"Synthetic\"}");
+    write(s.receipts / "launcher.json", "{\"image_name\":\"EBOOT\",\"sdk_revision\":\"" + std::string(40, 'a') + "\",\"binary_sha256\":\"" +
+                                            std::string(64, 'b') + "\",\"build_path\":\"/home/builder/secret\"}");
+    write(s.receipts / "engine.json", "{\"image_name\":\"mage_g\",\"sdk_revision\":\"" + std::string(40, 'a') + "\"}");
+    write(s.logs / "launcher.log", "[boot] VFS root: " + home + "/MAG/game\nAuthorization: Bearer " + token + "\n");
+    write(s.logs / "engine.log", "[RSX vulkan] using device 0: Synthetic GPU 9000\n[boot] " + windows_home + "\\MAG\\game\n" +
+                                     "escaped C:\\\\Users\\\\Synthetic.Player\\\\MAG and c:/users/synthetic.player/MAG\n" +
+                                     "other /home/someone/x and C:\\Users\\Public\\ok\n" + token + "\n");
+    write(s.logs / "supervisor.log", "2026-11-23T00:00:00Z started\n");
+    write(s.logs / "session-engine.json", summary("engine", 36000, 600, 3000, 2));
+    return s;
+}
+
+static void json_and_quote() {
+    Json v;
+    CHECK(parse_json("{\"a\": [1, -2.5e3, true, null, \"x\\u00e9\\ud83d\\ude00\"], \"b\": {}}", v));
+    CHECK(to_json(v) == "{\"a\":[1,-2.5e3,true,null,\"x\xC3\xA9\xF0\x9F\x98\x80\"],\"b\":{}}");
+    CHECK(v.get("a") && v.get("a")->items[1].number() == -2500);
+    for (const char *bad : {"", "{", "{\"a\":1,}", "[01]", "{\"a\":1}x", "{\"a\":1,\"a\":2}", "\"\\ud800\"", "nul"}) CHECK(!parse_json(bad, v));
+    CHECK(quote("a\"b\\\n\x01") == "\"a\\\"b\\\\\\n\\u0001\"");
+    CHECK(quote("\xff\xC3") == "\"\xEF\xBF\xBD\xEF\xBF\xBD\"");
+}
+
+static void redaction() {
+    Redaction r{{"secret-ticket-text"}, {{"/Volumes/Games/MAG", "<MAG folder>"}}, {home, windows_home}};
+    const std::string text = "t=" + token + " Bearer abc.def-ghi_jkl x secret-ticket-text " + home + "/MAG " + home + "x " +
+                             "c:\\users\\SYNTHETIC.PLAYER\\MAG " + "/Volumes/Games/MAG/logs /Volumes/Games/MAGIC " + "/Users/Shared/ok /Users/other/a /home/u/b D:\\Users\\Default\\ok";
+    const std::string out = redact(text, r);
+    CHECK(out.find("SyntheticDeviceToken") == std::string::npos);
+    CHECK(out.find("abc.def") == std::string::npos);
+    CHECK(out.find("secret-ticket-text") == std::string::npos);
+    CHECK(out.find("synthetic-player") == std::string::npos);
+    CHECK(out.find("SYNTHETIC") == std::string::npos);
+    CHECK(out.find("~/MAG") != std::string::npos);
+    CHECK(out.find("~\\MAG") != std::string::npos);
+    CHECK(out.find("/Users/Shared/ok") != std::string::npos);
+    CHECK(out.find("other") == std::string::npos);
+    CHECK(out.find("/home/u") == std::string::npos);
+    CHECK(out.find("D:\\Users\\Default\\ok") != std::string::npos);
+    CHECK(out.find("<MAG folder>/logs") != std::string::npos && out.find("/Volumes/Games/MAGIC") != std::string::npos);
+    CHECK(redact("mgd_short", r) == "mgd_short");  // too short to be a token
+}
+
+static void decisions(const fs::path &root) {
+    std::vector<std::string> reasons;
+    Json j;
+    CHECK(parse_json(summary("engine", 36000, 600, 3000, 2), j));
+    CHECK(judge_summary(j, reasons) == Trigger::SlowFrames);  // 8.3% over 50 ms
+    reasons.clear();
+    CHECK(parse_json(summary("engine", 36000, 600, 100, 2), j));
+    CHECK(judge_summary(j, reasons) == Trigger::None);
+    CHECK(parse_json(summary("engine", 36000, 600, 100, long_frame_count), j));
+    CHECK(judge_summary(j, reasons) == Trigger::SlowFrames);
+    reasons.clear();
+    CHECK(parse_json(summary("engine", 1000, 30, 900, 100), j));  // too short to judge
+    CHECK(judge_summary(j, reasons) == Trigger::None);
+    const std::string audio = "{\"available\": true, \"underruns\": 39, \"device_errors\": 0, \"clock_seconds\": 600, \"drift_ms\": 1.0}";
+    CHECK(parse_json(summary("engine", 36000, 600, 10, 0, audio), j));
+    CHECK(judge_summary(j, reasons) == Trigger::None);  // 39 < 20 + 600 / 30
+    const std::string bad_audio = "{\"available\": true, \"underruns\": 41, \"device_errors\": 0, \"clock_seconds\": 600, \"drift_ms\": 1.0}";
+    CHECK(parse_json(summary("engine", 36000, 600, 10, 0, bad_audio), j));
+    CHECK(judge_summary(j, reasons) == Trigger::Audio);
+    const std::string errors = "{\"available\": true, \"underruns\": 0, \"device_errors\": 1, \"clock_seconds\": 5, \"drift_ms\": 0}";
+    CHECK(parse_json(summary("engine", 10, 1, 0, 0, errors), j));
+    CHECK(judge_summary(j, reasons) == Trigger::Audio);
+    const std::string drift = "{\"available\": true, \"underruns\": 0, \"device_errors\": 0, \"clock_seconds\": 600, \"drift_ms\": -2500}";
+    CHECK(parse_json(summary("engine", 36000, 600, 0, 0, drift), j));
+    CHECK(judge_summary(j, reasons) == Trigger::Audio);
+
+    CHECK(is_crash_exit(139, "linux") && !is_crash_exit(1, "linux") && !is_crash_exit(90, "macos"));
+    CHECK(is_crash_exit(0xC0000005LL, "windows") && !is_crash_exit(139, "windows"));
+    CHECK(is_halt_exit(88) && is_halt_exit(87) && !is_halt_exit(1));
+
+    Session s = launch(root / "decide");
+    s.launcher_exit = 90; s.engine_exit = 0;
+    CHECK(decide(s).trigger == Trigger::SlowFrames);
+    s.engine_exit = 139;
+    CHECK(decide(s).trigger == Trigger::Crash);
+    s.engine_exit = 88;
+    write(s.logs / "engine.log", "x\n[hle] UNRESOLVED NID 0x99AB1A26 lr=0x00000000 r3..r6=0 0 0 0; halting\n");
+    Decision d = decide(s);
+    CHECK(d.trigger == Trigger::Halt && d.reasons.size() == 2 && d.reasons[1].find("0x99AB1A26") != std::string::npos);
+    s.engine_exit = -1; s.launcher_exit = 1;
+    CHECK(decide(s).trigger == Trigger::Crash);
+    s.player_stop = true;  // a missing name, for the player to correct: neither a crash nor an error
+    CHECK(decide(s).trigger == Trigger::None || decide(s).trigger == Trigger::SlowFrames);
+    s.launch_error = "Enter a player name.";
+    CHECK(decide(s).trigger != Trigger::LaunchError);
+    s.player_stop = false;
+    s.launcher_exit = 0; s.launch_error = "The game files are missing.";
+    CHECK(decide(s).trigger == Trigger::LaunchError);
+    s.launch_error.clear();
+    fs::remove(s.logs / "session-engine.json");
+    CHECK(decide(s).trigger == Trigger::None);
+    write(s.logs / "report-requested", "{\"requested_at\":1}\n");
+    d = decide(s);
+    CHECK(d.trigger == Trigger::Manual && d.manual);
+}
+
+static void finishing(const fs::path &root) {
+    // Reports on (no field): a slow session is queued; the body follows the portal's contract.
+    Session s = launch(root / "on");
+    s.launcher_exit = 90; s.engine_exit = 0;
+    Finished f = finish_session(s);
+    if (f.report_id.empty()) std::fprintf(stderr, "finish: %s\n", f.line.c_str());
+    CHECK(f.trigger == Trigger::SlowFrames && !f.report_id.empty());
+    CHECK(queued(s.queue).size() == 1);
+    const std::string body = read(s.queue / (f.report_id + ".json"));
+    Json report;
+    CHECK(parse_json(body, report, 8u << 20));
+    CHECK(report.members.size() == 7);
+    CHECK(report.get("trigger") && report.get("trigger")->text == "slow_frames");
+    CHECK(report.get("client")->get("gpu")->text == "Synthetic GPU 9000");
+    CHECK(report.get("client")->get("build")->get("launcher")->get("build_path") == nullptr);
+    CHECK(body.find(token) == std::string::npos && body.find("synthetic-player") == std::string::npos);
+    CHECK(body.find("portal-link") == std::string::npos);
+    for (char c : f.report_id) CHECK(!(c >= 'A' && c <= 'F'));
+    // The same session again: the performance limit allows two a day.
+    CHECK(finish_session(s).trigger == Trigger::SlowFrames);
+    f = finish_session(s);
+    CHECK(f.trigger == Trigger::None && f.line.find("daily limit") != std::string::npos);
+
+    // Reports off: nothing automatic, but the player's own request is sent.
+    Session off = launch(root / "off", "{\"schema_version\":1,\"server_address\":\"play.magtest.online\",\"send_reports\":false}");
+    off.launcher_exit = 90; off.engine_exit = 139;
+    f = finish_session(off);
+    CHECK(f.trigger == Trigger::None && f.line.find("off") != std::string::npos && queued(off.queue).empty());
+    write(off.logs / "report-requested", "{}\n");
+    f = finish_session(off);
+    CHECK(f.trigger == Trigger::Manual && queued(off.queue).size() == 1);
+
+    // Not linked: no report at all.
+    Session unlinked = launch(root / "unlinked");
+    fs::remove(unlinked.settings.parent_path() / "portal-link.json");
+    unlinked.engine_exit = 139;
+    f = finish_session(unlinked);
+    CHECK(f.trigger == Trigger::None && f.line.find("not linked") != std::string::npos);
+
+    // Payload caps: incompressible logs are cut to fit.
+    Session big = launch(root / "big");
+    std::string noise;
+    uint64_t x = 88172645463325252ull;
+    for (size_t i = 0; i < (6u << 20); ++i) { x ^= x << 13; x ^= x >> 7; x ^= x << 17; noise += char('!' + x % 90); if (i % 100 == 99) noise += '\n'; }
+    write(big.logs / "engine.log", noise);
+    write(big.logs / "launcher.log", noise);
+    Decision crash{Trigger::Crash, {"the engine exited with code 139"}, false};
+    const std::string large = build_report(big, crash, new_report_id());
+    Json parsed;
+    CHECK(parse_json(large, parsed, 8u << 20));
+    size_t compressed = 0;
+    for (const auto &[name, log] : parsed.get("logs")->members) compressed += log.get("data")->text.size() / 4 * 3;
+    CHECK(compressed <= logs_max_compressed + 8);
+    CHECK(compressed > logs_max_compressed / 4);
+}
+
+static void sending(const fs::path &root) {
+    Session s = launch(root / "send");
+    const auto id = [] { return new_report_id(); };
+    std::string error;
+    for (int i = 0; i < 7; ++i) CHECK(enqueue(s.queue, id(), Trigger::Crash, "{\"n\":" + std::to_string(i) + "}", error));
+    CHECK(queued(s.queue).size() == queue_max_reports);  // the oldest went first
+    FakeTransport t;
+    t.add(201); t.add(200); t.add(500);
+    Sent sent = send_queued(t, s.queue, s.settings, 1000000);
+    CHECK(sent.sent == 2 && sent.kept == 3 && sent.dropped == 0);
+    CHECK(t.requests.size() == 3);
+    CHECK(t.requests[0].first == "https://portal.invalid/api/v1/reports");
+    CHECK(t.requests[0].second.size() == 1 && t.requests[0].second[0].second == "Bearer " + token);
+    CHECK(sent.line.find(token) == std::string::npos);
+    // The failed report waits retry_first_seconds; the two after it were not tried.
+    auto q = queued(s.queue);
+    CHECK(q.size() == 3 && q[0].attempts == 1 && q[0].next_attempt == 1000000 + retry_first_seconds);
+    CHECK(q[1].attempts == 0 && q[2].attempts == 0);
+    // Not due: kept. 429 with Retry-After: kept until then, and the rest wait for the next sender.
+    t.requests.clear();
+    t.add(429, 120);
+    sent = send_queued(t, s.queue, s.settings, 1000010);
+    q = queued(s.queue);
+    CHECK(t.requests.size() == 1 && sent.kept == 3 && q.size() == 3);
+    CHECK(q[0].next_attempt == 1000000 + retry_first_seconds && q[1].next_attempt == 1000010 + 120 && q[1].attempts == 0);
+    // 413 drops that report; 401 drops it and stops.
+    t.requests.clear();
+    t.add(413); t.add(401);
+    sent = send_queued(t, s.queue, s.settings, 2000000);
+    CHECK(sent.dropped == 2 && sent.kept == 1 && t.requests.size() == 2);
+    // Network failures back off and are dropped after send_max_attempts.
+    long long now = 3000000;
+    for (int i = 0; i < send_max_attempts; ++i) { t.add(0); send_queued(t, s.queue, s.settings, now); now += retry_max_seconds; }
+    CHECK(queued(s.queue).empty());
+    // One sender at a time.
+    CHECK(enqueue(s.queue, id(), Trigger::Manual, "{}", error));
+    write(s.queue / "send.lock", std::to_string(now) + "\n");
+    sent = send_queued(t, s.queue, s.settings, now + 5);
+    CHECK(sent.line.find("another sender") != std::string::npos && queued(s.queue).size() == 1);
+    sent = send_queued(t, s.queue, s.settings, now + lock_stale_seconds + 1);  // a stale lock is taken over
+    CHECK(sent.line.find("another sender") == std::string::npos);
+    // Reports turned off since: automatic ones are dropped unsent, the player's own request is not.
+    fs::remove(s.queue / "send.lock");
+    for (auto &e : queued(s.queue)) { fs::remove(s.queue / (e.report_id + ".json")); fs::remove(s.queue / (e.report_id + ".state")); }
+    CHECK(enqueue(s.queue, id(), Trigger::Crash, "{}", error) && enqueue(s.queue, id(), Trigger::Manual, "{}", error));
+    write(s.settings, "{\"schema_version\":1,\"server_address\":\"play.magtest.online\",\"send_reports\":false}");
+    t.requests.clear();
+    t.add(201);
+    sent = send_queued(t, s.queue, s.settings, now + 10);
+    CHECK(sent.dropped == 1 && sent.sent == 1 && t.requests.size() == 1 && queued(s.queue).empty());
+}
+
+int main(int argc, char **argv) {
+    if (argc == 3 && std::string(argv[1]) == "selftest") {
+        const fs::path root = argv[2];
+        json_and_quote();
+        redaction();
+        decisions(root);
+        finishing(root);
+        sending(root);
+        CHECK(gpu_from_log("a\n[RSX vulkan] using device 1: Some GPU (x)\r\nb") == "Some GPU (x)");
+        CHECK(!system_info().empty());
+        if (failures) { std::fprintf(stderr, "%d failures\n", failures); return 1; }
+        std::printf("[player_reports] PASS\n");
+        return 0;
+    }
+    if (argc == 3 && std::string(argv[1]) == "build") {
+        Session s = launch(argv[2]);
+        s.launcher_exit = 90; s.engine_exit = 139;
+        const Finished f = finish_session(s);
+        if (f.report_id.empty()) { std::fprintf(stderr, "%s\n", f.line.c_str()); return 1; }
+        std::printf("%s\n", (s.queue / (f.report_id + ".json")).string().c_str());
+        return 0;
+    }
+    if (argc == 4 && std::string(argv[1]) == "send") {
+        auto transport = mag::portal::make_platform_transport();
+        if (!transport) return 3;
+        const Sent sent = send_queued(*transport, argv[2], argv[3]);
+        std::printf("%s\n", sent.line.c_str());
+        return 0;
+    }
+    std::fprintf(stderr, "usage: player_reports selftest|build <scratch> | send <queue> <settings>\n");
+    return 2;
+}

@@ -22,7 +22,10 @@ struct Response {
     int status = 0;     // HTTP status; 0 when no HTTP response arrived
     std::string body;
     std::string error;  // why no response arrived (status 0), for the player
+    int retry_after = -1;  // a Retry-After header given in seconds; -1 when absent or a date
 };
+// A Retry-After value: whole seconds (at most a day); -1 for anything else.
+int parse_retry_after(const std::string &value);
 class Transport {
 public:
     virtual ~Transport() = default;

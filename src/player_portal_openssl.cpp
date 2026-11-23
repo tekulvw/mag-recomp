@@ -112,6 +112,7 @@ bool parse_reply(const std::string &raw, Response &out) {
             std::string name = lower(header.substr(0, colon)), value = header.substr(colon + 1);
             value.erase(0, value.find_first_not_of(" \t"));
             if (name == "transfer-encoding" && lower(value).find("chunked") != std::string::npos) chunked = true;
+            if (name == "retry-after") out.retry_after = parse_retry_after(value);
             if (name == "content-length") {
                 char *end = nullptr; errno = 0;
                 length = std::strtoll(value.c_str(), &end, 10);
@@ -209,7 +210,7 @@ public:
         else if (raw.size() > reply_limit) response.error = "the reply from " + url.host + " was too large";
         else if (!parse_reply(raw, response)) response.error = raw.empty() ? "no reply from " + url.host + " (timed out or closed)"
                                                                            : "an incomplete reply from " + url.host;
-        if (!response.error.empty()) { response.status = 0; response.body.clear(); }
+        if (!response.error.empty()) { response.status = 0; response.body.clear(); response.retry_after = -1; }
         return response;
     }
 };

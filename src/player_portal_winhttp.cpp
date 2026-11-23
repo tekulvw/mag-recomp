@@ -78,6 +78,13 @@ public:
         if (!WinHttpQueryHeaders(request.h, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_HEADER_NAME_BY_INDEX,
                                  &status, &size, WINHTTP_NO_HEADER_INDEX))
             return failed();
+        wchar_t retry[32]; DWORD retry_size = sizeof retry;
+        if (WinHttpQueryHeaders(request.h, WINHTTP_QUERY_RETRY_AFTER, WINHTTP_HEADER_NAME_BY_INDEX, retry, &retry_size,
+                                WINHTTP_NO_HEADER_INDEX)) {
+            std::string value;
+            for (DWORD i = 0; i < retry_size / sizeof(wchar_t) && retry[i]; ++i) value += retry[i] < 128 ? char(retry[i]) : '?';
+            response.retry_after = parse_retry_after(value);
+        }
         for (;;) {
             DWORD available = 0, read = 0;
             if (!WinHttpQueryDataAvailable(request.h, &available)) return failed();

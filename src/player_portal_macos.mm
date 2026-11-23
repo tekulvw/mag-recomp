@@ -43,10 +43,13 @@ public:
             configuration.timeoutIntervalForRequest = 20; configuration.timeoutIntervalForResource = 40;
             NSURLSession *session = [NSURLSession sessionWithConfiguration:configuration delegate:[MAGPortalSessionDelegate new] delegateQueue:nil];
             dispatch_semaphore_t done = dispatch_semaphore_create(0);
-            __block NSInteger status = 0; __block NSData *data = nil; __block NSString *failure = nil;
+            __block NSInteger status = 0; __block NSData *data = nil; __block NSString *failure = nil, *retry = nil;
             [[session dataTaskWithRequest:request completionHandler:^(NSData *reply, NSURLResponse *meta, NSError *error) {
                 if (error) failure = error.localizedDescription ?: @"the request failed";
-                else if ([meta isKindOfClass:NSHTTPURLResponse.class]) { status = ((NSHTTPURLResponse *)meta).statusCode; data = reply; }
+                else if ([meta isKindOfClass:NSHTTPURLResponse.class]) {
+                    status = ((NSHTTPURLResponse *)meta).statusCode; data = reply;
+                    retry = [((NSHTTPURLResponse *)meta) valueForHTTPHeaderField:@"Retry-After"];
+                }
                 else failure = @"the reply was not HTTP";
                 dispatch_semaphore_signal(done);
             }] resume];
@@ -54,6 +57,7 @@ public:
             [session finishTasksAndInvalidate];
             if (failure) { response.error = failure.UTF8String; return response; }
             response.status = int(status);
+            if (retry) response.retry_after = parse_retry_after(retry.UTF8String);
             if (data.length > (1u << 20)) { response.status = 0; response.error = "the reply was too large"; return response; }
             response.body.assign((const char *)data.bytes, data.length);
             return response;

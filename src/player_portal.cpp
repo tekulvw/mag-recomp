@@ -631,4 +631,16 @@ Outcome import_device_token(Transport &transport, const std::string &portal, con
     out = link;
     return {};
 }
+
+int parse_retry_after(const std::string &value) {
+    size_t a = value.find_first_not_of(" \t"), b = value.find_last_not_of(" \t\r\n");
+    if (a == std::string::npos) return -1;
+    long long seconds = 0;
+    for (size_t i = a; i <= b; ++i) {
+        if (value[i] < '0' || value[i] > '9') return -1;
+        seconds = seconds * 10 + (value[i] - '0');
+        if (seconds > 86400) return 86400;
+    }
+    return int(seconds);
+}
 }  // namespace mag::portal
