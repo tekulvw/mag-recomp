@@ -52,11 +52,11 @@ The [installer](installer/README.md) does all of that for you: choose your game 
 installation folder, click **Build MAG**, and it downloads pinned build tools, runs every step on
 your computer and packages the result. Download it from a release.
 
-MAG has a [settings window](docs/player-settings.md) for the game server, player name, display mode
-and controls on every system: press **F10** while playing. It also opens before the game on the
-first launch; hold **Option** (macOS) or **Shift** (Windows) when launching to open it then too.
-macOS also has **MAG → Settings…**, Command-comma, and output resolution and FXAA. Settings survive
-updates and rebuilds.
+MAG has a [settings window](docs/player-settings.md) for the game server, player name, account,
+display and controls on every system: press **F10** while playing. On macOS and Windows it also
+opens before the game at every launch, filled with your saved settings, so **Play MAG** is one
+click (`--no-prompt` skips it, for scripts). macOS also has **MAG → Settings…** and Command-comma,
+and its Metal renderer adds rendering resolution and FXAA. Settings survive updates and rebuilds.
 
 ## For players
 
@@ -88,12 +88,14 @@ You build MAG on your own computer from your own copy; nothing game-derived is e
    - **macOS, once MAG starts:** if macOS asks for a permission for MAG, choose **Allow**.
 5. **Choose your player name.** You need one to play online. The server is already set
    (`play.magtest.online`); change it only if you were given another.
-   - **macOS:** the setup window opens on first launch. Fill in **Player name** (and **Game server**
-     if needed), then click **Play MAG**.
-   - **Windows and Linux:** start `MAG.exe` (Windows) or `./MAG` from the MAG folder (Linux). The
-     first time, the **MAG Setup** window opens: fill in **Player name** (and **Game server** if
-     needed), then click **Save and play**. Without a desktop (over SSH, say) run it once with
-     your name instead: `./MAG --name YourName` (add `--server <address>` for another server).
+   - **macOS and Windows:** start `MAG.app` or `MAG.exe`. The **MAG Settings** window opens before
+     the game, at every launch: fill in **Player name** (and **Game server** if needed), or click
+     **Link Account…** to play with your magtest.online account, then click **Play MAG**. Later
+     launches show your saved choices, so **Play MAG** is all it takes.
+   - **Linux:** start `./MAG` from the MAG folder. The first time, the **MAG Setup** window opens:
+     fill in **Player name** (and **Game server** if needed), then click **Save and play**.
+   - Without a desktop (over SSH, say) run it once with your name instead: `./MAG --name YourName`
+     (add `--server <address>` for another server).
 
    A name has 3 to 15 letters, digits, `-` or `_`, and starts with a letter. MAG remembers it, and
    types it in for you when the game asks you to sign in: just confirm it. On Linux that sign-in box
@@ -110,8 +112,8 @@ You build MAG on your own computer from your own copy; nothing game-derived is e
    with `--link-token` instead. See [Account link](docs/player-settings.md#account-link).
 6. **Use a controller, or the keyboard.** A standard USB or Bluetooth gamepad works on every system
    and is the recommended way to play. On Windows and Linux the keyboard also works as a controller
-   while the game window has focus and no controller is connected (set `PAD_NO_KEYBOARD=1` to turn
-   it off). Keys are physical positions, so they are the same on any keyboard layout:
+   while the game window has focus, alongside any connected controller (set `PAD_NO_KEYBOARD=1` to
+   turn it off). Keys are physical positions, so they are the same on any keyboard layout:
 
    | Keys | Controller |
    | --- | --- |
@@ -121,8 +123,9 @@ You build MAG on your own computer from your own copy; nothing game-derived is e
    | Arrow keys | D-pad |
    | WASD / IJKL | Left / right stick |
 
-   Any controller turns this keyboard layout off, including virtual gamepads that Steam Input or
-   remote-desktop and streaming software create. macOS uses the same keys in its game window.
+   A connected controller keeps working beside it, including virtual gamepads that Steam Input or
+   remote-desktop and streaming software create: keyboard buttons add to the controller's, and a
+   stick follows its keys while one is held. macOS uses the same keys in its game window.
 
    **Keyboard and mouse** play is built in on every system, beside any controller. In a match, on
    foot, these bindings replace the layout above: WASD moves, the mouse aims, left button fires,

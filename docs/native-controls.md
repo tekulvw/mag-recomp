@@ -258,6 +258,7 @@ and, where stated, write registers.
 | `AssistAdhesion` | `004F07D0` | early-result | r3 assist record, r4 actor, r6 and r7 output float addresses; on true r3 is the result |
 | `AssistCleanupEnter` / `AssistCleanupExit` | `004F1EEC` | entry/exit | entry r3 assist record, r4 camera |
 | `AssistFrictionYaw`, `AssistFrictionPitch` | `004E1DA8`, `004E1E10` | point | r3 camera, f1 friction scale (writable) |
+| `PromptText` / `PromptTextDone` | `0053BEA8` (a movie's localized-text request) | points, before and after the call returning to `0053BF44` | before: r3 the value record handed to the movie (section 12.1) |
 
 Caller return addresses: `YawRateEnter` comes from the basic consumer when `lr` is `0x0061E7B4`
 and from the sprint consumer when `lr` is `0x00675CF0`; `SprintPitchRateEnter` from the sprint
@@ -300,6 +301,15 @@ attachment statuses all print as "on-foot controls attached".
 unavailable or invalid state", followed by a colon and the error's own description when it has one
 (for example "invalid tuning record"), and makes the event return false (the game proceeds
 natively).
+
+**Diagnostics.** `MAG_GAME_CONTROLS_TRACE=1` (any value but empty or `0`) adds opt-in log lines;
+nothing changes behaviour. About once a second while handlers update, `trace look` counts how far
+mouse look got: handler updates, gameplay eligibility, look held by a menu, mouse eligibility,
+frames with motion and their summed counts, prepared and latched frames, look consumer seams run,
+nonzero displacements consumed, and the mouse-lock requests made (on and off). Every five seconds,
+`trace cost` gives the owner thread's update ticks, its hook calls per tick, the time spent in the
+hooks per tick, and each event above 2% of that time (by its number in `MagControlsHook`). The
+desktop backends add their own lines (section 8.1).
 
 **Construction** validates the profile, requires a session and both memory callbacks, configures
 the engine with the profile, reports the context as unsupported, records the engine's capture
@@ -526,7 +536,9 @@ since last seen, reset system and host caches, clear receipts and cancel the mou
      generation (a context change is not a device reset);
    - remember the context and the new capture generation; without gameplay eligibility reset host
      caches and clear gameplay receipts; request relative mouse capture only with gameplay
-     eligibility outside Controller mode; record the attaching tick; status "on-foot Rust input
+     eligibility outside Controller mode and while no menu holds look (the same request as step 5;
+     a frame attaches at every poll, so asking for the lock here regardless would take it back at
+     every poll while a menu holds look); record the attaching tick; status "on-foot Rust input
      attached" or "native menu buttons attached".
 4. Remember the system routes. When gameplay routes are now unavailable (a menu opened during the
    poll), revoke gameplay and mouse eligibility, reset host caches, clear gameplay receipts and
@@ -631,8 +643,19 @@ list still equals it exactly and gameplay routes are available.
   generation, actor handle `generation<<16|index`, actor, logic, controller, state, aim kind),
   yaw = minus the converted yaw (screen-right motion turns the other way in the game's yaw), pitch
   as converted, time step f31, rotation allowed, and mouse ownership = the look owner is the mouse.
-  When prepared, write 0.0 to the actor's two look-rate inputs (failure is an error) and set
-  status "on-foot mouse prepared".
+  When prepared, write the actor's two look-rate inputs (failure is an error) and set status
+  "on-foot mouse prepared": the pitch input is 0.0; the yaw input is 0.0 when the converted motion
+  is zero in both axes, else the *wake input* `0.001`, its sign flipping at every prepared frame
+  that has motion (the first is positive).
+  Why the wake input: a soldier who has stood still for a few seconds settles into an at-rest
+  state in which the game stops running its basic look consumer (so the `BasicYaw` and
+  `BasicPitch` seams no longer fire), and it leaves that state only when the look-rate input
+  turns the soldier faster than a very small stillness bound. Mouse motion reaches the game at
+  those seams and not through the look-rate input, so without the wake input the mouse could not
+  turn a soldier at rest, horizontally or vertically. The wake input is a thousandth of full stick
+  deflection: about 300 times the stillness bound, a turn of a few thousandths of a degree per
+  frame, and the alternating sign cancels it over consecutive frames. A smaller value (one
+  millionth) was measured not to wake the soldier (section 10).
 - `YawRateEnter`: counts depth; it is the observed one when at depth one, r3 is the actor-scope
   owner's actor and `lr` matches the caller for the owner's aim kind (sprint or basic).
   `SprintPitchRateEnter` likewise with the sprint caller.
@@ -757,10 +780,14 @@ CMake refuses to configure without it.
 While capture is requested the window registers for Raw Input from keyboards and mice, with no
 flags (legacy key and mouse messages still flow, and input arrives only while the application is
 in the foreground); the registration is removed when capture stops or the window changes. The
-backend reads `WM_INPUT` for the game window and never consumes it. It withholds exactly one
-message: a key press of Escape on the focused game window while the adapter owns the keyboard and
-requests capture and no dialog owns the keyboard, which the window procedure would treat as quit
-(the Linux rule; closing the window still quits). Keys are scan codes with their E0 prefix,
+backend reads `WM_INPUT` for the game window and never consumes it. It withholds a key press of
+Escape on the focused game window while the adapter owns the keyboard and requests capture and no
+dialog owns the keyboard, which the window procedure would treat as quit (the Linux rule; closing
+the window still quits). While capture is installed it also withholds the messages that would put
+the window in its menu mode: the release of a lone Alt or of F10 (`WM_SYSKEYUP`) and Alt with a
+character key (`WM_SYSCHAR`, a menu mnemonic or Alt+Space). The game window has no menu, and the
+modal menu loop would stop the pump, and the game with it, until another key or a click. Alt+F4 is
+a key press and still closes the window; Alt itself still reaches the game as a key. Keys are scan codes with their E0 prefix,
 translated by an explicit table (`player_input_win32_map.c`) to HID usages; E1 sequences (Pause),
 escape-sequence fragments, the fake shifts Windows adds around navigation keys, Break, system and
 media keys and the GUI keys are not captured. Raw Input repeats held keys, so the backend tracks
@@ -776,7 +803,11 @@ it arrives: presses and motion count only while the game window is focused, rele
 so a press made in another window before the next pump never reaches the game. Losing focus
 releases the confinement and shows the cursor again; a replaced or dropped confinement is
 re-applied at the next pump ("mouse lock lost; re-applying", once per loss). Every capture state
-change is logged once (`desktop_capture_transition`), as on Linux.
+change is logged once (`desktop_capture_transition`), as on Linux. With `MAG_GAME_CONTROLS_TRACE=1`
+the backend logs each acquisition of the lock with the client area and the confinement Windows
+applied, each release or failure, and about once a second what became of the raw mouse reports:
+motion accepted, or dropped as unfocused, capture not installed, not ready, not relative or stale
+(an older motion epoch), the confinement losses found, and the mouse-look requests the adapter made.
 
 Controllers on macOS and Linux reach the capture layer through `player_input_sdl_pad.c`: compile
 definitions on `libs/input/cellPad.c` route its SDL GameController calls through wrappers that
@@ -881,9 +912,23 @@ Switches:
 - `MAG_GAME_CONTROLS=0` in the engine's environment turns a built adapter off at run time (section
   4); the hooks then cost one null check each. Launch `MagRecomp` directly to use it, since the
   packaged supervisors do not pass `MAG_` variables through.
+- `MAG_GAME_PROMPTS=0` in the engine's environment keeps the game's PlayStation icons in button
+  prompts while the rest of the adapter stays on (section 12); the prompt seams then cost one check
+  each.
 
 Evidence for the default (the rule for in-repository code on by default, AGENTS.md):
 
+- *Mouse look on Windows (2026-11-23, local Training, relative motion injected with `SendInput`,
+  frame dumps, `MAG_GAME_CONTROLS_TRACE=1`):* 1000 counts in two seconds turned the camera in every
+  phase: at rest horizontally and vertically, after a pause-menu round trip, after a lone Alt tap,
+  while walking, and at rest again (frame change 10.7 to 34.1, against 1.1 to 3.5 for two idle
+  seconds before each). In every second with motion the adapter consumed a displacement in as many
+  frames as had motion. The lock was acquired at spawn and after the menu and released once for
+  the menu, with the confinement equal to the client area. Before the wake input (7.5) the same
+  check consumed nothing at rest. A soldier at rest stopped running the look consumer, so motion
+  turned the camera only while walking. A wake input of one millionth did not wake the soldier.
+  Before the attach fix (7.2) the lock was taken and released every frame while the pause menu
+  was open.
 - *Correctness:* the synthetic suites in section 11 (adapter, capture core, SDL and Win32 backends,
   settings registration, catalog) and the installer's synthetic toolchain and switch tests
   (`installer/tests/test_managed_tools.py`, `installer/tests/test_player_build.py`). On macOS the
@@ -910,3 +955,96 @@ codes, auto-repeat tracking, raw mouse reports, XInput readings, the keyboard fa
 seams (against synthetic system and SDK headers) run on any host; where a MinGW-w64 cross compiler
 is installed the Win32 code itself is compiled too (`tests/test_player_input_desktop_win32.py`).
 Behaviour inside a real Win32 window is verified on Windows, outside these tests.
+
+The button prompts (section 12) are tested the same way (`tests/test_game_controls_prompts.py`): the
+device choice, placeholder resolution against synthetic profiles, key labels against a fake host
+keyboard layout, and the seam against fake guest memory holding a value record. The host backends
+are compiled where their headers exist (Carbon on macOS, SDL2, MinGW-w64).
+
+## 12. Button prompts
+
+The game's UI movies draw a PlayStation button icon wherever their text holds a placeholder: an
+action name in square brackets, such as `[Action]`. While the player uses keyboard and mouse, the
+adapter rewrites that text before the movie sees it, so the movie draws the bound key's name in the
+game's own font instead of the icon. Controller players keep the game's text and icons. Drawn key
+and mouse images are not part of this (a later phase).
+
+The behaviour was established from the outside: argument and return values of the game's calls
+into the movie system, observed in Training and the front end. Prompts whose action name a movie
+writes in its own script, rather than taking it from localized text, are not reached by this seam
+and keep their icons.
+
+### 12.1 Interface facts
+
+- A movie asks the game for localized text; the game's handler (`0053BEA8`) hands the result to the
+  movie in one call, the one returning to `0053BF44`. Just before that call r3 is the address of a
+  value record in the handler's frame: u32 kind at `+0` (4: a UTF-8 string), u32 address of the
+  NUL-terminated text at `+8`. The movie copies the text during the call.
+- A placeholder is `[`, 1 to 32 characters from `A-Z`, `a-z`, `0-9` and `_`, then `]`. Its name's
+  token is the CRC-32 of the lower-cased name: the action tokens of section 2.3
+  (`mag_game_controls_prompt_action`).
+- The movie turns every placeholder left in the text into an icon by asking the game which pad
+  button the named action uses.
+
+### 12.2 Which device the prompts are for
+
+Keyboard and mouse when the profile mode is KBM; the controller when it is Controller. In Auto the
+device of the last press decides (`mag_controls_last_device`: a key or mouse button, or a controller
+button, trigger or a stick pushed past half way; mouse motion alone never switches, so the prompts
+do not change while aiming). Before any press it is keyboard and mouse, even with a controller
+connected: a controller counts only once it has sent a press (Windows reports an idle XInput pad on
+many PCs, and a controller player presses a button in the front end anyway).
+
+A movie fetches its text when it builds a screen or prompt, so a device change shows in prompts
+fetched after it; text already fetched (the HUD's is fetched at spawn) keeps its form until the
+movie fetches it again. The game offers no cheap way, known from the outside, to make every movie
+fetch its text again, so nothing forces it.
+
+### 12.3 Labels
+
+Each placeholder is resolved on its own, from the live profile, every time a movie asks for text:
+
+1. The menu confirm and back placeholders (tokens `0x33E32A99` and `0x75453127`) name the SDK
+   keyboard pad's keys for Cross and Circle (`mag_game_controls_pad_layout_key`): the menus that show
+   them (the front end and in-match menus) read that pad (section 8.2). A movie often fetches a
+   menu's text while the player is still on foot (the pause menu's footer arrives with the HUD), so
+   the context at request time cannot choose; the on-foot Confirm and Back bindings of section 2.3
+   are not shown.
+2. Any other catalog action: its first keyboard or mouse binding among its on-foot bindings, in
+   profile order (`mag_controls_action_bindings`).
+3. Anything else (no catalog action, only controller bindings) stays a placeholder, so the movie
+   draws the game's icon.
+
+A key's label is the name the host's keyboard layout gives it, so a French layout shows `A` where a
+US layout shows `Q`: macOS `UCKeyTranslate` on the selected layout (read on the main thread, again
+whenever the layout changes), Windows `GetKeyNameTextW`, Linux `SDL_GetKeyName` of
+`SDL_GetKeyFromScancode`. Only the layout-dependent keys (letters, the digit row, punctuation) ask
+the host; a name is upper-cased and used when it is printable ASCII of at most 8 characters, and a
+digit-row key whose unshifted character is not a letter or digit shows its digit. Every other key,
+and any host name that cannot be used, takes a fixed short name: `SPACE`, `ENTER`, `TAB`, `ESC`,
+`BKSP`, `SHIFT`, `CTRL`, `ALT`, `UP`, `F5`, `NUM4` and so on. Mouse buttons are `LMB`, `RMB`, `MMB`,
+`M4`, `M5`. In the text the label replaces the placeholder as `(LABEL)`; square brackets would be
+read as another placeholder.
+
+A rebinding applies to the next text a movie asks for. Prompts already on screen change when the
+movie asks again, which it does when the screen or prompt is rebuilt.
+
+### 12.4 Writing the text
+
+`PromptText` does nothing unless the prompts are for keyboard and mouse, the record's kind is a
+string, the text reads as at most 1023 bytes and at least one placeholder resolves. It then writes
+the new text into the next slot of a ring of 64 slots of 256 bytes and points the record's `+8` at
+it; a text that does not fit a slot is left unchanged. `PromptTextDone` puts the game's pointer
+back when the record still holds the slot's address. The game's own text is never written. Reads
+and writes go through checked callbacks; a failure leaves the text unchanged, is counted, and the
+first one is logged (`[game-prompts]`). With `MAG_GAME_CONTROLS_TRACE=1` each text that holds a placeholder
+is logged with the device and the result (at most 400 lines).
+
+The ring is the last 16 KB of the runtime's HLE window (`VM_HLE_INJECT_BASE`, 16 MB): guest memory
+the runtime owns and never gives the game, above the window's fixed SDK uses at its bottom. The
+prompts commit it at VM begin; without it they stay off and say so.
+
+Lifetime: the prompts are built with `MAG_GAME_CONTROLS` and start with it at VM begin
+(`mag_game_controls_prompts_runtime.cpp`, its own extension callbacks). `MAG_GAME_CONTROLS=0` or
+`MAG_GAME_PROMPTS=0` keeps them off; the seams then do nothing. Prompt events are handled on
+whichever thread asks for text, before the adapter's thread-ownership check.

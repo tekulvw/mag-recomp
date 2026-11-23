@@ -150,14 +150,19 @@ int main(int argc,char **argv) { @autoreleasepool {
  ownedOverlay=[NSString stringWithUTF8String:created];free(overlayTemplate);
  env[@"MAG_PLAYER_SETTINGS_PATH"]=[NSHomeDirectory() stringByAppendingPathComponent:@"Library/Application Support/MAG/settings.json"];
  env[@"MAG_PLAYER_OVERLAY_ROOT"]=ownedOverlay;env[@"MAG_PLAYER_SETUP"]=@"1";
- if((NSEvent.modifierFlags & NSEventModifierFlagOption)||(argc>1&&!strcmp(argv[1],"--settings")))env[@"MAG_PLAYER_SHOW_SETTINGS"]=@"1";
+ // Setup opens at every launch. --no-prompt, or MAG_SKIP_SETUP=1 from the caller, skips it (automation);
+ // --settings (or Option, now redundant) still forces it.
+ BOOL showSettings=(NSEvent.modifierFlags & NSEventModifierFlagOption)!=0,skipSetup=NO;
+ for(int i=1;i<argc;i++){if(!strcmp(argv[i],"--settings"))showSettings=YES;else if(!strcmp(argv[i],"--no-prompt"))skipSetup=YES;}
+ const char *callerSkip=getenv("MAG_SKIP_SETUP");if(callerSkip&&*callerSkip&&strcmp(callerSkip,"0"))skipSetup=YES;
+ if(showSettings)env[@"MAG_PLAYER_SHOW_SETTINGS"]=@"1";else if(skipSetup)env[@"MAG_SKIP_SETUP"]=@"1";
  int result=run(launcher,launcherElf,logs,env,[logs stringByAppendingPathComponent:@"launcher.log"]);
  if(result!=90)return result;
  NSDictionary *expected=@{@"version":@1,@"token":token,@"guest_path":@"/dev_bdvd/PS3_GAME/USRDIR/bin/mage_g.self",@"kind":@"mage_g"};
  if(![json(request,4096) isEqual:expected])fail(@"Engine handoff request identity mismatch");
  check(engine,er[@"binary_sha256"]);check(engineElf,er[@"elf_sha256"]);check(engineSelf,m[@"engine_self_sha256"]);
  for(NSString *k in env.allKeys.copy)if([k hasPrefix:@"MAG_HANDOFF_"]||[k hasPrefix:@"MAG_ENGINE_"])[env removeObjectForKey:k];
- [env removeObjectForKey:@"MAG_PLAYER_SETUP"];[env removeObjectForKey:@"MAG_PLAYER_SHOW_SETTINGS"];
+ [env removeObjectForKey:@"MAG_PLAYER_SETUP"];[env removeObjectForKey:@"MAG_PLAYER_SHOW_SETTINGS"];[env removeObjectForKey:@"MAG_SKIP_SETUP"];
  env[@"PS3_BOOT_PATH"]=@"/dev_bdvd/PS3_GAME/USRDIR/bin/mage_g.self";
  return run(engine,engineElf,logs,env,[logs stringByAppendingPathComponent:@"engine.log"]);
  } @catch(NSException *e) {

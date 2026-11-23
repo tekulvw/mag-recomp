@@ -174,8 +174,8 @@ int main(int argc,char**argv) {
  if(!launcher){char save[4096];snprintf(save,sizeof save,"%s/save.txt",gamedata);
   FILE *s=fopen(save,"a");if(!s)return 65;fputs("x\n",s);fclose(s);
   s=fopen(save,"r");for(int c;(c=fgetc(s))!=EOF;)saves+=c=='\n';fclose(s);}
- fprintf(f,"{\"settings_path\":\"%s\",\"overlay_root\":\"%s\",\"setup\":%s,\"show\":%s,\"movie\":\"%s\",\"gamedata\":\"%s\",\"saves\":%d}",
-  path,overlay,getenv("MAG_PLAYER_SETUP")?"true":"false",getenv("MAG_PLAYER_SHOW_SETTINGS")?"true":"false",movie?movie:"",gamedata,saves);fclose(f);
+ fprintf(f,"{\"settings_path\":\"%s\",\"overlay_root\":\"%s\",\"setup\":%s,\"show\":%s,\"skip\":%s,\"movie\":\"%s\",\"gamedata\":\"%s\",\"saves\":%d}",
+  path,overlay,getenv("MAG_PLAYER_SETUP")?"true":"false",getenv("MAG_PLAYER_SHOW_SETTINGS")?"true":"false",getenv("MAG_SKIP_SETUP")?"true":"false",movie?movie:"",gamedata,saves);fclose(f);
  if(!launcher)return 17;
  f=fopen(getenv("MAG_HANDOFF_REQUEST"),"w");if(!f)return 63;
  fprintf(f,"{\"version\":1,\"token\":\"%s\",\"guest_path\":\"/dev_bdvd/PS3_GAME/USRDIR/bin/mage_g.self\",\"kind\":\"mage_g\"}",getenv("MAG_HANDOFF_TOKEN"));fclose(f);
@@ -216,8 +216,8 @@ int main(int argc,char**argv) {
             launch=next((mag/'logs').glob('launch-*'))
             before=json.loads((launch/'launcher-env.json').read_text())
             after=json.loads((launch/'engine-env.json').read_text())
-            self.assertTrue(before['setup']);self.assertTrue(before['show'])
-            self.assertFalse(after['setup']);self.assertFalse(after['show'])
+            self.assertTrue(before['setup']);self.assertTrue(before['show']);self.assertFalse(before['skip'])
+            self.assertFalse(after['setup']);self.assertFalse(after['show']);self.assertFalse(after['skip'])
             self.assertEqual((before['movie'],after['movie']),('1','1'))  # decoder build: playback switches ship
             # Saves live in the installation's home/gamedata for both stages, not in the launch folder.
             self.assertEqual(Path(before['gamedata']).resolve(),(mag/'home/gamedata').resolve())
@@ -228,6 +228,17 @@ int main(int argc,char**argv) {
             second=next(p for p in (mag/'logs').glob('launch-*') if p!=launch)
             later=json.loads((second/'engine-env.json').read_text())
             self.assertEqual(later['gamedata'],after['gamedata']);self.assertEqual(later['saves'],2)
+            # Setup opens at every launch (the launcher decides); automation opts out explicitly.
+            plain=json.loads((second/'launcher-env.json').read_text())
+            self.assertTrue(plain['setup']);self.assertFalse(plain['show']);self.assertFalse(plain['skip'])
+            for argv,extra in ((['--no-prompt'],{}),([],{'MAG_SKIP_SETUP':'1'})):
+                seen=set((mag/'logs').glob('launch-*'))
+                quiet=subprocess.run([str(app/'Contents/MacOS/MAG'),*argv],capture_output=True,text=True,timeout=15,env={**os.environ,**extra})
+                self.assertEqual(quiet.returncode,17,quiet.stderr)
+                launch_dir=next(p for p in (mag/'logs').glob('launch-*') if p not in seen)
+                skipped=json.loads((launch_dir/'launcher-env.json').read_text())
+                self.assertTrue(skipped['skip']);self.assertFalse(skipped['show'])
+                self.assertFalse(json.loads((launch_dir/'engine-env.json').read_text())['skip'])
             self.assertEqual(before['settings_path'],after['settings_path'])
             self.assertTrue(before['settings_path'].endswith('/Library/Application Support/MAG/settings.json'))
             self.assertEqual(before['overlay_root'],after['overlay_root'])
@@ -239,7 +250,7 @@ int main(int argc,char**argv) {
             self.assertEqual(relocated.returncode,17,relocated.stderr)
             third=max((moved/'logs').glob('launch-*'),key=lambda p:p.stat().st_mtime_ns)
             env=json.loads((third/'engine-env.json').read_text())
-            self.assertEqual(Path(env['gamedata']).resolve(),(moved/'home/gamedata').resolve());self.assertEqual(env['saves'],3)
+            self.assertEqual(Path(env['gamedata']).resolve(),(moved/'home/gamedata').resolve());self.assertEqual(env['saves'],5)
             # Without its game files it says so instead of starting.
             shutil.rmtree(moved/'game')
             missing=subprocess.run([str(moved/'MAG.app/Contents/MacOS/MAG')],capture_output=True,text=True,timeout=15)

@@ -13,6 +13,7 @@
 #include "memory/vm.h"
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -21,6 +22,7 @@
 #include <mutex>
 #include <stdexcept>
 #include <string>
+bool mag_game_prompts_hook(MagControlsHook, ppu_context*) noexcept;  // mag_game_controls_prompts_runtime.cpp
 namespace {
 std::unique_ptr<MagGameControlsAdapter> adapter;
 std::atomic<uint64_t> sessions{};
@@ -109,7 +111,50 @@ void mouse_capture(bool on) { mag_input_desktop_set_mouse_enabled(on); }
 bool waiting(const char* status) {
     return !std::strcmp(status, "waiting for input poll") || !std::strcmp(status, "waiting for normal input poll");
 }
+const bool trace_hooks = [] { const char* v = std::getenv("MAG_GAME_CONTROLS_TRACE"); return v && *v && std::strcmp(v, "0"); }();
+// Opt-in cost profile (MAG_GAME_CONTROLS_TRACE=1): the owner thread's hook calls and the time spent
+// handling them, every five seconds per update tick, with each event above 2% of that time listed by
+// its number in MagControlsHook.
+constexpr unsigned hook_kinds = unsigned(MagControlsHook::AssistCleanupExit) + 1;
+unsigned cost_calls[hook_kinds]{};
+int64_t cost_ns[hook_kinds]{};
+unsigned cost_ticks{};
+std::chrono::steady_clock::time_point cost_next{};
+void trace_cost(MagControlsHook event, std::chrono::steady_clock::time_point start) {
+    const auto now = std::chrono::steady_clock::now();
+    const unsigned e = unsigned(event);
+    ++cost_calls[e];
+    cost_ns[e] += std::chrono::duration_cast<std::chrono::nanoseconds>(now - start).count();
+    cost_ticks += event == MagControlsHook::OuterEnter;
+    if (now < cost_next) return;
+    if (cost_ticks) {
+        unsigned calls = 0;
+        int64_t ns = 0;
+        for (unsigned i = 0; i < hook_kinds; ++i) calls += cost_calls[i], ns += cost_ns[i];
+        std::fprintf(stderr, "[game-controls] trace cost: %u ticks, %u hook calls (%.1f per tick), %.3f ms per tick in hooks;",
+                     cost_ticks, calls, double(calls) / cost_ticks, double(ns) / 1e6 / cost_ticks);
+        for (unsigned i = 0; i < hook_kinds; ++i)
+            if (cost_ns[i] * 50 > ns) std::fprintf(stderr, " e%u %u calls %.3f ms/tick", i, cost_calls[i], double(cost_ns[i]) / 1e6 / cost_ticks);
+        std::fprintf(stderr, "\n");
+    }
+    std::fill(std::begin(cost_calls), std::end(cost_calls), 0u);
+    std::fill(std::begin(cost_ns), std::end(cost_ns), int64_t{0});
+    cost_ticks = 0;
+    cost_next = now + std::chrono::seconds(5);
+}
+bool hook_owned(MagControlsHook event, ppu_context* ctx) noexcept;
 bool hook(MagControlsHook event, ppu_context* ctx) noexcept {
+    // Button prompts (section 12) run on whichever thread asks for UI text.
+    if (event == MagControlsHook::PromptText || event == MagControlsHook::PromptTextDone)
+        return mag_game_prompts_hook(event, ctx);
+    if (!trace_hooks) return hook_owned(event, ctx);
+    const auto start = std::chrono::steady_clock::now();
+    const bool owned_before = owner_thread.load(std::memory_order_acquire) == (ctx ? ctx->thread_id : UINT64_MAX);
+    const bool handled = hook_owned(event, ctx);
+    if (owned_before || (ctx && owner_thread.load(std::memory_order_acquire) == ctx->thread_id)) trace_cost(event, start);
+    return handled;
+}
+bool hook_owned(MagControlsHook event, ppu_context* ctx) noexcept {
     if (!adapter || !ctx) return false;
     if (event == MagControlsHook::OuterEnter) {
         uint64_t none = UINT64_MAX;

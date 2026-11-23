@@ -109,6 +109,16 @@ class PortablePlayerSettingsTests(unittest.TestCase):
             self.assertEqual(parse({'display_mode': 'borderless'})[0]['display_mode'], 'borderless')
             for bad in ({'display_mode': 'fullscreen'}, {'display_mode': 1}):
                 self.assertIsNone(parse(bad)[0], bad)
+            # The macOS file's output size, rendering scale and anti-aliasing: the same values, kept
+            # and written back only when not the default.
+            settings, _ = parse({'output_width': 2560, 'output_height': 1440, 'render_scale': 200, 'anti_aliasing': 'fxaa'})
+            self.assertEqual((settings['output_width'], settings['output_height'], settings['render_scale'], settings['anti_aliasing']),
+                             (2560, 1440, 200, 'fxaa'))
+            for default in ({'output_width': 1280, 'output_height': 720}, {'render_scale': 100}, {'anti_aliasing': 'off'}):
+                self.assertEqual(parse(default)[0], parse({})[0], default)
+            for bad in ({'output_width': 1234, 'output_height': 720}, {'output_width': 1920}, {'render_scale': 125},
+                        {'anti_aliasing': 'msaa'}, {'render_scale': '200'}, {'output_width': -1}):
+                self.assertIsNone(parse(bad)[0], bad)
             self.assertEqual(parse({'player_name': 'a' * 15})[0]['player_name'], 'a' * 15)  # the launcher's name capacity
             self.assertEqual(parse({'server_address': '192.0.2.5'})[0]['server_address'], '192.0.2.5')
             for bad in ({'schema_version': 2}, {'server_address': 'http://x.org'}, {'server_address': 'x.org:80'},
@@ -227,6 +237,15 @@ class PortablePlayerSettingsTests(unittest.TestCase):
             self.assertEqual((code, values['PS3RECOMP_VK_FULLSCREEN']), (0, '1'))
             code, values, err = self.prepare(root, **common, MAG_PLAYER_SETUP='1')
             self.assertNotIn('settings window opened', err)  # later launches go straight in
+            self.assertEqual(values['MAG_PLAYER_OUTPUT_SIZE'], '')  # borderless: the desktop size
+            settings.write_text(json.dumps({'server_address': '', 'output_width': 1920, 'output_height': 1080}))
+            code, values, err = self.prepare(root, **common, MAG_PLAYER_SETUP='1')
+            self.assertEqual((code, values['MAG_PLAYER_OUTPUT_SIZE'], values['PS3RECOMP_VK_FULLSCREEN']), (0, '1920x1080', ''))
+            settings.unlink()
+            # MAG_SKIP_SETUP: the Windows supervisor already ran setup, or the caller wants none.
+            code, values, err = self.prepare(root, **common, MAG_PLAYER_SETUP='1', MAG_SKIP_SETUP='1')
+            self.assertNotIn('settings window opened', err)
+            self.assertEqual(code, 9, err); self.assertIn('Choose a player name', err)  # defaults: the official server
             settings.unlink()
             # First run: options are validated and saved; the name reaches the runtime and the keyboard.
             code, _, err = self.prepare(root, **common, MAG_PLAYER_SETUP='1', MAG_PLAYER_SET_NAME='no')

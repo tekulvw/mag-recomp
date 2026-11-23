@@ -55,7 +55,8 @@ int mag_player_settings_prepare(void) { @autoreleasepool {
     [controller setAccountLinker:[[MAGPortalAccount alloc] initWithSettingsPath:path]];
     controller.editingChanged=^(BOOL editing){mag_player_set_input_blocked(editing);mag_input_desktop_refresh();};
     BOOL launcherPhase=environment("MAG_PLAYER_SETUP")!=nil;
-    BOOL setup=error||environment("MAG_PLAYER_SHOW_SETTINGS")||(!exists&&environment("MAG_PLAYER_SETUP"));
+    // Setup at every launch, filled with the saved settings (MAG_SKIP_SETUP for automation).
+    BOOL setup=MAGSettingsSetupWanted(launcherPhase,error!=nil);
     for(;;){
         if(setup){[NSApp activateIgnoringOtherApps:YES];if(![controller runSetup])return 0;}
         settings=controller.settings;

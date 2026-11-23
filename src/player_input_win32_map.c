@@ -172,3 +172,9 @@ int mag_win32_raw_input_admitted(int window_focused, int press_or_motion)
 {
     return !press_or_motion || window_focused;
 }
+
+int mag_win32_withholds_menu_message(unsigned message, uintptr_t wparam)
+{
+    if (message == MAG_WIN32_WM_SYSKEYUP) return wparam == MAG_WIN32_VK_MENU || wparam == MAG_WIN32_VK_F10;
+    return message == MAG_WIN32_WM_SYSCHAR;
+}
