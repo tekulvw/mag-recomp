@@ -20,6 +20,7 @@ typedef struct rsx_draw_backend {
  u32 (*depth_snapshot)(void*,u32,u32,u32);
  u32 (*depth_as_color)(void*,u32,u32,u32,u32);
  u32 (*pipeline_create)(void*,const char*,const char*,const rsx_be_render_state*,const rsx_vertex_layout_plan*,u32,rsx_be_format,u32);
+ void (*bind_targets)(void*,const u32*,u32,u32);
  void (*set_viewport)(void*,float,float,float,float);
  void (*set_scissor)(void*,u32,u32,u32,u32);
  void (*clear_color_rect)(void*,u32,const float*,u32,u32,u32,u32);

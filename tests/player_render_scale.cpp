@@ -29,6 +29,8 @@ static std::string host_fragment;
 static u32 host_pipeline(void*,const char*,const char*ps,const rsx_be_render_state*,const rsx_vertex_layout_plan*,const u8*,rsx_be_format,u32){host_fragment=ps;return 1;}
 static void release(void*,u32){}
 static u32 pipeline(void*,const char*,const char*ps,const rsx_be_render_state*,const rsx_vertex_layout_plan*,u32,rsx_be_format,u32){fragment=ps;return 1;}
+static u32 bound_target,bound_depth;
+static void bind(void*,const u32*surfaces,u32 count,u32 depth){bound_target=count?surfaces[0]:0;bound_depth=depth;}
 static void vp(void*,float x,float y,float w,float h){viewport[0]=x;viewport[1]=y;viewport[2]=w;viewport[3]=h;}
 static void sc(void*,u32 x,u32 y,u32 w,u32 h){rect[0]=x;rect[1]=y;rect[2]=w;rect[3]=h;}
 static void clear(void*p,u32,const float*,u32 x,u32 y,u32 w,u32 h){sc(p,x,y,w,h);}
@@ -47,7 +49,7 @@ int main(int argc,char**argv){
  base.texture_release=release;base.color_target_release=release;base.depth_target_release=release;
  base.color_snapshot=snap;base.surface_view=view;base.depth_snapshot=dsnap;base.depth_as_color=dcolor;
  base.depth_z24_view=zview;base.pipeline_create_host=host_pipeline;
- base.pipeline_create=pipeline;base.set_viewport=vp;base.set_scissor=sc;
+ base.pipeline_create=pipeline;base.bind_targets=bind;base.set_viewport=vp;base.set_scissor=sc;
  base.clear_color_rect=clear;base.clear_depth_stencil_rect=dclear;base.readback=read;base.depth_readback=dread;
  const auto*b=mag_player_render_backend(&base);
  if(!strcmp(argv[1],"100")){assert(b==&base);puts("native backend identity passed");return 0;}
@@ -105,6 +107,25 @@ int main(int argc,char**argv){
  // Optional GPU packed-depth shortcut is disabled; the engine's existing
  // float readback/conversion path must see guest-sized depth instead.
  assert(!b->depth_store_z24&&!b->depth_z24_texture);
+ // A guest size the scale does not divide (a 1x1 exposure target at 150%)
+ // rounds to whole physical pixels. Everything drawn into, cleared in or
+ // read from it follows that image's own ratio, so the whole physical image
+ // is covered and a normalized sample of it finds the pixels drawn.
+ const auto one=b->color_target_create(nullptr,RSX_BE_FMT_R8G8B8A8,1,1,nullptr,0);
+ const u32 side=last_w;assert(side==u32(percent+50)/100&&last_h==side);
+ const u32 handles[1]={one};b->bind_targets(nullptr,handles,1,0);assert(bound_target==one);
+ b->set_viewport(nullptr,0,0,1,1);assert(viewport[0]==0&&viewport[2]==float(side)&&viewport[3]==float(side));
+ b->set_scissor(nullptr,0,0,1,1);assert(rect[0]==0&&rect[1]==0&&rect[2]==side&&rect[3]==side);
+ b->clear_color_rect(nullptr,one,rgba,0,0,1,1);assert(rect[2]==side&&rect[3]==side);
+ unsigned char texel[4]={};b->readback(nullptr,one,0,0,1,1,texel,4);
+ assert(texel[0]==side/2&&texel[1]==side/2);
+ // Exactly scaled targets keep the nominal mapping when bound, depth-only
+ // passes take their depth target's grid, and both clamp nothing.
+ const u32 four[1]={c};b->bind_targets(nullptr,four,1,d);
+ b->set_viewport(nullptr,0,0,4,4);assert(viewport[2]==expected&&viewport[3]==expected);
+ b->bind_targets(nullptr,nullptr,0,atlas);assert(bound_depth==atlas);
+ b->set_viewport(nullptr,0,0,2048,1024);assert(viewport[2]==float(aw)&&viewport[3]==float(ah));
+ b->set_scissor(nullptr,1024,0,1024,1024);assert(rect[0]==aw/2&&rect[2]==aw-aw/2&&rect[3]==ah);
  assert(mag_player_render_backend(nullptr)==nullptr);
  puts("scaled resources, coordinates, WPOS and guest readbacks passed");
 }
