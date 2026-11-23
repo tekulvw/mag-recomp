@@ -776,7 +776,14 @@ holds an explicit window grab (`SDL_SetWindowGrab`), so the pointer stays confin
 window even where relative mode alone does not lock it; it acquires in the order leave relative
 mode, grab, centre the pointer, enter relative mode. Each pump checks the lock: when relative mode
 or the grab is gone or the pointer is outside the window, it re-applies the lock (logged once per
-loss as "mouse lock lost; re-applying"). Re-applying moves the pointer to the centre, so the core
+loss as "mouse lock lost; re-applying"). Only the X11 driver reports the pointer and the window in
+screen coordinates, and only there are the two compared. Other drivers (Wayland, KMSDRM) report
+the pointer in the coordinates of the window that has it and a window position SDL made up (where
+the window was asked to go, or the origin of the display it entered), so there the pointer only has
+to be inside the game window and no other window may have it. Comparing the two there found the
+lock lost, and took it again at every pump, whenever the pointer's window coordinates fell left of
+or above that made-up position: always on a second display, and in a centred window after a turn
+to the left or up. Re-applying moves the pointer to the centre, so the core
 discards motion observed before or during a re-acquisition (only the motion epoch advances; held
 keys and buttons stay), and the event filter also drops motion SDL reports for the centring warp. With
 `MAG_GAME_CONTROLS_TRACE=1` the backend logs, after each acquisition of the lock, the next 20

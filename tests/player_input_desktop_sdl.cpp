@@ -169,6 +169,42 @@ void run() {
     require(motion_x == before_x + 2 && motion_y == before_y + 1, "real motion still reaches the controls after a re-lock");
     unsetenv("MAG_GAME_CONTROLS_TRACE");
 
+    // A driver without a global pointer (the dummy driver here, Wayland in play) reports a window
+    // position it made up, such as where the window was asked to go. The lock is judged in the
+    // window's own coordinates there, so a held lock is not taken again at every pump.
+    SDL_SetWindowPosition(window, 300, 200);
+    SDL_WarpMouseInWindow(window, 1, 1);  // in relative mode: moves SDL's pointer, no motion
+    for (int i = 0; i < 3; ++i) pump();
+    int px = 0, py = 0;
+    SDL_GetMouseState(&px, &py);
+    require(px == 1 && py == 1, "a held lock away from the screen origin was re-applied (pointer re-centred)");
+    motion(3, 0);
+    pump();
+    require(motion_x == before_x + 5, "motion keeps reaching the controls with the window away from the origin");
+    SDL_SetWindowPosition(window, 0, 0);
+
+    // The lock rule itself, for both kinds of driver.
+    mag::SdlLockProbe probe;
+    probe.relative = probe.grabbed = true;
+    probe.width = 640, probe.height = 360;
+    probe.window_x = 1920, probe.window_y = 100;
+    probe.pointer_x = 10, probe.pointer_y = 10;
+    require(mag::sdl_desktop_lock_held(probe), "window coordinates: a pointer inside the window holds");
+    probe.other_window = true;
+    require(!mag::sdl_desktop_lock_held(probe), "window coordinates: another window with the pointer breaks the lock");
+    probe.other_window = false;
+    probe.pointer_x = 640;
+    require(!mag::sdl_desktop_lock_held(probe), "window coordinates: a pointer past the right edge breaks the lock");
+    probe.global_pointer = true;
+    probe.pointer_x = 1930, probe.pointer_y = 110;
+    require(mag::sdl_desktop_lock_held(probe), "screen coordinates: a pointer over the window holds");
+    probe.pointer_x = 10;
+    require(!mag::sdl_desktop_lock_held(probe), "screen coordinates: a pointer left of the window breaks the lock");
+    probe.pointer_x = 1930, probe.grabbed = false;
+    require(!mag::sdl_desktop_lock_held(probe), "without the grab the lock is gone");
+    probe.grabbed = true, probe.relative = false;
+    require(!mag::sdl_desktop_lock_held(probe), "without relative mode the lock is gone");
+
     mag_input_desktop_set_enabled(0);
     pump();
     require(!filter_installed() && !SDL_GetRelativeMouseMode(), "uninstall removes the filter and relative mode");
