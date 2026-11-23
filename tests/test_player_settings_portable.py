@@ -207,6 +207,26 @@ class PortablePlayerSettingsTests(unittest.TestCase):
             self.assertEqual((vfs / ARCHIVE).read_bytes(), original)
             self.assertEqual(sorted(p.name for p in owned.iterdir()), ['server-overlay.txt', 'vfs'])
 
+    def test_ticket_profile_overlay_keeps_np_tickets_on(self):
+        # The engine is its own process with no launcher init to turn UseNPTicket on again: in the
+        # portal ticket profile the override must leave it on, or the engine signs in without the
+        # ticket. The no-ticket profile keeps turning it off, and neither view is reused for the other.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp); script = b'MAGClientNetConfig = { UseNPTicket = true }\n'
+            vfs = self.vfs(root, script); owned = root / 'owned'; sha = hashlib.sha256(script).hexdigest()
+            def last_setting(text):
+                at = text.rfind(b'UseNPTicket = ')
+                return text[at:text.index(b'\n', at)]
+            for profile, expected in ((('ticket',), b'UseNPTicket = true'), ((), b'UseNPTicket = false'),
+                                      (('ticket',), b'UseNPTicket = true')):
+                result = self.run_driver('overlay', vfs, owned, '127.0.0.1', sha, *profile)
+                self.assertEqual(result.returncode, 0, result.stdout)
+                text = psarc.parse((owned / 'vfs' / ARCHIVE).read_bytes())[2](1)
+                self.assertTrue(text.startswith(script))
+                self.assertEqual(last_setting(text), expected)
+                marker = (owned / 'server-overlay.txt').read_text()
+                self.assertIn('connection_profile=' + ('portal-ticket-v1' if profile else 'community-no-ticket-v1'), marker)
+
     def prepare(self, root, **variables):
         env = {k: v for k, v in os.environ.items() if not k.startswith(('MAG_', 'PS3'))}
         env.update(variables)

@@ -46,8 +46,9 @@ int main(int argc, char **argv) {
         if (!mag::parse_portable_settings(std::string(in.begin(), in.end()), settings, error)) { std::cerr << error << '\n'; return 1; }
         std::cout << mag::format_portable_settings(settings); return 0;
     }
-    if (mode == "overlay" && argc == 6) {  // overlay <vfs> <owned> <server> <member sha>
-        auto result = mag::create_server_overlay(argv[2], argv[3], {argv[4], 54321, 0}, argv[5]);
+    if (mode == "overlay" && (argc == 6 || argc == 7)) {  // overlay <vfs> <owned> <server> <member sha> [ticket]
+        const bool ticket = argc == 7 && std::string(argv[6]) == "ticket";
+        auto result = mag::create_server_overlay(argv[2], argv[3], {argv[4], 54321, 0, ticket}, argv[5]);
         std::cout << int(result.status) << '\n' << result.root.string() << '\n' << result.message << '\n';
         return result.status == mag::OverlayStatus::Ready || result.status == mag::OverlayStatus::NotNeeded ? 0 : 1;
     }

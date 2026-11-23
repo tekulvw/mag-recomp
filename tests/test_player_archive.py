@@ -1,4 +1,5 @@
 """Server override edits only a synthetic archive's selected member."""
+import os
 import pathlib
 import hashlib
 import platform
@@ -83,6 +84,17 @@ class PlayerArchiveTests(unittest.TestCase):
             self.assertEqual(extract(2),bytes(range(200)))
             self.assertEqual(source.read_bytes(),data)
             self.assertEqual((output.parent/'other.asset').read_bytes(),b'unchanged sibling')
+            # The portal ticket profile keeps UseNPTicket on (the engine requests a ticket itself) and
+            # gets its own view, never the no-ticket one.
+            ticket_owned=root/'owned-ticket';ticket_owned.mkdir()
+            env=dict(os.environ,MAG_TEST_NP_TICKET='1')
+            ticket=subprocess.run([str(binary),str(vfs),str(ticket_owned),sha],capture_output=True,text=True,timeout=10,env=env)
+            self.assertEqual(ticket.returncode,0,ticket.stderr)
+            text=psarc.parse((ticket_owned/'vfs'/archive_path).read_bytes())[2](1)
+            self.assertIn(b'MAGClientNetConfig.UseNPTicket = true',text);self.assertNotIn(b'UseNPTicket = false',text)
+            self.assertIn(b'portal-ticket-v1',(ticket_owned/'server-overlay.json').read_bytes())
+            mixed=subprocess.run([str(binary),str(vfs),str(owned),sha],capture_output=True,text=True,timeout=10,env=env)
+            self.assertNotEqual(mixed.returncode,0)  # the existing no-ticket view is refused, not reused
             blank=subprocess.run([str(binary),str(vfs),str(owned),'0'*64,'blank'],capture_output=True,text=True,timeout=10)
             self.assertEqual(blank.returncode,0,blank.stderr)
             self.assertEqual(blank.stdout.strip(),str(vfs))

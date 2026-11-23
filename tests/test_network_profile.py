@@ -150,7 +150,8 @@ class PortalProfileTests(unittest.TestCase):
             network_profile.prepare_overlay(vfs,path,expected_member="/settings.lua")
             _,_,extract,*_=psarc.parse(target.read_bytes())
             self.assertIn(b'MAPSServerAddr = "192.168.40.20"',extract(1))
-            self.assertIn(b'UseNPTicket = false',extract(1))  # the game's own launcher init turns it on again
+            # The engine has no launcher init to turn it on again, so the ticket profile keeps it on.
+            self.assertIn(b'UseNPTicket = true',extract(1));self.assertNotIn(b'UseNPTicket = false',extract(1))
             vfs,path,target=self.fixture(tmp,maps_host='localhost',portal={'url':'https://p.example.org','token_file':'t'})
             result=network_profile.prepare_overlay(vfs,path,expected_member='/settings.lua')
             self.assertEqual(result['portal']['audience'],'localhost')

@@ -75,7 +75,8 @@ std::string ipv4(const std::string &host) {
 std::string identity(const fs::path &source, const mag::ServerChoice &choice, const std::string &member) {
     return "source=" + source.generic_string() + "\nserver_address=" + choice.server_address +
            "\ntcp_port=" + std::to_string(choice.tcp_port) + "\nudp_port=" + std::to_string(choice.udp_port) +
-           "\nmember_sha256=" + member + "\nconnection_profile=community-no-ticket-v1\n";
+           "\nmember_sha256=" + member + "\nconnection_profile=" +
+           (choice.np_ticket ? "portal-ticket-v1" : "community-no-ticket-v1") + "\n";
 }
 
 std::string read_text(const fs::path &path) {
@@ -102,11 +103,11 @@ void mirror(const fs::path &source, const fs::path &target, const fs::path &skip
 }
 }
 
-std::string mag::server_override_text(const std::string &host, int tcp_port, int udp_port) {
+std::string mag::server_override_text(const std::string &host, int tcp_port, int udp_port, bool np_ticket) {
     std::string text = "\n-- MAG player connection override\nMAGClientNetConfig = MAGClientNetConfig or {}\n"
                        "MAGClientNetConfig.EnableNetwork = true\nMAGClientNetConfig.MAPSServerAddr = \"" + host + "\"\n"
                        "MAGClientNetConfig.EnableServerOnClient = false\nMAGClientNetConfig.UseTestClient = false\n"
-                       "MAGClientNetConfig.UseNPTicket = false\n";
+                       "MAGClientNetConfig.UseNPTicket = " + std::string(np_ticket ? "true" : "false") + "\n";
     if (tcp_port) text += "MAGClientNetConfig.MAPSServerTCPPort = " + std::to_string(tcp_port) + "\n";
     if (udp_port) text += "MAGClientNetConfig.MAPSServerUDPPort = " + std::to_string(udp_port) + "\n";
     return text;
@@ -154,7 +155,7 @@ mag::OverlayResult mag::create_server_overlay(const fs::path &source_root, const
         catch (const std::exception &failure) { throw ArchiveProblem(failure.what()); }
         require_archive(sha(original) == expected_member_sha256,
                         "The settings archive does not match the supported retail version. The original was kept.");
-        const auto text = server_override_text(ipv4(choice.server_address), choice.tcp_port, choice.udp_port);
+        const auto text = server_override_text(ipv4(choice.server_address), choice.tcp_port, choice.udp_port, choice.np_ticket);
         auto replacement = original;
         replacement.insert(replacement.end(), text.begin(), text.end());
         auto changed = mag::rewrite_psarc_member(archive, settings_member, replacement);

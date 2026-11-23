@@ -202,7 +202,8 @@ extern "C" int mag_player_settings_prepare(void) {
     }
     if (!settings.server_address.empty()) {
         auto result = mag::create_server_overlay(path_variable("PS3_VFS_ROOT"), owned / "server",
-                                                 {settings.server_address, settings.tcp_port, settings.udp_port}, member_sha256);
+                                                 {settings.server_address, settings.tcp_port, settings.udp_port,
+                                                  !settings.ticket_file.empty()}, member_sha256);
         if (result.status == mag::OverlayStatus::Ready) {
 #ifdef _WIN32
             _wputenv_s(L"PS3_VFS_ROOT", result.root.c_str());

@@ -97,7 +97,9 @@ int mag_player_settings_prepare(void) { @autoreleasepool {
         }
         NSString *root=environment("PS3_VFS_ROOT");
         if([settings[@"server_address"] length]){
-            NSString *overlay=MAGCreateServerOverlay(root,environment("MAG_PLAYER_OVERLAY_ROOT"),settings,memberSHA256,&error);
+            // The ticket profile when a ticket file is set or the linked account supplied one.
+            NSString *ticket=[settings[@"ticket_file"] length]?settings[@"ticket_file"]:portalTicket;
+            NSString *overlay=MAGCreateServerOverlay(root,environment("MAG_PLAYER_OVERLAY_ROOT"),settings,ticket.length>0,memberSHA256,&error);
             if(!overlay&&launcherPhase&&[error.domain isEqual:@"MAGSettings"]&&error.code==MAGServerOverlayArchiveError){
                 // No setting can fix the game's own archive, so never loop back into
                 // setup for it: offer this launch offline, or quit.
@@ -110,7 +112,6 @@ int mag_player_settings_prepare(void) { @autoreleasepool {
             }else{
                 setenv("PS3_VFS_ROOT",overlay.fileSystemRepresentation,1);
                 setenv("PS3_NET_ONLINE","1",1);
-                NSString *ticket=[settings[@"ticket_file"] length]?settings[@"ticket_file"]:portalTicket;
                 if(ticket.length){
                     // Opt-in portal ticket profile (player_sign_in.h): the game keeps the NP
                     // ticket setting its init turns on, and the runtime returns this file's bytes.

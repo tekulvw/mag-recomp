@@ -3,7 +3,10 @@
 #include <string>
 
 namespace mag {
-struct ServerChoice { std::string server_address; int tcp_port = 0, udp_port = 0; };
+// np_ticket: the portal ticket profile (player_sign_in.h). Both phases then keep the game's NP
+// ticket setting on, so the engine requests a ticket as the launcher does; otherwise the
+// community no-ticket profile turns it off.
+struct ServerChoice { std::string server_address; int tcp_port = 0, udp_port = 0; bool np_ticket = false; };
 enum class OverlayStatus { NotNeeded, Ready, ArchiveError, Error };
 struct OverlayResult { OverlayStatus status; std::filesystem::path root; std::string message; };
 
@@ -16,5 +19,5 @@ OverlayResult create_server_overlay(const std::filesystem::path &source_root, co
                                     const ServerChoice &choice, const std::string &expected_member_sha256);
 
 // The Lua appended to the retail settings member for this server (shared with tests).
-std::string server_override_text(const std::string &ipv4, int tcp_port, int udp_port);
+std::string server_override_text(const std::string &ipv4, int tcp_port, int udp_port, bool np_ticket = false);
 }
