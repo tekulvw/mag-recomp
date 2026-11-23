@@ -239,6 +239,8 @@ struct MagGameControlsAdapter::State {
     // Scopes on the owning thread.
     std::optional<uint64_t> thread;
     unsigned outer{}, poll{}, handler_depth{}, actor_depth{}, yaw_rate{}, sprint_pitch_rate{};
+    // 7.4: whether gameplay routes were available at the start of the current handler update.
+    std::optional<bool> update_gameplay_available;
     bool yaw_rate_observed{}, sprint_pitch_observed{};
 
     // Poll, sample and frame.
@@ -649,6 +651,7 @@ struct MagGameControlsAdapter::State {
 
     void handler_enter(MagGameControlsCpu& cpu) {
         if (++handler_depth != 1) return;
+        update_gameplay_available.reset();
         update_handler(cpu);
         census(address(cpu.gpr[3]));  // as the update leaves it
     }
@@ -661,6 +664,7 @@ struct MagGameControlsAdapter::State {
             return;
         }
         const auto gameplay = guest.gameplay_routes();
+        update_gameplay_available = gameplay.has_value();
         if (!frame && !attach(gameplay)) return;
         system_routes = std::move(*routes);
         if (!gameplay) revoke_gameplay();
@@ -668,6 +672,7 @@ struct MagGameControlsAdapter::State {
     }
     void handler_exit() {
         if (!handler_depth || --handler_depth) return;
+        update_gameplay_available.reset();
         handler_owner.reset();
         recognition_handler = 0;
     }
@@ -710,11 +715,13 @@ struct MagGameControlsAdapter::State {
         if (looks != 0xF || !needed.empty() || !result.mask) return {};
         return result;
     }
-    // 7.4: the owner's watched list is unchanged and gameplay is still allowed.
+    // 7.4: the owner's watched list is unchanged and gameplay is still allowed (during a handler
+    // update, as read at the start of that update).
     bool contract_current() const {
         if (!contract || !owner) return false;
         const auto controls = guest.watched_controls(contract->handler);
-        return controls && *controls == contract->controls && guest.gameplay_routes().has_value();
+        if (!controls || *controls != contract->controls) return false;
+        return update_gameplay_available ? *update_gameplay_available : guest.gameplay_routes().has_value();
     }
     bool map_channels() {
         const auto add = [&](uint32_t channel, ActionId action) {

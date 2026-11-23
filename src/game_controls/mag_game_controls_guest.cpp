@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <bit>
 #include <cstring>
-#include <set>
 using namespace mag_guest;
 
 namespace {
@@ -50,10 +49,11 @@ std::optional<std::vector<uint32_t>> list_nodes(MagGuestReads& r, uint32_t head)
     const auto first = r.u32(head), last = r.u32(uint64_t(head) + 4);
     if (!first || !last) return {};
     std::vector<uint32_t> nodes;
-    std::set<uint32_t> seen;
     uint32_t previous = head, node = *first;
+    // A repeated node never leads back to the head (the walk from it would repeat), so the node
+    // bound alone rejects such a list: no set of seen nodes is needed.
     while (node != head) {
-        if (nodes.size() >= MaxListNodes || !mag_guest_pointer_like(node) || !seen.insert(node).second) return {};
+        if (nodes.size() >= MaxListNodes || !mag_guest_pointer_like(node)) return {};
         const auto back = r.u32(uint64_t(node) + 4), next = r.u32(node);
         if (!back || *back != previous || !next) return {};
         nodes.push_back(node);

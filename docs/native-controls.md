@@ -614,7 +614,11 @@ when the profile remaps the controller). Every token in the list must be unique.
 required mask; all four must be present. Each token that is (after aliases) a catalog action or a
 bound action is removed from the needed set and adds its channel to the mask. The contract exists
 when the needed set ends empty and the mask is nonzero. It is *current* while the owner's watched
-list still equals it exactly and gameplay routes are available.
+list still equals it exactly and gameplay routes are available. During a handler update the
+availability of gameplay routes is the one read at the start of that update (7.2 step 2), which a
+menu opened by the handler's own controls changes only at the next handler update; outside a
+handler update (the actor update) it is read anew each time. (Reading the UI tree again at every
+recognition was most of the adapter's per-frame cost, section 10.)
 
 ### 7.5 Actor update and mouse look
 
