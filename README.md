@@ -107,9 +107,10 @@ You build MAG on your own computer from your own copy; nothing game-derived is e
    - **Linux:** run `./MAG --link` from the MAG folder.
 
    `--unlink` (or **Unlink** on macOS) undoes it. See [Account link](docs/player-settings.md#account-link).
-6. **Use a controller.** A standard USB or Bluetooth gamepad works on every system and is the
-   recommended way to play. On Linux the keyboard also works as a controller while the game window
-   has focus, until a controller is connected (set `PAD_NO_KEYBOARD=1` to turn it off):
+6. **Use a controller, or the keyboard.** A standard USB or Bluetooth gamepad works on every system
+   and is the recommended way to play. On Windows and Linux the keyboard also works as a controller
+   while the game window has focus and no controller is connected (set `PAD_NO_KEYBOARD=1` to turn
+   it off). Keys are physical positions, so they are the same on any keyboard layout:
 
    | Keys | Controller |
    | --- | --- |
@@ -119,17 +120,16 @@ You build MAG on your own computer from your own copy; nothing game-derived is e
    | Arrow keys | D-pad |
    | WASD / IJKL | Left / right stick |
 
-   On Windows, a controller is needed to play matches. The keyboard only covers menus (arrow keys,
-   Z / X / A / S for the face buttons, Return for Start), has no camera or aim, and is ignored
-   whenever any controller is present, including virtual gamepads created by Steam Input or
-   remote-desktop and streaming software.
+   Any controller turns this keyboard layout off, including virtual gamepads that Steam Input or
+   remote-desktop and streaming software create. macOS uses the same keys in its game window.
 
-   **Keyboard and mouse** play is built in on every system. In a match, on foot: WASD moves, the
-   mouse aims, left button fires, right button aims down sights, Space jumps, Left Shift sprints,
-   R reloads, E interacts (hold for objectives), C crouches (hold for prone), Q and G cycle weapons
-   and equipment, F is melee, Escape is Start, Tab is Select and the arrow keys are the D-pad. A
-   controller keeps working beside it. To build without it, set `MAG_GAME_CONTROLS=0` before
-   starting the installer.
+   **Keyboard and mouse** play is built in on every system, beside any controller. In a match, on
+   foot, these bindings replace the layout above: WASD moves, the mouse aims, left button fires,
+   right button aims down sights, Space jumps, Left Shift sprints, R reloads, E interacts (hold for
+   objectives), C crouches (hold for prone), Q and G cycle weapons and equipment, F is melee, Escape
+   is Start, Tab is Select and the arrow keys are the D-pad. Press **F10** to change them, or the
+   mouse sensitivity, in the settings window. To build without them, set `MAG_GAME_CONTROLS=0`
+   before starting the installer.
 
 **If a download fails** (for example during a GitHub outage), retry later. Or point the installer
 at a folder of previously downloaded tools with `build --cache <folder>`, or at a mirror with
