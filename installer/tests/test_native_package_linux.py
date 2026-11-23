@@ -151,7 +151,8 @@ int main(void) {
 
     def install_fixture(self, root, game_source):
         """A packaged MAG whose launcher and engine are this synthetic C program."""
-        install=root/'install';install.mkdir();workspace=self.fixture(install)
+        # The build workspace sits beside the MAG folder, never inside it.
+        install=root/'install';install.mkdir();workspace=self.fixture(root/'build')
         disc=workspace/'local/retail-v1.0/PS3_GAME/USRDIR'
         elf=bytearray(136);elf[:7]=b'\x7fELF\x02\x02\x01'
         struct.pack_into('>Q',elf,32,64);struct.pack_into('>HH',elf,54,56,1)

@@ -97,6 +97,7 @@ def main():
         ''.join(f'#define {name} "{digest}"\n' for name in ('MAG_LAUNCHER_SHA256', 'MAG_ENGINE_SHA256',
                 'MAG_LAUNCHER_ELF_SHA256', 'MAG_ENGINE_ELF_SHA256', 'MAG_ENGINE_SELF_SHA256')))
     (scratch / 'supervisor.c').write_text(supervisor._SUPERVISOR)
+    supervisor.copy_supervisor_sources(ROOT, scratch)  # the account link and settings rules
     try:
         supervisor._compile('clang-cl', dict(os.environ), scratch, scratch / 'MAG.exe', Cancellation())
         print('MAG.exe supervisor compiled and linked')
