@@ -155,6 +155,64 @@ static void general(const fs::path& folder) {
     std::printf("general: fields, validation, display mode, cancel, damaged file\n");
 }
 
+// The General page as the macOS panel and the Win32 window edit it: Apply writes General alone,
+// dirty tracking, display changes that need the timed confirmation, Cancel, Play MAG's name rule,
+// and the fields the window does not edit kept from the file.
+static void general_apply(const fs::path& folder) {
+    fs::create_directories(folder);
+    const fs::path settings = folder / "settings.json";
+    SettingsForm form;
+    std::string error;
+    CHECK(settings_form_load(settings, form, error) && form.needs_save && !form.recovery);
+    CHECK(settings_form_general_dirty(form));  // no file yet: Apply writes the defaults
+    PortableSettings draft;
+    CHECK(settings_form_general_draft(form, draft, error) && !settings_form_play_ready(draft, error));
+    CHECK(error == "Enter a player name to play on a server. It is the name you sign in with.");
+    form.player_name = " Rook_7 ";
+    form.output = 1;
+    CHECK(settings_form_general_draft(form, draft, error) && settings_form_play_ready(draft, error));
+    CHECK(draft.player_name == "Rook_7" && draft.output_width == 1920 && draft.output_height == 1080);
+    CHECK(settings_form_display_changed(form.saved, draft));  // a windowed size: confirm it first
+    CHECK(settings_form_apply_general(settings, form, draft, error) && !form.needs_save && !settings_form_general_dirty(form));
+    std::string saved = read(settings);
+    CHECK(saved.find("\"output_width\": 1920") != std::string::npos && saved.find("\"player_name\": \"Rook_7\"") != std::string::npos);
+    // Borderless ignores the windowed size; the size is a display change only when windowed.
+    PortableSettings next = form.saved;
+    next.display_mode = "borderless";
+    CHECK(settings_form_display_changed(form.saved, next));
+    PortableSettings resized = next;
+    resized.output_width = 3840, resized.output_height = 2160;
+    CHECK(!settings_form_display_changed(next, resized));
+    // Ports, with the macOS panel's messages; nothing is written.
+    form.tcp_port = "12a";
+    CHECK(!settings_form_general_draft(form, draft, error) && error == "Ports must contain digits, or be blank for the game default.");
+    form.tcp_port = "70000";
+    CHECK(!settings_form_general_draft(form, draft, error) && error == "Ports must be between 1 and 65535, or blank.");
+    form.tcp_port = "0";
+    CHECK(!settings_form_general_draft(form, draft, error) && error == "Ports must be between 1 and 65535, or blank.");
+    form.tcp_port = " 00080 ";
+    CHECK(settings_form_general_draft(form, draft, error) && draft.tcp_port == 80);
+    CHECK(settings_form_general_dirty(form));
+    // Cancel: the fields return to the file's values.
+    settings_form_discard(form);
+    CHECK(form.tcp_port.empty() && form.output == 1 && !settings_form_general_dirty(form));
+    CHECK(read(settings) == saved);
+    // The window does not edit portal_url, ticket_file, the rendering scale or anti-aliasing: kept.
+    std::ofstream(settings) << "{\"server_address\": \"example.org\", \"player_name\": \"Rook_7\", \"portal_url\": \"https://portal.example.org\","
+                               " \"render_scale\": 200, \"anti_aliasing\": \"fxaa\"}";
+    CHECK(settings_form_load(settings, form, error) && !form.needs_save && form.render_scale == 2 && form.anti_aliasing == 1);
+    form.player_name = "Rook_8";
+    CHECK(settings_form_general_draft(form, draft, error) && settings_form_apply_general(settings, form, draft, error));
+    saved = read(settings);
+    CHECK(saved.find("\"portal_url\": \"https://portal.example.org\"") != std::string::npos);
+    CHECK(saved.find("\"render_scale\": 200") != std::string::npos && saved.find("\"anti_aliasing\": \"fxaa\"") != std::string::npos);
+    // A damaged file: recovery until an explicit Apply replaces it.
+    std::ofstream(settings) << "{broken";
+    CHECK(!settings_form_load(settings, form, error) && form.recovery && form.needs_save && settings_form_general_dirty(form));
+    CHECK(read(settings) == "{broken");
+    std::printf("general apply: draft, dirty, display change, ports, cancel, kept fields, recovery\n");
+}
+
 static void controls(const fs::path& folder) {
     register_controls(folder);
     const fs::path settings = folder / "settings.json";
@@ -281,6 +339,7 @@ int main(int argc, char** argv) {
     if (argc != 2) return 2;
     const fs::path folder = argv[1];
     general(folder / "general");
+    general_apply(folder / "apply");
     fs::create_directories(folder / "controls");
     controls(folder / "controls");
     if (failures) { std::printf("%d failure(s)\n", failures); return 1; }

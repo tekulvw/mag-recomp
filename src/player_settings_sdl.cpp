@@ -484,8 +484,10 @@ void SettingsPanel::draw(SDL_Renderer* r, SDL_Texture* font) const {
     }
 }
 
-SettingsWindowResult settings_window_run(SettingsForm& form, const std::filesystem::path& settings, bool setup,
-                                         const std::string& notice) {
+SettingsWindowResult settings_window_run(SettingsForm& form, const std::filesystem::path& settings,
+                                         const SettingsWindowOptions& options) {
+    const bool setup = options.setup;
+    const std::string& notice = options.notice;
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER) != 0) {
         std::fprintf(stderr, "[mag settings] no display for the settings window: %s\n", SDL_GetError());
         return SettingsWindowResult::Failed;
