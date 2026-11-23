@@ -103,6 +103,11 @@ class PortablePlayerSettingsTests(unittest.TestCase):
             self.assertEqual((settings['server_address'], settings['tcp_port'], settings['udp_port'], settings['player_name']),
                              ('example.org', 1, 2, 'Rook_7'))
             self.assertEqual(parse({'server_address': ''})[0]['server_address'], '')
+            # Display mode: written only when not the default, and only the two macOS values.
+            self.assertNotIn('display_mode', parse({'display_mode': 'windowed'})[0])
+            self.assertEqual(parse({'display_mode': 'borderless'})[0]['display_mode'], 'borderless')
+            for bad in ({'display_mode': 'fullscreen'}, {'display_mode': 1}):
+                self.assertIsNone(parse(bad)[0], bad)
             self.assertEqual(parse({'player_name': 'a' * 15})[0]['player_name'], 'a' * 15)  # the launcher's name capacity
             self.assertEqual(parse({'server_address': '192.0.2.5'})[0]['server_address'], '192.0.2.5')
             for bad in ({'schema_version': 2}, {'server_address': 'http://x.org'}, {'server_address': 'x.org:80'},
@@ -199,13 +204,29 @@ class PortablePlayerSettingsTests(unittest.TestCase):
             code, values, _ = self.prepare(root, PS3_VFS_ROOT=str(vfs))
             self.assertEqual((code, values['PS3_VFS_ROOT'], values['PS3_NP_ONLINE_ID']), (0, str(vfs), ''))
             self.assertFalse(settings.exists())
+            # First run without options: the settings window opens before the game; Cancel keeps defaults.
+            code, values, err = self.prepare(root, **common, MAG_PLAYER_SETUP='1', MAG_PLAYER_SET_SERVER='')
+            self.assertIn('settings window opened', err)
+            settings.unlink(missing_ok=True)
+            code, values, err = self.prepare(root, **common, MAG_PLAYER_SETUP='1',
+                                             MAG_TEST_WINDOW_SAVES=json.dumps({'server_address': '', 'player_name': 'Rook_9',
+                                                                               'display_mode': 'borderless'}))
+            self.assertEqual(code, 0, err); self.assertIn('settings window opened', err)
+            self.assertEqual(json.loads(settings.read_text())['display_mode'], 'borderless')
+            self.assertEqual((values['PS3_NP_ONLINE_ID'], values['PS3RECOMP_VK_FULLSCREEN']), ('Rook_9', '1'))
+            code, values, err = self.prepare(root, **common)  # the engine applies the same display mode
+            self.assertEqual((code, values['PS3RECOMP_VK_FULLSCREEN']), (0, '1'))
+            code, values, err = self.prepare(root, **common, MAG_PLAYER_SETUP='1')
+            self.assertNotIn('settings window opened', err)  # later launches go straight in
+            settings.unlink()
             # First run: options are validated and saved; the name reaches the runtime and the keyboard.
             code, _, err = self.prepare(root, **common, MAG_PLAYER_SETUP='1', MAG_PLAYER_SET_NAME='no')
             self.assertEqual(code, 9); self.assertIn('--name', err); self.assertFalse(settings.exists())
             code, values, err = self.prepare(root, **common, MAG_PLAYER_SETUP='1',
                                              MAG_PLAYER_SET_SERVER='127.0.0.1', MAG_PLAYER_SET_NAME='Rook_7')
-            self.assertEqual(code, 0, err)
+            self.assertEqual(code, 0, err); self.assertNotIn('settings window opened', err)  # options skip it
             self.assertEqual(json.loads(settings.read_text())['server_address'], '127.0.0.1')
+            self.assertEqual(values['PS3RECOMP_VK_FULLSCREEN'], '')  # windowed by default
             self.assertEqual(values['PS3_NP_ONLINE_ID'], 'Rook_7'); self.assertEqual(values['PS3RECOMP_OSK_INITIAL_TEXT'], 'Rook_7')
             # A server needs a name: the launcher signs in with it, so the launch stops and says how.
             saved = settings.read_text()

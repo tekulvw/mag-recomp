@@ -66,6 +66,11 @@ void osk_native_win32_pump(void) {
     calls += "osk-pump;";
     dialog = 1;  // the pump may open the dialog; the backend must see that
 }
+// The settings window's F10 (player_settings_session.h).
+int mag_player_settings_win32_message(const void* message) {
+    calls += "settings-message;";
+    return *static_cast<const int*>(message) == 121;  // stands in for an F10 message
+}
 int osk_native_win32_handle_message(void*) {
     calls += "osk-message;";
     return osk_handles;
@@ -145,16 +150,21 @@ void window() {
     calls.clear();
     int msg = 0;
     osk_handles = 1;
-    require(mag_player_win32_message(&msg) == 1 && calls == "capture-message(1);osk-message;",
+    require(mag_player_win32_message(&msg) == 1 && calls == "settings-message;capture-message(1);osk-message;",
             "the backend observes every message before the dialog");
     calls.clear();
     osk_handles = 0;
-    require(mag_player_win32_message(&msg) == 0 && calls == "capture-message(1);osk-message;",
+    require(mag_player_win32_message(&msg) == 0 && calls == "settings-message;capture-message(1);osk-message;",
             "an observed message goes on to the window");
     calls.clear();
     withhold = 1;
-    require(mag_player_win32_message(&msg) == 1 && calls == "capture-message(1);",
+    require(mag_player_win32_message(&msg) == 1 && calls == "settings-message;capture-message(1);",
             "a withheld quit key reaches neither the dialog nor the window");
+    calls.clear();
+    withhold = 0;
+    int f10 = 121;
+    require(mag_player_win32_message(&f10) == 1 && calls == "settings-message;",
+            "F10 opens the settings window and goes no further");
 }
 }  // namespace
 
