@@ -152,6 +152,18 @@ void focus() {
     require(mag_win32_raw_input_admitted(0, 0) == 1 && mag_win32_raw_input_admitted(1, 0) == 1, "releases always pass");
 }
 
+// The game window's pump withholds only what would start the window's modal menu loop.
+void menu_mode() {
+    require(mag_win32_withholds_menu_message(MAG_WIN32_WM_SYSKEYUP, MAG_WIN32_VK_MENU) == 1, "a lone Alt released");
+    require(mag_win32_withholds_menu_message(MAG_WIN32_WM_SYSKEYUP, MAG_WIN32_VK_F10) == 1, "F10 released");
+    require(mag_win32_withholds_menu_message(MAG_WIN32_WM_SYSCHAR, 'f') == 1, "Alt with a menu mnemonic");
+    require(mag_win32_withholds_menu_message(MAG_WIN32_WM_SYSCHAR, ' ') == 1, "Alt+Space, the system menu");
+    require(mag_win32_withholds_menu_message(MAG_WIN32_WM_SYSKEYDOWN, MAG_WIN32_VK_F4) == 0, "Alt+F4 still closes");
+    require(mag_win32_withholds_menu_message(MAG_WIN32_WM_SYSKEYDOWN, MAG_WIN32_VK_MENU) == 0, "Alt pressed passes");
+    require(mag_win32_withholds_menu_message(MAG_WIN32_WM_SYSKEYUP, MAG_WIN32_VK_F4) == 0, "other releases pass");
+    require(mag_win32_withholds_menu_message(0x0100 /* WM_KEYDOWN */, MAG_WIN32_VK_F10) == 0, "plain key messages pass");
+}
+
 int main(int argc, char** argv) {
     if (argc != 2) return 2;
     const std::string name = argv[1];
@@ -162,6 +174,7 @@ int main(int argc, char** argv) {
         else if (name == "xinput") xinput();
         else if (name == "fallback") fallback();
         else if (name == "focus") focus();
+        else if (name == "menu") menu_mode();
         else return 2;
     } catch (const std::exception& error) {
         std::cerr << name << ": " << error.what() << '\n';

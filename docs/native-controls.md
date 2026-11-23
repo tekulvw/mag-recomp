@@ -301,6 +301,15 @@ unavailable or invalid state", followed by a colon and the error's own descripti
 (for example "invalid tuning record"), and makes the event return false (the game proceeds
 natively).
 
+**Diagnostics.** `MAG_GAME_CONTROLS_TRACE=1` (any value but empty or `0`) adds opt-in log lines;
+nothing changes behaviour. About once a second while handlers update, `trace look` counts how far
+mouse look got: handler updates, gameplay eligibility, look held by a menu, mouse eligibility,
+frames with motion and their summed counts, prepared and latched frames, look consumer seams run,
+nonzero displacements consumed, and the mouse-lock requests made (on and off). Every five seconds,
+`trace cost` gives the owner thread's update ticks, its hook calls per tick, the time spent in the
+hooks per tick, and each event above 2% of that time (by its number in `MagControlsHook`). The
+desktop backends add their own lines (section 8.1).
+
 **Construction** validates the profile, requires a session and both memory callbacks, configures
 the engine with the profile, reports the context as unsupported, records the engine's capture
 generation and registers the system-button actions as shared native actions
@@ -526,7 +535,9 @@ since last seen, reset system and host caches, clear receipts and cancel the mou
      generation (a context change is not a device reset);
    - remember the context and the new capture generation; without gameplay eligibility reset host
      caches and clear gameplay receipts; request relative mouse capture only with gameplay
-     eligibility outside Controller mode; record the attaching tick; status "on-foot Rust input
+     eligibility outside Controller mode and while no menu holds look (the same request as step 5;
+     a frame attaches at every poll, so asking for the lock here regardless would take it back at
+     every poll while a menu holds look); record the attaching tick; status "on-foot Rust input
      attached" or "native menu buttons attached".
 4. Remember the system routes. When gameplay routes are now unavailable (a menu opened during the
    poll), revoke gameplay and mouse eligibility, reset host caches, clear gameplay receipts and
@@ -631,8 +642,19 @@ list still equals it exactly and gameplay routes are available.
   generation, actor handle `generation<<16|index`, actor, logic, controller, state, aim kind),
   yaw = minus the converted yaw (screen-right motion turns the other way in the game's yaw), pitch
   as converted, time step f31, rotation allowed, and mouse ownership = the look owner is the mouse.
-  When prepared, write 0.0 to the actor's two look-rate inputs (failure is an error) and set
-  status "on-foot mouse prepared".
+  When prepared, write the actor's two look-rate inputs (failure is an error) and set status
+  "on-foot mouse prepared": the pitch input is 0.0; the yaw input is 0.0 when the converted motion
+  is zero in both axes, else the *wake input* `0.001`, its sign flipping at every prepared frame
+  that has motion (the first is positive).
+  Why the wake input: a soldier who has stood still for a few seconds settles into an at-rest
+  state in which the game stops running its basic look consumer (so the `BasicYaw` and
+  `BasicPitch` seams no longer fire), and it leaves that state only when the look-rate input
+  turns the soldier faster than a very small stillness bound. Mouse motion reaches the game at
+  those seams and not through the look-rate input, so without the wake input the mouse could not
+  turn a soldier at rest, horizontally or vertically. The wake input is a thousandth of full stick
+  deflection: about 300 times the stillness bound, a turn of a few thousandths of a degree per
+  frame, and the alternating sign cancels it over consecutive frames. A smaller value (one
+  millionth) was measured not to wake the soldier (section 10).
 - `YawRateEnter`: counts depth; it is the observed one when at depth one, r3 is the actor-scope
   owner's actor and `lr` matches the caller for the owner's aim kind (sprint or basic).
   `SprintPitchRateEnter` likewise with the sprint caller.
@@ -757,10 +779,14 @@ CMake refuses to configure without it.
 While capture is requested the window registers for Raw Input from keyboards and mice, with no
 flags (legacy key and mouse messages still flow, and input arrives only while the application is
 in the foreground); the registration is removed when capture stops or the window changes. The
-backend reads `WM_INPUT` for the game window and never consumes it. It withholds exactly one
-message: a key press of Escape on the focused game window while the adapter owns the keyboard and
-requests capture and no dialog owns the keyboard, which the window procedure would treat as quit
-(the Linux rule; closing the window still quits). Keys are scan codes with their E0 prefix,
+backend reads `WM_INPUT` for the game window and never consumes it. It withholds a key press of
+Escape on the focused game window while the adapter owns the keyboard and requests capture and no
+dialog owns the keyboard, which the window procedure would treat as quit (the Linux rule; closing
+the window still quits). While capture is installed it also withholds the messages that would put
+the window in its menu mode: the release of a lone Alt or of F10 (`WM_SYSKEYUP`) and Alt with a
+character key (`WM_SYSCHAR`, a menu mnemonic or Alt+Space). The game window has no menu, and the
+modal menu loop would stop the pump, and the game with it, until another key or a click. Alt+F4 is
+a key press and still closes the window; Alt itself still reaches the game as a key. Keys are scan codes with their E0 prefix,
 translated by an explicit table (`player_input_win32_map.c`) to HID usages; E1 sequences (Pause),
 escape-sequence fragments, the fake shifts Windows adds around navigation keys, Break, system and
 media keys and the GUI keys are not captured. Raw Input repeats held keys, so the backend tracks
@@ -776,7 +802,11 @@ it arrives: presses and motion count only while the game window is focused, rele
 so a press made in another window before the next pump never reaches the game. Losing focus
 releases the confinement and shows the cursor again; a replaced or dropped confinement is
 re-applied at the next pump ("mouse lock lost; re-applying", once per loss). Every capture state
-change is logged once (`desktop_capture_transition`), as on Linux.
+change is logged once (`desktop_capture_transition`), as on Linux. With `MAG_GAME_CONTROLS_TRACE=1`
+the backend logs each acquisition of the lock with the client area and the confinement Windows
+applied, each release or failure, and about once a second what became of the raw mouse reports:
+motion accepted, or dropped as unfocused, capture not installed, not ready, not relative or stale
+(an older motion epoch), the confinement losses found, and the mouse-look requests the adapter made.
 
 Controllers on macOS and Linux reach the capture layer through `player_input_sdl_pad.c`: compile
 definitions on `libs/input/cellPad.c` route its SDL GameController calls through wrappers that
@@ -884,6 +914,17 @@ Switches:
 
 Evidence for the default (the rule for in-repository code on by default, AGENTS.md):
 
+- *Mouse look on Windows (2026-11-23, local Training, relative motion injected with `SendInput`,
+  frame dumps, `MAG_GAME_CONTROLS_TRACE=1`):* 1000 counts in two seconds turned the camera in every
+  phase: at rest horizontally and vertically, after a pause-menu round trip, after a lone Alt tap,
+  while walking, and at rest again (frame change 10.7 to 34.1, against 1.1 to 3.5 for two idle
+  seconds before each). In every second with motion the adapter consumed a displacement in as many
+  frames as had motion. The lock was acquired at spawn and after the menu and released once for
+  the menu, with the confinement equal to the client area. Before the wake input (7.5) the same
+  check consumed nothing at rest. A soldier at rest stopped running the look consumer, so motion
+  turned the camera only while walking. A wake input of one millionth did not wake the soldier.
+  Before the attach fix (7.2) the lock was taken and released every frame while the pause menu
+  was open.
 - *Correctness:* the synthetic suites in section 11 (adapter, capture core, SDL and Win32 backends,
   settings registration, catalog) and the installer's synthetic toolchain and switch tests
   (`installer/tests/test_managed_tools.py`, `installer/tests/test_player_build.py`). On macOS the
