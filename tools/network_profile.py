@@ -237,9 +237,12 @@ def prepare_overlay(vfs: Path, profile_path: Path, expected_member: str = MEMBER
     original=extract(names.index(expected_member)+1)
     if hashlib.sha256(original).hexdigest()!=profile['member_sha256']:
         raise ValueError('Settings member identity mismatch')
+    # The portal ticket profile keeps the NP ticket setting on: the engine (a separate process,
+    # with no launcher init to turn it on again) must request a ticket as the launcher does.
+    np_ticket='true' if portal else 'false'
     settings=('MAGClientNetConfig = {\n'
               '  EnableNetwork = true,\n  EnableServerOnClient = false,\n'
-              '  UseTestClient = false,\n  UseNPTicket = false,\n'
+              f'  UseTestClient = false,\n  UseNPTicket = {np_ticket},\n'
               f'  MAPSServerAddr = "{address}",\n'
               f'  MAPSServerTCPPort = {profile["maps_tcp_port"]},\n'
               f'  MAPSServerUDPPort = {profile["maps_udp_port"]},\n}}\n').encode()
