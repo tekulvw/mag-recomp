@@ -501,7 +501,9 @@ since last seen, reset system and host caches, clear receipts and cancel the mou
      generation (a context change is not a device reset);
    - remember the context and the new capture generation; without gameplay eligibility reset host
      caches and clear gameplay receipts; request relative mouse capture only with gameplay
-     eligibility outside Controller mode; record the attaching tick; status "on-foot Rust input
+     eligibility outside Controller mode and while no menu holds look (the same request as step 5;
+     a frame attaches at every poll, so asking for the lock here regardless would take it back at
+     every poll while a menu holds look); record the attaching tick; status "on-foot Rust input
      attached" or "native menu buttons attached".
 4. Remember the system routes. When gameplay routes are now unavailable (a menu opened during the
    poll), revoke gameplay and mouse eligibility, reset host caches, clear gameplay receipts and
@@ -874,6 +876,17 @@ Switches:
 
 Evidence for the default (the rule for in-repository code on by default, AGENTS.md):
 
+- *Mouse look on Windows (2026-11-23, local Training, relative motion injected with `SendInput`,
+  frame dumps, `MAG_GAME_CONTROLS_TRACE=1`):* 1000 counts in two seconds turned the camera in every
+  phase: at rest horizontally and vertically, after a pause-menu round trip, after a lone Alt tap,
+  while walking, and at rest again (frame change 10.7 to 34.1, against 1.1 to 3.5 for two idle
+  seconds before each). In every second with motion the adapter consumed a displacement in as many
+  frames as had motion. The lock was acquired at spawn and after the menu and released once for
+  the menu, with the confinement equal to the client area. Before the wake input (7.5) the same
+  check consumed nothing at rest. A soldier at rest stopped running the look consumer, so motion
+  turned the camera only while walking. A wake input of one millionth did not wake the soldier.
+  Before the attach fix (7.2) the lock was taken and released every frame while the pause menu
+  was open.
 - *Correctness:* the synthetic suites in section 11 (adapter, capture core, SDL and Win32 backends,
   settings registration, catalog) and the installer's synthetic toolchain and switch tests
   (`installer/tests/test_managed_tools.py`, `installer/tests/test_player_build.py`). On macOS the
