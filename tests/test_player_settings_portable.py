@@ -41,7 +41,8 @@ class PortablePlayerSettingsTests(unittest.TestCase):
         (root / 'sdata_decrypt.h').write_text('#include <stddef.h>\n#include <stdint.h>\n'
             'static inline uint8_t* sdata_decrypt(const uint8_t*,size_t,size_t*) { return NULL; }\n')
         cls.binary = root / 'driver'
-        sources = ['tests/player_settings_portable.cpp', 'src/player_settings_portable.cpp',
+        sources = ['tests/player_settings_portable.cpp', 'src/player_settings_portable.cpp', 'src/player_settings_file.cpp',
+                   'src/player_portal.cpp',
                    'src/player_server_overlay_portable.cpp', 'src/player_archive.cpp',
                    'src/player_inflate.cpp', 'src/player_sha256.cpp']
         result = subprocess.run([COMPILER, '-std=c++20', '-Wall', '-Wextra', '-Werror', '-DMAG_PLAYER_ARCHIVE_NO_ZLIB=1',
@@ -124,6 +125,14 @@ class PortablePlayerSettingsTests(unittest.TestCase):
             self.assertNotIn('ticket_file', parse({})[0])
             for bad in ({'ticket_file': 'relative/ticket.bin'}, {'ticket_file': 7}, {'ticket_file': '/a\nb'},
                         {'ticket_file': '/' + 'x' * 1024}):
+                self.assertIsNone(parse(bad)[0], bad)
+            # The optional portal address: https (http only for localhost), normalised, written back only when set.
+            self.assertEqual(parse({'portal_url': ' HTTPS://Portal.Example.org/ '})[0]['portal_url'], 'https://portal.example.org')
+            self.assertEqual(parse({'portal_url': 'http://127.0.0.1:8080'})[0]['portal_url'], 'http://127.0.0.1:8080')
+            self.assertNotIn('portal_url', parse({'portal_url': ''})[0])
+            for bad in ({'portal_url': 'http://portal.example.org'}, {'portal_url': 'portal.example.org'},
+                        {'portal_url': 'https://u@portal.example.org'}, {'portal_url': 'https://p.example.org/?x=1'},
+                        {'portal_url': 3}):
                 self.assertIsNone(parse(bad)[0], bad)
 
     def test_server_sign_in_profiles(self):
@@ -232,6 +241,14 @@ class PortablePlayerSettingsTests(unittest.TestCase):
             self.assertEqual((values['PS3_NET_ONLINE'], values['PS3RECOMP_NP_LOCAL_TICKET'], values['MAG_LOCAL_NO_TICKET']), ('', '', ''))
             settings.write_text(saved)
             self.assertEqual(self.prepare(root, **common, MAG_PLAYER_SETUP='1')[0], 0)
+            # A ticket the supervisor fetched from the portal applies to this phase only: never saved.
+            fetched = str(root / 'owned/portal-ticket.bin')
+            code, _, err = self.prepare(root, **common, MAG_PLAYER_SETUP='1', MAG_PLAYER_PORTAL_TICKET=fetched)
+            self.assertEqual(code, 0, err); self.assertIn('ticket file ' + fetched, err)
+            self.assertNotIn('ticket_file', json.loads(settings.read_text()))
+            self.assertNotIn('ticket_file', json.loads((owned / 'launch-settings.json').read_text()))
+            code, _, err = self.prepare(root, **common, MAG_PLAYER_SETUP='1', MAG_PLAYER_PORTAL_TICKET='relative.bin')
+            self.assertEqual(code, 0, err); self.assertIn('Signing in without it', err); self.assertNotIn(', ticket file', err)
             # The engine phase applies the launcher's snapshot, not a file edited meanwhile.
             settings.write_text(json.dumps({'player_name': 'Other'}))
             code, values, _ = self.prepare(root, **common)

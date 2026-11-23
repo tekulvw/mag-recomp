@@ -2,13 +2,14 @@
 #include <string>
 
 namespace mag {
-// The player's settings on Windows and Linux: the macOS settings file's connection fields,
+// The player's settings on Windows and Linux (parsed in player_settings_file.cpp): the macOS settings file's connection fields,
 // plus the player's online name. Other keys (for example from a macOS file) are ignored.
 struct PortableSettings {
     std::string server_address = "play.magtest.online";
     int tcp_port = 0, udp_port = 0;
     std::string player_name;  // Required to play on a server; empty only for the game default.
     std::string ticket_file;  // Optional (UTF-8): sign in with this file's ticket (player_sign_in.h).
+    std::string portal_url;   // Optional: the account portal; empty means the server's default (player_portal.h).
 };
 // Parse a settings file. On failure returns false and an explanation in `error`.
 bool parse_portable_settings(const std::string &json, PortableSettings &settings, std::string &error);
