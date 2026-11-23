@@ -93,6 +93,11 @@ bool system_action(ActionId action) {
     const auto* entry = mag_game_controls_action(action);
     return entry && entry->system_channel >= 0;
 }
+// Situational actions are recognized by their own token only (7.3) and never required (7.4).
+bool optional_action(ActionId action) {
+    const auto* entry = mag_game_controls_action(action);
+    return entry && entry->optional;
+}
 
 bool contains(const std::vector<uint32_t>& values, uint32_t value) {
     return std::find(values.begin(), values.end(), value) != values.end();
@@ -230,6 +235,8 @@ struct MagGameControlsAdapter::State {
     std::optional<ControlsProfile> pending;
     const char* status = "waiting for input poll";
     std::string error_status;  // status text of the last error (InvalidState and its reason)
+    void (*census_sink)(const char*) = nullptr;
+    std::set<std::string> census_seen;
 
     // Scopes on the owning thread.
     std::optional<uint64_t> thread;
@@ -642,8 +649,40 @@ struct MagGameControlsAdapter::State {
 
     // ---- Handler update and attachment (7.2, 7.4) --------------------------------------------
 
+    // Diagnostics only: describe the handler being updated, once per distinct description.
+    void census(uint32_t handler) noexcept {
+        if (!census_sink || census_seen.size() >= 2048) return;
+        try {
+            auto r = guest.reads();
+            const char* role = owner_handler(handler) ? "owner"
+                : gameplay_routes && contains(*gameplay_routes, handler) ? "gameplay-route"
+                : contains(system_routes, handler) ? "system-route" : "other";
+            char head[160];
+            std::snprintf(head, sizeof head, "census role=%s context=%s enabled=%d state=%u/%08X controls=", role,
+                          !frame ? "none" : gameplay_eligible ? "OnFoot" : "Menu",
+                          int(r.u8(uint64_t(handler) + 0x40).value_or(0xFF)), owner ? unsigned(owner->state_id) : 0u,
+                          owner ? r.u32(owner->state).value_or(0) : 0u);
+            std::string line = head;
+            if (const auto controls = guest.watched_controls(handler)) {
+                for (const auto& control : *controls) {
+                    char item[24];
+                    std::snprintf(item, sizeof item, "%08X:%u,", control.token, control.channel);
+                    line += item;
+                }
+            } else {
+                line += "unreadable";
+            }
+            if (census_seen.insert(line).second) census_sink(line.c_str());
+        } catch (...) {
+        }
+    }
+
     void handler_enter(MagGameControlsCpu& cpu) {
         if (++handler_depth != 1) return;
+        update_handler(cpu);
+        census(address(cpu.gpr[3]));  // as the update leaves it
+    }
+    void update_handler(MagGameControlsCpu& cpu) {
         recognition_handler = 0;
         if (!sample_key || !sealed) return;
         auto routes = guest.system_routes();
@@ -676,6 +715,7 @@ struct MagGameControlsAdapter::State {
         std::set<ActionId> needed;
         for (const auto& binding : profile.bindings)
             if ((binding.contexts & uint32_t(InputContext::OnFoot)) && !system_action(binding.action) &&
+                !optional_action(binding.action) &&
                 (binding.control.source != InputSource::Controller || profile.controller_remap))
                 needed.insert(binding.action);
         std::set<uint32_t> tokens;
@@ -715,7 +755,8 @@ struct MagGameControlsAdapter::State {
             for (const auto& control : contract->controls) {
                 const bool look = mag_game_controls_look_token(control.token);
                 const ActionId action = look ? control.token : mag_game_controls_token_action(control.token);
-                if ((look || mag_game_controls_action(action)) && !add(control.channel, action)) return false;
+                if ((look || (mag_game_controls_action(action) && !optional_action(action))) && !add(control.channel, action))
+                    return false;
             }
         for (const auto& action : mag_game_controls_actions())
             if (action.system_channel >= 0 && !add(uint32_t(action.system_channel), action.id)) return false;
@@ -859,9 +900,15 @@ struct MagGameControlsAdapter::State {
         if (!token || !binding || !tuning || !*binding || *binding > 0xFFFFFFF3 || !*tuning || *tuning > 0xFFFFFFD7) return false;
         const auto channel = r.u32(uint64_t(*binding) + 8);
         if (!channel || *channel >= 32) return false;
-        const auto mapped = channel_actions.find(*channel);
-        if (mapped == channel_actions.end()) return false;
-        const ActionId action = mapped->second;
+        // A watched token that names a catalog action is that action wherever it is watched; any
+        // other token takes the action of its channel.
+        const ActionId named = mag_game_controls_token_action(*token);
+        ActionId action = mag_game_controls_action(named) ? named : 0;
+        if (!action) {
+            const auto mapped = channel_actions.find(*channel);
+            if (mapped == channel_actions.end()) return false;
+            action = mapped->second;
+        }
 
         // Step 3.
         const auto* catalog = mag_game_controls_action(action);
@@ -878,8 +925,11 @@ struct MagGameControlsAdapter::State {
                 gameplay_eligible = mouse_eligible = false;
                 return false;
             }
+            // Situational actions may be watched by any system route (a vehicle's or a menu's own
+            // handler); other actions only by the owner or a gameplay route.
             if (gameplay ? mag_game_controls_token_action(*token) != action
-                         : !gameplay_routes || !contains(*gameplay_routes, handler))
+                         : !(gameplay_routes && contains(*gameplay_routes, handler)) &&
+                               !(optional_action(action) && contains(system_routes, handler)))
                 return false;
         }
 
@@ -931,6 +981,9 @@ struct MagGameControlsAdapter::State {
         } else if (gameplay) {
             host_caches[n] = {*owner, handler, *token, *binding, *tuning, tuple};
             if (offer) gameplay_receipts[action] = *offer;
+        } else if (optional_action(action)) {
+            // Given back like a system button when the adapter lets go (6.5).
+            system_caches[n] = {handler, *token, *binding, *tuning, tuple};
         }
         if (accept) mag_controls_accept_action(*sample_key, action, *offer);
 
@@ -1275,6 +1328,11 @@ bool MagGameControlsAdapter::dispatch(MagControlsHook event, MagGameControlsCpu 
 }
 
 const char* MagGameControlsAdapter::status() const noexcept { return state_->status; }
+
+void MagGameControlsAdapter::set_census(void (*sink)(const char*)) {
+    state_->census_sink = sink;
+    state_->census_seen.clear();
+}
 
 void MagGameControlsAdapter::request_profile(const ControlsProfile& profile) {
     mag_game_controls_validate_profile(profile);

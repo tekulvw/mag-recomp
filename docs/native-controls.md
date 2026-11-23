@@ -161,8 +161,11 @@ assist record embedded at `+0x1A0`. A *clean* assist record has u32 zero at `+0`
 
 ### 2.3 Game actions
 
-Action identifiers are the game's action-name tokens. The adapter's catalog (label, whether a
-controller button may be remapped to it, system channel for system buttons):
+Action identifiers are the game's action-name tokens: CRC-32 (the zlib polynomial) of the
+lower-cased action name, for example `fire` is `0x58DE09CF`. The game's on-screen prompts name the
+same actions as `[Name]` placeholders (`[Action]`, `[OS_Enter]`, `[Bleedout]`), so a prompt names
+an adapter action exactly (`mag_game_controls_prompt_action`). The adapter's catalog (label,
+whether a controller button may be remapped to it, system channel for system buttons):
 
 | Token | Label | Controller | System channel |
 | --- | --- | --- | --- |
@@ -187,8 +190,30 @@ controller button may be remapped to it, system channel for system buttons):
 | `0xEAB2ACF1` | D-pad left (commands) | yes | 2 |
 | `0x3D898BBF` | D-pad right (commands) | yes | 3 |
 
+**Situational actions** (catalog revision 2) are gameplay actions the game watches only in some
+situations: when the player is downed, on an on-screen prompt, in a command menu or in a vehicle.
+They are keyboard and mouse only (a controller presses them natively), *optional* (never required
+for the channel contract, 7.4) and recognized by their own token wherever the game watches them
+(7.3):
+
+| Token | Name | Label | Default key |
+| --- | --- | --- | --- |
+| `0x33E32A99` | os_enter | Confirm (on-screen prompts) | Return |
+| `0x75453127` | os_cancel | Back (on-screen prompts) | Backspace |
+| `0x40FEEC35` | bleedout | Bleed out (when downed) | X |
+| `0xC6DCD89F` | commandscreen | Command screen | M |
+| `0xA79B7198` | tcm_abilities | Tactical menu: abilities | 1 |
+| `0x6B7B7C6C` | tcm_frago | Tactical menu: FRAGO | 2 |
+| `0xF69D4193` | tcm_voicechat | Tactical menu: voice chat | 3 |
+| `0x74700E10` | vseatnext | Change seats | V |
+| `0xE3DD5118` | vsmoke | Smoke screen | B |
+
+The default keys are not yet verified against the game: which handler watches each token, on
+which channel and in which context comes from a census of a hosted match (`MAG_GAME_CONTROLS_TRACE`,
+section 4).
+
 Token aliases (a watched token that stands for a catalog action): `0x68C3570D` is Aim,
-`0x9716C7A1` is Crouch/prone, `0x71C8F2F0` is Interact. Every other token stands for itself.
+`0x9716C7A1` is Crouch/prone, `0x71C8F2F0` (contaction, the held form) is Interact. Every other token stands for itself.
 
 Look tokens (the four look-axis channels): `0xC8A3E21D`, `0x941734A2`, `0x661CB595`, `0xC34F3A66`.
 
@@ -257,6 +282,15 @@ rules in section 5 depend on (`002726B8`, `0026F91C`, `0023F108`).
 
 **Thread ownership.** The first thread that delivers `OuterEnter` after start owns the adapter for
 the session; events from every other thread are ignored entirely.
+
+**Census.** With `MAG_GAME_CONTROLS_TRACE=1`, or when a file named `controls-trace` exists next to the
+controls preferences (the packaged players pass no `MAG_` variables to the engine; on macOS that is
+`~/Library/Application Support/MAG/controls-trace`), the runtime prints, once per distinct description, each
+handler the game updates: its role (the local player's handler, a gameplay route, another system
+route or other), the attached context, whether it is enabled, the local player's movement state id
+and vtable, and every watched token with its channel (`[game-controls] census ...`). It reads guest
+memory only and changes nothing; it is how situational tokens, their channels and the vehicle
+states are learned from a match.
 
 **Status.** The adapter keeps a short status string. The runtime prints it (prefix
 `[game-controls]`) whenever it changes, except while it says it is waiting for a poll; the
@@ -490,8 +524,8 @@ since last seen, reset system and host caches, clear receipts and cancel the mou
    - adopt the owner; keep the gameplay routes (or none); gameplay is eligible when gameplay routes
      exist, the contract was built and the owner's handler is enabled;
    - clear the channel map, gameplay and system receipts, mouse eligibility;
-   - map each contract channel whose token is a look token or a catalog action (after aliases) to
-     that action; two different actions on one channel cancel ("ambiguous native action channel");
+   - map each contract channel whose token is a look token or a catalog action (after aliases)
+     that is not situational to that action; two different actions on one channel cancel ("ambiguous native action channel");
      map each catalog system channel to its system action;
    - report the context supported and request desktop capture unless the mode is Controller;
    - the semantic context is OnFoot when gameplay is eligible, otherwise Menu; attach the sample
@@ -533,14 +567,16 @@ Returns false (the game recognizes the control itself) unless every step below a
    frame. If the owner no longer matches, cancel ("native input routing changed") and return false.
 2. Control record `n` = r29 (not above `0xFFFFFFE3`); r31 and r3 must equal `n+8`. Read token,
    binding (nonzero, not above `0xFFFFFFF3`), tuning (nonzero, not above `0xFFFFFFD7`) and the
-   binding's channel (below 32). The action is the channel map's entry; none: return false.
+   binding's channel (below 32). The action is the token's catalog action (after aliases) when
+   it has one, otherwise the channel map's entry; none: return false.
 3. `system` = the action has a system channel; `gameplay` = the current handler is the owner's
    handler.
    - System action: the current handler must still be in the system routes, otherwise cancel
      ("native system route changed") and return false.
    - Other actions: gameplay must be eligible; the channel contract must still be current (7.4),
      otherwise revoke gameplay and mouse eligibility and return false; on the owner's handler the
-     token (after aliases) must equal the action; on another handler it must be a gameplay route.
+     token (after aliases) must equal the action; on another handler it must be a gameplay route,
+     or, for a situational action, any system route (a vehicle's or a menu's own handler).
 4. `mouse look` = gameplay, a look token, mouse eligible and the frame's look owner is the mouse.
    Ask the engine for this action's offer (`mag_controls_offer`). `remapped` = the profile remaps
    the controller and the action allows controller remapping. `deny native` = (gameplay or system)
@@ -574,7 +610,8 @@ Returns false (the game recognizes the control itself) unless every step below a
 12. Non-system action on the owner's handler: record a host cache. With an offer, keep it as a
     gameplay receipt and, when not blocked and the value is above zero, accept the action. On a
     gameplay route handler (not the owner's) nothing is recorded: no host cache, no receipt, no
-    acceptance; the published tuple is the only effect.
+    acceptance; the published tuple is the only effect. A situational action on another handler
+    is recorded as a system cache (6.5), so it is given back when the adapter lets go.
 13. Return true.
 
 `ControlCallback`: when the current control is r29 and the frame is no longer valid, write the
@@ -583,8 +620,8 @@ neutral tuple to it, forget its host cache, set r0 to zero and clear the current
 ### 7.4 Channel contract
 
 Built from the owner's watched controls (5.2). The needed set is every profile binding active in
-OnFoot whose action is not a system action (controller bindings count only when the profile remaps
-the controller). Every token in the list must be unique. Each look token adds its channel to the
+OnFoot whose action is neither a system action nor situational (controller bindings count only
+when the profile remaps the controller). Every token in the list must be unique. Each look token adds its channel to the
 required mask; all four must be present. Each token that is (after aliases) a catalog action or a
 bound action is removed from the needed set and adds its channel to the mask. The contract exists
 when the needed set ends empty and the mask is nonzero. It is *current* while the owner's watched
@@ -830,8 +867,9 @@ neither releases nor connects).
 
 The settings registration uses the catalog (`mag_game_controls_descriptors`): one descriptor per action, label from the catalog,
 contexts OnFoot|Menu for system actions and OnFoot otherwise, sources keyboard|mouse|controller for
-controller-capable actions and keyboard|mouse otherwise, group "Native menu / command buttons" or
-"On-foot actions". Validation is the catalog's profile validation; upgrade is the catalog upgrade.
+controller-capable actions and keyboard|mouse otherwise, group "Native menu / command buttons",
+"On-foot actions" or the situational action's own group ("Prompts and downed", "Commands",
+"Vehicles"). Validation is the catalog's profile validation; upgrade is the catalog upgrade.
 With a session, apply queues the profile on the adapter (after the session ends it reports that the
 saved controls apply next launch). Without a session (startup), apply only records that the player
 chose explicitly, so the startup mode override no longer applies.

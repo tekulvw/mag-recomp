@@ -982,13 +982,173 @@ void menu_keyboard_pad() {
     require(!owned() && !pad_muted(), "destroying the adapter kept the keyboard");
 }
 
+// A watched control on `handler`'s list (appended), with its own binding to `channel`.
+uint32_t watch(Memory& m, uint32_t handler, uint32_t slot, uint32_t token, uint32_t channel) {
+    const uint32_t node = 0x100C0000 + slot * 0x100, binding = node + 0x80;
+    m.map(node, 0x24);
+    m.map(binding, 0x0C);
+    m.put32(binding + 8, channel);
+    m.put32(node + Record, token);
+    m.put32(node + Record + 4, binding);
+    m.put32(node + Record + 8, Tuning);
+    std::vector<uint32_t> nodes;
+    for (uint32_t n = m.get32(handler + 4); n != handler + 4; n = m.get32(n)) nodes.push_back(n);
+    nodes.push_back(node);
+    m.link(handler + 4, nodes);
+    return node + Record;
+}
+constexpr uint32_t Bleedout = 0x40FEEC35, Confirm = 0x33E32A99, SeatNext = 0x74700E10;
+
+// Situational actions (catalog revision 2) are bound by default but never required: the player's
+// handler attaches on foot without them. Watched by their own token, they are recognized from their
+// own keys, even on a channel another action uses, wherever the game watches them: the player's
+// handler, a gameplay route or another registered handler.
+void situational_actions() {
+    Harness h;
+    require(h.idle_tick() == Attached, "a default profile with situational actions did not attach on foot");
+    // Downed: the player's handler also watches Bleedout, on Reload's channel (14).
+    const uint32_t bleed = watch(h.m, Handler, 0, Bleedout, 14);
+    require(h.idle_tick() == Attached, "a situational token sharing a channel blocked attachment");
+    mag_controls_push_event({{InputSource::Keyboard, 27}, true, time_ns()});  // X: Bleed out.
+    h.begin_tick();
+    h.enter_handler();
+    require(h.recognize_record(bleed, Handler), "Bleedout stayed native");
+    require(mag_guest_tuple_value(h.tuple_at(bleed)) == 1.0f, "Bleedout not pressed by X");
+    require(!h.recognize(Reload), "X pressed Reload, which shares the channel");
+    h.end_poll();
+    h.enter_actor();
+    h.end_tick();
+    mag_controls_push_event({{InputSource::Keyboard, 27}, false, time_ns()});
+    h.idle_tick();
+
+    // A HUD prompt's own handler (a gameplay route) watching Confirm on Jump's channel: Return
+    // confirms; Space (Jump) no longer does.
+    uint32_t record = 0;
+    const uint32_t route = route_handler(h.m, record);
+    h.m.put32(record, Confirm);
+    require(h.idle_tick() == Attached, "a prompt route blocked attachment");
+    mag_controls_push_event({{InputSource::Keyboard, 44}, true, time_ns()});
+    h.begin_tick();
+    h.enter_handler();
+    h.fire(Hook::HandlerExit);
+    h.enter_handler(route);
+    const auto before = h.tuple_at(record);
+    require(!h.recognize_record(record, route) && h.tuple_at(record) == before, "Space pressed the prompt's Confirm");
+    h.fire(Hook::HandlerExit);
+    h.end_poll();
+    h.enter_actor();
+    h.end_tick();
+    mag_controls_push_event({{InputSource::Keyboard, 44}, false, time_ns()});
+    mag_controls_push_event({{InputSource::Keyboard, 40}, true, time_ns()});  // Return.
+    h.begin_tick();
+    h.enter_handler();
+    h.fire(Hook::HandlerExit);
+    h.enter_handler(route);
+    require(h.recognize_record(record, route) && mag_guest_tuple_value(h.tuple_at(record)) == 1.0f,
+            "Return did not confirm the prompt");
+    h.fire(Hook::HandlerExit);
+    h.end_poll();
+    h.enter_actor();
+    h.end_tick();
+    mag_controls_push_event({{InputSource::Keyboard, 40}, false, time_ns()});
+
+    // Another registered handler (a vehicle's, say) watching Change seats: V presses it while the
+    // player is on foot, and the adapter gives it back when it lets go.
+    const uint32_t vehicle = 0x100D0000;
+    handler_base(h.m, vehicle, BaseVtable, true);
+    const uint32_t seat = watch(h.m, vehicle, 1, SeatNext, 3);
+    h.m.map(Registered + 0x20, 0x10);
+    h.m.put32(Registered + 0x28, vehicle);
+    h.m.link(InputManager + 0x2C, {Registered, Registered + 0x10, Registered + 0x20});
+    require(h.idle_tick() == Attached, "a registered vehicle handler blocked attachment");
+    mag_controls_push_event({{InputSource::Keyboard, 25}, true, time_ns()});  // V.
+    h.begin_tick();
+    h.enter_handler();
+    h.fire(Hook::HandlerExit);
+    h.enter_handler(vehicle);
+    require(h.recognize_record(seat, vehicle) && mag_guest_tuple_value(h.tuple_at(seat)) == 1.0f,
+            "V did not change seats");
+    h.cpu.gpr[3] = Handler;
+    h.fire(Hook::HandlerRefresh);  // Cancel: the held seat change is given back.
+    h.fire(Hook::HandlerRefreshed);
+    require(h.tuple_at(seat) == mag_guest_neutral_tuple(), "cancel kept the vehicle's seat change");
+    h.fire(Hook::HandlerExit);
+    h.fire(Hook::PollExit);
+    h.enter_actor();
+    h.end_tick();
+    mag_controls_push_event({{InputSource::Keyboard, 25}, false, time_ns()});
+    // In a menu a situational action is not taken over (the keyboard pad serves the menu).
+    h.m.put32(Pause + 0x9C0, 1);
+    require(h.idle_tick() == "native menu buttons attached", "paused game attached on foot");
+    mag_controls_push_event({{InputSource::Keyboard, 25}, true, time_ns()});
+    h.begin_tick();
+    h.enter_handler(vehicle);
+    require(!h.recognize_record(seat, vehicle), "a menu took over a situational action");
+    h.fire(Hook::HandlerExit);
+    h.fire(Hook::PollExit);
+    h.end_tick();
+}
+
+std::vector<std::string> census_lines;
+void census_line(const char* line) { census_lines.push_back(line); }
+
+// The census describes each distinct handler update once, and changes nothing.
+void census() {
+    Harness h;
+    h.adapter->set_census(census_line);
+    h.idle_tick();
+    h.idle_tick();
+    require(h.status() == Attached, "the census changed attachment");
+    require(census_lines.size() == 1, "each distinct handler description is reported once");
+    require(census_lines[0].find("census role=owner context=OnFoot enabled=1 state=1/01A6DD28 controls=B164D156:4,93115EC5:5,") == 0,
+            "owner description");
+    require(census_lines[0].find("C34F3A66:23,163AAB24:12,") != std::string::npos, "every watched token is listed");
+    h.m.put32(Pause + 0x9C0, 1);
+    h.idle_tick();
+    require(census_lines.size() == 2 && census_lines[1].find("role=owner context=Menu") != std::string::npos,
+            "a new context is a new description");
+    h.m.put32(Pause + 0x9C0, 0);
+    h.adapter->set_census(nullptr);
+    h.m.put8(Handler + 0x40, 0);
+    h.idle_tick();
+    require(census_lines.size() == 2, "a removed sink still reported");
+}
+
+// The query API for on-screen prompts: bindings by action and context, the last device used and
+// the profile revision.
+void prompt_queries() {
+    Harness h;
+    const uint64_t revision = mag_controls_profile_revision();
+    const auto bleed = mag_controls_action_bindings(Bleedout, InputContext::OnFoot);
+    require(bleed.size() == 1 && bleed[0].control == PhysicalControl{InputSource::Keyboard, 27}, "Bleed out is X");
+    require(mag_controls_action_bindings(Bleedout, InputContext::Menu).empty(), "Bleed out bound in menus");
+    const auto start = mag_controls_action_bindings(Start, InputContext::Menu);
+    require(start.size() == 1 && start[0].control.code == 41, "controller bindings listed without a remap");
+    require(!mag_controls_controller_remapped(), "default profile remaps the controller");
+    auto remap = mag_game_controls_default_profile();
+    remap.controller_remap = true;
+    mag_controls_configure(remap);
+    require(mag_controls_profile_revision() > revision, "configure did not advance the revision");
+    require(mag_controls_action_bindings(Start, InputContext::Menu).size() == 2 && mag_controls_controller_remapped(),
+            "remapped controller bindings not listed");
+    require(mag_controls_last_device() == InputDevice::None, "a device before any press");
+    mag_controls_push_event({{InputSource::Mouse, 0}, true, time_ns()});
+    require(mag_controls_last_device() == InputDevice::KeyboardMouse, "a click is keyboard and mouse");
+    mag_controls_push_event({{InputSource::Mouse, 0}, false, time_ns()});
+    mag_controls_push_event({{InputSource::Controller, 0}, true, time_ns(), 1});
+    require(mag_controls_last_device() == InputDevice::Controller, "a button press is the controller");
+    mag_controls_push_event({{InputSource::Keyboard, 4}, false, time_ns()});
+    require(mag_controls_last_device() == InputDevice::Controller, "a release changed the device");
+}
+
 int main(int argc, char** argv) {
     const std::map<std::string, void (*)()> scenarios = {
         {"owner", owner_resolution}, {"lists", malformed_lists}, {"routes", routes}, {"tick", full_tick},
         {"route", route_recognition},
         {"mouse", mouse_look},       {"assist", aim_assist},     {"lifecycle", lifecycle},
         {"threads", threads_and_errors}, {"menu", menu_holds_look},
-        {"menu-pad", menu_keyboard_pad}};
+        {"menu-pad", menu_keyboard_pad}, {"situational", situational_actions}, {"census", census},
+        {"prompt-queries", prompt_queries}};
     try {
         if (argc != 2 || !scenarios.count(argv[1])) throw std::runtime_error("usage: game_controls_adapter <scenario>");
         scenarios.at(argv[1])();
