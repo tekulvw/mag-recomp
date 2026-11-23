@@ -1,4 +1,5 @@
 """The Windows supervisor's setup window and account link: when they may appear (synthetic, host-built)."""
+import os
 import shutil
 import subprocess
 import tempfile
@@ -68,7 +69,9 @@ class WindowsSetupTests(unittest.TestCase):
         self.assertIn('if (prompt) MessageBoxW', source[source.index('static void notice('):])  # --no-prompt: logged only
         self.assertTrue(all((ROOT / 'src' / name).is_file() for name in windows.SUPERVISOR_SOURCES))
 
-    @unittest.skipUnless(MINGW, 'MinGW-w64 cross compiler')
+    # Off Windows only: on Windows the installer job builds the real supervisor with clang-cl, and
+    # a hosted MinGW may have older headers (no BCRYPT_SHA256_ALG_HANDLE).
+    @unittest.skipUnless(MINGW and os.name != 'nt', 'MinGW-w64 cross compiler, off Windows')
     def test_supervisor_compiles(self):
         with tempfile.TemporaryDirectory() as tmp:
             folder = Path(tmp)
