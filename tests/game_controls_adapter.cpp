@@ -206,7 +206,7 @@ struct Cpu {
     MagGameControlsCpu view() { return {std::span<uint64_t, 32>(gpr), std::span<double, 32>(fpr), lr, thread}; }
 };
 
-int capture_requests = 0, mouse_requests = 0;
+int capture_requests = 0, mouse_requests = 0, mouse_lock_requests = 0;
 bool capture_on = false, mouse_on = false;
 void on_capture(bool on) {
     ++capture_requests;
@@ -214,6 +214,7 @@ void on_capture(bool on) {
 }
 void on_mouse(bool on) {
     ++mouse_requests;
+    mouse_lock_requests += on;
     mouse_on = on;
 }
 
@@ -638,7 +639,8 @@ void mouse_look() {
     h.cpu.fpr[31] = 1.0 / 30;
     h.fire(Hook::Prepare);
     require(h.status() == std::string("on-foot mouse prepared"), "mouse not prepared");
-    require(h.m.getf(Actor + 0x184) == 0.0f && h.m.getf(Actor + 0x18C) == 0.0f, "look-rate inputs not cleared");
+    // Mouse motion: the stick's look rates are replaced, yaw by the wake input (first one positive).
+    require(h.m.getf(Actor + 0x184) == 0.001f && h.m.getf(Actor + 0x18C) == 0.0f, "look-rate inputs not replaced");
     h.cpu.gpr[3] = Actor;
     h.cpu.lr = 0x0061E7B4;
     h.fire(Hook::YawRateEnter);
@@ -667,6 +669,30 @@ void mouse_look() {
     h.fire(Hook::BasicYaw);
     require(h.m.getf(Actor + 0x188) == 0.25f, "stale mouse sample reused");
     h.end_tick();
+
+    // The wake input flips sign at every prepared frame with motion (vertical motion too), so the
+    // turn it adds cancels; a prepared frame without motion writes zero and keeps the sign.
+    const auto prepared = [&](double dx, double dy) {
+        if (dx || dy) mag_controls_push_relative_mouse(dx, dy);
+        h.m.putf(Actor + 0x184, 0.7f);
+        h.m.putf(Actor + 0x18C, -0.4f);
+        h.begin_tick();
+        h.enter_handler();
+        h.end_poll();
+        h.enter_actor();
+        h.cpu.gpr[30] = Logic;
+        h.cpu.gpr[31] = State;
+        h.cpu.fpr[31] = 1.0 / 30;
+        h.fire(Hook::Prepare);
+        require(h.status() == std::string("on-foot mouse prepared"), "mouse not prepared");
+        require(h.m.getf(Actor + 0x18C) == 0.0f, "pitch look-rate input not cleared");
+        const float yaw = h.m.getf(Actor + 0x184);
+        h.end_tick();
+        return yaw;
+    };
+    require(prepared(0, 40) == -0.001f, "vertical motion did not wake with the flipped sign");
+    require(prepared(0, 0) == 0.0f, "a frame without motion wrote a wake input");
+    require(prepared(-30, 0) == 0.001f, "the wake sign did not keep alternating");
 }
 
 void aim_assist() {
@@ -879,6 +905,12 @@ void menu_holds_look() {
     update(Look);
     require(capture_on && !mouse_on, "a stable menu hold on look did not release the mouse lock");
     require(h.status() == std::string("on-foot input attached; a menu holds look"), "menu status not reported");
+    // Each poll attaches again before the handler update: while the hold lasts nothing may ask for
+    // the lock back, or the cursor would be captured and released once per frame.
+    const int locks = mouse_lock_requests;
+    update(Look);
+    update(Look);
+    require(!mouse_on && mouse_lock_requests == locks, "a held menu asked for the mouse lock again");
     update(0);
     update(Look);  // flicker on the way out
     update(0);
