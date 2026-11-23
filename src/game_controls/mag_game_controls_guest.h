@@ -22,6 +22,8 @@ constexpr uint32_t CameraVtable = 0x01A644E0;
 constexpr uint32_t CameraTarget = 0x22C, CameraAssistRecord = 0x1A0;
 // Actor fields.
 constexpr uint32_t ActorYawInput = 0x184, ActorYawRequest = 0x188, ActorPitchInput = 0x18C;
+// 7.5: the yaw look-rate input (a fraction of full stick deflection) written while the mouse moves.
+constexpr float MouseWakeYawInput = 0.001f;
 constexpr uint32_t ActorController = 0x590, ActorLogic = 0x594, ActorState = 0x670, ActorRemote = 0x6B4;
 // Handler fields.
 constexpr uint32_t HandlerList = 4, HandlerPriority = 0x38, HandlerSlot = 0x3C, HandlerEnabled = 0x40;

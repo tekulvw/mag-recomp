@@ -4,11 +4,14 @@
  * - the window pump's per-pump keyboard sample first runs the desktop capture backend on the same
  *   thread with the same window, then the SDK's own sample, unchanged, then watches for F10 in the
  *   game window, which opens the settings window (player_settings_session.h);
- * - the keyboard pad state cellPad reads is neutral while the adapter owns the keyboard, so keys
- *   bound to actions (Q, E, Space, Return, ...) do not also press pad buttons. The window flag is
- *   kept, so the SDK's ownership of controller port 0 does not change. */
+ * - the keyboard pad state cellPad reads is neutral while the adapter plays on-foot gameplay with
+ *   the keyboard, so keys bound to actions (Q, E, Space, Return, ...) do not also press pad buttons;
+ *   in an in-match menu the pad stays live, and keys still held when it comes back need a release
+ *   first (player_input_keyboard_pad_gate.h). The window flag is kept, so the SDK's ownership of
+ *   controller port 0 does not change. */
 #include "player_input_capture.h"
 #include "player_input_desktop_sdl.h"
+#include "player_input_keyboard_pad_gate.h"
 #include "player_settings_session.h"
 #include "libs/input/pad_sdl_keyboard.h"
 
@@ -28,10 +31,9 @@ void ps3recomp_pad_sdl_keyboard_sample(void* sdl_window, int suppressed)
 
 PS3RecompSDLKeyboardPadState ps3recomp_pad_sdl_keyboard_state(void)
 {
+    static MagKeyboardPadGate gate;
     PS3RecompSDLKeyboardPadState state = mag_sdk_pad_sdl_keyboard_state();
-    if (mag_input_capture_keyboard_owned()) {
-        PS3RecompSDLKeyboardPadState neutral = {0, 128, 128, 128, 128, state.window};
-        return neutral;
-    }
+    mag_keyboard_pad_gate_snapshot(&gate, mag_input_capture_keyboard_pad_muted(), &state.buttons, &state.analog_lx,
+                                   &state.analog_ly, &state.analog_rx, &state.analog_ry);
     return state;
 }

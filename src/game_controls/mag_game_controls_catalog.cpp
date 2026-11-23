@@ -9,6 +9,13 @@ constexpr ActionId Fire = 0x58de09cf, Aim = 0xc07aa75a, Jump = 0xa7b30616, Sprin
     CycleEquipment = 0xcb535315, Melee = 0xdb59e9a9, Start = 0x163aab24, Select = 0x0a7fd35e,
     DpadUp = 0xa5bc1361, DpadDown = 0x8c2adba2, DpadLeft = 0xeab2acf1, DpadRight = 0x3d898bbf,
     Forward = 0xb164d156, Backward = 0x93115ec5, Left = 0x44533986, Right = 0xf3468eb5;
+// Situational actions (catalog revision 2), named by the game's prompt placeholders.
+constexpr ActionId Confirm = 0x33e32a99 /* os_enter */, Cancel = 0x75453127 /* os_cancel */,
+    Bleedout = 0x40feec35 /* bleedout */, CommandScreen = 0xc6dcd89f /* commandscreen */,
+    TacticalAbilities = 0xa79b7198 /* tcm_abilities */, TacticalFrago = 0x6b7b7c6c /* tcm_frago */,
+    TacticalVoice = 0xf69d4193 /* tcm_voicechat */, SeatNext = 0x74700e10 /* vseatnext */,
+    Smoke = 0xe3dd5118 /* vsmoke */;
+constexpr const char *Prompts = "Prompts and downed", *Commands = "Commands", *Vehicles = "Vehicles";
 constexpr MagGameControlsAction catalog[] = {
     {Forward, "Move forward", false}, {Backward, "Move backward", false},
     {Left, "Strafe left", false}, {Right, "Strafe right", false},
@@ -16,9 +23,19 @@ constexpr MagGameControlsAction catalog[] = {
     {Sprint, "Sprint", true}, {Reload, "Reload", true}, {Interact, "Interact (hold for objectives)", true},
     {Stance, "Crouch / prone (tap / hold)", true}, {CycleWeapons, "Cycle weapons", true},
     {CycleEquipment, "Cycle equipment", true}, {Melee, "Melee", true},
-    {Start, "Start (options / respawn)", true, 12}, {Select, "Select (commands)", true, 13},
-    {DpadUp, "D-pad up (scope / commands)", true, 0}, {DpadDown, "D-pad down (scope / commands)", true, 1},
-    {DpadLeft, "D-pad left (commands)", true, 2}, {DpadRight, "D-pad right (commands)", true, 3}};
+    {Start, "Start (options / respawn)", true, 12, false, 1}, {Select, "Select (commands)", true, 13, false, 1},
+    {DpadUp, "D-pad up (scope / commands)", true, 0, false, 1},
+    {DpadDown, "D-pad down (scope / commands)", true, 1, false, 1},
+    {DpadLeft, "D-pad left (commands)", true, 2, false, 1}, {DpadRight, "D-pad right (commands)", true, 3, false, 1},
+    {Confirm, "Confirm (on-screen prompts)", false, -1, true, 2, Prompts},
+    {Cancel, "Back (on-screen prompts)", false, -1, true, 2, Prompts},
+    {Bleedout, "Bleed out (when downed)", false, -1, true, 2, Prompts},
+    {CommandScreen, "Command screen", false, -1, true, 2, Commands},
+    {TacticalAbilities, "Tactical menu: abilities", false, -1, true, 2, Commands},
+    {TacticalFrago, "Tactical menu: FRAGO", false, -1, true, 2, Commands},
+    {TacticalVoice, "Tactical menu: voice chat", false, -1, true, 2, Commands},
+    {SeatNext, "Change seats", false, -1, true, 2, Vehicles},
+    {Smoke, "Smoke screen", false, -1, true, 2, Vehicles}};
 constexpr uint32_t look_tokens[] = {0xc8a3e21d, 0x941734a2, 0x661cb595, 0xc34f3a66};
 // Contexts a binding may use: on foot for gameplay actions; on foot and menu for system buttons.
 constexpr uint32_t OnFoot = uint32_t(InputContext::OnFoot);
@@ -40,15 +57,37 @@ ActionId mag_game_controls_token_action(uint32_t token) {
     switch (token) {
     case 0x68c3570d: return Aim;
     case 0x9716c7a1: return Stance;
-    case 0x71c8f2f0: return Interact;
+    case 0x71c8f2f0: return Interact;  // contaction: the held form of action
     default: return token;
     }
+}
+
+uint32_t mag_game_controls_name_token(std::string_view name) {
+    uint32_t crc = 0xFFFFFFFFu;
+    for (char c : name) {
+        const unsigned char byte = (c >= 'A' && c <= 'Z') ? static_cast<unsigned char>(c - 'A' + 'a') : static_cast<unsigned char>(c);
+        crc ^= byte;
+        for (int bit = 0; bit < 8; ++bit) crc = (crc >> 1) ^ (0xEDB88320u & (0u - (crc & 1u)));
+    }
+    return ~crc;
+}
+
+ActionId mag_game_controls_prompt_action(std::string_view name) {
+    const ActionId action = mag_game_controls_token_action(mag_game_controls_name_token(name));
+    return mag_game_controls_action(action) ? action : 0;
 }
 
 unsigned mag_game_controls_look_bit(uint32_t token) {
     for (unsigned i = 0; i < std::size(look_tokens); ++i)
         if (look_tokens[i] == token) return 1u << i;
     return 0;
+}
+
+uint32_t mag_game_controls_pad_layout_key(MagPadButton button) {
+    // X Z C V, Return, Space, the arrows, Q E, R T, F G.
+    constexpr uint32_t keys[] = {27, 6, 29, 25, 40, 44, 82, 81, 80, 79, 20, 8, 21, 23, 9, 10};
+    const auto index = static_cast<size_t>(button);
+    return index < std::size(keys) ? keys[index] : 0;
 }
 
 ControlsProfile mag_game_controls_default_profile() {
@@ -65,14 +104,20 @@ ControlsProfile mag_game_controls_default_profile() {
     for (auto [code, id] : {std::pair{10u, Fire}, {9u, Aim}, {0u, Jump}, {7u, Sprint}, {2u, Reload},
                             {1u, Interact}, {3u, Stance}, {33u, CycleWeapons}, {32u, CycleEquipment}, {8u, Melee}})
         profile.bindings.push_back({{InputSource::Controller, code}, id});
-    // System buttons: Escape, Tab and the arrow keys; Start, Back and the D-pad on a controller.
+    // System buttons: Escape, Tab and the arrows; Start, Back and the D-pad on a controller.
     for (auto [code, id] : {std::pair{41u, Start}, {43u, Select}, {82u, DpadUp}, {81u, DpadDown},
                             {80u, DpadLeft}, {79u, DpadRight}})
         profile.bindings.push_back({{InputSource::Keyboard, code}, id, SystemContexts});
     for (auto [code, id] : {std::pair{6u, Start}, {4u, Select}, {11u, DpadUp}, {12u, DpadDown},
                             {13u, DpadLeft}, {14u, DpadRight}})
         profile.bindings.push_back({{InputSource::Controller, code}, id, SystemContexts});
-    profile.catalog_revision = 1;
+    // Situational actions (keyboard only; a controller presses them natively): Return and Backspace
+    // for on-screen prompts, X to bleed out, M and 1 2 3 for commands, V and B in vehicles.
+    for (auto [code, id] : {std::pair{40u, Confirm}, {42u, Cancel}, {27u, Bleedout}, {16u, CommandScreen},
+                            {30u, TacticalAbilities}, {31u, TacticalFrago}, {32u, TacticalVoice},
+                            {25u, SeatNext}, {5u, Smoke}})
+        profile.bindings.push_back({{InputSource::Keyboard, code}, id});
+    profile.catalog_revision = MagGameControlsCatalogRevision;
     return profile;
 }
 
@@ -83,7 +128,7 @@ std::vector<ActionDescriptor> mag_game_controls_descriptors() {
         const bool system = action.system_channel >= 0;
         result.push_back({action.id, action.label, system ? SystemContexts : OnFoot,
                           Keyboard | Mouse | (action.digital_controller ? Controller : 0u),
-                          system ? "Native menu / command buttons" : "On-foot actions"});
+                          action.group ? action.group : system ? "Native menu / command buttons" : "On-foot actions"});
     }
     return result;
 }
@@ -110,17 +155,20 @@ void mag_game_controls_validate_profile(const ControlsProfile& profile) {
 }
 
 void mag_game_controls_upgrade_profile(ControlsProfile& profile) {
-    if (profile.catalog_revision > 1) throw std::invalid_argument("Controls catalog is newer than this build");
-    if (profile.catalog_revision == 1) return;
+    if (profile.catalog_revision > MagGameControlsCatalogRevision)
+        throw std::invalid_argument("Controls catalog is newer than this build");
+    if (profile.catalog_revision == MagGameControlsCatalogRevision) return;
     for (auto binding : mag_game_controls_default_profile().bindings) {
-        if (mag_game_controls_action(binding.action)->system_channel < 0) continue;
+        if (mag_game_controls_action(binding.action)->revision <= profile.catalog_revision) continue;
         const bool present = std::any_of(profile.bindings.begin(), profile.bindings.end(), [&](const auto& b) {
             return b.action == binding.action && b.control.source == binding.control.source;
         });
         // Never displace a physical control the player already uses in a context.
         for (const auto& b : profile.bindings)
             if (b.control == binding.control) binding.contexts &= ~b.contexts;
+        // A gameplay action's binding is on foot or nothing.
+        if (mag_game_controls_action(binding.action)->system_channel < 0 && binding.contexts != OnFoot) continue;
         if (!present && binding.contexts) profile.bindings.push_back(binding);
     }
-    profile.catalog_revision = 1;
+    profile.catalog_revision = MagGameControlsCatalogRevision;
 }

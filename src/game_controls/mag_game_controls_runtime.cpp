@@ -13,6 +13,7 @@
 #include "memory/vm.h"
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -20,11 +21,13 @@
 #include <memory>
 #include <mutex>
 #include <stdexcept>
+#include <string>
+bool mag_game_prompts_hook(MagControlsHook, ppu_context*) noexcept;  // mag_game_controls_prompts_runtime.cpp
 namespace {
 std::unique_ptr<MagGameControlsAdapter> adapter;
 std::atomic<uint64_t> sessions{};
 std::atomic<uint64_t> owner_thread{UINT64_MAX};
-const char* last_status = nullptr;
+std::string last_status;  // what was printed last (statuses may name an error)
 std::mutex settings_lifetime;
 uint64_t settings_session{};
 std::atomic<bool> explicit_apply{false};
@@ -94,12 +97,64 @@ void register_settings(const std::filesystem::path& path, uint64_t session) {
     }
     mag::mag_controls_settings_register(std::move(registration));
 }
+void census(const char* line) { std::fprintf(stderr, "[game-controls] %s\n", line); }
+// The census is on with MAG_GAME_CONTROLS_TRACE=1, or when a file named controls-trace sits next to
+// the controls preferences: the packaged players pass no MAG_ variables to the engine.
+bool tracing(const std::filesystem::path& preferences) {
+    const char* value = std::getenv("MAG_GAME_CONTROLS_TRACE");
+    if (value && !std::strcmp(value, "1")) return true;
+    std::error_code ignored;
+    return !preferences.empty() && std::filesystem::exists(preferences.parent_path() / "controls-trace", ignored);
+}
 void capture(bool on) { mag_input_desktop_set_enabled(on); }
 void mouse_capture(bool on) { mag_input_desktop_set_mouse_enabled(on); }
 bool waiting(const char* status) {
     return !std::strcmp(status, "waiting for input poll") || !std::strcmp(status, "waiting for normal input poll");
 }
+const bool trace_hooks = [] { const char* v = std::getenv("MAG_GAME_CONTROLS_TRACE"); return v && *v && std::strcmp(v, "0"); }();
+// Opt-in cost profile (MAG_GAME_CONTROLS_TRACE=1): the owner thread's hook calls and the time spent
+// handling them, every five seconds per update tick, with each event above 2% of that time listed by
+// its number in MagControlsHook.
+constexpr unsigned hook_kinds = unsigned(MagControlsHook::AssistCleanupExit) + 1;
+unsigned cost_calls[hook_kinds]{};
+int64_t cost_ns[hook_kinds]{};
+unsigned cost_ticks{};
+std::chrono::steady_clock::time_point cost_next{};
+void trace_cost(MagControlsHook event, std::chrono::steady_clock::time_point start) {
+    const auto now = std::chrono::steady_clock::now();
+    const unsigned e = unsigned(event);
+    ++cost_calls[e];
+    cost_ns[e] += std::chrono::duration_cast<std::chrono::nanoseconds>(now - start).count();
+    cost_ticks += event == MagControlsHook::OuterEnter;
+    if (now < cost_next) return;
+    if (cost_ticks) {
+        unsigned calls = 0;
+        int64_t ns = 0;
+        for (unsigned i = 0; i < hook_kinds; ++i) calls += cost_calls[i], ns += cost_ns[i];
+        std::fprintf(stderr, "[game-controls] trace cost: %u ticks, %u hook calls (%.1f per tick), %.3f ms per tick in hooks;",
+                     cost_ticks, calls, double(calls) / cost_ticks, double(ns) / 1e6 / cost_ticks);
+        for (unsigned i = 0; i < hook_kinds; ++i)
+            if (cost_ns[i] * 50 > ns) std::fprintf(stderr, " e%u %u calls %.3f ms/tick", i, cost_calls[i], double(cost_ns[i]) / 1e6 / cost_ticks);
+        std::fprintf(stderr, "\n");
+    }
+    std::fill(std::begin(cost_calls), std::end(cost_calls), 0u);
+    std::fill(std::begin(cost_ns), std::end(cost_ns), int64_t{0});
+    cost_ticks = 0;
+    cost_next = now + std::chrono::seconds(5);
+}
+bool hook_owned(MagControlsHook event, ppu_context* ctx) noexcept;
 bool hook(MagControlsHook event, ppu_context* ctx) noexcept {
+    // Button prompts (section 12) run on whichever thread asks for UI text.
+    if (event == MagControlsHook::PromptText || event == MagControlsHook::PromptTextDone)
+        return mag_game_prompts_hook(event, ctx);
+    if (!trace_hooks) return hook_owned(event, ctx);
+    const auto start = std::chrono::steady_clock::now();
+    const bool owned_before = owner_thread.load(std::memory_order_acquire) == (ctx ? ctx->thread_id : UINT64_MAX);
+    const bool handled = hook_owned(event, ctx);
+    if (owned_before || (ctx && owner_thread.load(std::memory_order_acquire) == ctx->thread_id)) trace_cost(event, start);
+    return handled;
+}
+bool hook_owned(MagControlsHook event, ppu_context* ctx) noexcept {
     if (!adapter || !ctx) return false;
     if (event == MagControlsHook::OuterEnter) {
         uint64_t none = UINT64_MAX;
@@ -112,7 +167,7 @@ bool hook(MagControlsHook event, ppu_context* ctx) noexcept {
         const bool attached = !std::strcmp(status, "on-foot Rust input attached") ||
             !std::strcmp(status, "on-foot mouse prepared");
         const char* visible = attached ? "on-foot controls attached" : status;
-        if (!last_status || std::strcmp(last_status, visible)) {
+        if (last_status != visible) {
             std::fprintf(stderr, "[game-controls] %s\n", visible);
             last_status = visible;
         }
@@ -143,9 +198,13 @@ void start(const char*) {
     mag_game_controls_upgrade_profile(profile);
     if (auto mode = startup_mode()) profile.mode = *mode;
     owner_thread.store(UINT64_MAX, std::memory_order_release);
-    last_status = nullptr;
+    last_status.clear();
     adapter = std::make_unique<MagGameControlsAdapter>(MagGameControlsMemory{nullptr, read, write}, ++sessions,
                                                        profile, capture, mouse_capture);
+    if (tracing(path)) {
+        adapter->set_census(census);
+        std::fprintf(stderr, "[game-controls] census on: each distinct input handler is described once\n");
+    }
     register_settings(path, sessions.load());
     mag_game_controls_install_hooks(hook);
     std::fprintf(stderr, "[game-controls] registered; controller sticks keep the native response; awaiting the local player\n");
