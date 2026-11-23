@@ -95,9 +95,10 @@ You build MAG on your own computer from your own copy; nothing game-derived is e
    A name has 3 to 15 letters, digits, `-` or `_`, and starts with a letter. MAG remembers it, and
    types it in for you when the game asks you to sign in: just confirm it. On Linux that sign-in box
    is a small text window. [Player settings](docs/player-settings.md) has the details.
-6. **Use a controller.** A standard USB or Bluetooth gamepad works on every system and is the
-   recommended way to play. On Linux the keyboard also works as a controller while the game window
-   has focus, until a controller is connected (set `PAD_NO_KEYBOARD=1` to turn it off):
+6. **Use a controller, or the keyboard.** A standard USB or Bluetooth gamepad works on every system
+   and is the recommended way to play. On Windows and Linux the keyboard also works as a controller
+   while the game window has focus and no controller is connected (set `PAD_NO_KEYBOARD=1` to turn
+   it off). Keys are physical positions, so they are the same on any keyboard layout:
 
    | Keys | Controller |
    | --- | --- |
@@ -107,10 +108,9 @@ You build MAG on your own computer from your own copy; nothing game-derived is e
    | Arrow keys | D-pad |
    | WASD / IJKL | Left / right stick |
 
-   On Windows, a controller is needed to play matches. The keyboard only covers menus (arrow keys,
-   Z / X / A / S for the face buttons, Return for Start), has no camera or aim, and is ignored
-   whenever any controller is present, including virtual gamepads created by Steam Input or
-   remote-desktop and streaming software. Mouse aim is not available on any system yet.
+   Any controller turns the keyboard off, including virtual gamepads that Steam Input or
+   remote-desktop and streaming software create. macOS uses the same keys in its game window.
+   Mouse aim is not available on any system yet.
 
 **If a download fails** (for example during a GitHub outage), retry later. Or point the installer
 at a folder of previously downloaded tools with `build --cache <folder>`, or at a mirror with
