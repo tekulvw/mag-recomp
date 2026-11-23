@@ -149,6 +149,8 @@ It is drawn with the SDL2 the game already ships (`src/player_settings_sdl.cpp`)
 
 Before the game the display preview is a **MAG Display Preview** window. In game the settings window asks the game process over a pipe, and the game window's own pump applies the change (`mag_player_settings_sdl_pump`), so the preview, **Keep changes** and **Revert** act on the real game window; the same pipe tells the game when controls are saved. The output resolution is the window's size in physical pixels, applied when the game window opens (`MAG_PLAYER_OUTPUT_SIZE`). The Account row links over OpenSSL (`src/player_portal_openssl.cpp`), as `./MAG --link` does.
 
+The packaged `./MAG` gives the game a private `HOME` and passes on only the desktop session's own variables: the display, audio and D-Bus connections, and the input method (`XMODIFIERS`, `SDL_IM_MODULE`, `XDG_SESSION_TYPE`, `IBUS_ADDRESS`), so text typed into the settings window and the game's on-screen keyboard dialog goes through the desktop's input method as in any other SDL program. IBus normally publishes its address in a file under your own configuration folder, which the private `HOME` hides from SDL; when `IBUS_ADDRESS` is not set, `./MAG` reads that file where SDL would (`$XDG_CONFIG_HOME` or `~/.config`, `ibus/bus/<machine id>-<display host>-<display number>`) and passes the address on.
+
 Windows and Linux edit the same settings form (`src/player_settings_form.cpp`), which uses the settings file's own validation and the controls service, so no rule is restated. F10 reaches the game window through the controls adapter's window seams; a build with `MAG_GAME_CONTROLS=0` has no Controls pages and no F10, and opens the window only before the game.
 
 The settings live in a small file:

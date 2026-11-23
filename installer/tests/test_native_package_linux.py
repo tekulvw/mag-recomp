@@ -254,6 +254,64 @@ int main(int argc,char** argv) {
             self.assertEqual(calls, ['setup - skip=1 settings=1', 'launcher skip=1', 'setup --notice=player-name skip=1 settings=1',
                                      'launcher skip=1', 'engine skip=0'])
 
+    # A launcher and engine stand-in that records the input method variables each phase receives.
+    INPUT_METHOD_RECORDER=r'''
+#include <stdio.h>
+#include <stdlib.h>
+int main(void) {
+ const char* request=getenv("MAG_HANDOFF_REQUEST");
+ FILE* out=fopen(request?"launcher.env":"engine.env","w");if(!out)return 40;
+ const char* names[]={"XMODIFIERS","SDL_IM_MODULE","XDG_SESSION_TYPE","IBUS_ADDRESS","GTK_IM_MODULE"};
+ for(int i=0;i<5;i++){const char* v=getenv(names[i]);fprintf(out,"%s=%s\n",names[i],v?v:"(unset)");}
+ fclose(out);
+ if(request){FILE* f=fopen(request,"wx");if(!f)return 46;
+  fprintf(f,"{\"version\":1,\"token\":\"%s\",\"guest_path\":\"/dev_bdvd/PS3_GAME/USRDIR/bin/mage_g.self\",\"kind\":\"mage_g\"}\n",getenv("MAG_HANDOFF_TOKEN"));fclose(f);return 90;}
+ return 23;
+}
+'''
+
+    @unittest.skipUnless(sys.platform=='linux','requires Linux ELF loader and OpenSSL development headers')
+    def test_native_supervisor_passes_the_desktop_input_method_on(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            install=self.install_fixture(root,self.INPUT_METHOD_RECORDER)
+            base={k:v for k,v in os.environ.items()
+                  if k not in ('DISPLAY','WAYLAND_DISPLAY','XMODIFIERS','SDL_IM_MODULE','XDG_SESSION_TYPE','IBUS_ADDRESS','GTK_IM_MODULE')}
+            base['XDG_CONFIG_HOME']=str(root/'config')
+            def launch(**extra):
+                run=subprocess.run([str(install/'MAG/MAG'),'--no-prompt'],env={**base,**extra},capture_output=True,text=True,timeout=60)
+                self.assertEqual(run.returncode,23,run.stderr)
+                logs=max((install/'logs').glob('launch-*'),key=lambda p:p.stat().st_mtime)
+                read=lambda name:dict(line.split('=',1) for line in (logs/name).read_text().splitlines())
+                launcher,engine=read('launcher.env'),read('engine.env')
+                self.assertEqual(launcher,engine,'both phases get the same input method')
+                return launcher
+            # The input method's choice reaches the game; other toolkits' modules are not SDL's.
+            seen=launch(XMODIFIERS='@im=fcitx',SDL_IM_MODULE='fcitx',XDG_SESSION_TYPE='x11',IBUS_ADDRESS='unix:path=/run/ibus-fixture',
+                        GTK_IM_MODULE='ibus')
+            self.assertEqual(seen,{'XMODIFIERS':'@im=fcitx','SDL_IM_MODULE':'fcitx','XDG_SESSION_TYPE':'x11',
+                                   'IBUS_ADDRESS':'unix:path=/run/ibus-fixture','GTK_IM_MODULE':'(unset)'})
+            # Nothing set, nothing passed (and no IBus address file to read).
+            self.assertEqual(set(launch().values()),{'(unset)'})
+            # IBus's address file under the player's own configuration folder, where SDL would look
+            # without the game's private HOME: <machine id>-<host or unix>-<display number>.
+            machine_id=''
+            for path in ('/var/lib/dbus/machine-id','/etc/machine-id'):
+                try: machine_id=Path(path).read_text().splitlines()[0].strip()
+                except (OSError,IndexError): machine_id=''
+                if machine_id: break
+            if not machine_id:
+                self.skipTest('no D-Bus machine id on this host for the IBus address file')
+            bus=root/'config/ibus/bus';bus.mkdir(parents=True)
+            (bus/f'{machine_id}-unix-7').write_text('# This file is created by ibus-daemon, please do not modify it.\n'
+                                                    'IBUS_ADDRESS=unix:path=/tmp/ibus-fixture,guid=00\nIBUS_DAEMON_PID=1\n')
+            (bus/f'{machine_id}-unix-wayland-0').write_text('IBUS_ADDRESS=unix:path=/tmp/ibus-wayland\n')
+            self.assertEqual(launch(DISPLAY=':7.0')['IBUS_ADDRESS'],'unix:path=/tmp/ibus-fixture,guid=00')
+            self.assertEqual(launch(DISPLAY=':0',XDG_SESSION_TYPE='wayland')['IBUS_ADDRESS'],'unix:path=/tmp/ibus-wayland')
+            self.assertEqual(launch(DISPLAY=':9')['IBUS_ADDRESS'],'(unset)','no file for that display')
+            self.assertEqual(launch(DISPLAY=':7',IBUS_ADDRESS='unix:path=/run/own')['IBUS_ADDRESS'],'unix:path=/run/own',
+                             'an address the session sets wins')
+
     @unittest.skipUnless(sys.platform=='linux','requires Linux ELF loader and OpenSSL development headers')
     def test_native_supervisor_links_and_fetches_a_ticket_before_each_phase(self):
         import base64, http.server, threading
