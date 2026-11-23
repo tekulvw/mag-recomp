@@ -26,6 +26,10 @@ _SUPERVISOR = r'''
 #define _UNICODE
 #include <windows.h>
 #include <bcrypt.h>
+/* Older MinGW-w64 headers lack the pseudo-handle; the value is the Windows SDK's. */
+#ifndef BCRYPT_SHA256_ALG_HANDLE
+#define BCRYPT_SHA256_ALG_HANDLE ((BCRYPT_ALG_HANDLE)0x00000041)
+#endif
 #include <shellapi.h>
 #include <stdio.h>
 #include <stdlib.h>
