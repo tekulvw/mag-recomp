@@ -12,6 +12,9 @@
 #include <system_error>
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
 #else
 #include <fcntl.h>
@@ -362,17 +365,17 @@ Outcome run_link(Transport &transport, const std::string &portal, const std::str
     Outcome outcome = start_link(transport, portal, client, start);
     if (!outcome.ok()) return outcome;
     if (ui.show) ui.show(start);
-    int interval = std::max(1, start.interval), remaining = start.expires_in, failures = 0;
+    int interval = (std::max)(1, start.interval), remaining = start.expires_in, failures = 0;
     for (;;) {
         if (remaining <= 0) return fail(Status::Expired, "The link code expired before it was approved. Start again.");
-        const int pause = std::min(interval, remaining);
+        const int pause = (std::min)(interval, remaining);
         if (ui.wait && !ui.wait(pause)) return fail(Status::Cancelled, "Linking was cancelled.");
         remaining -= pause;
         outcome = poll_link(transport, portal, start.device_code, out);
         switch (outcome.status) {
         case Status::Ok: return outcome;
         case Status::Pending: failures = 0; break;
-        case Status::SlowDown: failures = 0; interval = std::min(interval + 5, 60); break;
+        case Status::SlowDown: failures = 0; interval = (std::min)(interval + 5, 60); break;
         case Status::Busy: case Status::Unreachable:
             // A dropped connection or a busy portal for a moment should not lose the code.
             if (++failures >= 5) return outcome;
