@@ -98,7 +98,10 @@ The MAG-owned game controls adapter (keyboard and mouse play with mouse aim,
 every host: the installer passes `-DMAG_GAME_CONTROLS=ON -DMAG_INPUT_RUST=ON` with a pinned Rust
 toolchain. It sets no runtime switch. `MAG_GAME_CONTROLS=0` in the installer's environment builds
 without it; in the engine's environment it turns a built adapter off. Its evidence and what is not
-yet measured are recorded in native-controls.md, section 10.
+yet measured are recorded in native-controls.md, section 10. With the adapter, keyboard and mouse
+players see their bound keys in the game's button prompts (native-controls.md, section 12);
+`MAG_GAME_PROMPTS=0` in the engine's environment keeps the game's PlayStation icons. That feature
+sets no runtime switch either.
 
 ## Packaged players and launchers
 

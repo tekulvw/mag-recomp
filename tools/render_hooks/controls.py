@@ -100,6 +100,12 @@ POINTS = {
     '005DA0F0': [('SprintPitchDamage', 'before', multiply_single(31, 31, 1), None)],
     '004E1DA8': [('AssistFrictionYaw', 'before', multiply_single(1, 0, 1), None)],
     '004E1E10': [('AssistFrictionPitch', 'before', multiply_single(1, 0, 1), None)],
+    # Button prompts (docs/native-controls.md, section 12): the localized-text result handed to a
+    # movie, before and after the call that delivers it.
+    '0053BEA8': [
+        ('PromptText', 'before', call('0053BF44', '00E52570'), None),
+        ('PromptTextDone', 'after', call('0053BF44', '00E52570'), None),
+    ],
 }
 PINS = {
     '00013C54': {'sha256': 'd88de44f6b44e8115eeed4b594e56059545e20b44c1f6f1d47c97e154689aa95', 'file': 'ppu_recomp_000.cpp'},
@@ -121,6 +127,7 @@ PINS = {
     '0061E524': {'sha256': '4bb6c37807ab4ad2fa94d15c10de4ccaf4456ad1df78a992e57de51be85100de', 'file': 'ppu_recomp_002.cpp'},
     '006415D0': {'sha256': '6d726222bb6a4b85118467d26f2832ca1940d2dfb75726f5220931bdbc3ee6a6', 'file': 'ppu_recomp_002.cpp'},
     '00676D2C': {'sha256': 'b1b1b5a2046016231259b1ccd1f7aab708aee384e717fc2a1c9ea4b3f481dd84', 'file': 'ppu_recomp_002.cpp'},
+    '0053BEA8': {'sha256': 'c1d07029abfd42d81ac659bfcda9ea2894a3d9ca7c15d9fdfd013eb3e7ec0f8b', 'file': 'ppu_recomp_002.cpp'},
 }
 # The update tick also carries update-loop and cohort hooks; all three pin it identically.
 SHARED = {'00013C54'}

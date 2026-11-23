@@ -21,6 +21,7 @@
 #include <mutex>
 #include <stdexcept>
 #include <string>
+bool mag_game_prompts_hook(MagControlsHook, ppu_context*) noexcept;  // mag_game_controls_prompts_runtime.cpp
 namespace {
 std::unique_ptr<MagGameControlsAdapter> adapter;
 std::atomic<uint64_t> sessions{};
@@ -110,6 +111,9 @@ bool waiting(const char* status) {
     return !std::strcmp(status, "waiting for input poll") || !std::strcmp(status, "waiting for normal input poll");
 }
 bool hook(MagControlsHook event, ppu_context* ctx) noexcept {
+    // Button prompts (section 12) run on whichever thread asks for UI text.
+    if (event == MagControlsHook::PromptText || event == MagControlsHook::PromptTextDone)
+        return mag_game_prompts_hook(event, ctx);
     if (!adapter || !ctx) return false;
     if (event == MagControlsHook::OuterEnter) {
         uint64_t none = UINT64_MAX;
