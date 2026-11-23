@@ -1,6 +1,7 @@
 """Synthetic renderer boundary checks; no SDK checkout or game assets needed."""
 import os
 import pathlib
+import re
 import shutil
 import subprocess
 import tempfile
@@ -52,3 +53,37 @@ class PlayerRenderScaleTests(unittest.TestCase):
             '-I'+str(root),'-I'+str(root/'include'),'-I'+str(ROOT/'src'),
             '-fsyntax-only',str(ROOT/'src/player_render_scale.cpp')],capture_output=True,text=True,timeout=30)
         self.assertEqual(result.returncode,0,result.stderr)
+
+    def test_every_backend_callback_with_target_geometry_is_scaled_or_reviewed(self):
+        """Which surfaces scale: every backend entry point that takes a pixel rectangle, an
+        image size or a fragment program must be wrapped (scaled to the physical grid) or
+        disabled by the adapter, unless it is listed here as guest-sized by design. A new SDK
+        callback that passes through unreviewed would mix guest and physical sizes."""
+        sdk=os.environ.get('MAG_TEST_SDK')
+        if not sdk:
+            self.skipTest('Set MAG_TEST_SDK to the public runtime checkout')
+        header=pathlib.Path(sdk)/'libs/video/rsx_draw_engine.h'
+        if not header.is_file():
+            self.skipTest('Public runtime checkout is unavailable')
+        text=header.read_text()
+        body=text[text.index('typedef struct rsx_draw_backend {'):]
+        body=re.sub(r'/\*.*?\*/','',body[:body.index('} rsx_draw_backend;')],flags=re.S)
+        geometry=re.compile(r'\b(?:u32|float)\s+(?:x|y|w|h|width|height)\b')
+        guest_sized={
+            'init':'the output window size, independent of rendering resolution',
+            'texture_create':'textures decoded from guest memory keep their guest size',
+            'texture_upload':'rows of a guest-memory texture',
+            'texture_create_3d':'volume textures decoded from guest memory',
+            'texture_upload_3d':'slices of a guest-memory volume texture',
+        }
+        adapter=(ROOT/'src/player_render_scale.cpp').read_text()
+        handled=set(re.findall(r'\b(?:scaled|target)\.(\w+)\s*=',adapter))
+        unreviewed=[]
+        for name,params in re.findall(r'\(\s*\*\s*(\w+)\s*\)\s*\(([^)]*)\)',body):
+            if not (geometry.search(params) or 'ps_hlsl' in params):
+                continue
+            if name not in handled and name not in guest_sized:
+                unreviewed.append(name)
+        self.assertEqual(unreviewed,[],'backend callbacks pass guest geometry through unscaled')
+        for name in guest_sized:
+            self.assertNotIn(name,handled,name+' is listed as guest-sized but the adapter changes it')
