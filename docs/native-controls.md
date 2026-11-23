@@ -283,7 +283,9 @@ rules in section 5 depend on (`002726B8`, `0026F91C`, `0023F108`).
 **Thread ownership.** The first thread that delivers `OuterEnter` after start owns the adapter for
 the session; events from every other thread are ignored entirely.
 
-**Census.** With `MAG_GAME_CONTROLS_TRACE=1` the runtime prints, once per distinct description, each
+**Census.** With `MAG_GAME_CONTROLS_TRACE=1`, or when a file named `controls-trace` exists next to the
+controls preferences (the packaged players pass no `MAG_` variables to the engine; on macOS that is
+`~/Library/Application Support/MAG/controls-trace`), the runtime prints, once per distinct description, each
 handler the game updates: its role (the local player's handler, a gameplay route, another system
 route or other), the attached context, whether it is enabled, the local player's movement state id
 and vtable, and every watched token with its channel (`[game-controls] census ...`). It reads guest

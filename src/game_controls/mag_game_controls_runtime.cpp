@@ -96,9 +96,13 @@ void register_settings(const std::filesystem::path& path, uint64_t session) {
     mag::mag_controls_settings_register(std::move(registration));
 }
 void census(const char* line) { std::fprintf(stderr, "[game-controls] %s\n", line); }
-bool tracing() {
+// The census is on with MAG_GAME_CONTROLS_TRACE=1, or when a file named controls-trace sits next to
+// the controls preferences: the packaged players pass no MAG_ variables to the engine.
+bool tracing(const std::filesystem::path& preferences) {
     const char* value = std::getenv("MAG_GAME_CONTROLS_TRACE");
-    return value && !std::strcmp(value, "1");
+    if (value && !std::strcmp(value, "1")) return true;
+    std::error_code ignored;
+    return !preferences.empty() && std::filesystem::exists(preferences.parent_path() / "controls-trace", ignored);
 }
 void capture(bool on) { mag_input_desktop_set_enabled(on); }
 void mouse_capture(bool on) { mag_input_desktop_set_mouse_enabled(on); }
@@ -152,7 +156,10 @@ void start(const char*) {
     last_status.clear();
     adapter = std::make_unique<MagGameControlsAdapter>(MagGameControlsMemory{nullptr, read, write}, ++sessions,
                                                        profile, capture, mouse_capture);
-    if (tracing()) adapter->set_census(census);
+    if (tracing(path)) {
+        adapter->set_census(census);
+        std::fprintf(stderr, "[game-controls] census on: each distinct input handler is described once\n");
+    }
     register_settings(path, sessions.load());
     mag_game_controls_install_hooks(hook);
     std::fprintf(stderr, "[game-controls] registered; controller sticks keep the native response; awaiting the local player\n");
