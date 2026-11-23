@@ -87,8 +87,11 @@ int fixture_input_button(void) { return SDL_GameControllerGetButton(0,SDL_CONTRO
 int fixture_input_axis(void) { return SDL_GameControllerGetAxis(0,SDL_CONTROLLER_AXIS_LEFTX); }
 ''')
         (sdk/'libs/input/pad_macos.m').write_text('''#include "pad_macos.h"
-PS3RecompMacOSPadState ps3recomp_pad_macos_state(void) { return (PS3RecompMacOSPadState){7,10,20,30,40}; }
-uint16_t ps3recomp_pad_macos_buttons(void) { return 7; }
+int fixture_pad_held = 1;
+PS3RecompMacOSPadState ps3recomp_pad_macos_state(void) {
+    return fixture_pad_held ? (PS3RecompMacOSPadState){7,10,20,30,40} : (PS3RecompMacOSPadState){0,128,128,128,128};
+}
+uint16_t ps3recomp_pad_macos_buttons(void) { return fixture_pad_held ? 7 : 0; }
 ''')
         (sdk/'CMakeLists.txt').write_text('''add_library(ps3recomp_runtime STATIC libs/input/cellPad.c libs/input/pad_macos.m libs/video/rsx_metal_backend.m libs/video/rsx_draw_engine.c)
 target_include_directories(ps3recomp_runtime PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
