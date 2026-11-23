@@ -1,7 +1,10 @@
-"""Package private local native outputs into a relocatable macOS app.
+"""Package private local native outputs into a self-contained, relocatable MAG folder.
 
-Assets stay in the owned installation workspace; move the complete installation root.
-This packages no account data and runs no game. Developer ID signing is deferred.
+The MAG folder holds MAG.app (MAG\\MAG.exe on Windows, MAG/MAG on Linux), the game files the
+game reads (game/, hard-linked from the build workspace where the volume allows) and, once
+played, home/ and logs/. Nothing in it refers to the build workspace, so it keeps working when
+it is moved or the build folder is deleted. This packages no account data and runs no game.
+Developer ID signing is deferred.
 """
 from __future__ import annotations
 import hashlib
@@ -115,11 +118,14 @@ int main(int argc,char **argv) { @autoreleasepool {
  @try {
  NSDictionary *m=json([app stringByAppendingPathComponent:@"Contents/Resources/runtime.json"],2097152);
  NSString *(^inApp)(NSString *)=^NSString *(NSString *p){return [app stringByAppendingPathComponent:p].stringByStandardizingPath;};
- NSString *workspace=[app stringByAppendingPathComponent:m[@"workspace"]].stringByStandardizingPath;
- NSString *vfs=[workspace stringByAppendingPathComponent:@"local/retail-v1.0"];
+ // The game files live in the MAG folder beside the app, named relative to it.
+ id game=m[@"game"];if(![game isKindOfClass:NSString.class]||![game length]||[game isAbsolutePath])fail(@"Invalid local manifest");
+ NSString *vfs=inApp(game);BOOL folder=NO;
+ if(![NSFileManager.defaultManager fileExistsAtPath:[vfs stringByAppendingPathComponent:@"PS3_GAME"] isDirectory:&folder]||!folder)
+  fail([@"The game files are missing. Keep the game folder beside MAG.app: " stringByAppendingString:vfs]);
  NSString *launcher=inApp(m[@"launcher"]),*engine=inApp(m[@"engine"]);
- NSString *launcherElf=[workspace stringByAppendingPathComponent:@"local/retail-v1.0/PS3_GAME/USRDIR/EBOOT.elf"];
- NSString *engineElf=[workspace stringByAppendingPathComponent:@"local/retail-v1.0/PS3_GAME/USRDIR/bin/mage_g.elf"];
+ NSString *launcherElf=[vfs stringByAppendingPathComponent:@"PS3_GAME/USRDIR/EBOOT.elf"];
+ NSString *engineElf=[vfs stringByAppendingPathComponent:@"PS3_GAME/USRDIR/bin/mage_g.elf"];
  NSString *engineSelf=[vfs stringByAppendingPathComponent:@"PS3_GAME/USRDIR/bin/mage_g.self"];
  NSDictionary *lr=json(inApp(@"Contents/Resources/package-receipts/launcher.json"),2097152),*er=json(inApp(@"Contents/Resources/package-receipts/engine.json"),2097152);
  if(![lr[@"image_name"] isEqual:@"EBOOT"]||![er[@"image_name"] isEqual:@"mage_g"])fail(@"Incorrect image receipts");
@@ -178,11 +184,53 @@ def playback_environment(records):
     return dict(MOVIE_PLAYBACK_ENV) if any(decoder) else {}
 
 
-def package(config, workspace, destination, token=None, events=None):
-    """Build MAG.app above its owned workspace without launching any executable.
+# The game files' folder inside the MAG folder, and where the build workspace keeps them.
+GAME_FOLDER = 'game'
+WORKSPACE_GAME = 'local/retail-v1.0'
 
-    The app + descendant workspace form the local install. No cache/source-toolchain
-    paths enter the launcher. Existing destinations are never overwritten.
+
+def check_workspace(workspace, folder):
+    """The build workspace must be an ordinary folder outside the new MAG folder."""
+    workspace, folder = Path(workspace).absolute(), Path(folder).absolute()
+    if workspace.is_symlink() or not workspace.is_dir():
+        raise InstallerError('The build workspace must be an ordinary folder')
+    if not folder.is_dir() or folder.is_symlink():
+        raise InstallerError('Choose a new MAG folder under an existing ordinary folder')
+    workspace_real, folder_real = workspace.resolve(), folder.resolve()
+    if workspace_real.is_relative_to(folder_real) or folder_real.is_relative_to(workspace_real):
+        raise InstallerError('The build workspace must be outside the MAG folder')
+    game = folder / GAME_FOLDER
+    if game.exists() or game.is_symlink():
+        raise InstallerError(f'The MAG folder already holds game files: {game}')
+    return workspace, folder
+
+
+def stage_game(workspace, folder, token, events):
+    """Place the game files in <MAG folder>/game: hard links to the workspace's copies where the
+    volume allows, else copies. The firmware and everything else the build used stay behind."""
+    from .native_build import link_tree
+    counts = link_tree(contained(workspace, WORKSPACE_GAME), folder / GAME_FOLDER, token)
+    events({'event': 'game-files-staged', **counts,
+            'message': f'Game files in the MAG folder: {counts["linked"]} linked, {counts["copied"]} copied'})
+    return folder / GAME_FOLDER
+
+
+def package_receipt(record, binary, source_receipt, token):
+    """Bind the packaged bytes to the build's receipt by digest. The build's receipt itself stays
+    in the build folder: it records build-machine paths, which the MAG folder must not carry."""
+    result = {key: record[key] for key in ('image_name', 'elf_sha256', 'sdk_revision')}
+    result.update(binary_sha256=_digest(binary, token), kind='local-packaged-native',
+                  source_receipt_sha256=_digest(source_receipt, token),
+                  original_binary_sha256=record['binary_sha256'])
+    return result
+
+
+def package(config, workspace, destination, token=None, events=None):
+    """Build <MAG folder>/MAG.app and <MAG folder>/game without launching any executable.
+
+    The workspace is the finished build's; it may be anywhere outside the MAG folder, and the
+    package never refers to it. No cache/source-toolchain paths enter the launcher. Existing
+    destinations are never overwritten.
     """
     if config.get('host') == 'linux-x86_64':
         from .native_package_linux import package as package_linux
@@ -193,45 +241,35 @@ def package(config, workspace, destination, token=None, events=None):
     token = token or Cancellation(); events = events or (lambda event: None)
     workspace, destination = Path(workspace).absolute(), Path(destination).absolute()
     if destination.exists() or destination.is_symlink(): raise InstallerError('App destination already exists')
-    if destination.suffix != '.app' or not destination.parent.is_dir(): raise InstallerError('Choose a new .app under the installation directory')
-    root = destination.parent.resolve()
-    workspace_real = workspace.resolve()
-    if workspace.is_symlink() or not workspace.is_dir() or workspace_real == root or not workspace_real.is_relative_to(root):
-        raise InstallerError('Owned workspace must be an ordinary descendant of the installation folder')
-    # Reject symlink directory components even if they resolve back under root.
-    relative = workspace.relative_to(destination.parent)
-    if contained(destination.parent, str(relative)).resolve() != workspace_real:
-        raise InstallerError('Workspace path changed during installation validation')
-    if workspace_real.is_relative_to(destination.resolve()) or destination.resolve().is_relative_to(workspace_real):
-        raise InstallerError('App and workspace must be separate installation paths')
+    if destination.suffix != '.app' or not destination.parent.is_dir(): raise InstallerError('Choose a new .app in the new MAG folder')
+    workspace, folder = check_workspace(workspace, destination.parent)
     manifest = json.loads(contained(workspace, 'profiles/retail-v1.0.json').read_text(encoding='utf-8'))
     framework = json.loads(contained(workspace, 'profiles/framework.json').read_text(encoding='utf-8'))
     records, originals = {}, {}
-    for role, folder, image in [('launcher', 'build', 'EBOOT'), ('engine', 'build-engine', 'mage_g')]:
-        binary = _ordinary(contained(workspace, folder + '/MagRecomp'))
+    for role, folder_name, image in [('launcher', 'build', 'EBOOT'), ('engine', 'build-engine', 'mage_g')]:
+        binary = _ordinary(contained(workspace, folder_name + '/MagRecomp'))
         receipt = _ordinary(binary.with_suffix('.receipt.json'))
         record = json.loads(receipt.read_text()); expected = manifest['images'][image]
         if (record.get('binary_sha256') != _digest(binary, token) or record.get('elf_sha256') != expected['elf_sha256'] or record.get('image_name') != image):
             raise InstallerError(f'Native source receipt mismatch: {receipt}')
         if record.get('sdk_revision') not in set(framework['strict_runtime_revisions']) & set(framework['strict_hle_runtime_revisions']):
             raise InstallerError('Packaged runtime must support strict syscall/HLE policies')
-        relative = 'local/retail-v1.0/PS3_GAME/USRDIR/' + ('EBOOT.elf' if role == 'launcher' else 'bin/mage_g.elf')
+        relative = WORKSPACE_GAME + '/PS3_GAME/USRDIR/' + ('EBOOT.elf' if role == 'launcher' else 'bin/mage_g.elf')
         elf = _ordinary(contained(workspace, relative))
         if _digest(elf, token) != record['elf_sha256']:
             raise InstallerError(f'Native runtime ELF identity mismatch: {elf}')
         records[role], originals[role] = record, (binary, receipt)
     destination.mkdir(mode=0o700)
     try:
+        game = stage_game(workspace, folder, token, events)
         macos = destination/'Contents/MacOS'; macos.mkdir(parents=True)
         resources = destination/'Contents/Resources'; resources.mkdir()
         libs = destination/'Contents/Frameworks'; libs.mkdir()
-        receipts = resources/'source-receipts'; receipts.mkdir()
         package_receipts = resources/'package-receipts'; package_receipts.mkdir()
         copied, edges, library_names = {}, {}, {}
         for role, name in [('launcher', 'MagRecomp'), ('engine', 'MagEngine')]:
             source, receipt = originals[role]; target = macos/name
             shutil.copyfile(source, target); target.chmod(0o755)
-            shutil.copyfile(receipt, receipts/(role+'.json'))
             copied[source.resolve()] = target
         queue = [(source.resolve(), source.resolve(), []) for source, _ in originals.values()]
         scanned = set()
@@ -260,21 +298,24 @@ def package(config, workspace, destination, token=None, events=None):
             for original, resolved in edges[source]:
                 replacement = ('@loader_path/' if target.parent == libs else '@executable_path/../Frameworks/') + copied[resolved].name
                 _run_tool(['/usr/bin/install_name_tool', '-change', original, replacement, str(target)], token)
-                adjustments.append({'file':str(target.relative_to(destination)), 'from':original, 'to':replacement})
+                # The build machine's library path is not recorded, only its file name.
+                adjustments.append({'file':str(target.relative_to(destination)),
+                                    'from':Path(original).name if original.startswith('/') else original, 'to':replacement})
+            # Every library now loads from the app, so search paths into the build machine
+            # (its managed tools) are dropped; relative ones stay.
+            for rpath in _rpaths(target, token):
+                if not rpath.startswith('@'):
+                    _run_tool(['/usr/bin/install_name_tool', '-delete_rpath', rpath, str(target)], token)
             _run_tool(['/usr/bin/codesign', '--force', '--sign', '-', str(target)], token)
-        runtime = {'schema_version':1,'workspace':os.path.relpath(workspace,destination),
+        runtime = {'schema_version':2,'game':os.path.relpath(game,destination),
                    'launcher':'Contents/MacOS/MagRecomp','engine':'Contents/MacOS/MagEngine',
                    'engine_self_sha256':manifest['images']['mage_g']['source_sha256'],
                    'signing':'local-ad-hoc','adjustments':adjustments,
                    'environment':playback_environment(records)}
         for role, name in [('launcher','MagRecomp'),('engine','MagEngine')]:
-            target=macos/name
-            # A distinct package receipt binds transformed bytes and points to
-            # the immutable source receipt; it does not rewrite the source build.
-            record = {key:records[role][key] for key in ('image_name','elf_sha256','sdk_revision')}
-            record.update(binary_sha256=_digest(target,token),kind='local-packaged-native',
-                          source_receipt_sha256=_digest(receipts/(role+'.json'),token),
-                          original_binary_sha256=records[role]['binary_sha256'])
+            # A distinct package receipt binds transformed bytes and the build's
+            # immutable source receipt; it does not rewrite the source build.
+            record = package_receipt(records[role], macos/name, originals[role][1], token)
             (package_receipts/(role+'.json')).write_text(json.dumps(record,indent=2)+'\n')
         (resources/'runtime.json').write_text(json.dumps(runtime,indent=2)+'\n')
         source=resources/'launcher.m'; source.write_text(_LAUNCHER)
@@ -289,8 +330,9 @@ def package(config, workspace, destination, token=None, events=None):
                            'NSHighResolutionCapable':True},stream)
         _run_tool(['/usr/bin/codesign','--force','--sign','-',str(destination)],token)
         events({'event':'app-packaged','output':str(destination),'launcher':str(supervisor),
-                'message':'Local MAG app packaged. Move the complete installation folder with its workspace.'})
+                'message':'MAG.app packaged. Its MAG folder is self-contained: move it as a whole.'})
         return destination
     except BaseException:
         shutil.rmtree(destination)
+        shutil.rmtree(folder / GAME_FOLDER, ignore_errors=True)  # check_workspace: it was not there
         raise

@@ -53,7 +53,8 @@ def format_event(event: dict) -> str:
                 'firmware': 'Generating firmware support', 'spu-programs': 'Generating remaining game worker programs',
                 'configure-launcher': 'Checking launcher build dependencies', 'configure-engine': 'Checking game engine build dependencies',
                 'build-launcher': 'Compiling the launcher', 'build-engine': 'Compiling the game engine',
-                'copy-inputs': 'Copying your game files into the private workspace', 'copy-source': 'Preparing a private source workspace'}.get(event.get('stage'), str(event.get('stage', 'Working')))
+                'copy-inputs': 'Placing your game files in the private build workspace', 'copy-source': 'Preparing a private source workspace',
+                'migrate-layout': 'Moving the build files out of the MAG folder'}.get(event.get('stage'), str(event.get('stage', 'Working')))
     if name == 'stage-activity':
         return f'{event.get("stage", "Working")} still running ({event.get("elapsed", 0):.0f}s). Log: {event.get("log", "see logs folder")}'
     if name == 'synthetic-complete':
