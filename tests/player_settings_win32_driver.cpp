@@ -31,6 +31,16 @@ static HWND wait_window(const wchar_t* type, const wchar_t* title) {
     }
     return nullptr;
 }
+// Presses a message box's button and waits until the box is gone, so the window's own loop runs again.
+static bool answer(HWND box, int button) {
+    for (int i = 0; i < 500 && IsWindow(box); ++i) {
+        HWND control = GetDlgItem(box, button);
+        if (i % 2 == 0) PostMessageW(box, WM_COMMAND, MAKEWPARAM(button, BN_CLICKED), LPARAM(control));
+        else if (control) PostMessageW(control, BM_CLICK, 0, 0);
+        Sleep(20);
+    }
+    return !IsWindow(box);
+}
 static void settle(HWND window) {
     // Round trip through the window's thread so everything posted before has been handled.
     DWORD_PTR ignored;
@@ -96,7 +106,7 @@ int main(int argc, char** argv) {
         PostMessageW(window, WM_COMMAND, IDOK, 0);
         HWND warning = wait_window(L"#32770", L"MAG Settings");
         CHECK(warning != nullptr);
-        if (warning) PostMessageW(warning, WM_COMMAND, IDOK, 0);
+        CHECK(warning && answer(warning, IDOK));
         settle(window);
         CHECK(!fs::exists(settings));
         SetWindowTextW(GetDlgItem(window, IdName), L"Rook_7");
@@ -117,7 +127,7 @@ int main(int argc, char** argv) {
         HWND question = wait_window(L"#32770", L"Replace binding?");
         CHECK(question != nullptr);
         if (!question) note(window, "no conflict question");
-        if (question) PostMessageW(question, WM_COMMAND, IDYES, 0);
+        CHECK(question && answer(question, IDYES));
         settle(window);
         // A mouse button, and Escape cancelling a capture.
         select_row(window, 1);
