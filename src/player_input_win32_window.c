@@ -4,8 +4,8 @@
  * libs/video/rsx_vulkan_backend.c and libs/video/rsx_d3d12_backend.c rename those calls to the
  * functions below, which run the desktop capture backend on the same thread and then the
  * on-screen keyboard's own function, unchanged:
- * - attaching or detaching the window tells the backend first (it releases the cursor before the
- *   window goes);
+ * - attaching or detaching the window tells the settings window's seam (the display preview and
+ *   the saved output size) and then the backend (it releases the cursor before the window goes);
  * - the per-pump call runs the keyboard's pump, then the backend with the keyboard's dialog flag;
  * - the per-message call lets the backend observe the message first. It only ever withholds a
  *   press of Escape that the window would treat as quit while the adapter owns the keyboard
@@ -22,6 +22,7 @@
 
 void mag_player_win32_set_window(void* window)
 {
+    mag_player_settings_win32_window(window);
     mag_input_desktop_win32_window(window);
     osk_native_win32_set_window(window);
 }

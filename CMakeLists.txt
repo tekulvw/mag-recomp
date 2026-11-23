@@ -357,10 +357,12 @@ else()
     # MAG_GAME_CONTROLS (cmake/MagControls.cmake).
     target_sources(${PROJECT_NAME} PRIVATE src/player_settings_session.cpp src/player_settings_form.cpp)
     if(WIN32)
-        target_sources(${PROJECT_NAME} PRIVATE src/player_settings_win32.cpp src/player_input_win32_map.c)
+        # The window's Account row links through the portal over WinHTTP, as MAG.exe --link does.
+        target_sources(${PROJECT_NAME} PRIVATE src/player_settings_win32.cpp src/player_input_win32_map.c
+            src/player_settings_account.cpp src/player_portal_winhttp.cpp)
         set_source_files_properties(src/player_settings_win32.cpp TARGET_DIRECTORY ${PROJECT_NAME}
             PROPERTIES COMPILE_DEFINITIONS "UNICODE;_UNICODE")
-        target_link_libraries(${PROJECT_NAME} PRIVATE user32 gdi32 comctl32 xinput)
+        target_link_libraries(${PROJECT_NAME} PRIVATE user32 gdi32 comctl32 xinput shell32 winhttp)
     else()
         target_sources(${PROJECT_NAME} PRIVATE src/player_settings_sdl.cpp)
         # The panel draws with the SDK's public-domain bitmap font (libs/misc/osk_font8x8.h).
