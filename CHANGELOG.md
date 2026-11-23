@@ -1,5 +1,38 @@
 # Changelog
 
+## [0.7.0](https://github.com/tekulvw/mag-recomp/compare/v0.6.0...v0.7.0) (2026-11-23)
+
+
+### Features
+
+* **controls:** make situational actions pressable on keyboard and mouse ([#236](https://github.com/tekulvw/mag-recomp/issues/236)) ([4a662b0](https://github.com/tekulvw/mag-recomp/commit/4a662b0a0a56cf73c8a7bc54d28239765aadc223))
+* **controls:** show the bound keys in button prompts on keyboard and mouse ([#239](https://github.com/tekulvw/mag-recomp/issues/239)) ([cfcb1de](https://github.com/tekulvw/mag-recomp/commit/cfcb1de4eb16df127815029ba993ecf5af34dadf))
+* **controls:** X confirms everywhere and Tab opens the command screen ([#244](https://github.com/tekulvw/mag-recomp/issues/244)) ([39d81c7](https://github.com/tekulvw/mag-recomp/commit/39d81c7cd51c6de180ef99d59cc28a18c095c037))
+* **player:** Linux MAG Settings matches macOS and opens at every launch ([#240](https://github.com/tekulvw/mag-recomp/issues/240)) ([025e8d8](https://github.com/tekulvw/mag-recomp/commit/025e8d82feab27559198d76fb65e79c878d2aa22))
+* **player:** request tickets per server and import service-account tokens ([#238](https://github.com/tekulvw/mag-recomp/issues/238)) ([ee1af67](https://github.com/tekulvw/mag-recomp/commit/ee1af67b9ff8ed05acc471af4bba957ebfd9d205))
+* **player:** Windows MAG Settings matches macOS and opens at every launch ([#234](https://github.com/tekulvw/mag-recomp/issues/234)) ([52334f4](https://github.com/tekulvw/mag-recomp/commit/52334f4f0b349cfb4def11c25f163657e148fc5f))
+
+
+### Bug Fixes
+
+* **controls:** keep the keyboard's menu buttons in in-match menus ([#233](https://github.com/tekulvw/mag-recomp/issues/233)) ([1482ecc](https://github.com/tekulvw/mag-recomp/commit/1482ecc601bc5f70a549c48091a8836f83fc7065))
+* **controls:** leave a control to the game when another thread withdraws the frame ([#243](https://github.com/tekulvw/mag-recomp/issues/243)) ([334762a](https://github.com/tekulvw/mag-recomp/commit/334762a47d7fd61efede3d366c0b75c87c95bf5c))
+* **controls:** turn a standing soldier with the mouse and stop the Win32 lock flapping ([#237](https://github.com/tekulvw/mag-recomp/issues/237)) ([f80f763](https://github.com/tekulvw/mag-recomp/commit/f80f763ae9acd0e942b76d75959c40a29cf8c157))
+* **player:** keep NP tickets on for the engine of a linked or ticket-file launch ([#246](https://github.com/tekulvw/mag-recomp/issues/246)) ([4d66a92](https://github.com/tekulvw/mag-recomp/commit/4d66a92913937355040e35c84d14a0a6c8d115a8))
+* **render:** scale GPU depth views with the rendering resolution ([#245](https://github.com/tekulvw/mag-recomp/issues/245)) ([90f287d](https://github.com/tekulvw/mag-recomp/commit/90f287d7ec84d89ec084ffa9e58d1b7b4c75fa6e))
+* **sdk:** pin runtime-2026.11.23-gameupdate so linked accounts get past the launcher's update check ([#248](https://github.com/tekulvw/mag-recomp/issues/248)) ([5e63f57](https://github.com/tekulvw/mag-recomp/commit/5e63f5757b1386998f5dbac858f31c8065e95935))
+* **sdk:** pin runtime-2026.11.23-kbmerge so the keyboard works alongside a connected controller ([#232](https://github.com/tekulvw/mag-recomp/issues/232)) ([09a95c3](https://github.com/tekulvw/mag-recomp/commit/09a95c368f41d5ed1bec41fc113912b78a095352))
+
+
+### Performance
+
+* **controls:** stop re-reading the UI tree at every recognition ([#241](https://github.com/tekulvw/mag-recomp/issues/241)) ([ff0dea4](https://github.com/tekulvw/mag-recomp/commit/ff0dea432f9d66680f7bbe58ee665460f710bf1f))
+
+
+### Documentation
+
+* **controls:** record the Windows in-game checks and the on/off frame rate ([#231](https://github.com/tekulvw/mag-recomp/issues/231)) ([9240b5d](https://github.com/tekulvw/mag-recomp/commit/9240b5d8f949ec67b10f8fe40d733a692258a9be))
+
 ## [0.6.0](https://github.com/tekulvw/mag-recomp/compare/v0.5.6...v0.6.0) (2026-11-23)
 
 
