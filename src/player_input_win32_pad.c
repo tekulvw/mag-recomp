@@ -5,8 +5,10 @@
  *   input block masks what the SDK sees, as the SDL GameController seam does on macOS and Linux.
  *   cellPad sweeps ports 0..3 in order on each poll, so port 0 starts a capture refresh; each
  *   port keeps one identity for the life of the process.
- * - the keyboard fallback reads nothing while the adapter owns the keyboard, so keys bound to
- *   actions do not also press pad buttons. Whether a controller is present changes nothing here:
+ * - the keyboard fallback reads nothing while the adapter plays on-foot gameplay with the keyboard,
+ *   so keys bound to actions do not also press pad buttons; in an in-match menu it reads keys again,
+ *   each still held one only after a release (player_input_keyboard_pad_gate.h). Whether a
+ *   controller is present changes nothing here:
  *   the desktop capture backend takes keyboard and mouse beside any XInput device (real or
  *   virtual), and the controller keeps working.
  * Nothing changes for the SDK unless the adapter owns the keyboard or input is blocked. */
@@ -21,6 +23,7 @@
 #include <stdatomic.h>
 #include <string.h>
 #include "player_input_capture.h"
+#include "player_input_keyboard_pad_gate.h"
 #include "player_input_win32_map.h"
 #include "player_settings_runtime.h"
 
@@ -76,8 +79,11 @@ DWORD WINAPI mag_player_xinput_get_state(DWORD port, XINPUT_STATE* state)
 SHORT WINAPI mag_player_get_async_key_state(int key)
 {
     /* Ask the system only when its answer is used. */
-    const int owned = mag_input_capture_keyboard_owned();
-    return mag_win32_keyboard_fallback_state(owned ? 0 : GetAsyncKeyState(key), owned);
+    static MagKeyboardPadGate gate;
+    const int muted = mag_input_capture_keyboard_pad_muted();
+    const SHORT state = mag_win32_keyboard_fallback_state(muted ? 0 : GetAsyncKeyState(key), muted);
+    mag_keyboard_pad_gate_begin(&gate, muted);
+    return mag_keyboard_pad_gate_input(&gate, (unsigned)key & 0xFFu, (state & 0x8000) != 0) ? state : 0;
 }
 
 /* cellPad.c sees these through the renamed system declarations, and user32's is declared as a DLL

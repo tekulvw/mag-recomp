@@ -17,6 +17,7 @@
 #include <mutex>
 #include <set>
 #include <stdexcept>
+#include <string>
 #include <utility>
 #include <vector>
 using namespace mag;
@@ -225,6 +226,7 @@ struct MagGameControlsAdapter::State {
     std::mutex pending_mutex;
     std::optional<ControlsProfile> pending;
     const char* status = "waiting for input poll";
+    std::string error_status;  // status text of the last error (InvalidState and its reason)
 
     // Scopes on the owning thread.
     std::optional<uint64_t> thread;
@@ -531,17 +533,23 @@ struct MagGameControlsAdapter::State {
         if (!mag_input_capture_poll_begin(poll_number)) throw std::runtime_error("capture layer refused the input poll");
         capture_poll_open = true;
     }
-    // 8.2: the replacement owns the keyboard only while the local handler is validly registered.
+    // 8.2: the replacement owns the keyboard only while the local handler is validly registered,
+    // and mutes the legacy keyboard pad only while this poll would attach on foot: in an in-match
+    // menu it routes the system buttons alone, so the pad keeps the menu's other buttons.
     void update_keyboard_ownership() {
-        bool owned = false;
+        bool owned = false, on_foot = false;
         try {
-            if (const auto local = guest.local_owner())
+            if (const auto local = guest.local_owner()) {
                 owned = !lifecycle.exhausted && !lifecycle.is_tombstoned(local->handler) &&
                         removal_known_clear(local->handler) && guest.system_routes().has_value();
+                on_foot = owned && local->enabled && guest.gameplay_routes().has_value() && build_contract(*local);
+            }
         } catch (...) {
+            mag_input_capture_set_keyboard_pad_live(0);
             mag_input_capture_set_keyboard_owner(0);
             throw;
         }
+        mag_input_capture_set_keyboard_pad_live(owned && !on_foot);
         mag_input_capture_set_keyboard_owner(owned);
     }
     void sample_seal() {
@@ -1196,12 +1204,21 @@ MagGameControlsAdapter::~MagGameControlsAdapter() {
 }
 
 bool MagGameControlsAdapter::dispatch(MagControlsHook event, MagGameControlsCpu cpu) noexcept {
+    auto& s = *state_;
     try {
-        return state_->dispatch(event, cpu);
+        return s.dispatch(event, cpu);
+    } catch (const std::exception& error) {
+        // Name the reason, so a log shows which guest record or engine rule refused.
+        try {
+            s.error_status = std::string(InvalidState) + ": " + error.what();
+            s.cancel_quietly(s.error_status.c_str());
+        } catch (...) {
+            s.cancel_quietly(InvalidState);
+        }
     } catch (...) {
-        state_->cancel_quietly(InvalidState);
-        return false;
+        s.cancel_quietly(InvalidState);
     }
+    return false;
 }
 
 const char* MagGameControlsAdapter::status() const noexcept { return state_->status; }

@@ -263,7 +263,9 @@ the session; events from every other thread are ignored entirely.
 attachment statuses all print as "on-foot controls attached".
 
 **Failures.** Any error inside event handling cancels (section 6.2) with the status "rejected
-unavailable or invalid state" and makes the event return false (the game proceeds natively).
+unavailable or invalid state", followed by a colon and the error's own description when it has one
+(for example "invalid tuning record"), and makes the event return false (the game proceeds
+natively).
 
 **Construction** validates the profile, requires a session and both memory callbacks, configures
 the engine with the profile, reports the context as unsupported, records the engine's capture
@@ -675,7 +677,7 @@ The SDL backend runs on the game window's thread. The SDK's window pump polls SD
 takes its keyboard-pad sample; compile definitions on `libs/input/pad_sdl_keyboard.c` rename that
 sample and the keyboard-pad state, and `player_input_sdl_keyboard.c` takes their place: the sample
 first runs the capture backend with the same window and dialog flag, then the SDK's own sample; the
-state is neutral (window flag kept) while the adapter owns the keyboard (8.2), as the macOS window
+state is neutral (window flag kept) while the adapter mutes the keyboard pad (8.2), as the macOS window
 pad is. While capture is requested an SDL event filter (chained after any filter already set)
 observes keyboard, mouse and window events and queues them for the pump; it passes every event
 on except one: a press of Escape on the focused game window while the adapter owns the keyboard
@@ -750,7 +752,7 @@ refresh (cellPad sweeps ports 0 to 3 in order), each port keeps one identity, bu
 GameController numbers (A 0, B 1, X 2, Y 3, Back 4, Guide 5, Start 6, stick buttons 7 and 8,
 shoulders 9 and 10, D-pad up, down, left, right 11 to 14), sticks are right/down-positive and
 triggers 0..32767. cellPad's own keyboard fallback reads keys only when XInput reports nothing on
-port 0; while the adapter owns the keyboard it reads none at all, so bound keys do not double as pad
+port 0; while the adapter mutes the keyboard pad (8.2) it reads none at all, so bound keys do not double as pad
 buttons. Keyboard and mouse capture is merged with XInput, never gated on it: a controller (real,
 or a virtual one from Steam Input, a driver or a streaming client) keeps working beside the
 keyboard and mouse, and its presence does not turn keyboard and mouse capture off. (cellPad's
@@ -763,6 +765,24 @@ At each outermost `PollEnter`: keyboard is owned by the replacement when the loc
 (allowing disabled), lifecycle is not exhausted, the owner's handler is not tombstoned, its removal
 is known not pending and system routes are available. The answer is published once per poll
 (`mag_input_capture_set_keyboard_owner`); on an error it is released before the error propagates.
+Ownership decides who reads the keyboard's own keys, such as Escape, which the SDL and Win32
+backends withhold from the window while it is owned (8.1).
+
+The **legacy keyboard pad** (the SDK's fixed key-to-button layout: X Cross, C Circle, Z Square,
+V Triangle, Return Start, Space Select, arrows the D-pad, W/A/S/D and I/J/K/L the sticks, Q/E, R/T
+and F/G the shoulders, triggers and stick buttons) is muted only while the keyboard is owned *and*
+this poll would attach on foot: the owner is enabled, gameplay routes are available (5.4) and the
+channel contract builds (7.4). Otherwise, in an in-match menu that has a local player (the pause
+menu, the death and spawn-selection screens, any UI that blocks gameplay), the adapter attaches as
+Menu and routes the system buttons alone (Escape, Tab and the arrows), so the pad stays live
+(`mag_input_capture_set_keyboard_pad_live`) and the menu's other buttons work from the keyboard as
+they do in the front end. The pad's readers (macOS window pad, SDL keyboard pad, Win32 keyboard
+fallback) obey `mag_input_capture_keyboard_pad_muted()`: owned and not live. When the pad comes back
+from being muted, a key or stick direction still held counts only after it has been released once
+(`player_input_keyboard_pad_gate.h`), so a gameplay key held across the change does not press a
+menu button. The arrows reach a menu through both paths with the same meaning. Return and Space
+press Start and Select natively, except on a control the adapter already replaces, which then reads
+only the adapter's bindings unless a controller is connected (7.3 step 6).
 
 ### 8.3 Controller sample
 

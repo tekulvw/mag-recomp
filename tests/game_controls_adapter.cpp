@@ -5,6 +5,7 @@
 #include "mag_game_controls_catalog.h"
 #include "mag_game_controls_guest.h"
 #include "player_controls_rust.h"
+#include "player_input_capture.h"
 #include <array>
 #include <bit>
 #include <chrono>
@@ -830,7 +831,7 @@ void threads_and_errors() {
     h.enter_handler();
     const auto before = h.tuple(Jump);
     require(!h.recognize(Jump), "invalid tuning replaced recognition");
-    require(h.status() == Invalid, "invalid tuning did not cancel");
+    require(h.status() == std::string(Invalid) + ": invalid tuning record", "invalid tuning did not cancel with its reason");
     require(h.cpu.gpr[11] == 0xDEAD && h.tuple(Jump) == before, "failed recognition changed state");
     require(!capture_on && !mouse_on, "cancel kept desktop capture");
     // After the cancel the rest of the tick is inert.
@@ -889,12 +890,73 @@ void menu_holds_look() {
     require(h.status() == std::string("on-foot Rust input attached"), "status did not return to gameplay");
 }
 
+// The legacy keyboard pad (the SDK's fixed key layout: Cross on X, ...) is muted only while a poll
+// attaches on foot. In an in-match menu with a local player (paused, the player's handler disabled
+// as after death, a UI element that blocks gameplay) the adapter routes the system buttons alone,
+// so the pad stays live for the menu's other buttons while the adapter keeps the keyboard (Escape).
+void menu_keyboard_pad() {
+    Harness h;
+    const auto pad_muted = [] { return mag_input_capture_keyboard_pad_muted() != 0; };
+    const auto owned = [] { return mag_input_capture_keyboard_owned() != 0; };
+    require(!owned() && !pad_muted(), "nothing owned before the first poll");
+    require(h.idle_tick() == Attached, "first tick did not attach on foot");
+    require(owned() && pad_muted(), "on foot the adapter owns the keyboard and mutes the legacy pad");
+
+    // Paused (the in-match options menu): menu buttons, keyboard still owned, pad live.
+    h.m.put32(Pause + 0x9C0, 1);
+    require(h.idle_tick() == "native menu buttons attached", "a paused game attached on foot");
+    require(owned() && !pad_muted(), "an in-match menu muted the legacy keyboard pad");
+    require(capture_on && !mouse_on, "an in-match menu keeps keyboard capture without the mouse lock");
+    // The adapter still routes Escape (Start) to the menu's handler: system buttons keep working.
+    mag_controls_push_event({{InputSource::Keyboard, 41}, true, time_ns()});
+    h.begin_tick();
+    h.enter_handler();
+    require(h.recognize(Start) && mag_guest_tuple_value(h.tuple(Start)) == 1.0f, "Escape did not press Start in the menu");
+    require(!h.recognize(Jump), "a gameplay control was replaced in a menu");
+    h.end_poll();
+    h.enter_actor();
+    h.end_tick();
+    mag_controls_push_event({{InputSource::Keyboard, 41}, false, time_ns()});
+    h.m.put32(Pause + 0x9C0, 0);
+    require(h.idle_tick() == Attached && pad_muted(), "unpausing did not mute the pad again");
+
+    // The player's handler disabled (a dead player waiting to deploy): the same.
+    h.m.put8(Handler + 0x40, 0);
+    require(h.idle_tick() == "native menu buttons attached", "a disabled handler attached on foot");
+    require(owned() && !pad_muted(), "a disabled handler muted the legacy keyboard pad");
+    h.m.put8(Handler + 0x40, 1);
+    require(h.idle_tick() == Attached && pad_muted(), "re-enabling did not mute the pad again");
+
+    // A UI element of unknown type blocks gameplay: the same.
+    ui_package(h.m, 1, true);
+    ui_element(h.m, 0, 0x01A00000, 0x01A00040, true);
+    require(h.idle_tick() == "native menu buttons attached", "an unknown UI element attached on foot");
+    require(owned() && !pad_muted(), "an unknown UI element muted the legacy keyboard pad");
+    h.m.put32(Packages + 0x40, 0);
+    require(h.idle_tick() == Attached && pad_muted(), "closing the UI did not mute the pad again");
+
+    // Without a local player nothing is owned and nothing muted (the front end's own menus).
+    h.m.bytes.erase(ObjectManager + 0x44);
+    h.begin_tick();
+    require(!owned() && !pad_muted(), "no local player kept the keyboard");
+    h.enter_handler();
+    h.end_poll();
+    h.end_tick();
+    // Destroying the adapter releases everything.
+    h.m.put32(ObjectManager + 0x44, Handle);
+    h.idle_tick();
+    require(owned() && pad_muted(), "the restored player was not owned");
+    h.adapter.reset();
+    require(!owned() && !pad_muted(), "destroying the adapter kept the keyboard");
+}
+
 int main(int argc, char** argv) {
     const std::map<std::string, void (*)()> scenarios = {
         {"owner", owner_resolution}, {"lists", malformed_lists}, {"routes", routes}, {"tick", full_tick},
         {"route", route_recognition},
         {"mouse", mouse_look},       {"assist", aim_assist},     {"lifecycle", lifecycle},
-        {"threads", threads_and_errors}, {"menu", menu_holds_look}};
+        {"threads", threads_and_errors}, {"menu", menu_holds_look},
+        {"menu-pad", menu_keyboard_pad}};
     try {
         if (argc != 2 || !scenarios.count(argv[1])) throw std::runtime_error("usage: game_controls_adapter <scenario>");
         scenarios.at(argv[1])();
