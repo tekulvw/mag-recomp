@@ -78,6 +78,7 @@ void settings_form_fill_general(SettingsForm& form, const PortableSettings& stor
     form.output = index_of(mag_settings_output_widths, stored.output_width);
     form.render_scale = index_of(mag_settings_render_scales, stored.render_scale);
     form.anti_aliasing = stored.anti_aliasing == "fxaa" ? 1 : 0;
+    form.send_reports = stored.send_reports;
 }
 
 bool settings_form_load(const std::filesystem::path& settings, SettingsForm& form, std::string& error) {
@@ -114,6 +115,7 @@ bool settings_form_general_draft(const SettingsForm& form, PortableSettings& dra
     draft.output_height = mag_settings_output_heights[output];
     draft.render_scale = mag_settings_render_scales[std::clamp(form.render_scale, 0, MAG_SETTINGS_RENDER_SCALES - 1)];
     draft.anti_aliasing = mag_settings_anti_aliasing_values[std::clamp(form.anti_aliasing, 0, MAG_SETTINGS_ANTI_ALIASING_MODES - 1)];
+    draft.send_reports = form.send_reports;
     if (!parse_port(form.tcp_port, draft.tcp_port, error) || !parse_port(form.udp_port, draft.udp_port, error)) return false;
     return check_server_address(draft.server_address, error) && check_player_name(draft.player_name, error);
 }
@@ -122,7 +124,7 @@ static bool same(const PortableSettings& a, const PortableSettings& b) {
     return a.server_address == b.server_address && a.tcp_port == b.tcp_port && a.udp_port == b.udp_port &&
            a.player_name == b.player_name && a.ticket_file == b.ticket_file && a.portal_url == b.portal_url &&
            a.display_mode == b.display_mode && a.output_width == b.output_width && a.output_height == b.output_height &&
-           a.render_scale == b.render_scale && a.anti_aliasing == b.anti_aliasing;
+           a.render_scale == b.render_scale && a.anti_aliasing == b.anti_aliasing && a.send_reports == b.send_reports;
 }
 
 bool settings_form_general_dirty(const SettingsForm& form) {

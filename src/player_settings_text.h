@@ -9,7 +9,8 @@
  * Layout, top to bottom (docs/player-settings.md):
  *   [General | Controls]                       (Controls only when a catalog is registered)
  *   General:  Connection  { Game server, Player name, Account, > Advanced: TCP port, UDP port }
- *             note, Graphics { Display mode, Output resolution, Rendering resolution, Anti-aliasing }, note
+ *             note, Graphics { Display mode, Output resolution, Rendering resolution, Anti-aliasing }, note,
+ *             Reports { [x] Send performance and error reports, Send report }
  *   Controls: [Keyboard & Mouse | Controller], Input mode + Bindings, aim assist, mouse row,
  *             Action / Primary / Secondary rows, hint, Reset, note
  *   error line, display confirmation (15 s), separator, footer: status, Cancel, Apply, Play MAG */
@@ -70,6 +71,21 @@
 #define MAG_SETTINGS_GRAPHICS_NOTE \
     "Rendering percentages scale the game's 720p-height targets. Output resolution sets the window size."
 #define MAG_SETTINGS_GRAPHICS_NOTE_NO_SCALE "Output resolution sets the window size."
+
+/* General: Reports (src/player_report_request.h; docs/player-settings.md, "Reports"). The checkbox
+ * is the send_reports setting; Send report asks the supervisor to send one when MAG closes, even
+ * with the checkbox off. Reports go under the linked account, so Send report needs one. */
+#define MAG_SETTINGS_HEADING_REPORTS "Reports"
+#define MAG_SETTINGS_SEND_REPORTS "Send performance and error reports"
+#define MAG_SETTINGS_SEND_REPORTS_HINT \
+    "Frame-rate and audio-timing statistics, crash and error details and recent MAG logs go to magtest.online under your linked account. Never game files, passwords or tokens."
+#define MAG_SETTINGS_SEND_REPORTS_ON "On"  /* the checkbox's own label */
+#define MAG_SETTINGS_SEND_REPORT_NOW "Send report"
+#define MAG_SETTINGS_SEND_REPORT_HINT "Send one now, for a problem you just saw"
+#define MAG_SETTINGS_REPORT_REQUESTED "A report will be sent when MAG closes."
+#define MAG_SETTINGS_REPORT_NEEDS_LINK "Link an account to send reports"
+#define MAG_SETTINGS_REPORT_UNAVAILABLE "Reports are sent only when MAG starts from its app"
+#define MAG_SETTINGS_REPORT_FAILED "The report request could not be saved."
 
 /* Choices, in menu order, with the values the settings file stores. */
 #define MAG_SETTINGS_DISPLAY_MODES 2

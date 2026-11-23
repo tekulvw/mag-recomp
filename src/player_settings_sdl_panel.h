@@ -7,6 +7,7 @@
 #include "player_settings_account.h"
 #include "player_settings_form.h"
 #include "player_settings_window.h"
+#include "player_report_request.h"
 #include <SDL2/SDL.h>
 #include <cstdint>
 #include <filesystem>
@@ -67,6 +68,7 @@ public:
     const std::string& status() const { return status_; }
     const std::string& hint() const { return hint_; }
     std::string account_status() const;
+    std::string report_status() const;  // after Send report: requested, or why it failed
     bool pending() const { return pending_; }        // a display change waits for Keep or Revert
     bool asking() const { return question_ != Question::None; }
     std::string question() const { return question_title_; }
@@ -131,6 +133,8 @@ private:
     bool save_general(const PortableSettings& draft);
     void account_clicked();
     std::string account_portal() const;
+    const char* report_blocker() const;
+    void request_report_now();
     // Controls.
     void begin_capture(size_t row, unsigned slot, uint64_t now_ms);
     void end_capture(const char* why);
@@ -172,6 +176,6 @@ private:
         bool fresh = false;
     };
     std::shared_ptr<Mailbox> mailbox_;
-    std::string account_status_, account_button_;
+    std::string account_status_, account_button_, report_status_;
 };
 }  // namespace mag

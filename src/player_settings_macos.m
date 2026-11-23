@@ -74,6 +74,9 @@ static NSStackView *row(NSString *title,NSString *hint,NSView *control) {
     NSStackView *_accountRow;
     NSBox *_accountSeparator;
     NSTextField *_accountStatus;
+    NSButton *_sendReports,*_reportButton;
+    NSTextField *_reportStatus;
+    NSString *_reportRequested;
     id<MAGAccountLinking> _linker;
     BOOL _linking;
     NSArray<NSControl*> *_fields;
@@ -152,6 +155,16 @@ static NSStackView *row(NSString *title,NSString *hint,NSView *control) {
     add(graphics,row(@MAG_SETTINGS_RENDERING,@MAG_SETTINGS_NEXT_LAUNCH_HINT,_rendering));add(graphics,separator());
     add(graphics,row(@MAG_SETTINGS_ANTI_ALIASING,@MAG_SETTINGS_NEXT_LAUNCH_HINT,_aa));add(_general,group(graphics));
     add(_general,label(@MAG_SETTINGS_GRAPHICS_NOTE,11,YES));
+    gap=[NSView new];[gap.heightAnchor constraintEqualToConstant:6].active=YES;add(_general,gap);
+    heading=label(@MAG_SETTINGS_HEADING_REPORTS,14,NO);heading.font=[NSFont boldSystemFontOfSize:14];add(_general,heading);
+    _sendReports=[NSButton checkboxWithTitle:@MAG_SETTINGS_SEND_REPORTS_ON target:self action:@selector(changed:)];_sendReports.identifier=@"send_reports";
+    _reportButton=[NSButton buttonWithTitle:@MAG_SETTINGS_SEND_REPORT_NOW target:self action:@selector(sendReport:)];_reportButton.identifier=@"send_report";
+    _reportStatus=label(@"",11,YES);_reportStatus.identifier=@"report_status";
+    NSStackView *reports=stack(NSUserInterfaceLayoutOrientationVertical,5);
+    add(reports,row(@MAG_SETTINGS_SEND_REPORTS,@MAG_SETTINGS_SEND_REPORTS_HINT,_sendReports));add(reports,separator());
+    NSStackView *reportRow=row(@MAG_SETTINGS_SEND_REPORT_NOW,@"",_reportButton);
+    [(NSStackView *)reportRow.arrangedSubviews.firstObject addArrangedSubview:_reportStatus];
+    add(reports,reportRow);add(_general,group(reports));
     add(_root,_errorLabel);
     _confirmation=stack(NSUserInterfaceLayoutOrientationVertical,7);_confirmation.identifier=@"display_confirmation";
     add(_confirmation,label(@MAG_SETTINGS_CONFIRM_QUESTION,13,NO));_countdown=label(@"",11,YES);add(_confirmation,_countdown);
@@ -168,7 +181,7 @@ static NSStackView *row(NSString *title,NSString *hint,NSView *control) {
     _applyButton.keyEquivalent=@"\r";
     _playButton=[NSButton buttonWithTitle:@MAG_SETTINGS_PLAY target:self action:@selector(play:)];_playButton.keyEquivalent=@"\r";_playButton.hidden=YES;_playButton.enabled=!_recovery;_playButton.identifier=@"play";
     for(NSButton *button in @[_cancelButton,_applyButton,_playButton])[footer addArrangedSubview:button];
-    add(_root,footer);_fields=@[_server,_name,_tcp,_udp,_mode,_resolution,_rendering,_aa,_section];
+    add(_root,footer);_fields=@[_server,_name,_tcp,_udp,_mode,_resolution,_rendering,_aa,_sendReports,_section];
     [self fill:settings];[self changed:nil];
     if(error)[self showError:error.localizedDescription];
     [self fit];[window center];return self;
@@ -197,6 +210,7 @@ static NSStackView *row(NSString *title,NSString *hint,NSView *control) {
     index=[numbers(mag_settings_render_scales,MAG_SETTINGS_RENDER_SCALES) indexOfObject:settings[@"render_scale"]?:@100];
     [_rendering selectItemAtIndex:index==NSNotFound?0:index];
     [_aa selectItemAtIndex:[settings[@"anti_aliasing"] isEqual:@"fxaa"]?1:0];
+    _sendReports.state=[settings[@"send_reports"] isEqual:@NO]?NSControlStateValueOff:NSControlStateValueOn;
 }
 - (NSDictionary *)draft:(NSError **)error {
     NSMutableDictionary *draft=MAGSettingsDefaults().mutableCopy;draft[@"server_address"]=_server.stringValue;draft[@"player_name"]=_name.stringValue;
@@ -215,6 +229,7 @@ static NSStackView *row(NSString *title,NSString *hint,NSView *control) {
     draft[@"output_width"]=@(mag_settings_output_widths[index]);draft[@"output_height"]=@(mag_settings_output_heights[index]);
     draft[@"render_scale"]=@(mag_settings_render_scales[_rendering.indexOfSelectedItem]);
     draft[@"anti_aliasing"]=_aa.indexOfSelectedItem==1?@"fxaa":@"off";
+    if(_sendReports.state==NSControlStateValueOff)draft[@"send_reports"]=@NO;  // no field: on
     return MAGSettingsValidate(draft,error);
 }
 - (void)controlTextDidChange:(NSNotification *)note {[self changed:nil];}
@@ -223,9 +238,24 @@ static NSStackView *row(NSString *title,NSString *hint,NSView *control) {
     NSDictionary *draft=[self draft:NULL];BOOL dirty=_section.selectedSegment==1?[_controlsPane controlsDirty]:(_needsSave||![draft isEqual:self.settings]);
     _applyButton.enabled=dirty;_resolution.enabled=_mode.indexOfSelectedItem==0;
     _status.stringValue=dirty?@MAG_SETTINGS_STATUS_DIRTY:@MAG_SETTINGS_STATUS_CLEAN;
-    [self refreshAccount];
+    [self refreshAccount];[self refreshReport];
 }
-- (void)setAccountLinker:(id<MAGAccountLinking>)linker {_linker=linker;[self refreshAccount];[self fit];}
+// The Send report row: a request needs the supervisor's MAG_REPORT_REQUEST and a linked account.
+- (BOOL)linked {
+    NSString *portal=_linker?[self accountPortal]:nil;
+    return portal&&[_linker linkedNameForPortal:portal]!=nil;
+}
+- (void)refreshReport {
+    NSString *blocker=MAGReportRequestBlocker([self linked]);
+    _reportButton.enabled=!blocker&&!_pending;
+    _reportStatus.stringValue=_reportRequested?:blocker?:@MAG_SETTINGS_SEND_REPORT_HINT;
+}
+- (void)sendReport:(id)sender {
+    if(MAGReportRequestBlocker([self linked]))return;
+    _reportRequested=MAGReportRequestWrite(NULL)?@MAG_SETTINGS_REPORT_REQUESTED:@MAG_SETTINGS_REPORT_FAILED;
+    [self refreshReport];[self fit];
+}
+- (void)setAccountLinker:(id<MAGAccountLinking>)linker {_linker=linker;[self refreshAccount];[self refreshReport];[self fit];}
 - (void)adoptSettings:(NSDictionary *)settings {self.settings=settings;[self fill:settings];[self changed:nil];}
 - (NSString *)accountPortal {
     NSString *server=[_server.stringValue stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
@@ -251,6 +281,7 @@ static NSStackView *row(NSString *title,NSString *hint,NSView *control) {
         NSString *message=nil;
         if(![_linker unlink:&message])[self showError:message];
         else{_errorLabel.hidden=YES;_accountStatus.stringValue=message;_accountButton.title=@MAG_SETTINGS_ACCOUNT_LINK;}
+        [self refreshReport];
         [self fit];return;
     }
     _linking=YES;_accountButton.title=@MAG_SETTINGS_ACCOUNT_CANCEL;_errorLabel.hidden=YES;_accountStatus.stringValue=@MAG_SETTINGS_ACCOUNT_CONTACTING;
@@ -259,7 +290,7 @@ static NSStackView *row(NSString *title,NSString *hint,NSView *control) {
         MAGSettingsController *me=weak;if(me){me->_accountStatus.stringValue=message;[me fit];}
     } finished:^(BOOL linked,NSString *message){
         MAGSettingsController *me=weak;if(!me)return;
-        me->_linking=NO;[me refreshAccount];
+        me->_linking=NO;[me refreshAccount];[me refreshReport];
         if(!linked){if(message.length)[me showError:message];return;}
         // The account's name is the one MAG signs in with; offer it in the field for Apply.
         NSString *name=[me->_linker linkedNameForPortal:portal];
@@ -397,7 +428,7 @@ static NSStackView *row(NSString *title,NSString *hint,NSView *control) {
     _oldFrame=_gameWindow.frame;_oldStyle=_gameWindow.styleMask;_oldDrawable=_metal.drawableSize;_oldPresentation=NSApp.presentationOptions;
     _pending=draft;[self setDisplay:draft];_confirmation.hidden=NO;
     for(NSControl *field in _fields)field.enabled=NO;
-    _applyButton.enabled=NO;_playButton.enabled=NO;_cancelButton.enabled=NO;
+    _applyButton.enabled=NO;_playButton.enabled=NO;_cancelButton.enabled=NO;_reportButton.enabled=NO;
     _deadline=NSProcessInfo.processInfo.systemUptime+MAG_SETTINGS_CONFIRM_SECONDS;[self tick:nil];
     _timer=[NSTimer timerWithTimeInterval:.2 target:self selector:@selector(tick:) userInfo:nil repeats:YES];
     [NSRunLoop.mainRunLoop addTimer:_timer forMode:NSRunLoopCommonModes];

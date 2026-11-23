@@ -149,6 +149,17 @@ class PortablePlayerSettingsTests(unittest.TestCase):
                         {'portal_url': 'https://u@portal.example.org'}, {'portal_url': 'https://p.example.org/?x=1'},
                         {'portal_url': 3}):
                 self.assertIsNone(parse(bad)[0], bad)
+            # Reports: no field means on (existing files keep reporting), written back only when off.
+            self.assertNotIn('send_reports', parse({})[0])
+            self.assertEqual(parse({'send_reports': True})[0], parse({})[0])
+            self.assertIs(parse({'send_reports': False})[0]['send_reports'], False)
+            self.assertIs(parse(parse({'send_reports': False})[0])[0]['send_reports'], False)  # round trip
+            self.assertIs(parse('{"send_reports":false,"player_name":"Rook_7"}')[0]['send_reports'], False)
+            for bad in ({'send_reports': 'yes'}, {'send_reports': 0}, {'send_reports': 1}, {'send_reports': None},
+                        '{"send_reports": tru}', '{"send_reports": falsey}', {'tcp_port': True}, {'render_scale': False},
+                        {'player_name': True}, {'schema_version': True}):
+                self.assertIsNone(parse(bad)[0], bad)
+            self.assertIn('true or false', parse({'send_reports': 'yes'})[1])
 
     def test_server_sign_in_profiles(self):
         def profile(name, ticket):

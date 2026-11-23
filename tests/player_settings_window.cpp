@@ -240,6 +240,51 @@ static void general(const fs::path& folder) {
     CHECK(read(settings).find("\"player_name\": \"Rook_9\"") != std::string::npos);
     CHECK(send(linking, key(SDL_SCANCODE_ESCAPE)) == SettingsPanel::State::Saved);  // Apply saved something
 
+    // Reports: the checkbox is on by default, Cancel restores it, Apply writes send_reports only
+    // when off. Send report needs MAG_REPORT_REQUEST (a packaged launch) and a linked account, and
+    // works with the checkbox off.
+    {
+        std::ofstream(settings) << "{\"server_address\": \"play.magtest.online\", \"player_name\": \"Rook_7\"}";
+        SettingsForm reports;
+        CHECK(settings_form_load(settings, reports, error) && reports.send_reports);
+        const fs::path marker = folder / "report-requested";
+        unsetenv("MAG_REPORT_REQUEST");
+        SettingsPanel panel(reports, settings, SettingsWindowOptions{}, &game);
+        CHECK(panel.shown("check:reports") && panel.label("check:reports") == "On" && panel.enabled("check:reports"));
+        CHECK(panel.shown("button:report") && !panel.enabled("button:report"));
+        click(panel, "check:reports");
+        CHECK(!reports.send_reports && panel.enabled("button:apply") && panel.status() == "Unsaved changes");
+        send(panel, key(SDL_SCANCODE_ESCAPE));
+        CHECK(reports.send_reports);  // Cancel put it back
+        SettingsPanel again(reports, settings, SettingsWindowOptions{}, &game);
+        click(again, "check:reports");
+        click(again, "button:apply");
+        CHECK(read(settings).find("\"send_reports\": false") != std::string::npos);
+        PortableSettings stored;
+        bool exists = false;
+        CHECK(load_portable_settings(settings, stored, exists, error) && !stored.send_reports);
+        click(again, "check:reports");
+        click(again, "button:apply");
+        CHECK(read(settings).find("send_reports") == std::string::npos);
+        // Not linked: the button explains; linked with a request path: it writes the marker.
+        setenv("MAG_REPORT_REQUEST", marker.string().c_str(), 1);
+        SettingsPanel unlinked(reports, settings, SettingsWindowOptions{}, &game);
+        CHECK(!unlinked.enabled("button:report") && !fs::exists(marker));
+        std::string link_error;
+        CHECK(portal::save_link(folder / "portal-link.json", {"https://magtest.online", "mgd_synthetic_token", "Rook_9"}, link_error));
+        reports.send_reports = false;  // an explicit request works with reports off
+        SettingsPanel linked(reports, settings, SettingsWindowOptions{}, &game);
+        CHECK(linked.enabled("button:report"));
+        click(linked, "button:report");
+        CHECK(linked.report_status() == "A report will be sent when MAG closes.");
+        const std::string request = read(marker);
+        CHECK(request.rfind("{\"requested_at\":", 0) == 0 && request.back() == '\n');
+        CHECK((fs::status(marker).permissions() & (fs::perms::group_all | fs::perms::others_all)) == fs::perms::none);
+        draw(linked);
+        unsetenv("MAG_REPORT_REQUEST");
+        CHECK(portal::forget_link(folder / "portal-link.json", link_error));
+    }
+
     // A damaged settings file: Play waits until Apply replaces it.
     std::ofstream(settings) << "{broken";
     SettingsForm damaged;
