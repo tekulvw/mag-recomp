@@ -196,6 +196,73 @@ extern "C" int mag_portal_link_dialog(const wchar_t *settings_file, const wchar_
     return state.linked;
 }
 
+namespace {
+int link_token(const wchar_t *settings_file, const wchar_t *server_choice, const wchar_t *portal_choice, wchar_t *message, int capacity) {
+    auto stop = [&](const std::string &text) { copy_out(text, message, capacity); return 0; };
+    // The settings file as it is (a missing one has the defaults), with the choices applied.
+    const fs::path path(settings_file);
+    const std::string shown = utf8(settings_file);
+    mag::PortableSettings settings;
+    std::string error;
+    std::error_code code;
+    const bool exists = fs::exists(fs::symlink_status(path, code));
+    if (exists) {
+        if (fs::file_size(path, code) > 65536 || code) return stop("Fix or delete " + shown + " first: it is damaged.");
+        std::ifstream in(path, std::ios::binary);
+        std::ostringstream text; text << in.rdbuf();
+        if (in.fail() || !mag::parse_portable_settings(text.str(), settings, error)) return stop("Fix or delete " + shown + " first: " + error);
+    }
+    bool changed = !exists;
+    if (server_choice) {
+        std::string host = utf8(server_choice);
+        if (!mag::check_server_address(host, error)) return stop("--server: " + error);
+        changed = changed || host != settings.server_address;
+        settings.server_address = host;
+    }
+    if (portal_choice) {
+        std::string url = utf8(portal_choice);
+        if (!check_portal_url(url, error)) return stop("--portal-url: " + error);
+        changed = changed || url != settings.portal_url;
+        settings.portal_url = url;
+    }
+    if (settings.server_address.empty()) return stop("Choose the game server first: MAG.exe --server <host> --link-token.");
+    const std::string portal = portal_of(settings);
+    if (portal.empty())
+        return stop("No account portal applies to " + settings.server_address + ". Add --portal-url with that server's account portal.");
+    // The token, from standard input only (never the command line, which other processes can read).
+    std::string input;
+    HANDLE in = GetStdHandle(STD_INPUT_HANDLE);
+    if (!in || in == INVALID_HANDLE_VALUE) return stop("Pass the device token on standard input, for example: Get-Content token.txt | MAG.exe --link-token");
+    char buffer[1024];
+    DWORD got = 0;
+    while (input.size() <= 4096 && ReadFile(in, buffer, sizeof buffer, &got, nullptr) && got) input.append(buffer, got);
+    std::string token;
+    if (!read_device_token(input, token)) return stop("Standard input holds no device token. Pass the token the portal showed (it starts with mgd_).");
+    if (changed && !write_private_file(path, mag::format_portable_settings(settings), error)) return stop(error);
+    auto transport = make_platform_transport();
+    Link link;
+    Outcome outcome = import_device_token(*transport, portal, settings.server_address, token, link_path(path), link);
+    if (!outcome.ok()) return stop(outcome.message);
+    if (!link.player_name.empty() && link.player_name != settings.player_name) {  // the account's name wins, as at launch
+        settings.player_name = link.player_name;
+        write_private_file(path, mag::format_portable_settings(settings), error);
+    }
+    copy_out("Linked as " + link.player_name + " at " + portal + " for " + settings.server_address + ".", message, capacity);
+    return 1;
+}
+}  // namespace
+
+extern "C" int mag_portal_link_token(const wchar_t *settings_file, const wchar_t *server_choice, const wchar_t *portal_choice,
+                                     wchar_t *message, int capacity) {
+    copy_out("", message, capacity);
+    try {
+        return link_token(settings_file, server_choice, portal_choice, message, capacity);
+    } catch (const std::exception &e) {  // nothing may cross into the C supervisor
+        copy_out(std::string("Linking failed: ") + e.what(), message, capacity);
+        return 0;
+    }
+}
+
 extern "C" int mag_portal_unlink(const wchar_t *settings_file, wchar_t *message, int capacity) {
     const fs::path file = link_path(fs::path(settings_file));
     Link link; bool exists = false; std::string error;
@@ -218,7 +285,7 @@ extern "C" int mag_portal_phase(const wchar_t *settings_file, const wchar_t *ser
     if (portal.empty() || !settings.ticket_file.empty()) return MAG_PORTAL_NONE;  // a set ticket_file wins
     auto transport = make_platform_transport();
     auto result = prepare_launch_ticket(*transport, link_path(fs::path(settings_file)), fs::path(ticket_file), portal,
-                                        "Run MAG.exe --link to link it again.");
+                                        settings.server_address, "Run MAG.exe --link to link it again.");
     switch (result.state) {
     case LaunchTicket::State::Ready:
         if (launcher && result.player_name != settings.player_name) {

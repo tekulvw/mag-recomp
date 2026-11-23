@@ -11,6 +11,12 @@ int mag_portal_applies(const wchar_t *settings_file, const wchar_t *server_choic
 /* A small modal window: shows the portal's code, opens the link page, waits for approval and
  * stores the device token. Returns 1 once linked. */
 int mag_portal_link_dialog(const wchar_t *settings_file, const wchar_t *server_choice);
+/* --link-token: read a device token (minted on the portal for a service account) from standard
+ * input, store it for the portal that applies to the settings with the --server and --portal-url
+ * choices (either may be NULL; given ones are saved to the settings file), and check it by fetching
+ * one ticket. Returns 1 once linked and checked; `message` says as whom, or why not. */
+int mag_portal_link_token(const wchar_t *settings_file, const wchar_t *server_choice, const wchar_t *portal_choice,
+                          wchar_t *message, int capacity);
 /* Forget the link on this computer; `message` (capacity in characters) says what happened. */
 int mag_portal_unlink(const wchar_t *settings_file, wchar_t *message, int capacity);
 

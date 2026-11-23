@@ -95,7 +95,8 @@ static int run_settings(const fs::path& engine,const fs::path& logs,const std::m
  close(fd);child=pid;int status;while(waitpid(pid,&status,0)<0){if(errno!=EINTR)return 1;}child=0;
  return WIFEXITED(status)?WEXITSTATUS(status):1;
 }
-static const char* usage="Usage: MAG [--server <hostname or IPv4>] [--name <player name>] [--no-prompt] | MAG --link | MAG --unlink";
+static const char* usage="Usage: MAG [--server <hostname or IPv4>] [--name <player name>] [--no-prompt] | MAG --link | MAG --unlink"
+ " | MAG [--server <hostname or IPv4>] [--portal-url <url>] --link-token < token";
 // The settings as this launch will apply them, for choosing the account portal. A damaged file
 // yields none: the game reports it and plays offline.
 static mag::PortableSettings player_settings(const fs::path& path,const std::map<std::string,std::string>& choices,bool& usable) {
@@ -131,6 +132,36 @@ static int link_account(const fs::path& link_file,const std::string& portal,cons
  if(link.player_name.empty())std::cout<<"Your account has no player name yet: claim one at "<<portal<<"/account first.\n";
  return 0;
 }
+// MAG --link-token: a device token minted on the portal (a service account for test automation),
+// read from standard input, never the command line, which other users' processes can read. The
+// --server and --portal-url choices are saved to the settings file, so later launches use the same
+// server and portal; the token is then checked by fetching one ticket.
+static int link_token(const fs::path& link_file,const fs::path& path,const std::map<std::string,std::string>& choices) {
+ mag::PortableSettings settings;std::string error;std::error_code none;
+ const bool exists=fs::exists(fs::symlink_status(path,none));
+ if(exists){bool ok=false;try{ok=mag::parse_portable_settings(read_file(path,65536),settings,error);}catch(const std::exception& e){error=e.what();}
+  if(!ok)fail("Fix or delete "+path.string()+" first: "+error);}
+ bool changed=!exists;
+ if(auto c=choices.find("MAG_PLAYER_SET_SERVER");c!=choices.end()){std::string host=c->second;
+  if(!mag::check_server_address(host,error))fail("--server "+c->second+": "+error);changed|=host!=settings.server_address;settings.server_address=host;}
+ if(auto c=choices.find("portal_url");c!=choices.end()){std::string url=c->second;
+  if(!mag::portal::check_portal_url(url,error))fail("--portal-url "+c->second+": "+error);changed|=url!=settings.portal_url;settings.portal_url=url;}
+ if(settings.server_address.empty())fail("Choose the game server first: ./MAG --server <host> --link-token.");
+ const std::string portal=mag::portal::portal_for(settings.server_address,settings.portal_url);
+ if(portal.empty())fail("No account portal applies to "+settings.server_address+". Add --portal-url with that server's account portal.");
+ if(isatty(0))std::cerr<<"Paste the device token, then press Enter and Ctrl+D:"<<std::endl;
+ std::string input;char buffer[1024];ssize_t n;
+ while(input.size()<=4096&&(n=read(0,buffer,sizeof buffer))!=0){if(n<0){if(errno==EINTR)continue;fail("Cannot read the token from standard input.");}input.append(buffer,n);}
+ std::string token;
+ if(!mag::portal::read_device_token(input,token))fail("Standard input holds no device token. Pass the token the portal showed (it starts with mgd_).");
+ if(changed&&!mag::portal::write_private_file(path,mag::format_portable_settings(settings),error))fail(error);
+ auto transport=mag::portal::make_platform_transport();mag::portal::Link link;
+ auto outcome=mag::portal::import_device_token(*transport,portal,settings.server_address,token,link_file,link);
+ if(!outcome.ok())fail(outcome.message);
+ if(link.player_name!=settings.player_name){settings.player_name=link.player_name;mag::portal::write_private_file(path,mag::format_portable_settings(settings),error);}  // the account's name wins, as at launch
+ std::cout<<"Linked as "<<link.player_name<<" at "<<portal<<" for "<<settings.server_address<<". Start ./MAG to play.\n";
+ return 0;
+}
 static int unlink_account(const fs::path& link_file) {
  mag::portal::Link link;bool exists=false;std::string error;mag::portal::load_link(link_file,link,exists,error);
  if(!mag::portal::forget_link(link_file,error))fail(error);
@@ -147,7 +178,7 @@ static void portal_ticket(std::map<std::string,std::string>& env,const fs::path&
  if(portal.empty()||settings.server_address.empty())return;
  if(!settings.ticket_file.empty()){if(launcher)std::cerr<<"MAG account: the ticket_file setting is used instead of the account link.\n";return;}
  auto transport=mag::portal::make_platform_transport();
- auto result=mag::portal::prepare_launch_ticket(*transport,link_file,ticket,portal,relink);
+ auto result=mag::portal::prepare_launch_ticket(*transport,link_file,ticket,portal,settings.server_address,relink);
  using State=mag::portal::LaunchTicket::State;
  if(result.state==State::Ready){
   env["MAG_PLAYER_PORTAL_TICKET"]=result.file.string();
@@ -172,10 +203,12 @@ int main(int argc,char** argv) {
  for(int i=1;i<argc;i++){std::string a=argv[i];
   if(a=="--help"||a=="-h"){std::cout<<usage<<"\n";return 0;}
   if(a=="--no-prompt"){prompt=false;continue;}
-  if(a=="--link"||a=="--unlink"){account=a;continue;}
-  std::string key=a.rfind("--server",0)==0?"MAG_PLAYER_SET_SERVER":a.rfind("--name",0)==0?"MAG_PLAYER_SET_NAME":"";
-  if(key.empty())fail(std::string(usage)+" (unknown option "+a+")");
-  auto eq=a.find('=');if(eq!=std::string::npos)choices[key]=a.substr(eq+1);else if(i+1<argc&&(a=="--server"||a=="--name"))choices[key]=argv[++i];else fail(usage);}
+  if(a=="--link"||a=="--unlink"||a=="--link-token"){account=a;continue;}
+  std::string key=a.rfind("--server",0)==0?"MAG_PLAYER_SET_SERVER":a.rfind("--name",0)==0?"MAG_PLAYER_SET_NAME":a.rfind("--portal-url",0)==0?"portal_url":"";
+  if(key.empty())fail(std::string(usage)+(a.rfind("-",0)==0?" (unknown option "+a+")":" (unexpected argument; a device token goes on standard input)"));
+  auto eq=a.find('=');if(eq!=std::string::npos)choices[key]=a.substr(eq+1);else if(i+1<argc&&(a=="--server"||a=="--name"||a=="--portal-url"))choices[key]=argv[++i];else fail(usage);}
+ // --portal-url names the portal a token is for; --link-token takes the account's name.
+ if((choices.count("portal_url")&&account!="--link-token")||(account=="--link-token"&&choices.count("MAG_PLAYER_SET_NAME")))fail(usage);
  const char* config=getenv("XDG_CONFIG_HOME");fs::path settings;
  if(config&&*config=='/')settings=fs::path(config)/"MAG";else if(const char* h=getenv("HOME");h&&*h=='/')settings=fs::path(h)/".config/MAG";
  else fail("Cannot find your configuration folder (set HOME or XDG_CONFIG_HOME)");
@@ -185,6 +218,7 @@ int main(int argc,char** argv) {
  if(account=="--link"){auto chosen=player_settings(settings,choices,settings_usable);
   if(!settings_usable)fail("Fix or delete "+settings.string()+" first: it is damaged.");
   return link_account(link_file,mag::portal::portal_for(chosen.server_address,chosen.portal_url),settings);}
+ if(account=="--link-token")return link_token(link_file,settings,choices);
  char self[65536];auto n=readlink("/proc/self/exe",self,sizeof self-1);if(n<=0||n==(ssize_t)sizeof self-1)fail("Cannot locate MAG executable");self[n]=0;
  // The game files are in the MAG folder, beside the folder that holds this executable.
  fs::path app=fs::path(self).parent_path();root=app.parent_path();auto vfs=(app/MAG_GAME_ROOT).lexically_normal();

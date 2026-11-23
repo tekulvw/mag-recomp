@@ -67,6 +67,7 @@ enum class Status {
     Pending, SlowDown,                    // linking: keep waiting
     Denied, Expired, InvalidCode,         // linking: the code is finished
     Unlinked, Banned, NoPlayerName,       // tickets: the account needs the player's attention
+    UnknownAudience,                      // tickets: this portal does not serve the game server
     Busy, Unreachable, BadResponse,       // the portal, the network, or an unexpected reply
     Cancelled, Storage,
 };
@@ -105,7 +106,12 @@ bool decode_base64(const std::string &text, std::string &out);  // standard alph
 // The version 1 layout: exact length 108 + A + N, magic, version, and the audience and name
 // fields matching the reply. The signature is the game server's to verify.
 bool check_ticket(const Ticket &ticket, std::string &error);
-Outcome fetch_ticket(Transport &transport, const std::string &portal, const std::string &device_token, Ticket &out);
+// The ticket's audience: the game server's host name (or IPv4 address), lowercased.
+std::string ticket_audience(const std::string &server);
+// POST <portal>/api/v1/ticket with {"audience": ticket_audience(server)} (an empty server sends {}
+// for the portal's default audience). The reply's audience must be the one requested.
+Outcome fetch_ticket(Transport &transport, const std::string &portal, const std::string &device_token,
+                     const std::string &server, Ticket &out);
 
 // ---- Storage ----
 // The link lives next to the player's settings file (portal-link.json).
@@ -130,9 +136,20 @@ struct LaunchTicket {
     std::string message;         // Failed (and a NotLinked link to another portal): for the player
     Status status = Status::Ok;
 };
-// Fetch a fresh ticket into `ticket_file` when a portal applies and this computer is linked to it.
-// An unlinked device token is forgotten; `relink` says how to link again ("Run ./MAG --link.").
+// Fetch a fresh ticket for `server` into `ticket_file` when a portal applies and this computer is
+// linked to it. An unlinked device token is forgotten; `relink` says how to link again
+// ("Run ./MAG --link.").
 LaunchTicket prepare_launch_ticket(Transport &transport, const std::filesystem::path &link_file,
                                    const std::filesystem::path &ticket_file, const std::string &portal,
-                                   const std::string &relink);
+                                   const std::string &server, const std::string &relink);
+
+// ---- A link without the device-code page (--link-token) ----
+// A device token minted on the portal (a staff-made service account) and installed on a test
+// computer. `text` is what was read from standard input: surrounding white space is dropped.
+bool read_device_token(const std::string &text, std::string &token);
+// Store the token for `portal` (portal-link.json, owner-only, atomic), then check it by fetching
+// one ticket for `server`. On success `out` names the account's player. A token the portal refuses
+// is forgotten again; after any other failure it stays stored, and each launch tries it again.
+Outcome import_device_token(Transport &transport, const std::string &portal, const std::string &server,
+                            const std::string &text, const std::filesystem::path &link_file, Link &out);
 }

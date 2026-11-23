@@ -431,15 +431,23 @@ bool check_ticket(const Ticket &t, std::string &error) {
     return true;
 }
 
-Outcome fetch_ticket(Transport &transport, const std::string &portal, const std::string &device_token, Ticket &out) {
+std::string ticket_audience(const std::string &server) { return lower(server); }
+
+Outcome fetch_ticket(Transport &transport, const std::string &portal, const std::string &device_token,
+                     const std::string &server, Ticket &out) {
     if (!valid_device_token(device_token)) return fail(Status::Unlinked, "The saved account link is not valid.");
-    Response r = transport.post(portal + "/api/v1/ticket", "{}", {{"Authorization", "Bearer " + device_token}});
+    const std::string audience = ticket_audience(server);
+    Response r = transport.post(portal + "/api/v1/ticket", audience.empty() ? std::string("{}") : "{\"audience\":" + json_string(audience) + "}",
+                                {{"Authorization", "Bearer " + device_token}});
     if (r.status == 200) {
         JsonObject o; Ticket t;
         if (parse_json_object(r.body, o) && decode_base64(text(o, "ticket"), t.bytes) && integer(o, "expires_at", t.expires_at) &&
             integer(o, "account_id", t.account_id)) {
             t.player_name = text(o, "player_name");
             t.audience = text(o, "audience");
+            if (!audience.empty() && t.audience != audience)
+                return fail(Status::BadResponse, "The account portal at " + portal + " sent a ticket for " + printable(t.audience, 64) +
+                                                     ", not " + printable(audience, 64) + ".");
             std::string problem;
             if (t.account_id > 0 && check_ticket(t, problem)) { out = std::move(t); return {}; }
             return fail(Status::BadResponse, problem);
@@ -447,6 +455,10 @@ Outcome fetch_ticket(Transport &transport, const std::string &portal, const std:
         return fail(Status::BadResponse, "The account portal at " + portal + " sent an unexpected ticket reply.");
     }
     const std::string code = error_code(r);
+    if (r.status == 400 && code == "unknown_audience")
+        return fail(Status::UnknownAudience, "This account portal (" + portal + ") doesn't issue tickets for " +
+                                                 printable(audience.empty() ? server : audience, 64) +
+                                                 ". Set portal_url to the account portal of that server.");
     if (r.status == 401 && code == "invalid_token")
         return fail(Status::Unlinked, "This computer is no longer linked to your account (it was unlinked on the website).");
     if (r.status == 403 && code == "banned") {
@@ -541,7 +553,7 @@ bool forget_link(const fs::path &path, std::string &error) {
 // ---- Before each launch phase ----
 
 LaunchTicket prepare_launch_ticket(Transport &transport, const fs::path &link_file, const fs::path &ticket_file,
-                                   const std::string &portal, const std::string &relink) {
+                                   const std::string &portal, const std::string &server, const std::string &relink) {
     LaunchTicket result;
     if (portal.empty()) return result;
     result.state = LaunchTicket::State::NotLinked;
@@ -557,7 +569,7 @@ LaunchTicket prepare_launch_ticket(Transport &transport, const fs::path &link_fi
         return result;
     }
     Ticket ticket;
-    Outcome outcome = fetch_ticket(transport, portal, link.device_token, ticket);
+    Outcome outcome = fetch_ticket(transport, portal, link.device_token, server, ticket);
     result.status = outcome.status;
     if (!outcome.ok()) {
         result.state = LaunchTicket::State::Failed;
@@ -581,5 +593,42 @@ LaunchTicket prepare_launch_ticket(Transport &transport, const fs::path &link_fi
     result.file = ticket_file;
     result.player_name = ticket.player_name;
     return result;
+}
+
+// ---- A link without the device-code page ----
+
+bool read_device_token(const std::string &text, std::string &token) {
+    if (text.size() > 4096) return false;
+    size_t a = text.find_first_not_of(" \t\r\n"), b = text.find_last_not_of(" \t\r\n");
+    if (a == std::string::npos) return false;
+    std::string candidate = text.substr(a, b - a + 1);
+    if (!valid_device_token(candidate)) return false;
+    token = std::move(candidate);
+    return true;
+}
+
+Outcome import_device_token(Transport &transport, const std::string &portal, const std::string &server,
+                            const std::string &text, const fs::path &link_file, Link &out) {
+    std::string token, error;
+    if (!read_device_token(text, token))
+        return fail(Status::Unlinked, "Standard input holds no device token. Pass the token the portal showed (it starts with mgd_).");
+    if (portal.empty()) return fail(Status::UnknownAudience, "No account portal applies to " + server + ".");
+    Link link{portal, token, ""};
+    if (!save_link(link_file, link, error)) return fail(Status::Storage, error);
+    Ticket ticket;
+    Outcome outcome = fetch_ticket(transport, portal, token, server, ticket);
+    if (!outcome.ok()) {
+        if (outcome.status == Status::Unlinked) {
+            forget_link(link_file, error);
+            outcome.message = "The account portal at " + portal + " does not accept this token (it may have been revoked). It was not saved.";
+        } else {
+            outcome.message += " The token is saved; MAG tries it again at each launch.";
+        }
+        return outcome;
+    }
+    link.player_name = ticket.player_name;
+    save_link(link_file, link, error);  // the name shown for this link; best effort
+    out = link;
+    return {};
 }
 }  // namespace mag::portal

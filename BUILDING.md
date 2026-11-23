@@ -309,6 +309,10 @@ receipt records `movie_playback`), `boot.py` also turns on the runtime's movie p
 MAG app sets the same switches whenever its build has the decoder: without them, the game opens
 and closes each movie at once and then waits forever after the legal screen.
 
+`--network-profile <profile.json>` points the launcher at a local replacement service, or, with
+the profile's `portal` block, signs in to a ticket-enforcing test server with a service-account
+token; see [Account link](docs/player-settings.md#account-link).
+
 | Keys | PS3 control |
 | --- | --- |
 | WASD / IJKL | Left / right stick |

@@ -3,7 +3,10 @@ import os
 import sys
 import tempfile
 from pathlib import Path
-from tools.boot import classify_boot, capture_process, clone_disc, movie_environment
+from tools.boot import classify_boot, capture_process, clone_disc, movie_environment, network_environment
+from tools import network_profile
+from tests import test_network_profile as profiles
+from tests.test_network_profile import FakePortal, TOKEN, ticket_bytes, token_file
 
 
 class BootTests(unittest.TestCase):
@@ -121,3 +124,46 @@ class BootImageTests(unittest.TestCase):
         for name in ['prototype','mage_g']:
             with self.assertRaises(ValueError):
                 select_boot_image(profile,name)
+
+
+class BootNetworkEnvironmentTests(unittest.TestCase):
+    """A network profile's environment, without launching anything."""
+
+    def test_portal_profile_fetches_a_ticket_and_uses_the_ticket_profile(self):
+        portal=FakePortal(self,audiences=('test.example.org',),name='Svc_Bot')
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);token_file(root)
+            vfs,path,_=profiles.PortalProfileTests().fixture(root,portal={'url':portal.url,'token_file':'service.token','audience':'test.example.org'})
+            network=network_profile.prepare_overlay(vfs,path,expected_member='/settings.lua')
+            output=root/'run';output.mkdir()
+            env=network_environment(network,output)
+            ticket=output/'portal-ticket.bin'
+            self.assertEqual(env,{'PS3_NET_ONLINE':'1','PS3_NET_TRACE':'1','PS3RECOMP_NP_LOCAL_TICKET':'1',
+                                  'PS3RECOMP_NP_TICKET_FILE':str(ticket),'PS3_NP_ONLINE_ID':'Svc_Bot',
+                                  'PS3RECOMP_OSK_INITIAL_TEXT':'Svc_Bot'})  # never the no-ticket profile's switches
+            self.assertEqual(ticket.read_bytes(),ticket_bytes('test.example.org','Svc_Bot'))
+            if os.name=='posix':self.assertEqual(ticket.stat().st_mode&0o777,0o600)
+            self.assertEqual(portal.requests,[('/api/v1/ticket','Bearer '+TOKEN,'application/json',{'audience':'test.example.org'})])
+            # The run's record names the ticket, never its token or bytes.
+            self.assertEqual(network['portal_ticket']['player_name'],'Svc_Bot')
+            import json
+            recorded=json.dumps(network)
+            self.assertNotIn(TOKEN,recorded);self.assertNotIn('MAGT',recorded)
+
+    def test_portal_refusal_stops_the_run_before_launch(self):
+        portal=FakePortal(self,audiences=())
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);token_file(root)
+            vfs,path,_=profiles.PortalProfileTests().fixture(root,portal={'url':portal.url,'token_file':'service.token'})
+            network=network_profile.prepare_overlay(vfs,path,expected_member='/settings.lua')
+            with self.assertRaisesRegex(network_profile.PortalError,"doesn't issue tickets for 127.0.0.1"):
+                network_environment(network,root)
+            self.assertFalse((root/'portal-ticket.bin').exists())
+
+    def test_profiles_without_a_portal_are_unchanged(self):
+        base={'host_sockets':True,'restore_ticket_setting':True,'local_account_name':'PlayerRetail','local_np_ticket':True}
+        self.assertEqual(network_environment(base,Path('/nonexistent')),
+                         {'PS3_NET_ONLINE':'1','PS3_NET_TRACE':'1','MAG_LOCAL_NO_TICKET':'1','MAG_LOCAL_ACCOUNT_NAME':'PlayerRetail',
+                          'PS3RECOMP_OSK_INITIAL_TEXT':'PlayerRetail','PS3RECOMP_NP_LOCAL_TICKET':'1','PS3_NP_ONLINE_ID':'PlayerRetail'})
+        self.assertEqual(network_environment({'host_sockets':False,'restore_ticket_setting':False,'local_account_name':None,
+                                              'local_np_ticket':False,'portal':None},Path('/nonexistent')),{})

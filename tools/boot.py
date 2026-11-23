@@ -14,7 +14,7 @@ if __package__ in (None, ''):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from tools.prepare_inputs import ROOT, verify_hash, sha256_file, data_path, load_framework
 from tools.provenance import validate_receipt
-from tools.network_profile import prepare_overlay
+from tools.network_profile import prepare_overlay, fetch_portal_ticket, PORTAL_TICKET
 
 
 def clone_disc(source: Path, destination: Path) -> None:
@@ -114,6 +114,34 @@ def movie_environment(receipt: dict) -> dict:
     return dict(MOVIE_PLAYBACK_ENV) if receipt.get('movie_playback') is True else {}
 
 
+def network_environment(network: dict, output_dir: Path) -> dict:
+    """The environment a prepared network profile asks for. A profile with a portal block fetches
+    a ticket for its server first and records it (not its bytes) in network['portal_ticket']."""
+    env={}
+    if network['host_sockets']:
+        env['PS3_NET_ONLINE']='1'
+        env['PS3_NET_TRACE']='1'
+    if network['restore_ticket_setting']:
+        env['MAG_LOCAL_NO_TICKET']='1'
+    if network.get('local_account_name'):
+        env['MAG_LOCAL_ACCOUNT_NAME']=network['local_account_name']
+        # The native name dialog remains editable and requires confirmation.
+        env['PS3RECOMP_OSK_INITIAL_TEXT']=network['local_account_name']
+    if network.get('local_np_ticket'):
+        env['PS3RECOMP_NP_LOCAL_TICKET']='1'
+        env['PS3_NP_ONLINE_ID']=network['local_account_name']
+    if network.get('portal'):
+        # The portal ticket profile, as a linked player's launch uses it: the runtime's local
+        # ticket provider returns this file's bytes, and the online ID is the ticket's player.
+        ticket=fetch_portal_ticket(network['portal'],output_dir/PORTAL_TICKET)
+        network['portal_ticket']=ticket
+        env['PS3RECOMP_NP_LOCAL_TICKET']='1'
+        env['PS3RECOMP_NP_TICKET_FILE']=ticket['file']
+        env['PS3_NP_ONLINE_ID']=ticket['player_name']
+        env['PS3RECOMP_OSK_INITIAL_TEXT']=ticket['player_name']
+    return env
+
+
 def select_boot_image(profile: dict, image_name: str) -> tuple[dict, Path, str]:
     if image_name not in ('EBOOT','mage_g'):
         raise ValueError('Image must be EBOOT or mage_g')
@@ -158,19 +186,8 @@ def run_boot(binary: Path, seconds: float, output_dir: Path, syscall_trace: str 
     network=None
     if network_profile is not None:
         network=prepare_overlay(vfs,network_profile)
+        env.update(network_environment(network,output_dir))
         (output_dir/'network-profile.json').write_text(json.dumps(network,indent=2)+'\n')
-        if network['host_sockets']:
-            env['PS3_NET_ONLINE']='1'
-            env['PS3_NET_TRACE']='1'
-        if network['restore_ticket_setting']:
-            env['MAG_LOCAL_NO_TICKET']='1'
-        if network.get('local_account_name'):
-            env['MAG_LOCAL_ACCOUNT_NAME']=network['local_account_name']
-            # The native name dialog remains editable and requires confirmation.
-            env['PS3RECOMP_OSK_INITIAL_TEXT']=network['local_account_name']
-        if network.get('local_np_ticket'):
-            env['PS3RECOMP_NP_LOCAL_TICKET']='1'
-            env['PS3_NP_ONLINE_ID']=network['local_account_name']
         trace_network=True
     if trace_network:
         env['MAG_TRACE_NETWORK']='1'
@@ -242,7 +259,8 @@ if __name__ == '__main__':
     parser.add_argument('--visible', action='store_true', help='Show the native Metal window')
     parser.add_argument('--trace-queue', action='store_true', help='Observe bounded queue descriptors and completion counters')
     parser.add_argument('--first-nonblack', action='store_true', help='Retain the first nonblack presented frame')
-    parser.add_argument('--network-profile',type=Path,help='Hash-pinned local replacement-service profile')
+    parser.add_argument('--network-profile',type=Path,help='Hash-pinned local replacement-service profile; '
+                        'its optional portal block signs in with a ticket fetched for its server')
     parser.add_argument('--trace-network',action='store_true',help='Observe retail network settings and callbacks')
     a=parser.parse_args()
     binary=a.binary or ROOT/('build-engine' if a.image=='mage_g' else 'build')/'MagRecomp'

@@ -89,5 +89,49 @@ class WindowsSetupTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
 
 
+    def test_link_token_reads_standard_input_and_reports_for_automation(self):
+        source = windows._SUPERVISOR
+        self.assertIn('if (!wcscmp(a, L"--link-token")) { account = 3; continue; }', source)
+        self.assertIn('else if (!wcsncmp(a, L"--portal-url", 12)) { target = &portal_url; prefix = 12; }', source)
+        # --portal-url only with --link-token, which takes the account's name rather than --name.
+        self.assertIn('if ((portal_url && account != 3) || (account == 3 && player)) fail(usage, NULL);', source)
+        # An account command: it exits before any game file is checked.
+        command = source[source.index('if (account) {'):source.index('check(launcher, MAG_LAUNCHER_SHA256)')]
+        self.assertIn('int ok = mag_portal_link_token(settings, server, portal_url, message, 1024);', command)
+        self.assertIn('report(message, ok, prompt);', command)
+        # The result goes to redirected standard output or error; a message box only when interactive.
+        report = source[source.index('static void report('):source.index('int WINAPI wWinMain(')]
+        self.assertIn('GetStdHandle(ok ? STD_OUTPUT_HANDLE : STD_ERROR_HANDLE)', report)
+        self.assertIn('else if (prompt) MessageBoxW', report)
+        # The token comes from standard input only, through the shared import (src/player_portal.cpp).
+        root = windows.Path(__file__).resolve().parents[2] / 'src'
+        portal = (root / 'player_portal_win32.cpp').read_text(encoding='utf-8')
+        body = portal[portal.index('int link_token(const wchar_t *settings_file'):portal.index('extern "C" int mag_portal_unlink(')]
+        self.assertIn('GetStdHandle(STD_INPUT_HANDLE)', body)
+        self.assertIn('read_device_token(input, token)', body)
+        self.assertIn('import_device_token(*transport, portal, settings.server_address, token, link_path(path), link)', body)
+        self.assertIn('int mag_portal_link_token(', (root / 'player_portal_win32.h').read_text(encoding='utf-8'))
+        # Each phase asks for a ticket for the configured server.
+        self.assertIn('settings.server_address, "Run MAG.exe --link to link it again.");', portal)
+
+    @unittest.skipUnless(shutil.which('x86_64-w64-mingw32-g++') and shutil.which('x86_64-w64-mingw32-gcc'), 'MinGW-w64 cross compiler')
+    def test_supervisor_and_portal_sources_compile(self):
+        """The supervisor and its portal sources build for Windows (MinGW-w64 here; the installer uses clang-cl)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            scratch = Path(tmp)
+            digest = '"' + 'a' * 64 + '"'
+            (scratch / 'supervisor_config.h').write_text(
+                '#define MAG_GAME_ROOT L"..\\\\game"\n' + ''.join(f'#define MAG_{name}_SHA256 {digest}\n' for name in
+                                                              ('LAUNCHER', 'ENGINE', 'LAUNCHER_ELF', 'ENGINE_ELF', 'ENGINE_SELF')) +
+                '#define MAG_RUNTIME_DEFAULTS {{NULL, NULL}}\n', encoding='utf-8')
+            (scratch / 'supervisor.c').write_text(windows._SUPERVISOR, encoding='utf-8')
+            windows.copy_supervisor_sources(windows.Path(__file__).resolve().parents[2], scratch)
+            portable = [name for name in windows.SUPERVISOR_SOURCES if name.endswith('.cpp')]
+            for argv in (['x86_64-w64-mingw32-g++', '-std=c++20', '-DUNICODE', '-D_UNICODE', '-c', *portable],
+                         ['x86_64-w64-mingw32-gcc', '-c', 'supervisor.c']):
+                result = subprocess.run(argv, cwd=scratch, capture_output=True, text=True, timeout=300)
+                self.assertEqual(result.returncode, 0, result.stderr[-3000:])
+
+
 if __name__ == '__main__':
     unittest.main()

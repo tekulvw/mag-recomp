@@ -147,6 +147,7 @@ NSString *MAGPortalLaunchTicket(NSString *settingsPath, NSString *ownedFolder, N
     auto transport = mag::portal::make_platform_transport();
     const std::filesystem::path ticket = std::filesystem::path(ownedFolder.fileSystemRepresentation) / "portal-ticket.bin";
     auto result = mag::portal::prepare_launch_ticket(*transport, mag::portal::link_path(settingsPath.fileSystemRepresentation), ticket, portal,
+                                                     server.UTF8String,
                                                      "Link it again in MAG Settings (MAG > Settings…, Account).");
     using State = mag::portal::LaunchTicket::State;
     if (!result.message.empty()) *message = string(result.message);
