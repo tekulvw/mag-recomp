@@ -381,7 +381,7 @@ the configure options and `installer/mag_installer/managed_tools.py` for the pin
 - **Paths.** Keep the build and installation path ASCII-only and short. The runtime opens guest
   files and its ELF argument through narrow-character APIs, and long build paths exceed Windows'
   length limit. The installer refuses an installation path with non-ASCII characters or more than
-  100 characters.
+  83 characters, which keeps its deepest build folder (`MAG-build\build-work`) within 100.
 
 ## Extending a build
 
