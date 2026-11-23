@@ -13,6 +13,7 @@ from .model import InstallerError, Profile
 from .safety import Cancellation, Cancelled
 from . import ux
 from .native_build import FIRMWARE_SOURCE_HINT
+from .player_build import BUILD_SUFFIX
 
 
 class WizardController:
@@ -171,25 +172,37 @@ class PlayerBuildController(WizardController):
             self.state = 'blocked'
 
     def has_journal(self, parent):
+        """A failed build to retry: in the build folder, or inside a MAG folder of the earlier layout."""
+        from .player_build import build_folder
         output = ux.destination(parent)
-        try:
-            journal = output / 'build.json'
-            if output.is_symlink() or journal.is_symlink():
-                return False
-            data = json.loads(journal.read_text(encoding='utf-8'))
-            return isinstance(data, dict) and data.get('schema_version') == 2 and data.get('state') in ('incomplete', 'building')
-        except (OSError, ValueError):
-            return False
+        for folder in (build_folder(output), output):
+            try:
+                journal = folder / 'build.json'
+                if folder.is_symlink() or journal.is_symlink() or not journal.is_file():
+                    continue
+                data = json.loads(journal.read_text(encoding='utf-8'))
+                if isinstance(data, dict) and data.get('schema_version') == 2 and data.get('state') in ('incomplete', 'building'):
+                    return True
+            except (OSError, ValueError):
+                continue
+        return False
+
+    def legacy_install(self, parent):
+        """A finished MAG folder an earlier installer built with its build files inside it."""
+        from .player_build import legacy_journal
+        status = legacy_journal(ux.destination(parent))
+        return status is not None and status.get('state') == 'complete'
 
     def start(self, source, parent, cache, retry=False):
         if self.blocked:
             raise InstallerError(self.blocked)
         if self.busy:
             raise InstallerError('A build is already running')
+        from .player_build import build_folder
         output = ux.destination(parent).absolute()
-        if (output.exists() or output.is_symlink()) and not retry:
+        if (output.exists() or output.is_symlink()) and not retry and not self.legacy_install(parent):
             raise InstallerError('Output already exists; choose another installation parent. Existing files are preserved.')
-        self.output, self.logs = output, output/'logs'
+        self.output, self.logs = output, build_folder(output)/'logs'
         self.token = Cancellation()
         self.error = ''
         self.state = 'installing'
@@ -274,11 +287,14 @@ def launch(root: Path, synthetic: bool = False) -> int:
     def refresh():
         for widget in controls:widget.configure(state='disabled' if controller.busy else 'normal')
         build.configure(state='disabled' if controller.busy or controller.blocked else 'normal')
+        legacy=False
         if not synthetic:
             build.configure(text='Retry build' if controller.has_journal(Path(parent.get()).expanduser()) else 'Build MAG')
+            legacy=not controller.busy and controller.legacy_install(Path(parent.get()).expanduser())
         cancel.configure(state='normal' if controller.busy else 'disabled')
         output=controller.display_output(Path(parent.get()).expanduser())
-        destination_label.configure(text=f'New output folder: {output}')
+        destination_label.configure(text=(f'{output} was built by an earlier installer. Build MAG moves its build files beside it, to {output}{BUILD_SUFFIX}, without rebuilding.'
+                                           if legacy else f'New output folder: {output}' + ('' if synthetic else f' (build files: {output}{BUILD_SUFFIX})')))
         open_output.configure(state='normal' if output.is_dir() else 'disabled')
         open_logs.configure(state='normal' if controller.logs and controller.logs.is_dir() else 'disabled')
     def tick():

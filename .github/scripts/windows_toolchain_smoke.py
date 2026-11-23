@@ -70,7 +70,7 @@ def main():
 
     scratch = work / 'supervisor'; scratch.mkdir(exist_ok=True)
     (scratch / 'supervisor_config.h').write_text(
-        '#define MAG_WORKSPACE L"..\\\\build-work\\\\workspace"\n' +
+        '#define MAG_GAME_ROOT L"..\\\\game"\n' +
         ''.join(f'#define {n} "{"0" * 64}"\n' for n in ('MAG_LAUNCHER_SHA256', 'MAG_ENGINE_SHA256',
                 'MAG_LAUNCHER_ELF_SHA256', 'MAG_ENGINE_ELF_SHA256', 'MAG_ENGINE_SELF_SHA256')))
     (scratch / 'supervisor.c').write_text(native_package_windows._SUPERVISOR)
