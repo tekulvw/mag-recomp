@@ -835,8 +835,35 @@ Evidence for the default (the rule for in-repository code on by default, AGENTS.
   ([player-controls-settings.md](player-controls-settings.md)); aim assist is denied only under the
   engine's KBM policy (section 7.6). Any adapter error cancels and the game proceeds natively
   (section 4, "Failures").
-- *Not yet recorded:* an in-game check of mouse aim in Training on Windows and Linux, and a frame
-  rate comparison with and without `MAG_GAME_CONTROLS`. Record them here when they are run.
+- *In game on Windows (2026-11-23, RTX 5090 / Ryzen 9 9950X3D, one client, local Training).* The build
+  came from main `bbc054f` through the installer's local recipe route, with the controls built and
+  the installer's own pinned Rust toolchain. Each check ran through the Windows FPS lane with
+  injected Win32 input (`SendInput`/`keybd_event`) and frame dumps.
+  - Keyboard and the on-foot bindings work: W moved the player (frame change 20.3 against 2.5 for
+    one idle second), Escape opened the pause menu and closed it again, focus loss released keys,
+    and a key held across refocus stayed ignored until pressed again.
+  - **Mouse look did not turn the camera.** 1000 counts of relative motion changed the frame by
+    2.3, the same as an idle second, before and after the menu. Through the pause menu the capture
+    log alternated "mouse locked" and "mouse released (menu, or the lock could not be applied)"
+    hundreds of times, and the status stayed "a menu holds look" at times in plain Training. The
+    same smoke test on 2026-11-09 showed the same result. Not fixed yet.
+  - The settings window opened on F10 in the HUD as its own process, saved, and the engine applied
+    the saved controls to the running game.
+- *Frame rate, controls on against `MAG_GAME_CONTROLS=0` (same binary, three interleaved rounds of 90
+  s Training holds, 6 of 6 runs left Training normally, presents up to 151 per second):*
+
+  | Round | On: flips/s mean / median | Off: flips/s mean / median |
+  | --- | --- | --- |
+  | 1 | 53.69 / 53.80 | 54.88 / 55.91 |
+  | 2 | 54.39 / 54.45 | 55.72 / 55.84 |
+  | 3 | 54.26 / 54.31 | 55.17 / 55.24 |
+  | Mean of means | 54.11 | 55.26 (+2.1%) |
+
+  Off was faster in every round (+0.9 to +1.3 flips/s). The p95 frame time was 19.5-19.9 ms with
+  the controls on and 19.4 ms off. The adapter attached in every "on" run and reported itself off
+  in every "off" run. On Windows the default costs about 2% of guest frame rate, and mouse aim
+  does not work there yet.
+- *Not yet recorded:* the same checks on Linux.
 
 ## 11. Tests
 
