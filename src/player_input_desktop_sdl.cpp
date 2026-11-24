@@ -207,7 +207,7 @@ Backend& backend() {
 bool observed_type(Uint32 type) {
     switch (type) {
     case SDL_KEYDOWN: case SDL_KEYUP: case SDL_MOUSEBUTTONDOWN: case SDL_MOUSEBUTTONUP:
-    case SDL_MOUSEMOTION: case SDL_WINDOWEVENT:
+    case SDL_MOUSEMOTION: case SDL_MOUSEWHEEL: case SDL_WINDOWEVENT:
         return true;
     default:
         return false;
@@ -279,6 +279,26 @@ void deliver(Backend& b, const Observed& item) {
         b.core.mouse_button(sdl_desktop_mouse_index(e.button.button), kMouseDevice, e.type == SDL_MOUSEBUTTONDOWN,
                             item.time_ns, item.stamp);
         break;
+    case SDL_MOUSEWHEEL: {
+        // Whole steps, up positive; a "flipped" (natural scrolling) report is turned back to the
+        // wheel's own direction so wheel up is the same physical control on every host.
+        // Some SDL builds (sdl2-compat) report fractional scrolling in preciseY only: whole steps
+        // are then taken from its running total.
+        if (e.wheel.which == SDL_TOUCH_MOUSEID || e.wheel.windowID != id) break;
+        int steps = e.wheel.y;
+#if SDL_VERSION_ATLEAST(2, 0, 18)
+        static float precise = 0;
+        if (steps) precise = 0;
+        else if (e.wheel.preciseY != 0) {
+            precise += e.wheel.preciseY;
+            steps = int(precise);
+            precise -= float(steps);
+        }
+#endif
+        if (e.wheel.direction == SDL_MOUSEWHEEL_FLIPPED) steps = -steps;
+        b.core.mouse_wheel(steps, kMouseDevice, item.time_ns, item.stamp);
+        break;
+    }
     case SDL_MOUSEMOTION: {
         const bool foreign = e.motion.which == SDL_TOUCH_MOUSEID || e.motion.windowID != id;
         const bool accepted = !foreign && !item.warp &&
@@ -398,7 +418,11 @@ uint32_t sdl_desktop_mouse_index(uint8_t sdl_button) {
     case SDL_BUTTON_MIDDLE: return 2;
     case SDL_BUTTON_X1: return 3;
     case SDL_BUTTON_X2: return 4;
-    default: return sdl_button ? uint32_t(sdl_button) - 1 : 0;
+    default: {
+        // Further buttons follow, skipping the wheel's codes.
+        const uint32_t code = sdl_button ? uint32_t(sdl_button) - 1 : 0;
+        return code >= MouseWheelUp ? code + 2 : code;
+    }
     }
 }
 

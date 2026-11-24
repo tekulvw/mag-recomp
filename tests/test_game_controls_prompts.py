@@ -38,6 +38,9 @@ class GameControlsPromptsTests(unittest.TestCase):
     def test_placeholders_resolve_to_the_live_bindings(self):
         self.run_case('resolve')
 
+    def test_shoulder_and_stick_prompts_name_the_key_for_the_context(self):
+        self.run_case('buttons')
+
     def test_text_rewrite_replaces_only_resolvable_placeholders(self):
         self.run_case('rewrite')
 

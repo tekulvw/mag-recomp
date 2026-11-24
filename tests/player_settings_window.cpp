@@ -61,6 +61,12 @@ static SDL_Event mouse(Uint8 button, int x = 5, int y = 5) {
     e.button.y = y;
     return e;
 }
+static SDL_Event wheel(int y) {
+    SDL_Event e{};
+    e.type = SDL_MOUSEWHEEL;
+    e.wheel.y = y;
+    return e;
+}
 static SDL_Event pad(Uint32 type, Uint8 button) {
     SDL_Event e{};
     e.type = type;
@@ -458,6 +464,13 @@ static void controls(const fs::path& folder) {
     click(panel, "slot:0:0");
     send(panel, mouse(SDL_BUTTON_RIGHT));
     CHECK(panel.label("slot:0:0") == "Right mouse");
+    // The wheel binds a notch up or down, and does not scroll the list while capturing.
+    click(panel, "slot:0:0");
+    send(panel, wheel(-1));
+    CHECK(!panel.capturing() && panel.label("slot:0:0") == "Wheel down");
+    click(panel, "slot:0:0");
+    send(panel, wheel(1));
+    CHECK(panel.label("slot:0:0") == "Wheel up");
     click(panel, "slot:0:0");
     send(panel, key(SDL_SCANCODE_ESCAPE));
     CHECK(!panel.capturing() && panel.hint() == "Binding capture canceled.");

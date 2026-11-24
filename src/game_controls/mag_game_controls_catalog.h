@@ -21,7 +21,7 @@ struct MagGameControlsAction {
     const char* group = nullptr;  // Settings group; null: by kind.
 };
 
-constexpr unsigned MagGameControlsCatalogRevision = 3;
+constexpr unsigned MagGameControlsCatalogRevision = 4;
 
 std::span<const MagGameControlsAction> mag_game_controls_actions();
 // Actions an older catalog had. A saved profile may still bind them, so loading accepts them;

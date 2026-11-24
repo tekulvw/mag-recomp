@@ -805,6 +805,13 @@ bool capture_message(const MSG& msg) {
         if (fresh(key)) accept({InputSource::Mouse, index});
         return true;
     }
+    case WM_MOUSEWHEEL: {
+        // A notch of the wheel binds wheel up or down (positive deltas turn away from the user).
+        if (capture.device != SettingsDevice::KeyboardMouse) return true;
+        const int delta = GET_WHEEL_DELTA_WPARAM(msg.wParam);
+        if (delta) accept({InputSource::Mouse, delta > 0 ? MouseWheelUp : MouseWheelDown});
+        return true;
+    }
     case WM_LBUTTONUP: case WM_RBUTTONUP: case WM_MBUTTONUP: case WM_XBUTTONUP: {
         const int key = msg.message == WM_LBUTTONUP ? VK_LBUTTON : msg.message == WM_RBUTTONUP ? VK_RBUTTON
                         : msg.message == WM_MBUTTONUP ? VK_MBUTTON : HIWORD(msg.wParam) == XBUTTON1 ? VK_XBUTTON1 : VK_XBUTTON2;

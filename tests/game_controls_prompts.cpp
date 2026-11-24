@@ -28,9 +28,11 @@ constexpr ActionId Interact = 0x47cc8c92, Fire = 0x58de09cf, Bleedout = 0x40feec
 struct World {
     InputDevice device = InputDevice::KeyboardMouse;
     InputPolicy policy;
+    bool pad_live = false;
     ControlsProfile profile = mag_game_controls_default_profile();
     MagGamePromptSources sources() {
         MagGamePromptSources s;
+        s.keyboard_pad_live = [this] { return pad_live; };
         s.last_device = [this] { return device; };
         s.policy = [this] { return policy; };
         s.bindings = [this](ActionId action, InputContext context) {
@@ -79,6 +81,9 @@ void labels() {
     require(mag_prompt_fallback_label({InputSource::Keyboard, 39}) == "0", "digit 0");
     require(mag_prompt_fallback_label({InputSource::Keyboard, 44}) == "SPACE", "space");
     require(mag_prompt_fallback_label({InputSource::Keyboard, 40}) == "ENTER", "return");
+    require(mag_prompt_fallback_label({InputSource::Mouse, MouseWheelUp}) == "WHEEL UP" &&
+                mag_prompt_fallback_label({InputSource::Mouse, MouseWheelDown}) == "WHEEL DN",
+            "the wheel's steps");
     require(mag_prompt_fallback_label({InputSource::Keyboard, 225}) == "SHIFT", "left shift");
     require(mag_prompt_fallback_label({InputSource::Keyboard, 62}) == "F5", "function key");
     require(mag_prompt_fallback_label({InputSource::Keyboard, 92}) == "NUM4", "keypad");
@@ -120,6 +125,7 @@ void resolve() {
     require(mag_game_prompts_label("fire", s) == "LMB", "names are case-insensitive");
     require(mag_game_prompts_label("Bleedout", s) == "ENTER", "[Bleedout]");
     require(mag_game_prompts_label("CommandScreen", s) == "TAB", "[CommandScreen] is the Select key");
+    require(mag_game_prompts_label("Respawn", s) == "ESC", "[Respawn] is the Start key");
     require(mag_game_prompts_label("NoSuchAction", s).empty(), "unknown name keeps the icon");
     // Menu buttons: the SDK keyboard pad's Cross and Circle keys, whatever the profile binds.
     require(mag_game_prompts_label("OS_Enter", s) == "X", "menu confirm is the pad's Cross key");
@@ -234,10 +240,43 @@ void seam() {
 }
 }  // namespace
 
+// Shoulder and stick prompts (section 12.6): the key that presses the button in the current context.
+void buttons() {
+    host_names.clear();
+    require(mag_game_prompts_button_text("L1") == MagPadButton::L1 && mag_game_prompts_button_text("R3") == MagPadButton::R3,
+            "button names");
+    require(!mag_game_prompts_button_text("L4") && !mag_game_prompts_button_text("l1") && !mag_game_prompts_button_text(" L1") &&
+            !mag_game_prompts_button_text("L1 ") && !mag_game_prompts_button_text("LB"), "only exact names");
+    World w;
+    auto s = w.sources();
+    // In a menu the keyboard pad's keys.
+    w.pad_live = true;
+    const std::pair<MagPadButton, const char*> menu[] = {{MagPadButton::L1, "Q"}, {MagPadButton::R1, "E"},
+        {MagPadButton::L2, "R"}, {MagPadButton::R2, "T"}, {MagPadButton::L3, "F"}, {MagPadButton::R3, "G"},
+        {MagPadButton::Cross, "X"}, {MagPadButton::Square, "Z"}};
+    for (auto [button, key] : menu) require(mag_game_prompts_button_key(button, s) == key, "menu: the pad's key");
+    // On foot the binding of the action the game's controller layout puts on the button.
+    w.pad_live = false;
+    const std::pair<MagPadButton, const char*> foot[] = {{MagPadButton::L1, "RMB"}, {MagPadButton::R1, "LMB"},
+        {MagPadButton::L2, "G"}, {MagPadButton::R2, "Q"}, {MagPadButton::L3, "SHIFT"}, {MagPadButton::R3, "F"},
+        {MagPadButton::Cross, "SPACE"}, {MagPadButton::Circle, "E"}, {MagPadButton::Square, "R"}, {MagPadButton::Triangle, "C"}};
+    for (auto [button, key] : foot) require(mag_game_prompts_button_key(button, s) == key, "on foot: the bound key");
+    rebind(w.profile, 0xc07aa75a /* aim */, {InputSource::Keyboard, 229});
+    require(mag_game_prompts_button_key(MagPadButton::L1, s) == "RSHIFT", "a rebinding is followed");
+    require(*mag_game_prompts_rewrite("L1", s) == "RSHI", "long names are shortened for the box");
+    require(*mag_game_prompts_rewrite("R1", s) == "LMB", "a whole button text is replaced");
+    require(!mag_game_prompts_rewrite("L1 R1", s), "other texts are not button names");
+    std::erase_if(w.profile.bindings, [](const auto& b) { return b.action == 0xdb59e9a9 && b.control.source != InputSource::Controller; });
+    require(mag_game_prompts_button_key(MagPadButton::R3, s).empty() && !mag_game_prompts_rewrite("R3", s), "no key: unchanged");
+    require(mag_game_prompts_compact("SPACE") == "SPACE" && mag_game_prompts_compact("NUMENT") == "NUME" &&
+            mag_game_prompts_compact("Q") == "Q", "compact labels");
+}
+
 int main(int argc, char** argv) {
     try {
         const std::string which = argc > 1 ? argv[1] : "";
         if (which == "device") device();
+        else if (which == "buttons") buttons();
         else if (which == "labels") labels();
         else if (which == "resolve") resolve();
         else if (which == "rewrite") rewrite();

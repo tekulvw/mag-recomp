@@ -108,6 +108,22 @@ static NSString *keyHash(NSString *p) {
  if(be(s,4)==1&&va<=0x32A660&&len>=16&&0x32A670-va<=len){uint64_t at=file+0x32A660-va;if(at>d.length||d.length-at<16)fail(@"Invalid key segment");return hashData([d subdataWithRange:NSMakeRange(at,16)]);}}
  fail(@"Launcher key segment unavailable");return nil;
 }
+// After the game exits: the note the game's ticket refill left when a sign-in was refused or
+// expired and never recovered (src/player_portal.h), shown once; automation only logs it.
+static void signInNotice(NSString *owned,NSString *logs,BOOL quiet) {
+ if(!owned)return;
+ NSString *path=[owned stringByAppendingPathComponent:@"sign-in-notice.txt"];
+ NSString *text=[[NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil]
+                 stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+ [NSFileManager.defaultManager removeItemAtPath:path error:nil];
+ if(!text.length)return;
+ [[text stringByAppendingString:@"\n"] writeToFile:[logs stringByAppendingPathComponent:@"sign-in-notice.txt"] atomically:YES encoding:NSUTF8StringEncoding error:nil];
+ fprintf(stderr,"MAG account: %s\n",text.UTF8String);
+ if(quiet)return;
+ [NSApplication sharedApplication];
+ NSAlert *alert=[NSAlert new];alert.messageText=@"MAG account";alert.informativeText=text;[alert addButtonWithTitle:@"OK"];
+ [NSApp activateIgnoringOtherApps:YES];[alert runModal];
+}
 static int run(NSString *binary,NSString *elf,NSString *cwd,NSDictionary *env,NSString *log) {
  NSFileManager *fm=NSFileManager.defaultManager;[fm createFileAtPath:log contents:nil attributes:@{NSFilePosixPermissions:@0600}];
  NSFileHandle *f=[NSFileHandle fileHandleForWritingAtPath:log];NSTask *t=[NSTask new];t.executableURL=[NSURL fileURLWithPath:binary];t.arguments=@[elf];t.currentDirectoryURL=[NSURL fileURLWithPath:cwd];t.environment=env;t.standardOutput=f;t.standardError=f;
@@ -189,7 +205,7 @@ int main(int argc,char **argv) { @autoreleasepool {
  if(showSettings)env[@"MAG_PLAYER_SHOW_SETTINGS"]=@"1";else if(skipSetup)env[@"MAG_SKIP_SETUP"]=@"1";
  int result=run(launcher,launcherElf,logs,env,[logs stringByAppendingPathComponent:@"launcher.log"]);
  report.session.launcher_exit=result;
- if(result!=90)return result;
+ if(result!=90){signInNotice(ownedOverlay,logs,skipSetup);return result;}
  NSDictionary *expected=@{@"version":@1,@"token":token,@"guest_path":@"/dev_bdvd/PS3_GAME/USRDIR/bin/mage_g.self",@"kind":@"mage_g"};
  if(![json(request,4096) isEqual:expected])fail(@"Engine handoff request identity mismatch");
  check(engine,er[@"binary_sha256"]);check(engineElf,er[@"elf_sha256"]);check(engineSelf,m[@"engine_self_sha256"]);
@@ -197,6 +213,7 @@ int main(int argc,char **argv) { @autoreleasepool {
  [env removeObjectForKey:@"MAG_PLAYER_SETUP"];[env removeObjectForKey:@"MAG_PLAYER_SHOW_SETTINGS"];[env removeObjectForKey:@"MAG_SKIP_SETUP"];
  env[@"PS3_BOOT_PATH"]=@"/dev_bdvd/PS3_GAME/USRDIR/bin/mage_g.self";
  report.session.engine_exit=run(engine,engineElf,logs,env,[logs stringByAppendingPathComponent:@"engine.log"]);
+ signInNotice(ownedOverlay,logs,skipSetup);
  return (int)report.session.engine_exit;
  } @catch(NSException *e) {
  if(e.reason)report.session.launch_error=e.reason.UTF8String;
