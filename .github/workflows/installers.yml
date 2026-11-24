@@ -8,20 +8,16 @@ name: Installers
 # to rebuild and attach installers for an existing release: the source kit is
 # built from that tag's source, with this commit's installer tooling.
 # Docs-only changes build nothing that ships; skip them (CI capacity is limited).
-# Pull requests build installers only when an installer input changes: the
-# installer itself, its CI scripts, the pins, the tools it runs and the build
-# recipe. Every push to main still builds everything, so anything a filtered
-# pull request misses is caught there.
+# Pull requests build installers only when the `changes` job finds an installer
+# input among their changes (the `installers` list in tools/ci_changes.py: the
+# installer itself, its CI scripts, the pins, the tools it runs, the build
+# recipe, the MAG sources the kit packs and compiles, and this file). A change
+# that reaches only src/ skips the Linux managed toolchain build, which reads no
+# MAG source (`installer_toolchain`). Every push to main still builds
+# everything, so anything a filtered pull request misses is caught there.
 on:
   pull_request:
-    paths:
-      - 'installer/**'
-      - '.github/scripts/**'
-      - '.github/workflows/installers.yml'
-      - 'profiles/**'
-      - 'tools/**'
-      - 'CMakeLists.txt'
-      - 'cmake/**'
+    paths-ignore: ['docs/**']
   push:
     branches: [main]
     paths-ignore: ['docs/**', '**/*.md']
@@ -54,10 +50,29 @@ env:
   TOOLING_REF: ${{ github.sha }}
 
 jobs:
+  changes:
+    # Pushes, releases and manual runs report every output true.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      installers: ${{ steps.diff.outputs.installers }}
+      installer_toolchain: ${{ steps.diff.outputs.installer_toolchain }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          # The pull request merge commit and its base parent.
+          fetch-depth: 2
+          persist-credentials: false
+      - id: diff
+        run: python3 tools/ci_changes.py --base HEAD^1 --head HEAD
+
   kit:
     # Experimental rendering is validated by its own source/ABI/shader jobs.
     # Installer qualification resumes after proven code is reviewed for main.
-    if: github.event_name != 'pull_request' || github.head_ref != 'codex/render-frontend-integration'
+    needs: changes
+    if: >-
+      needs.changes.outputs.installers == 'true' &&
+      (github.event_name != 'pull_request' || github.head_ref != 'codex/render-frontend-integration')
     name: Source kit
     runs-on: mag-recomp
     timeout-minutes: 20
@@ -260,7 +275,7 @@ jobs:
 
   linux:
     name: Linux installer
-    needs: kit
+    needs: [changes, kit]
     runs-on: mag-recomp
     timeout-minutes: 90
     steps:
@@ -296,6 +311,8 @@ jobs:
       - name: Pinned runtime and PPU lifter
         run: python tools/fetch_ps3recomp.py --role runtime --role lifter-ppu
       - name: Managed Linux downloads, dependency builds and Vulkan runtime (no game data)
+        # Reads the installer, pins and tools but no MAG source: skipped for src/-only pull requests.
+        if: needs.changes.outputs.installer_toolchain == 'true'
         run: python .github/scripts/linux_toolchain_smoke.py --runtime-sdk local/ps3recomp-runtime --work "$RUNNER_TEMP/linux-managed"
       - name: Compile Linux runtime, MAG sources and supervisor (synthetic inputs)
         run: python .github/scripts/linux_native_check.py --runtime-sdk local/ps3recomp-runtime --ppu-sdk local/ps3recomp-lifter-dfa7073 --work "$RUNNER_TEMP/linux-native"
