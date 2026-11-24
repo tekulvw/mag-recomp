@@ -100,7 +100,7 @@ toolchain. It sets no runtime switch. `MAG_GAME_CONTROLS=0` in the installer's e
 without it; in the engine's environment it turns a built adapter off. Its evidence and what is not
 yet measured are recorded in native-controls.md, section 10. With the adapter, keyboard and mouse
 players see their bound keys in the game's button prompts (native-controls.md, section 12);
-`MAG_GAME_PROMPTS=0` in the engine's environment keeps the game's PlayStation icons. That feature
+`MAG_GAME_PROMPTS=0` in the engine's environment keeps the game's PlayStation icons, as text placeholders and as the menu icon pictures the prompts replace through the runtime's texture override hook (section 12.5). That feature
 sets no runtime switch either.
 
 ## Packaged players and launchers
