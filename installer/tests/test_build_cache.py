@@ -241,7 +241,7 @@ class CompileCacheTests(unittest.TestCase):
             env = compile_cache.environment(config, 'f' * 64, Path(temp) / 'stats.log')
             self.assertEqual(env['CCACHE_COMPILERCHECK'], 'string:' + 'f' * 64)
             self.assertEqual(env['CCACHE_BASEDIR'], '/b')
-            self.assertEqual(Path(env['CCACHE_CONFIGPATH']).read_text(), f'max_size = {6 * GIB}\n')
+            self.assertEqual(Path(env['CCACHE_CONFIGPATH']).read_text(), f'max_size = {6 * 1024}MiB\n')
             self.assertEqual(Path(env['CCACHE_DIR']), Path(temp) / 'build-cache/objects')
 
     def test_compiler_identity_follows_the_real_compiler_file_and_version(self):

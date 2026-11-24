@@ -86,13 +86,22 @@ def check(cmake, ninja, ccache, compilers, env, identity, work):
 
 
 def diagnose(ccache, env, folder, stats):
-    """What ccache did when its stats log stayed empty: its counters and one compile command."""
+    """What ccache did when its stats log shows no cacheable compilation: its counters, and its
+    own log of one compile command run again."""
     print(f'stats log {stats}: exists={stats.exists()} size={stats.stat().st_size if stats.exists() else 0}', flush=True)
-    subprocess.run([str(ccache), '--show-stats', '-vv'], env=env)
-    subprocess.run([str(ccache), '--show-config'], env=env)
-    commands = subprocess.run(['ninja', '-C', str(folder), '-t', 'commands'], env=env, capture_output=True, text=True)
-    lines = [line for line in commands.stdout.splitlines() if line.strip()]
-    print('first command:', lines[0][:600] if lines else commands.stderr[-600:], flush=True)
+    if stats.exists():
+        print('stats log head:', stats.read_text(errors='replace')[:400], flush=True)
+    subprocess.run([str(ccache), '--show-stats', '-v'], env=env)
+    ninja = shutil.which('ninja', path=env.get('PATH') or env.get('Path'))
+    commands = subprocess.run([ninja or 'ninja', '-C', str(folder), '-t', 'commands'], env=env, capture_output=True, text=True)
+    compile = next((line for line in commands.stdout.splitlines() if 'ccache' in line and ' -c ' in line), None)
+    print('compile command:', (compile or commands.stderr)[:1500], flush=True)
+    if compile:
+        log = folder.with_name(folder.name + '-ccache-debug.log')
+        subprocess.run(compile, shell=True, cwd=folder, env={**env, 'CCACHE_LOGFILE': str(log)})
+        if log.exists():
+            lines = log.read_text(errors='replace').splitlines()
+            print('ccache log:', *[line for line in lines if 'nsupported' in line or 'too hard' in line.lower()][:20] or lines[-30:], sep='\n')
 
 
 def rebuild_hits(cmake, ccache, env, identity, cache_root, base_dir, configure, build_args, folders, minimum=0.95):

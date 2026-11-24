@@ -142,7 +142,8 @@ def environment(config, identity, stats_log):
     cache = BuildCache(config['build_cache']['root'])
     directory = cache.objects_directory()
     configuration = directory / 'ccache.conf'
-    text = f'max_size = {cache.objects_max_bytes()}\n'
+    # ccache reads a bare number as GiB.
+    text = f'max_size = {cache.objects_max_bytes() // (1024 * 1024)}MiB\n'
     if not configuration.is_file() or configuration.read_text(encoding='utf-8') != text:
         configuration.write_text(text, encoding='utf-8')
     return {'CCACHE_DIR': str(directory), 'CCACHE_CONFIGPATH': str(configuration),
