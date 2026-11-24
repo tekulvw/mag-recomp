@@ -456,11 +456,13 @@ def install(root, source, output, cache, token=None, events=None, retry=False):
     if windows:
         check_windows_location(output, WINDOWS_BUILD_RESERVE)
     reused = {'tools': 0.0, 'lift': 0.0, 'compile': 0.0}
+    reused_unestimated = [0]
     def counted(event):
         if event.get('event') == 'build-cache-hit' and event.get('kind') in reused:
             reused[event['kind']] += event.get('saved_seconds', 0) or 0
         elif event.get('event') == 'compile-cache':
             reused['compile'] += event.get('saved_seconds', 0) or 0
+            reused_unestimated[0] += event.get('unestimated_hits', 0) or 0
         events(event)
     cache_store = build_caches.BuildCache.for_cache(cache, token, counted) if reuse else None
     with _exclusive_lock(lock, retry, events), (cache_store.session() if cache_store else nullcontext()):
@@ -556,11 +558,14 @@ def install(root, source, output, cache, token=None, events=None, retry=False):
             token.check()
             if cache_store:
                 saved = sum(reused.values())
+                unestimated = reused_unestimated[0]
                 summary = {'event': 'build-cache-summary', **{k + '_saved_seconds': round(v, 1) for k, v in reused.items()},
                            'message': ('Build cache: this build reused earlier work, saving about '
                                        f'{build_caches.duration_text(saved)} (tools {build_caches.duration_text(reused["tools"])}, '
                                        f'generated sources {build_caches.duration_text(reused["lift"])}, compiler time '
-                                       f'{build_caches.duration_text(reused["compile"])}).' if saved >= 1 else
+                                       f'{build_caches.duration_text(reused["compile"])}'
+                                       + (', plus compilations reused without a recorded time' if unestimated else '') + ').'
+                                       if saved >= 1 or unestimated else
                                        'Build cache: nothing was reused this time; this build\'s work is kept for later builds on this computer.')}
                 events(summary)
                 status['build_cache'] = {k: round(v, 1) for k, v in reused.items()}

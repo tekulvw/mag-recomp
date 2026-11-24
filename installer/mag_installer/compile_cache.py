@@ -277,4 +277,6 @@ def message(summary):
             f'({summary["hit_rate"]:.0f}%)')
     if summary['saved_seconds'] >= 1:
         text += f', about {duration_text(summary["saved_seconds"])} of compiler time saved'
+    if summary.get('unestimated_hits'):
+        text += f' ({summary["unestimated_hits"]} reused without a recorded compile time, not counted)'
     return text + f'; the stage took {duration_text(summary["seconds"])}.'
