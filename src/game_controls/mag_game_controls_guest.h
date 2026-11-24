@@ -17,6 +17,10 @@ constexpr uint32_t InputManager = 0x01FB8E60, UiManager = 0x01FB82C0;
 constexpr uint32_t PauseState = 0x01DC8100, ProcessingState = 0x01DB3B18;
 constexpr uint32_t UiHandler = UiManager + 0x28;
 constexpr uint32_t BaseHandlerVtable = 0x01A57350;
+// The movement state a local player has before the first spawn of a match: the pre-battle lobby
+// and the first deploy screen (docs/native-controls.md, 2.2). Never seen once the player spawned.
+constexpr uint8_t PreSpawnStateId = 0;
+constexpr uint32_t PreSpawnStateVtable = 0x01A6CE38;
 constexpr uint32_t BaseUpdateEntry = 0x003A2C84, SharedToc = 0x01B35B20;
 constexpr uint32_t CameraVtable = 0x01A644E0;
 constexpr uint32_t CameraTarget = 0x22C, CameraAssistRecord = 0x1A0;
@@ -66,6 +70,7 @@ struct MagGuestOwner {
     uint32_t actor{}, logic{}, controller{}, handler{}, state{};
     uint8_t state_id{};
     bool enabled{}, mouse_supported{};
+    bool pre_spawn{};  // the movement state is the one before the first spawn (lobby, first deploy)
     MagMouseAimState aim = MagMouseAimState::Basic;
     uint32_t handle() const { return generation << 16 | index; }
     friend bool operator==(const MagGuestOwner&, const MagGuestOwner&) = default;
