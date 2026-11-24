@@ -31,6 +31,8 @@ const char* fixed_label(uint32_t usage) {
 std::string mag_prompt_fallback_label(PhysicalControl control) {
     if (control.source == InputSource::Mouse) {
         static constexpr std::array<const char*, 5> names{"LMB", "RMB", "MMB", "M4", "M5"};
+        if (control.code == MouseWheelUp) return "WHEEL UP";
+        if (control.code == MouseWheelDown) return "WHEEL DN";
         return control.code < names.size() ? names[control.code] : "M" + std::to_string(control.code + 1);
     }
     if (control.source != InputSource::Keyboard) return {};

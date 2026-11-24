@@ -117,6 +117,10 @@ int mag_player_settings_prepare(void) { @autoreleasepool {
                     // ticket setting its init turns on, and the runtime returns this file's bytes.
                     setenv("PS3RECOMP_NP_LOCAL_TICKET","1",1);
                     setenv("PS3RECOMP_NP_TICKET_FILE",ticket.fileSystemRepresentation,1);
+                    // A linked account's ticket file serves one sign-in each; MAGPortalLaunchTicket's
+                    // refill puts a fresh one back. A ticket_file setting is a fixed file, read each time.
+                    if([ticket isEqual:portalTicket])setenv("PS3RECOMP_NP_TICKET_REFILL","1",1);
+                    else unsetenv("PS3RECOMP_NP_TICKET_REFILL");
                     if(portalTicket&&!launcherPhase){
                         // Friends and presence while the engine runs (docs/player-social.md): the
                         // game process holds the account link on macOS, so the portal worker runs

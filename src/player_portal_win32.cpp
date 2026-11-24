@@ -8,6 +8,7 @@
 #include <windows.h>
 #include <shellapi.h>
 #include <atomic>
+#include <cstdio>
 #include <fstream>
 #include <memory>
 #include <sstream>
@@ -276,19 +277,38 @@ extern "C" int mag_portal_unlink(const wchar_t *settings_file, wchar_t *message,
     return 1;
 }
 
+// The phase's single-use ticket file, kept filled while the game runs (player_portal.h).
+static std::unique_ptr<TicketRefill> ticket_refill;
+
+extern "C" int mag_portal_take_notice(const wchar_t *ticket_file, wchar_t *message, int capacity) {
+    ticket_refill.reset();
+    copy_out("", message, capacity);
+    std::string text;
+    if (!take_sign_in_notice(fs::path(ticket_file), text)) return 0;
+    copy_out(text, message, capacity);
+    return 1;
+}
+
 extern "C" int mag_portal_phase(const wchar_t *settings_file, const wchar_t *server_choice, const wchar_t *ticket_file, int launcher,
                                 wchar_t *name, int name_capacity, wchar_t *message, int message_capacity) {
+    ticket_refill.reset();  // a new phase fetches its own ticket below
     copy_out("", name, name_capacity);
     copy_out("", message, message_capacity);
     mag::PortableSettings settings;
     if (!launch_settings(settings_file, server_choice, settings)) return MAG_PORTAL_NONE;
     const std::string portal = portal_of(settings);
     if (portal.empty() || !settings.ticket_file.empty()) return MAG_PORTAL_NONE;  // a set ticket_file wins
+    static const char *relink = "Link it again in MAG Settings (Account), or run MAG.exe --link.";
     auto transport = make_platform_transport();
     auto result = prepare_launch_ticket(*transport, link_path(fs::path(settings_file)), fs::path(ticket_file), portal,
-                                        settings.server_address, "Run MAG.exe --link to link it again.");
+                                        settings.server_address, relink);
     switch (result.state) {
     case LaunchTicket::State::Ready:
+        // Each sign-in takes a fresh ticket from the file, which the supervisor keeps filled from
+        // here; the device token never enters the game process.
+        ticket_refill = start_ticket_refill(make_platform_transport, link_path(fs::path(settings_file)), fs::path(ticket_file),
+                                            portal, settings.server_address, relink, result.expires_at,
+                                            [](const std::string &line) { std::fprintf(stderr, "MAG account: %s\n", line.c_str()); });
         if (launcher && result.player_name != settings.player_name) {
             copy_out(result.player_name, name, name_capacity);
             copy_out("You play as " + result.player_name + ", the name on your linked account" +

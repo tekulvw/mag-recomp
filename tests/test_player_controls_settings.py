@@ -38,7 +38,7 @@ class ControlsSettingsTests(unittest.TestCase):
             subprocess.run(['xcrun', 'clang', '-fobjc-arc', '-Wall', '-Wextra', '-Werror', '-Wno-unused-parameter', '-I'+str(ROOT/'src'), '-c', str(ROOT/'src'/f'{source}.m'), '-o', str(obj)], check=True)
             objects.append(str(obj))
         binary = self.root/'panel'
-        subprocess.run([self.compiler, '-std=c++20', '-fobjc-arc', '-Wall', '-Wextra', '-Werror', '-Wno-unused-parameter', '-pthread', '-I'+str(ROOT/'src'), str(ROOT/'tests/player_controls_panel.mm'), str(ROOT/'src/player_controls_macos.mm'), *self.common, *objects, str(self.library), *self.link, '-framework', 'AppKit', '-framework', 'QuartzCore', '-framework', 'GameController', '-o', str(binary)], check=True)
+        subprocess.run([self.compiler, '-std=c++20', '-fobjc-arc', '-Wall', '-Wextra', '-Werror', '-Wno-unused-parameter', '-pthread', '-I'+str(ROOT/'src'), str(ROOT/'tests/player_controls_panel.mm'), str(ROOT/'src/player_controls_macos.mm'), *self.common, str(ROOT/'src/player_settings_debug.cpp'), *objects, str(self.library), *self.link, '-framework', 'AppKit', '-framework', 'QuartzCore', '-framework', 'GameController', '-o', str(binary)], check=True)
         with tempfile.TemporaryDirectory() as folder:
             result = subprocess.run([str(binary), folder], capture_output=True, text=True, timeout=20)
             self.assertEqual(result.returncode, 0, result.stdout+result.stderr)

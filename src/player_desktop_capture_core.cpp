@@ -1,5 +1,6 @@
 // Portable desktop capture state machine; the behaviour is described in player_desktop_capture_core.h.
 #include "player_desktop_capture_core.h"
+#include <algorithm>
 namespace mag {
 namespace {
 constexpr uint32_t kFirstKey = 4, kLastKey = 231;   // USB HID keyboard usages the catalog binds
@@ -156,6 +157,17 @@ void DesktopCaptureCore::mouse_button(uint32_t index, uint64_t device, bool down
         return;
     }
     sink_.push_event({{InputSource::Mouse, index}, down, time_ns, device});
+}
+
+void DesktopCaptureCore::mouse_wheel(int steps, uint64_t device, uint64_t time_ns, DesktopCaptureGate::Stamp stamp) {
+    if (!installed_ || !ready_ || !steps || !gate_.accepts(stamp)) return;
+    const uint32_t code = steps > 0 ? MouseWheelUp : MouseWheelDown;
+    const int count = std::min(steps > 0 ? steps : -steps, MaxWheelSteps);
+    for (int i = 0; i < count; ++i) {
+        // A step has no duration: a press and its release one nanosecond later.
+        sink_.push_event({{InputSource::Mouse, code}, true, time_ns + 2 * uint64_t(i), device});
+        sink_.push_event({{InputSource::Mouse, code}, false, time_ns + 2 * uint64_t(i) + 1, device});
+    }
 }
 
 bool DesktopCaptureCore::mouse_motion(double dx, double dy, DesktopCaptureGate::Stamp stamp) {

@@ -189,6 +189,10 @@ int main(int argc,char**argv) {
  fprintf(f,"{\"settings_path\":\"%s\",\"overlay_root\":\"%s\",\"setup\":%s,\"show\":%s,\"skip\":%s,\"logs\":\"%s\",\"movie\":\"%s\",\"gamedata\":\"%s\",\"saves\":%d,\"session_dir\":\"%s\",\"report_request\":\"%s\"}",
   path,overlay,getenv("MAG_PLAYER_SETUP")?"true":"false",getenv("MAG_PLAYER_SHOW_SETTINGS")?"true":"false",getenv("MAG_SKIP_SETUP")?"true":"false",getenv("MAG_PLAYER_LOGS_ROOT")?getenv("MAG_PLAYER_LOGS_ROOT"):"",movie?movie:"",gamedata,saves,
   session?session:"",request?request:"");fclose(f);
+ /* A test asks (through the saves folder) for the note a refused sign-in leaves beside the ticket. */
+ if(!launcher){char ask[4096],note[4096];snprintf(ask,sizeof ask,"%s/notice-request.txt",gamedata);
+  FILE *in=fopen(ask,"r");if(in){snprintf(note,sizeof note,"%s/sign-in-notice.txt",overlay);FILE *out=fopen(note,"w");
+   for(int c;(c=fgetc(in))!=EOF;)fputc(c,out);fclose(out);fclose(in);remove(ask);}}
  if(!launcher)return 17;
  f=fopen(getenv("MAG_HANDOFF_REQUEST"),"w");if(!f)return 63;
  fprintf(f,"{\"version\":1,\"token\":\"%s\",\"guest_path\":\"/dev_bdvd/PS3_GAME/USRDIR/bin/mage_g.self\",\"kind\":\"mage_g\"}",getenv("MAG_HANDOFF_TOKEN"));fclose(f);
@@ -254,6 +258,17 @@ int main(int argc,char**argv) {
                 skipped=json.loads((launch_dir/'launcher-env.json').read_text())
                 self.assertTrue(skipped['skip']);self.assertFalse(skipped['show'])
                 self.assertFalse(json.loads((launch_dir/'engine-env.json').read_text())['skip'])
+            # A sign-in refused during the session is said after the game exits (here, automation:
+            # logged and on stderr, no dialog), and only once.
+            note='Your MAG sign-in expired (The account portal is busy). Restart MAG to sign in again.'
+            (mag/'home/gamedata/notice-request.txt').write_text(note+'\n')
+            seen=set((mag/'logs').glob('launch-*'))
+            told=subprocess.run([str(app/'Contents/MacOS/MAG'),'--no-prompt'],capture_output=True,text=True,timeout=15)
+            self.assertEqual(told.returncode,17,told.stderr);self.assertIn('MAG account: '+note,told.stderr)
+            launch_dir=next(p for p in (mag/'logs').glob('launch-*') if p not in seen)
+            self.assertEqual((launch_dir/'sign-in-notice.txt').read_text(),note+'\n')
+            quiet=subprocess.run([str(app/'Contents/MacOS/MAG'),'--no-prompt'],capture_output=True,text=True,timeout=15)
+            self.assertEqual(quiet.returncode,17,quiet.stderr);self.assertNotIn('MAG account:',quiet.stderr)
             self.assertEqual(before['settings_path'],after['settings_path'])
             self.assertTrue(before['settings_path'].endswith('/Library/Application Support/MAG/settings.json'))
             self.assertEqual(before['overlay_root'],after['overlay_root'])
@@ -265,7 +280,7 @@ int main(int argc,char**argv) {
             self.assertEqual(relocated.returncode,17,relocated.stderr)
             third=max((moved/'logs').glob('launch-*'),key=lambda p:p.stat().st_mtime_ns)
             env=json.loads((third/'engine-env.json').read_text())
-            self.assertEqual(Path(env['gamedata']).resolve(),(moved/'home/gamedata').resolve());self.assertEqual(env['saves'],5)
+            self.assertEqual(Path(env['gamedata']).resolve(),(moved/'home/gamedata').resolve());self.assertEqual(env['saves'],7)
             # Without its game files it says so instead of starting.
             shutil.rmtree(moved/'game')
             missing=subprocess.run([str(moved/'MAG.app/Contents/MacOS/MAG')],capture_output=True,text=True,timeout=15)
