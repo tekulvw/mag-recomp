@@ -1,5 +1,52 @@
 # Changelog
 
+## [0.8.0](https://github.com/tekulvw/mag-recomp/compare/v0.7.0...v0.8.0) (2026-11-24)
+
+
+### Features
+
+* **controls:** name the respawn and scope zoom actions so their prompts show keys ([#270](https://github.com/tekulvw/mag-recomp/issues/270)) ([3f9b1ba](https://github.com/tekulvw/mag-recomp/commit/3f9b1ba9eedad0eb2600f254fce04f5cb57cb0d8))
+* **controls:** read Windows controllers through SDL2 so PlayStation pads work ([#277](https://github.com/tekulvw/mag-recomp/issues/277)) ([0c975e2](https://github.com/tekulvw/mag-recomp/commit/0c975e2d10cb0fec1c332908d5582b1bf1ebd8ef))
+* **controls:** show key caps for the menus' face-button icons on keyboard and mouse ([#271](https://github.com/tekulvw/mag-recomp/issues/271)) ([ae18ba5](https://github.com/tekulvw/mag-recomp/commit/ae18ba51cb1fe69d03c40e0f63aaf42910b9faaf))
+* **controls:** trace Linux mouse look with the Windows summary ([#251](https://github.com/tekulvw/mag-recomp/issues/251)) ([05b29cb](https://github.com/tekulvw/mag-recomp/commit/05b29cb9a07db8d0af677537b7893fd069913b79))
+* **controls:** zoom a scope with the mouse wheel ([#272](https://github.com/tekulvw/mag-recomp/issues/272)) ([236ae1d](https://github.com/tekulvw/mag-recomp/commit/236ae1de8e53d8f2d606ce98d1790151ca6570ac))
+* **engine:** record frame pacing and audio timing in a session summary ([#249](https://github.com/tekulvw/mag-recomp/issues/249)) ([5e93eaa](https://github.com/tekulvw/mag-recomp/commit/5e93eaa5ee63e76be7e57049290a24d595eff8d2))
+* **player:** add a Debug page to MAG Settings with the controls trace and the logs folder ([#261](https://github.com/tekulvw/mag-recomp/issues/261)) ([d2fd8a8](https://github.com/tekulvw/mag-recomp/commit/d2fd8a852ac04a93834674933f70e5dcf5dd1713))
+* **player:** let players describe the problem when they press Send report ([#269](https://github.com/tekulvw/mag-recomp/issues/269)) ([ac2c28f](https://github.com/tekulvw/mag-recomp/commit/ac2c28ff94ddb158b62da74db0d413619cd59874))
+* **player:** note a sign-in the game server refused ([#275](https://github.com/tekulvw/mag-recomp/issues/275)) ([1334c9e](https://github.com/tekulvw/mag-recomp/commit/1334c9ecf1eb5644030b64db5af027c39b776997))
+* **player:** send performance and error reports from the supervisors ([#255](https://github.com/tekulvw/mag-recomp/issues/255)) ([4dbadca](https://github.com/tekulvw/mag-recomp/commit/4dbadcaa77e653bc86d83aae833fd5bd96432fbf))
+* **player:** show the portal's friends and presence in the game ([#266](https://github.com/tekulvw/mag-recomp/issues/266)) ([5add065](https://github.com/tekulvw/mag-recomp/commit/5add065a9485b9ff3b9f0308bc91b7d37461e704))
+* **render:** rendering resolution on the Vulkan renderer (Windows and Linux) ([#280](https://github.com/tekulvw/mag-recomp/issues/280)) ([5cd7d92](https://github.com/tekulvw/mag-recomp/commit/5cd7d926dc0ba89b5cc1ca704e6bca529e857650))
+
+
+### Bug Fixes
+
+* **controls:** give in-match menus that hold look the keyboard pad ([#284](https://github.com/tekulvw/mag-recomp/issues/284)) ([6c77a0e](https://github.com/tekulvw/mag-recomp/commit/6c77a0e36a3640ca341fe9c2e54bb991df6c0791))
+* **controls:** keep Escape from closing the Linux game window before the first match ([#263](https://github.com/tekulvw/mag-recomp/issues/263)) ([a10e6ee](https://github.com/tekulvw/mag-recomp/commit/a10e6ee0d2153c9c3ce97c031d0044e856dc5c76))
+* **controls:** keep keyboard and mouse working on Windows with a controller attached ([#286](https://github.com/tekulvw/mag-recomp/issues/286)) ([1adfe1e](https://github.com/tekulvw/mag-recomp/commit/1adfe1e4dc0b4b991f851e3b17f413811d5e69a5))
+* **controls:** keep the Linux mouse lock on Wayland when the window is away from the origin ([#250](https://github.com/tekulvw/mag-recomp/issues/250)) ([8fcee62](https://github.com/tekulvw/mag-recomp/commit/8fcee62f2222f4e2ed97e0f1ba65bbb20a58a674))
+* **controls:** never let Escape close the game window ([#262](https://github.com/tekulvw/mag-recomp/issues/262)) ([0a069f1](https://github.com/tekulvw/mag-recomp/commit/0a069f1e8985630bf216f0d4c9e27789fd3e51df))
+* **controls:** stop inverting vertical mouse look on Windows and Linux ([#259](https://github.com/tekulvw/mag-recomp/issues/259)) ([f80082d](https://github.com/tekulvw/mag-recomp/commit/f80082d8866f0fe4d5acc04697b37122c7bf6704))
+* **controls:** treat the pre-battle lobby and first deploy screen as menus ([#264](https://github.com/tekulvw/mag-recomp/issues/264)) ([2b2477a](https://github.com/tekulvw/mag-recomp/commit/2b2477a97ed575f85ecf80ac9031a65782cfea8c))
+* **installer:** package the sign-in refusal header with the supervisors ([#279](https://github.com/tekulvw/mag-recomp/issues/279)) ([5b3b9e5](https://github.com/tekulvw/mag-recomp/commit/5b3b9e5e52028dc5f091b3cc313f81ae723f98ac))
+* **player:** bring the Linux settings window forward with the keyboard when it opens ([#254](https://github.com/tekulvw/mag-recomp/issues/254)) ([fe9c59e](https://github.com/tekulvw/mag-recomp/commit/fe9c59e293f40df91947691642a536a73c6cde71))
+* **player:** give every sign-in of a linked account a fresh ticket ([#265](https://github.com/tekulvw/mag-recomp/issues/265)) ([b6c8357](https://github.com/tekulvw/mag-recomp/commit/b6c8357a0c9f79e9f15cb01ad3a204021cda99df))
+* **player:** keep the link-again note when the last ticket then expires ([#282](https://github.com/tekulvw/mag-recomp/issues/282)) ([f0a8b69](https://github.com/tekulvw/mag-recomp/commit/f0a8b692f0d7bc211803ada21b2c08f186c09e93))
+* **player:** let the Linux game and settings window use the desktop's input method ([#253](https://github.com/tekulvw/mag-recomp/issues/253)) ([c5a28c5](https://github.com/tekulvw/mag-recomp/commit/c5a28c5583bc97d8eaa0628f835bf03de726b8c5))
+* **player:** show the report id after Send report, send counts as numbers, expire old reports ([#260](https://github.com/tekulvw/mag-recomp/issues/260)) ([b0a7f41](https://github.com/tekulvw/mag-recomp/commit/b0a7f4179bbb30e99bca34aeae02d670f55364fe))
+* **sdk:** pin runtime-2026.11.23-audiostats so reports carry audio timing ([#258](https://github.com/tekulvw/mag-recomp/issues/258)) ([8622f39](https://github.com/tekulvw/mag-recomp/commit/8622f39a91393d8d00fbfa7c3a6dec1148095675))
+* **sdk:** pin runtime-2026.11.23-sdlpad for SDL2 controllers on Windows ([#276](https://github.com/tekulvw/mag-recomp/issues/276)) ([b8a686f](https://github.com/tekulvw/mag-recomp/commit/b8a686f2b54491afe6fb7fb3ded57a92dcfb77fe))
+
+
+### Performance
+
+* **installer:** reuse earlier builds' work through a per-user build cache ([#267](https://github.com/tekulvw/mag-recomp/issues/267)) ([21fd344](https://github.com/tekulvw/mag-recomp/commit/21fd344404251d990bb8722211f124d24bf3829f))
+
+
+### Documentation
+
+* describe performance and error reports ([#256](https://github.com/tekulvw/mag-recomp/issues/256)) ([5a0b9c2](https://github.com/tekulvw/mag-recomp/commit/5a0b9c265eb7d298e56863424e3b153673a3ccdf))
+
 ## [0.7.0](https://github.com/tekulvw/mag-recomp/compare/v0.6.0...v0.7.0) (2026-11-23)
 
 
