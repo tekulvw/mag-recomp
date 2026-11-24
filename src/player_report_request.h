@@ -6,16 +6,26 @@
 #include <cstdint>
 #include <filesystem>
 #include <string>
+#include "player_settings_text.h"
 
 namespace mag {
 // Where the marker goes: MAG_REPORT_REQUEST, or empty when this launch has no supervisor that
 // sends reports (the button is then disabled).
 std::filesystem::path report_request_path();
-// Writes {"requested_at":<unix seconds>,"report_id":"<id>"}\n to `path`, replacing any earlier
-// request, owner-only (0600 on POSIX). The supervisor sends the report under that id, so the player
-// can quote it. False with an explanation in `error` when it cannot.
+// Writes {"requested_at":<unix seconds>,"report_id":"<id>","comment":"<text>"}\n to `path`,
+// replacing any earlier request, owner-only (0600 on POSIX). The supervisor sends the report under
+// that id, so the player can quote it, with the comment (clipped by clip_report_comment; it may be
+// empty) as session.user_comment. False with an explanation in `error` when it cannot.
 bool write_report_request(const std::filesystem::path &path, int64_t unix_seconds, const std::string &report_id,
-                          std::string &error);
+                          const std::string &comment, std::string &error);
+// The comment as a report carries it: well-formed UTF-8 (anything else is dropped), no control
+// characters but newlines and tabs (CR LF and CR become LF), at most `limit` code points, cut only
+// between code points.
+std::string clip_report_comment(const std::string &utf8, size_t limit = MAG_SETTINGS_REPORT_COMMENT_LIMIT);
+// Code points in well-formed UTF-8 (what the counter shows).
+size_t report_comment_length(const std::string &utf8);
+// The counter's text, MAG_SETTINGS_REPORT_COMMENT_COUNTER ("12/1000"), counting what is sent.
+std::string report_comment_counter(const std::string &utf8);
 // A new report id: a random, lowercase UUID version 4.
 std::string new_report_request_id();
 // The status line after a request: MAG_SETTINGS_REPORT_REQUESTED with the id's first 8 characters.
@@ -25,5 +35,5 @@ std::string report_requested_status(const std::string &report_id);
 // it can be used.
 const char *report_request_blocker(bool linked);
 // The same, at report_request_path() with the current time and a new id, which `report_id` receives.
-bool request_report(std::string &report_id, std::string &error);
+bool request_report(std::string &report_id, const std::string &comment, std::string &error);
 }  // namespace mag

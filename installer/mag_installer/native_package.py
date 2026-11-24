@@ -232,6 +232,7 @@ int main(int argc,char **argv) { @autoreleasepool {
 # Sources the supervisor compiles with it: the reports (src/player_reports.h), their gzip, and the
 # portal transport that sends them with the linked account's token.
 SUPERVISOR_SOURCES = ('player_reports.h', 'player_reports.cpp', 'player_gzip.h', 'player_gzip.cpp', 'player_portal.h',
+                      'player_report_request.h', 'player_report_request.cpp', 'player_settings_text.h',
                       'player_portal.cpp', 'player_portal_macos.h', 'player_portal_macos.mm', 'player_settings_macos.h',
                       'player_settings_store.h', 'player_sign_in_refusal.h')
 

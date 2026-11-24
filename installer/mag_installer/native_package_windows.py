@@ -488,7 +488,7 @@ SUPERVISOR_SOURCES = ('player_portal.h', 'player_portal.cpp', 'player_portal_win
                       'player_social.h', 'player_social.cpp',
                       'player_portal_win32.cpp', 'player_settings_portable.h', 'player_settings_file.cpp', 'player_settings_text.h', 'player_sign_in.h',
                       'player_reports.h', 'player_reports.cpp', 'player_reports_win32.h', 'player_reports_win32.cpp',
-                      'player_gzip.h', 'player_gzip.cpp', 'player_sign_in_refusal.h')
+                      'player_gzip.h', 'player_gzip.cpp', 'player_sign_in_refusal.h', 'player_report_request.h', 'player_report_request.cpp')
 
 
 def copy_supervisor_sources(source, scratch):
