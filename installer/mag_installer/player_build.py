@@ -406,15 +406,15 @@ def install(root, source, output, cache, token=None, events=None, retry=False, j
                              'cannot move there. Move that folder aside, then Build MAG again. Existing files are preserved.')
     if legacy is not None and legacy.get('state') == 'complete':
         # A finished MAG folder of the earlier layout: no inputs, tools or compile needed.
-        with _exclusive_lock(lock, True, events):
+        with _exclusive_lock(lock, True, events, reclaim=True):
             return _migrate(root, output, build, legacy_journal(output) or legacy, token, events)
     journal_now = _read_journal(build / 'build.json') if build.is_dir() and not build.is_symlink() else None
     if journal_now is not None and journal_now.get('migration') == 'swapping' and not output.exists() and (build / 'package').is_dir():
-        with _exclusive_lock(lock, True, events):
+        with _exclusive_lock(lock, True, events, reclaim=True):
             return _finish_migration(output, build, journal_now, app_name(_manifest(root)['host']), events)
     if journal_now is not None and journal_now.get('state') == 'publishing' and output.is_dir() and not (build / 'package').exists():
         # Interrupted between moving the MAG folder into place and recording it.
-        with _exclusive_lock(lock, True, events):
+        with _exclusive_lock(lock, True, events, reclaim=True):
             name = app_name(_manifest(root)['host'])
             journal_now.update(state='complete', app=str(output / name))
             _write_json(build / 'build.json', journal_now)
@@ -469,7 +469,7 @@ def install(root, source, output, cache, token=None, events=None, retry=False, j
             reused_unestimated[0] += event.get('unestimated_hits', 0) or 0
         events(event)
     cache_store = build_caches.BuildCache.for_cache(cache, token, counted) if reuse else None
-    with _exclusive_lock(lock, retry, events), (cache_store.session() if cache_store else nullcontext()):
+    with _exclusive_lock(lock, retry, events, reclaim=True), (cache_store.session() if cache_store else nullcontext()):
         if retry:
             if not build.exists() and not build.is_symlink():
                 legacy = legacy_journal(output)

@@ -76,7 +76,8 @@ The game files are hard links where the volume allows: your game folder, the bui
 `MAG/game` then share one copy on disk, and deleting any of them leaves the others intact (a file
 edited in place changes in all of them; MAG checks its executables' identities at every start). Where
 links are not possible (another drive, a file system without them, or a read-only file on Windows),
-they are copied. A **Retry build** reuses `MAG-build`; once MAG works you may delete it to reclaim
+they are copied. A **Retry build** reuses `MAG-build`. A build that ended, or an installer that was closed or
+crashed, never blocks the next Build MAG there; only an installer that is still running does. Once MAG works you may delete `MAG-build` to reclaim
 space. The firmware module is only used to build, so it stays in `MAG-build`.
 
 Installers before this layout kept the build files inside the `MAG` folder, whose app read its game

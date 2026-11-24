@@ -81,11 +81,23 @@ def _cleanup_notice(notices, event):
         except BaseException: pass
 
 
-@contextmanager
-def _exclusive_lock(path, resume, notices=None):
-    """Keep a stable lock file and kernel-held lease; never reclaim by PID."""
-    if path.is_symlink(): raise InstallerError('Install lock is a symlink')
-    backend = 'windows-msvcrt' if os.name == 'nt' else 'posix-flock'
+# Attempts to take a reclaimable lock whose file another installer removed or replaced
+# between this installer's open and its kernel lock (see _exclusive_lock).
+RECLAIM_ATTEMPTS = 3
+
+
+class _LockPathChanged(Exception):
+    """The lock file was removed or replaced after this installer opened it."""
+
+
+def _lock_metadata(backend):
+    # The pid and time are for people reading the file; the kernel lease alone decides ownership.
+    return json.dumps({'schema_version': 1, 'locking': backend, 'pid': os.getpid(),
+                       'started': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}).encode()
+
+
+def _take_lock(path, resume, reclaim, backend):
+    """Open the lock file and take its kernel lease; returns (handle, created)."""
     flags = os.O_RDWR | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0)
     created = True
     try:
@@ -95,14 +107,18 @@ def _exclusive_lock(path, resume, notices=None):
             handle = os.open(path, flags | os.O_CREAT | os.O_EXCL, 0o600)
         except FileExistsError:
             created = False
-            if not resume:
+            if not resume and not reclaim:
                 raise InstallerError('Installation lock exists; explicit resume is required')
             # Never recreate a file that disappears between EEXIST and this open.
-            handle = os.open(path, flags)
+            try:
+                handle = os.open(path, flags)
+            except FileNotFoundError:
+                if reclaim:
+                    raise _LockPathChanged() from None
+                raise
     except OSError as exc:
         raise InstallerError('Cannot open the local installation lock') from exc
     acquired = False
-    succeeded = False
     try:
         info = os.fstat(handle)
         if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
@@ -121,22 +137,76 @@ def _exclusive_lock(path, resume, notices=None):
             except OSError as exc:
                 raise InstallerError('Another installer holds this output, or Windows locking is unavailable') from exc
         acquired = True
-        current = path.stat(follow_symlinks=False)
+        try:
+            current = path.stat(follow_symlinks=False)
+        except FileNotFoundError:
+            if reclaim:
+                raise _LockPathChanged() from None
+            raise InstallerError('Installation lock pathname changed; refusing staging access') from None
         if (current.st_dev, current.st_ino) != (info.st_dev, info.st_ino):
+            if reclaim:
+                raise _LockPathChanged()
             raise InstallerError('Installation lock pathname changed; refusing staging access')
         if not created:
             os.lseek(handle, 0, os.SEEK_SET)
             metadata = os.read(handle, 4097)
-            if not metadata or len(metadata) > 4096:
-                raise InstallerError('Empty or unrecognized legacy lock; retained for manual inspection')
-            try: recorded = json.loads(metadata)
-            except (ValueError, UnicodeError) as exc:
-                raise InstallerError('Unrecognized legacy lock; retained for manual inspection') from exc
-            if not isinstance(recorded, dict) or recorded.get('locking') != backend:
-                raise InstallerError('Legacy PID lock is not a kernel lock; retained for manual inspection')
+            # A reclaimable lock may be empty: its creator stopped between creating and recording it.
+            if not (reclaim and metadata == b''):
+                if not metadata or len(metadata) > 4096:
+                    raise InstallerError('Empty or unrecognized legacy lock; retained for manual inspection')
+                try: recorded = json.loads(metadata)
+                except (ValueError, UnicodeError) as exc:
+                    raise InstallerError('Unrecognized legacy lock; retained for manual inspection') from exc
+                if not isinstance(recorded, dict) or recorded.get('locking') != backend:
+                    raise InstallerError('Legacy PID lock is not a kernel lock; retained for manual inspection')
+        return handle, created
+    except BaseException:
+        if acquired:
+            try: _release_lock(handle, backend)
+            except BaseException: pass
+        os.close(handle)
+        raise
+
+
+def _remove_lock_file(path, handle):
+    """Remove the lock file this installer still holds; False if it is not ours to remove."""
+    try:
+        current = path.stat(follow_symlinks=False)
+        mine = os.fstat(handle)
+    except OSError:
+        return False
+    if (current.st_dev, current.st_ino) != (mine.st_dev, mine.st_ino):
+        return False
+    path.unlink()
+    return True
+
+
+@contextmanager
+def _exclusive_lock(path, resume, notices=None, reclaim=False):
+    """Hold a kernel lease on a lock file beside the output; never decide ownership by PID.
+
+    With ``reclaim`` (the player build's lock), an existing file whose lease can be taken
+    belongs to an installer that has exited, whichever way it ended, so it is taken over
+    without an explicit resume, and the file is removed when this installer is done.
+    Without it, the file stays and an existing one needs ``resume`` (the pipeline's journal).
+    """
+    if path.is_symlink(): raise InstallerError('Install lock is a symlink')
+    backend = 'windows-msvcrt' if os.name == 'nt' else 'posix-flock'
+    for attempt in range(RECLAIM_ATTEMPTS if reclaim else 1):
+        try:
+            handle, created = _take_lock(path, resume, reclaim, backend)
+            break
+        except _LockPathChanged:
+            # Another installer removed or replaced the file after this one opened it: start over.
+            continue
+    else:
+        raise InstallerError('Another installer keeps replacing this output\'s lock; try again')
+    acquired = True
+    succeeded = False
+    try:
         os.lseek(handle, 0, os.SEEK_SET)
         os.ftruncate(handle, 0)
-        metadata = json.dumps({'schema_version': 1, 'locking': backend, 'pid': os.getpid()}).encode()
+        metadata = _lock_metadata(backend)
         with os.fdopen(os.dup(handle), 'wb') as stream:
             stream.write(metadata)
             stream.flush()
@@ -145,12 +215,24 @@ def _exclusive_lock(path, resume, notices=None):
         succeeded = True
     finally:
         failures = []
+        removed = False
+        if reclaim and backend == 'posix-flock':
+            # Remove while still holding the lease: an installer that opened this file meanwhile
+            # finds, once it gets the lease, that the path no longer names it, and starts over.
+            try: removed = _remove_lock_file(path, handle)
+            except BaseException as exc: failures.append(exc)
         if acquired:
             try: _release_lock(handle, backend)
             except BaseException as exc: failures.append(exc)
         # Closing still releases the kernel lock if explicit unlock failed.
         try: os.close(handle)
         except BaseException as exc: failures.append(exc)
+        if reclaim and backend != 'posix-flock' and not removed:
+            # Windows cannot delete a file this process has open, so it is removed after closing.
+            # Another installer that opened it in between keeps it open, and Windows then refuses
+            # the deletion: that installer owns the file. Never a failure of this build.
+            try: path.unlink()
+            except OSError: pass
         for failure in failures:
             _cleanup_notice(notices, {'event': 'lock-cleanup-notice',
                                      'failure_type': type(failure).__name__,
