@@ -226,7 +226,7 @@ def _allowed_outside(path, config, prefixes=()):
 def _classify(config, workspace, output, before, after_files, traces, pins):
     """The reads beyond the key ({relative: sha256}), listings, and why the result cannot be stored."""
     reads, writes, lists, programs, prefixes = traces
-    files_before, _ = before
+    files_before, folders_before = before
     python = _norm(Path(config['python']).resolve())
     for argv in programs:
         program = Path(argv[0]).name.lower() if argv else ''
@@ -252,9 +252,11 @@ def _classify(config, workspace, output, before, after_files, traces, pins):
             if relative.split('/', 1)[0] in STATIC or any(normalized.startswith(c) for c in checkouts):
                 continue
             if relative not in files_before:
-                if relative not in after_files and not (workspace / relative).exists():
+                parent = relative.rsplit('/', 1)[0] if '/' in relative else '.'
+                if relative not in after_files and not (workspace / relative).exists() \
+                        and (parent == '.' or parent in folders_before):
                     recorded[relative] = None   # looked for and absent: its absence is an input
-                continue   # written by generation itself
+                continue   # written by generation itself (in folders it made, or left behind)
             if relative in after_files and after_files[relative] != files_before[relative]:
                 return None, None, f'generation changed {relative}, which existed before it ran'
             recorded[relative] = file_hash(workspace / relative)
@@ -262,7 +264,6 @@ def _classify(config, workspace, output, before, after_files, traces, pins):
             continue   # the build's own logs, home and bytecode, written during this build
         elif not _allowed_outside(path, config, prefixes):
             return None, None, f'generation read {path}'
-    _, folders_before = before
     for path in sorted(lists):
         normalized = _norm(path)
         if normalized.startswith(workspace_prefix) or normalized == _norm(workspace):
