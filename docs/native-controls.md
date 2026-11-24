@@ -236,9 +236,18 @@ the command screen into an on-foot Select key where Select has room for it. Load
 bindings to retired actions (`mag_game_controls_retired_actions`, the settings registration's
 `retired`) so that a revision 2 file still loads; the upgrade removes them before validation.
 
+**Catalog revision 4** adds the mouse wheel for scope zoom: wheel up and down (mouse codes 8 and
+9, `MouseWheelUp`, `MouseWheelDown`) are on-foot keys for D-pad up and down, which the game's
+scopeup and scopedown tokens use; the arrows keep working. On foot the wheel also moves anything
+else the game reads on D-pad up and down, since the adapter cannot tell a scope from the outside.
+Upgrading adds each wheel step only where the player uses it for nothing on foot and the D-pad
+direction has fewer than two keyboard or mouse controls there.
+
 Token aliases (a watched token that stands for a catalog action): `0x68C3570D` is Aim,
 `0x9716C7A1` is Crouch/prone, `0x71C8F2F0` (contaction, the held form) is Interact, `0xC6DCD89F`
-(commandscreen) is Select. Every other token stands for itself.
+(commandscreen) is Select, `0xE88EB86F` (respawn) is Start, `0xF280DD78` and `0x6BF6CA31`
+(scopeup, scopedown: scope zoom) are D-pad up and down. The census shows each watched on that
+button, so these aliases change no recognition; they let prompts such as `[Respawn]` name the key. Every other token stands for itself.
 
 Look tokens (the four look-axis channels): `0xC8A3E21D`, `0x941734A2`, `0x661CB595`, `0xC34F3A66`.
 
@@ -766,6 +775,12 @@ while Command is held and leaves the engine's window fields unfocused when captu
   such as firing or aiming, leaves it alone, so look motion around the click is kept. Motion counts only if it was
   observed while ready and relative under the current mode. An intentional mouse-mode change
   (menu versus gameplay) changes relative motion only and keeps held keys and buttons.
+- The mouse wheel's whole steps (up, away from the user, positive) are presses each followed at
+  once by a release of mouse code 8 (up) or 9 (down), at most 8 a report; they count while ready,
+  in menus as well as on foot, and nothing stays held. Fractional reports (fine-grained wheels)
+  accumulate into whole steps; a turn the other way drops the partial step. Natural ("flipped")
+  scrolling is turned back to the wheel's own direction. macOS reads GameController's scroll
+  input, SDL its wheel events, Win32 Raw Input's wheel delta (120 to a notch).
 - The left and right GUI keys are never captured.
 
 The SDL backend runs on the game window's thread. The SDK's window pump polls SDL events and then
@@ -1156,7 +1171,66 @@ The ring is the last 16 KB of the runtime's HLE window (`VM_HLE_INJECT_BASE`, 16
 the runtime owns and never gives the game, above the window's fixed SDK uses at its bottom. The
 prompts commit it at VM begin; without it they stay off and say so.
 
+### 12.5 Picture prompts
+
+Some menu prompts are pictures, not text: the movie places a face-button icon next to a plain label
+(the Square beside DELETE on character management and beside REWARDS on the deploy screen, the
+Triangle beside WATCH VIDEO). No placeholder reaches the movie for these, so 12.1 to 12.4 cannot
+change them. Observed from the outside (texture decodes and guest memory around them, in the front
+end and Training), these icons are four 24x24 textures, one per face button, each a single-level
+linear DXT5 image with a 96-byte pitch, the same bytes on every screen that uses them.
+
+While the prompts are for keyboard and mouse (12.2), the renderer draws our own key cap in place of
+each of those icons, labelled with the key that presses that button now (12.6):
+
+- Recognition: the runtime's draw engine asks the prompts about every guest 2D texture it decodes
+  (`rsx_draw_engine_set_texture_override`, an SDK hook that is inert when unset). A texture is a
+  game icon when its format byte is `0xA8` (linear DXT5), it is 24x24 with one level and pitch 96,
+  and the SHA-256 of its 576 bytes is one of four identities in `mag_game_controls_icons.cpp` (Cross,
+  Circle, Square, Triangle). Every other texture is declined and never asked about again.
+- The picture: a rounded key outline with the label of 12.6 for that button (in a menu the keyboard
+  pad's X, C, Z, V; on foot the keys bound to Jump, Interact, Reload, Crouch), named as in 12.3,
+  drawn white on clear with the
+  5x7 font of `player_prompt_keycap.cpp` (our own), box-filtered, stored with its rows bottom-up as
+  the game's icons are, and DXT5-encoded into the same 576-byte layout.
+- Switching: once per host frame the prompts re-read the device and the labels (which follow the
+  keyboard pad state and the profile). When the pictures to show change, they start a new override
+  generation, and the renderer decodes the four icons again (their guest bytes, or our pictures) the
+  next time each is drawn. Guest memory is never written; controller players keep the game's icons,
+  and a button with no key keeps its icon.
+
+Not reached: the Training pause menu's EXIT GAME square and Kill Self stick ring keep the game's
+pictures (they are not among the four textures), and the L1/R1 tab boxes of the training menu and
+the pause menu and the L2/R2 boxes of character creation are text the movies carry themselves, with
+no request to the game that names the button (checked: neither the text seam nor a lab rewrite of
+the image-name answer changes them). Not covered: the D3D12 renderer (parked), which does not decode through the draw
+engine.
+
+### 12.6 Shoulder and stick prompts, and the key for a button
+
+The shoulder and stick prompts (L1, R1, L2, R2, L3, R3) are not pictures: a movie asks for localized
+text whose whole content is the button's name ("L1"), and draws it in a small box (the pause menu's
+tab switches, for example). The text seam of 12.1 sees that text; a text that is exactly one of those
+six names is replaced, without parentheses, by the key that presses the button now. The game asks
+for these four (L1, R1, L2, R2) when the HUD is built; the tab boxes drawn by the movies themselves
+are not reached (12.5).
+
+The key for a button (`mag_game_prompts_button_key`), for the face-button pictures of 12.5 as well:
+
+1. While the SDK keyboard pad serves menu buttons (not muted, 8.2): the pad's key for the button
+   (`mag_game_controls_pad_layout_key`: Q, E, R, T, F, G for L1, R1, L2, R2, L3, R3).
+2. Otherwise (on foot): the action the game's own controller layout puts on that button (the
+   catalog's controller defaults, 2.3: L1 aim, R1 fire, L2 cycle equipment, R2 cycle weapons, L3
+   sprint, R3 melee, Cross jump, Circle interact, Square reload, Triangle crouch), and its first
+   keyboard or mouse binding in the live profile, named as in 12.3.
+3. No such key: the game's text or icon stays.
+
+A box holds about five characters: a longer name keeps its first four (`RSHIFT` becomes `RSHI`).
+
+Some of these texts are fetched when a movie is built (the pause menu's with the HUD), so they show
+the key of the context at that moment, the same limit as 12.2.
+
 Lifetime: the prompts are built with `MAG_GAME_CONTROLS` and start with it at VM begin
 (`mag_game_controls_prompts_runtime.cpp`, its own extension callbacks). `MAG_GAME_CONTROLS=0` or
-`MAG_GAME_PROMPTS=0` keeps them off; the seams then do nothing. Prompt events are handled on
+`MAG_GAME_PROMPTS=0` keeps them off (text and pictures); the seams then do nothing and no texture override is set. Prompt events are handled on
 whichever thread asks for text, before the adapter's thread-ownership check.
