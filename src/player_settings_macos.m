@@ -1,5 +1,6 @@
 #import "player_settings_macos.h"
 #include "player_settings_text.h"
+#include "player_settings_debug.h"
 #import <QuartzCore/CAMetalLayer.h>
 #import <QuartzCore/CATransaction.h>
 
@@ -64,7 +65,9 @@ static NSStackView *row(NSString *title,NSString *hint,NSView *control) {
 
 @implementation MAGSettingsController {
     NSString *_path;
-    NSStackView *_root,*_general,*_ports,*_confirmation;
+    NSStackView *_root,*_general,*_ports,*_confirmation,*_debug;
+    NSMutableArray<NSButton *> *_debugControls;
+    NSMutableArray<NSTextField *> *_debugHints;
     NSSegmentedControl *_section;
     NSView *_controlsHost;
     id<MAGControlsSettingsPane> _controlsPane;
@@ -111,10 +114,31 @@ static NSStackView *row(NSString *title,NSString *hint,NSView *control) {
         [_root.leadingAnchor constraintEqualToAnchor:window.contentView.leadingAnchor constant:MAG_SETTINGS_MARGIN],
         [_root.trailingAnchor constraintEqualToAnchor:window.contentView.trailingAnchor constant:-MAG_SETTINGS_MARGIN],
         [_root.topAnchor constraintEqualToAnchor:window.contentView.topAnchor constant:22]]];
-    _section=[NSSegmentedControl segmentedControlWithLabels:@[@MAG_SETTINGS_PAGE_GENERAL,@MAG_SETTINGS_PAGE_CONTROLS] trackingMode:NSSegmentSwitchTrackingSelectOne target:self action:@selector(sectionChanged:)];
-    _section.selectedSegment=0;_section.hidden=YES;_section.identifier=@"settings_section";add(_root,_section);
+    // General and Debug; Controls joins between them when an input integration registers its catalog.
+    _section=[NSSegmentedControl segmentedControlWithLabels:@[@MAG_SETTINGS_PAGE_GENERAL,@MAG_SETTINGS_PAGE_DEBUG] trackingMode:NSSegmentSwitchTrackingSelectOne target:self action:@selector(sectionChanged:)];
+    _section.selectedSegment=0;_section.identifier=@"settings_section";add(_root,_section);
     _general=stack(NSUserInterfaceLayoutOrientationVertical,9);add(_root,_general);
     _controlsHost=[NSView new];_controlsHost.hidden=YES;add(_root,_controlsHost);
+    // Debug: one row per mag_settings_debug_items entry (player_settings_text.h); switches act at once.
+    _debug=stack(NSUserInterfaceLayoutOrientationVertical,9);_debug.hidden=YES;_debug.identifier=@"debug_page";add(_root,_debug);
+    {
+        NSTextField *debugHeading=label(@MAG_SETTINGS_HEADING_DEBUG,14,NO);debugHeading.font=[NSFont boldSystemFontOfSize:14];add(_debug,debugHeading);
+        NSStackView *rows=stack(NSUserInterfaceLayoutOrientationVertical,5);
+        _debugControls=[NSMutableArray new];_debugHints=[NSMutableArray new];
+        for(int i=0;i<MAG_SETTINGS_DEBUG_ITEMS;++i){
+            const MagSettingsDebugItem *item=&mag_settings_debug_items[i];
+            NSButton *control=item->kind==MAG_SETTINGS_DEBUG_SWITCH
+                ?[NSButton checkboxWithTitle:@(item->control) target:self action:@selector(debugClicked:)]
+                :[NSButton buttonWithTitle:@(item->control) target:self action:@selector(debugClicked:)];
+            control.tag=i;control.identifier=[@"debug_" stringByAppendingString:@(item->id)];[_debugControls addObject:control];
+            NSStackView *debugRow=row(@(item->title),@(item->hint),control);
+            NSStackView *labels=(NSStackView *)debugRow.arrangedSubviews.firstObject;
+            [_debugHints addObject:(NSTextField *)labels.arrangedSubviews.lastObject];
+            if(i)add(rows,separator());
+            add(rows,debugRow);
+        }
+        add(_debug,group(rows));add(_debug,label(@MAG_SETTINGS_DEBUG_NOTE,11,YES));
+    }
     NSTextField *heading=label(@MAG_SETTINGS_HEADING_CONNECTION,14,NO);heading.font=[NSFont boldSystemFontOfSize:14];add(_general,heading);
     _server=[NSTextField textFieldWithString:@""];_server.placeholderString=@MAG_SETTINGS_SERVER_PLACEHOLDER;_server.identifier=@"server_address";_server.delegate=self;
     NSStackView *connection=stack(NSUserInterfaceLayoutOrientationVertical,5);
@@ -188,14 +212,52 @@ static NSStackView *row(NSString *title,NSString *hint,NSView *control) {
 }
 
 - (void)setControlsPane:(id<MAGControlsSettingsPane>)pane view:(NSView *)view {
-    _controlsPane=pane;_section.hidden=NO;view.translatesAutoresizingMaskIntoConstraints=NO;
+    _controlsPane=pane;view.translatesAutoresizingMaskIntoConstraints=NO;
+    if(_section.segmentCount==2){
+        _section.segmentCount=3;
+        [_section setLabel:@MAG_SETTINGS_PAGE_GENERAL forSegment:0];[_section setLabel:@MAG_SETTINGS_PAGE_CONTROLS forSegment:1];
+        [_section setLabel:@MAG_SETTINGS_PAGE_DEBUG forSegment:2];
+    }
     [_controlsHost addSubview:view];
     [NSLayoutConstraint activateConstraints:@[[view.leadingAnchor constraintEqualToAnchor:_controlsHost.leadingAnchor],[view.trailingAnchor constraintEqualToAnchor:_controlsHost.trailingAnchor],[view.topAnchor constraintEqualToAnchor:_controlsHost.topAnchor],[view.bottomAnchor constraintEqualToAnchor:_controlsHost.bottomAnchor]]];
     __weak MAGSettingsController *weakSelf=self;pane.controlsChanged=^{[weakSelf changed:nil];};[self fit];
 }
+// The page shown, by its segment's label: Controls exists only with an input integration.
+- (BOOL)onControls {return [[_section labelForSegment:_section.selectedSegment] isEqual:@MAG_SETTINGS_PAGE_CONTROLS];}
+- (BOOL)onDebug {return [[_section labelForSegment:_section.selectedSegment] isEqual:@MAG_SETTINGS_PAGE_DEBUG];}
 - (void)sectionChanged:(id)sender {
-    [_controlsPane cancelBindingCapture];_general.hidden=_section.selectedSegment==1;_controlsHost.hidden=!_general.hidden;
-    _applyButton.title=_general.hidden?@MAG_SETTINGS_APPLY_CONTROLS:@MAG_SETTINGS_APPLY;_errorLabel.hidden=YES;[self changed:nil];[self fit];
+    [_controlsPane cancelBindingCapture];
+    const BOOL controls=[self onControls],debug=[self onDebug];
+    _general.hidden=controls||debug;_controlsHost.hidden=!controls;_debug.hidden=!debug;
+    if(debug)[self refreshDebug];
+    _applyButton.title=controls?@MAG_SETTINGS_APPLY_CONTROLS:@MAG_SETTINGS_APPLY;_errorLabel.hidden=YES;[self changed:nil];[self fit];
+}
+// Debug: the switches show whether their file exists; Open logs folder needs the supervisor's folder.
+- (void)refreshDebug {
+    char folder[4096];const BOOL logs=mag_settings_logs_folder(folder,sizeof folder);
+    for(int i=0;i<MAG_SETTINGS_DEBUG_ITEMS;++i){
+        const MagSettingsDebugItem *item=&mag_settings_debug_items[i];
+        if(item->kind==MAG_SETTINGS_DEBUG_SWITCH)
+            _debugControls[i].state=mag_settings_debug_switch(item->id,_path.fileSystemRepresentation)?NSControlStateValueOn:NSControlStateValueOff;
+        else if(!strcmp(item->id,"open_logs")){_debugControls[i].enabled=logs;_debugHints[i].stringValue=logs?@(item->hint):@MAG_SETTINGS_DEBUG_NO_LOGS;}
+    }
+}
+- (void)debugClicked:(NSButton *)sender {
+    if(sender.tag<0||sender.tag>=MAG_SETTINGS_DEBUG_ITEMS)return;
+    const MagSettingsDebugItem *item=&mag_settings_debug_items[sender.tag];
+    if(item->kind==MAG_SETTINGS_DEBUG_SWITCH){
+        const BOOL on=sender.state==NSControlStateValueOn;
+        if(!mag_settings_set_debug_switch(item->id,_path.fileSystemRepresentation,on))[self showError:[@"Cannot change " stringByAppendingString:@(item->title)]];
+        else{_errorLabel.hidden=YES;_status.stringValue=on?@MAG_SETTINGS_DEBUG_SWITCH_ON:@MAG_SETTINGS_DEBUG_SWITCH_OFF;}
+    }else if(!strcmp(item->id,"open_logs")){
+        char folder[4096];
+        if(mag_settings_logs_folder(folder,sizeof folder)){
+            NSString *path=[NSString stringWithUTF8String:folder];
+            [NSFileManager.defaultManager createDirectoryAtPath:path withIntermediateDirectories:YES attributes:nil error:nil];
+            [NSWorkspace.sharedWorkspace openURL:[NSURL fileURLWithPath:path isDirectory:YES]];
+        }
+    }
+    [self refreshDebug];[self fit];
 }
 - (void)dealloc {[_timer invalidate];if(_resizeObserver)[NSNotificationCenter.defaultCenter removeObserver:_resizeObserver];}
 - (void)fit { [self.window.contentView layoutSubtreeIfNeeded];[self.window setContentSize:NSMakeSize(MAG_SETTINGS_WIDTH,_root.fittingSize.height+44)]; }
@@ -235,7 +297,7 @@ static NSStackView *row(NSString *title,NSString *hint,NSView *control) {
 - (void)controlTextDidChange:(NSNotification *)note {[self changed:nil];}
 - (void)changed:(id)sender {
     if(_pending)return;
-    NSDictionary *draft=[self draft:NULL];BOOL dirty=_section.selectedSegment==1?[_controlsPane controlsDirty]:(_needsSave||![draft isEqual:self.settings]);
+    NSDictionary *draft=[self draft:NULL];BOOL dirty=[self onDebug]?NO:[self onControls]?[_controlsPane controlsDirty]:(_needsSave||![draft isEqual:self.settings]);
     _applyButton.enabled=dirty;_resolution.enabled=_mode.indexOfSelectedItem==0;
     _status.stringValue=dirty?@MAG_SETTINGS_STATUS_DIRTY:@MAG_SETTINGS_STATUS_CLEAN;
     [self refreshAccount];[self refreshReport];
@@ -399,8 +461,8 @@ static NSStackView *row(NSString *title,NSString *hint,NSView *control) {
     _status.stringValue=@MAG_SETTINGS_STATUS_SAVED;return YES;
 }
 - (void)apply:(id)sender {
-    if(_pending)return;
-    if(_section.selectedSegment==1){
+    if(_pending||[self onDebug])return;
+    if([self onControls]){
         NSError *error=nil;[_controlsPane cancelBindingCapture];
         if(![_controlsPane applyControls:&error]){[self showError:error.localizedDescription];return;}
         _errorLabel.hidden=YES;[self changed:nil];return;

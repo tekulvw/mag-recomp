@@ -140,7 +140,7 @@ MAG can send a performance and error report after a session. A report covers fra
   - time spent in each phase;
   - the audio path's counters, when the runtime provides them: mix periods, underruns, starved frames, late and dropped periods, device errors, and drift against the 48 kHz clock.
 - **The session:** how the launcher and the engine exited, why the report was made, and the first line of a halt (an unresolved import or syscall). If the launch stopped with an error, its message is included.
-- **The client:** the MAG version and platform, operating system and version, CPU, thread count, memory, GPU, renderer, the game server's address, the display settings, and the build identities from the package receipts (runtime revision and SHA-256 digests).
+- **The client:** the MAG version and platform, operating system and version, CPU, thread count, memory, GPU, renderer, the game server's address, the display settings, whether the controls trace was on (`controls_trace`, see [Debug](#debug)), and the build identities from the package receipts (runtime revision and SHA-256 digests).
 - **Logs:** the ends of this launch's `launcher.log`, `engine.log`, `supervisor.log` and `settings.log`, gzip-compressed, at most 2 MiB compressed in total.
 
 Never in a report:
@@ -205,6 +205,15 @@ Tests:
 - `tests.test_session_monitor`: the monitor's counters, percentiles and per-minute series, the summary JSON, and its overhead.
 - `tests.test_player_reports`: the triggers and thresholds, redaction, payload caps, the queue and retries, and an upload through the platform transport to a fake portal that checks the portal's rules.
 - `installer/tests/test_native_package.py` and `installer/tests/test_native_package_linux.py`: the real macOS and Linux supervisors send a crash report end to end.
+
+## Debug
+
+The **Debug** page (beside General and Controls, on macOS, Windows and Linux) holds switches and actions that help with bug reports. Its switches act at once: they are files the game reads when it starts, not settings, so **Apply** and **Cancel** do not concern them, and they take effect at the next launch.
+
+- **Controls trace → Record controls trace** creates or deletes the empty file `controls-trace` next to the settings file, which turns the game controls' census on at launch ([native-controls.md](native-controls.md), "Census"); the checkbox shows whether the file is there, however it got there. Reports say whether it was on (`client.controls_trace`).
+- **Logs → Open logs folder** opens this MAG folder's `logs` folder, with a folder per launch. The packaged supervisor names it for the game (`MAG_PLAYER_LOGS_ROOT`); without it (a development run) the button is disabled and says so.
+
+The page lists `mag_settings_debug_items` in `src/player_settings_text.h`: a new switch or action is one more entry there (its title, hint, and checkbox or button text) and one more case in `src/player_settings_debug.cpp`, and every window shows it.
 
 ## Development and verification
 

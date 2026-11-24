@@ -685,6 +685,11 @@ std::string build_report(const Session &s, const Decision &d, const std::string 
     client += ",\"render\":{\"display_mode\":" + quote(clip(settings.display_mode, 32)) + ",\"output\":" +
               quote(std::to_string(settings.width) + "x" + std::to_string(settings.height)) +
               ",\"render_scale\":" + std::to_string(settings.render_scale) + ",\"anti_aliasing\":" + quote(clip(settings.anti_aliasing, 32)) + "}";
+    // Whether the controls census was recording: the Debug page's switch, a file next to the
+    // settings (MAG_CONTROLS_TRACE_FILE in player_settings_text.h; docs/native-controls.md, Census).
+    std::error_code no_trace;
+    client += std::string(",\"controls_trace\":") +
+              (!s.settings.empty() && fs::exists(s.settings.parent_path() / "controls-trace", no_trace) ? "true" : "false");
     client += ",\"build\":{\"launcher\":" + receipt(s.receipts / "launcher.json") + ",\"engine\":" + receipt(s.receipts / "engine.json") + "}}";
     if (client.size() > client_max_bytes) client = "{\"version\":" + quote(clip(s.version, 60)) + ",\"platform\":" + quote(s.platform) + "}";
     // session

@@ -4,6 +4,7 @@
 //        player_reports build <empty scratch folder>   (prints the queued report's path)
 //        player_reports send <queue> <settings file>    (the platform transport; prints the line)
 #include "player_reports.h"
+#include "player_settings_text.h"
 #include "player_gzip.h"
 #include <cstdio>
 #include <cstdlib>
@@ -185,6 +186,14 @@ static void finishing(const fs::path &root) {
     CHECK(report.get("client")->get("cpu_threads")->kind == Json::Kind::Number);  // counts are numbers
     CHECK(report.get("client")->get("os")->kind == Json::Kind::String);
     CHECK(report.get("client")->get("build")->get("launcher")->get("build_path") == nullptr);
+    // The Debug page's controls trace: off, then on once its file sits next to the settings.
+    CHECK(report.get("client")->get("controls_trace") && report.get("client")->get("controls_trace")->kind == Json::Kind::Bool &&
+          !report.get("client")->get("controls_trace")->boolean);
+    std::ofstream(s.settings.parent_path() / MAG_CONTROLS_TRACE_FILE).close();
+    Json traced;
+    CHECK(parse_json(build_report(s, decide(s), new_report_id()), traced, 8u << 20));
+    CHECK(traced.get("client")->get("controls_trace")->boolean);
+    fs::remove(s.settings.parent_path() / MAG_CONTROLS_TRACE_FILE);
     CHECK(body.find(token) == std::string::npos && body.find("synthetic-player") == std::string::npos);
     CHECK(body.find("portal-link") == std::string::npos);
     for (char c : f.report_id) CHECK(!(c >= 'A' && c <= 'F'));

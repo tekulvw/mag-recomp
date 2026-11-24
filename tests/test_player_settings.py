@@ -11,6 +11,46 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 @unittest.skipUnless(platform.system() == 'Darwin', 'native macOS settings')
 class PlayerSettingsTests(unittest.TestCase):
+    def test_debug_page_switch_and_logs_folder(self):
+        """The C interface the macOS panel's Debug page uses (src/player_settings_debug.h), headless."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            source = root / 'debug.m'
+            source.write_text(r"""
+#import <Foundation/Foundation.h>
+#include "player_settings_debug.h"
+#include "player_settings_text.h"
+#include <assert.h>
+#include <stdlib.h>
+#include <string.h>
+int main(int argc, char **argv) { @autoreleasepool {
+    assert(argc == 2);
+    NSString *folder = [NSString stringWithUTF8String:argv[1]];
+    NSString *settings = [folder stringByAppendingPathComponent:@"settings.json"];
+    NSString *trace = [folder stringByAppendingPathComponent:@MAG_CONTROLS_TRACE_FILE];
+    assert(!mag_settings_debug_switch("controls_trace", settings.fileSystemRepresentation));
+    assert(mag_settings_set_debug_switch("controls_trace", settings.fileSystemRepresentation, 1));
+    assert([NSFileManager.defaultManager fileExistsAtPath:trace] && mag_settings_debug_switch("controls_trace", settings.fileSystemRepresentation));
+    assert(mag_settings_set_debug_switch("controls_trace", settings.fileSystemRepresentation, 0) && ![NSFileManager.defaultManager fileExistsAtPath:trace]);
+    char logs[4096];
+    unsetenv("MAG_PLAYER_LOGS_ROOT"); assert(!mag_settings_logs_folder(logs, sizeof logs));
+    setenv("MAG_PLAYER_LOGS_ROOT", "/tmp/mag logs", 1); assert(mag_settings_logs_folder(logs, sizeof logs) && !strcmp(logs, "/tmp/mag logs"));
+    assert(!mag_settings_logs_folder(logs, 4));  // does not fit
+    puts("debug page interface passed");
+} }
+""")
+            binary = root / 'debug-test'
+            result = subprocess.run(['xcrun', 'clang++', '-std=c++20', '-c', str(ROOT / 'src/player_settings_debug.cpp'), '-I' + str(ROOT / 'src'),
+                                     '-Wall', '-Wextra', '-Werror', '-o', str(root / 'debug.o')], capture_output=True, text=True, timeout=60)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            result = subprocess.run(['xcrun', 'clang', '-fobjc-arc', '-Wall', '-Wextra', '-Werror', '-I' + str(ROOT / 'src'), str(source),
+                                     str(root / 'debug.o'), '-lc++', '-framework', 'Foundation', '-o', str(binary)],
+                                    capture_output=True, text=True, timeout=60)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            result = subprocess.run([str(binary), tmp], capture_output=True, text=True, timeout=10)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn('debug page interface passed', result.stdout)
+
     def test_validation_atomic_save_and_corrupt_file_recovery(self):
         with tempfile.TemporaryDirectory() as tmp:
             binary = pathlib.Path(tmp) / 'settings-test'
