@@ -300,3 +300,4 @@ build/settings-preview/MAGSettingsPreview
 ```
 
 The preview uses disposable preferences and never starts the game. An optional directory argument retains preview preferences there for repeated UI checks.
+
