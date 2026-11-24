@@ -85,6 +85,16 @@ def check(cmake, ninja, ccache, compilers, env, identity, work):
     print('compile cache: hits across folders, identical to a cold build', flush=True)
 
 
+def diagnose(ccache, env, folder, stats):
+    """What ccache did when its stats log stayed empty: its counters and one compile command."""
+    print(f'stats log {stats}: exists={stats.exists()} size={stats.stat().st_size if stats.exists() else 0}', flush=True)
+    subprocess.run([str(ccache), '--show-stats', '-vv'], env=env)
+    subprocess.run([str(ccache), '--show-config'], env=env)
+    commands = subprocess.run(['ninja', '-C', str(folder), '-t', 'commands'], env=env, capture_output=True, text=True)
+    lines = [line for line in commands.stdout.splitlines() if line.strip()]
+    print('first command:', lines[0][:600] if lines else commands.stderr[-600:], flush=True)
+
+
 def rebuild_hits(cmake, ccache, env, identity, cache_root, base_dir, configure, build_args, folders, minimum=0.95):
     """Build one project in two build folders through the compile cache: the first compiles, the
     second must take at least `minimum` of its compilations from the cache."""
@@ -98,6 +108,8 @@ def rebuild_hits(cmake, ccache, env, identity, cache_root, base_dir, configure, 
         subprocess.run([str(cmake), '--build', str(folder), *map(str, build_args)], env=stage_env, check=True)
         counts.append(compile_cache.read_stats(stats)[1:])
         print(f'{folder.name}: {counts[-1][0]} hits, {counts[-1][1]} misses', flush=True)
+        if not sum(counts[-1]):
+            diagnose(ccache, stage_env, folder, stats)
     (cold_hits, cold_misses), (hits, misses) = counts
     if not cold_misses or not hits or hits < minimum * (hits + misses):
         raise SystemExit(f'the second build must reuse at least {minimum:.0%} of its compilations: {counts}')
