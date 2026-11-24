@@ -21,9 +21,10 @@ ROLES = ('runtime', 'lifter-spu', 'lifter-ppu', 'spu-programs')
 _REQUIRED = {'schema_version', 'source_tree', 'disc_root', 'eboot_elf', 'engine_elf',
              'firmware', 'python', 'cmake', 'ninja', 'git', 'sdks'}
 # ffmpeg: required on macOS/Linux. msvc/linux_toolchain: host compiler records.
+# sdl2: Windows only, the pinned prebuilt's CMake package, DLL and licence (controller input).
 # game_controls: opt-in keyboard and mouse controls (docs/native-controls.md), with the
 # pinned Rust toolchain's cargo and rustc executables (not rustup proxies).
-_OPTIONAL = {'jobs', 'cmake_args', 'native_graphics', 'managed_prefix', 'ffmpeg', 'msvc', 'host', 'linux_toolchain',
+_OPTIONAL = {'jobs', 'cmake_args', 'native_graphics', 'managed_prefix', 'ffmpeg', 'sdl2', 'msvc', 'host', 'linux_toolchain',
              'game_controls'}
 
 
@@ -123,6 +124,11 @@ def load_config(path):
         fields = {'include', 'avcodec', 'avformat', 'avutil', 'swscale'}
         _object(raw['ffmpeg'], fields, set(), 'ffmpeg')
         result['ffmpeg'] = {key: _path(raw['ffmpeg'][key], path.parent, f'ffmpeg.{key}', directory=key == 'include', dependency=True) for key in fields}
+    if 'sdl2' in raw:   # Windows: controller input, from the pinned prebuilt
+        if 'msvc' not in raw: raise InstallerError('sdl2 requires a Windows (msvc) configuration')
+        fields = {'cmake_dir', 'dll', 'license'}
+        _object(raw['sdl2'], fields, set(), 'sdl2')
+        result['sdl2'] = {key: _path(raw['sdl2'][key], path.parent, f'sdl2.{key}', directory=key == 'cmake_dir', dependency=True) for key in fields}
     jobs = raw.get('jobs', 2)
     if type(jobs) is not int or not 1 <= jobs <= 4:
         raise InstallerError('jobs must be an integer from 1 to 4')
@@ -339,6 +345,10 @@ def build_plan(config, workspace):
                        '-DPS3RECOMP_FFMPEG_INCLUDE_DIR=' + cmake_path(ffmpeg['include'])]
             for name in ('avcodec', 'avformat', 'avutil', 'swscale'):
                 common.append('-DPS3RECOMP_FFMPEG_' + name.upper() + '_LIBRARY=' + cmake_path(ffmpeg[name]))
+        # Controllers: SDL2's game controller API (PlayStation pads too); a configuration
+        # written before SDL2 was pinned keeps the runtime's XInput pads.
+        common += (['-DPS3RECOMP_PAD_USE_SDL2=ON', '-DSDL2_DIR=' + cmake_path(config['sdl2']['cmake_dir'])]
+                   if config.get('sdl2') else ['-DPS3RECOMP_PAD_USE_SDL2=OFF'])
     else:
         def cmake_path(value): return str(value)
         ffmpeg = config['ffmpeg']

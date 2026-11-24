@@ -124,7 +124,8 @@ class GameControlsBuild(unittest.TestCase):
             'SDL_GameControllerUpdate': 'mag_player_controller_update',
             'SDL_GameControllerOpen': 'mag_player_controller_open',
             'SDL_GameControllerClose': 'mag_player_controller_close',
-            'SDL_GameControllerGetAttached': 'mag_player_controller_attached'})
+            'SDL_GameControllerGetAttached': 'mag_player_controller_attached',
+            'SDL_GameControllerSetPlayerIndex': 'mag_player_controller_set_player_index'})
         keyboard = dict(entry.split('=', 1) for entry in report['sdk:pad_sdl_keyboard.c'].split(';'))
         self.assertEqual(keyboard, {'ps3recomp_pad_sdl_keyboard_sample': 'mag_sdk_pad_sdl_keyboard_sample',
                                     'ps3recomp_pad_sdl_keyboard_state': 'mag_sdk_pad_sdl_keyboard_state'})
@@ -152,6 +153,27 @@ class GameControlsBuild(unittest.TestCase):
                   'osk_native_win32_handle_message': 'mag_player_win32_message'}
         for name in ('rsx_vulkan_backend.c', 'rsx_d3d12_backend.c'):
             self.assertEqual(dict(entry.split('=', 1) for entry in report[f'sdk:{name}'].split(';')), window, name)
+        self.assert_sdk_untouched(report, {'pad_sdl_keyboard.c'})
+
+    def test_win32_desktop_backend_with_sdl_controllers(self):
+        # PS3RECOMP_PAD_USE_SDL2 (the Windows default, cmake/MagRuntimeOptions.cmake): controllers come
+        # through the SDL seam shared with macOS and Linux; the Win32 seam keeps the keyboard fallback.
+        self.record()
+        self.configure('-DMAG_GAME_CONTROLS=ON', '-DMAG_INPUT_RUST=ON', '-DMAG_GAME_CONTROLS_DESKTOP=win32',
+                       '-DPS3RECOMP_PAD_USE_SDL2=ON')
+        report = self.report()
+        self.assertEqual(self.runtime_sources(report), self.SDK_NAMES | self.WIN32_SEAMS | {'player_input_sdl_pad.c'})
+        pad = dict(entry.split('=', 1) for entry in report['sdk:cellPad.c'].split(';'))
+        self.assertEqual(pad, {
+            'SDL_GameControllerGetButton': 'mag_player_controller_button',
+            'SDL_GameControllerGetAxis': 'mag_player_controller_axis',
+            'SDL_GameControllerUpdate': 'mag_player_controller_update',
+            'SDL_GameControllerOpen': 'mag_player_controller_open',
+            'SDL_GameControllerClose': 'mag_player_controller_close',
+            'SDL_GameControllerGetAttached': 'mag_player_controller_attached',
+            'SDL_GameControllerSetPlayerIndex': 'mag_player_controller_set_player_index',
+            'GetAsyncKeyState': 'mag_player_get_async_key_state'})
+        self.assertEqual(report['seam:player_input_win32_pad.c'], 'MAG_PAD_SDL2=1')
         self.assert_sdk_untouched(report, {'pad_sdl_keyboard.c'})
 
     def test_win32_desktop_backend_needs_the_window_pump_seams(self):

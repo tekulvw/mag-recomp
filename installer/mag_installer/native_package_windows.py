@@ -477,7 +477,7 @@ def _c_hex(value):
 SUPERVISOR_SOURCES = ('player_portal.h', 'player_portal.cpp', 'player_portal_winhttp.cpp', 'player_portal_win32.h',
                       'player_portal_win32.cpp', 'player_settings_portable.h', 'player_settings_file.cpp', 'player_settings_text.h', 'player_sign_in.h',
                       'player_reports.h', 'player_reports.cpp', 'player_reports_win32.h', 'player_reports_win32.cpp',
-                      'player_gzip.h', 'player_gzip.cpp', 'player_report_request.h', 'player_report_request.cpp')
+                      'player_gzip.h', 'player_gzip.cpp', 'player_sign_in_refusal.h', 'player_report_request.h', 'player_report_request.cpp')
 
 
 def copy_supervisor_sources(source, scratch):
@@ -556,8 +556,13 @@ def package(config, workspace, destination, token=None, events=None, environment
             ffmpeg_root = Path(config['ffmpeg']['include']).parent
             for name in WINDOWS_FFMPEG_DLLS:
                 shutil.copyfile(_ordinary(ffmpeg_root / 'bin' / name), bin_dir / name)
-            licenses = resources / 'licenses'; licenses.mkdir()
+            licenses = resources / 'licenses'; licenses.mkdir(exist_ok=True)
             shutil.copyfile(_ordinary(ffmpeg_root / 'LICENSE.txt'), licenses / 'FFmpeg-LICENSE.txt')
+        if config.get('sdl2'):
+            # Controller input: SDL2.dll beside the executables, and its zlib licence.
+            shutil.copyfile(_ordinary(Path(config['sdl2']['dll'])), bin_dir / 'SDL2.dll')
+            licenses = resources / 'licenses'; licenses.mkdir(exist_ok=True)
+            shutil.copyfile(_ordinary(Path(config['sdl2']['license'])), licenses / 'SDL2-LICENSE.txt')
         game_relative = os.path.relpath(game, destination)
         engine_self = manifest['images']['mage_g']['source_sha256']
         runtime = {'schema_version': 2, 'game': Path(game_relative).as_posix(),

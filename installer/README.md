@@ -101,7 +101,8 @@ compiler:
   build folder (`MAG-build\build-work`) stays within Windows' path limit. The executables use
   the static C runtime. MAG presents through Vulkan: glslang and the Vulkan headers are built from
   pinned sources, and the Vulkan loader comes with the GPU driver. Movies play through a pinned
-  prebuilt FFmpeg 9 (LGPL shared build), whose DLLs and licence are packaged beside MAG.
+  prebuilt FFmpeg 9 (LGPL shared build) and controllers, PlayStation pads included, through the
+  official prebuilt SDL2 2.32.10; their DLLs and licences are packaged beside MAG.
 
 - **Linux** targets Ubuntu 24.04 or later on x86_64 with a graphical desktop and Vulkan driver.
   Build MAG requests Ubuntu authorization for required compiler and desktop development packages

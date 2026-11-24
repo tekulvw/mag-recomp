@@ -28,6 +28,14 @@ if(TARGET ps3recomp_runtime)
         get_filename_component(_name "${_path}" NAME)
         string(APPEND _sdk "sdk:${_name}=${_definitions}\n")
     endforeach()
+    # Compile definitions on the seams the controls adapter adds to the runtime.
+    foreach(_source IN LISTS _runtime)
+        get_filename_component(_name "${_source}" NAME)
+        if(_name MATCHES "^player_input_")
+            get_source_file_property(_definitions "${_source}" DIRECTORY "${PS3RECOMP_DIR}" COMPILE_DEFINITIONS)
+            string(APPEND _sdk "seam:${_name}=${_definitions}\n")
+        endif()
+    endforeach()
 endif()
 file(WRITE "${CMAKE_BINARY_DIR}/controls.txt"
     "receipt=${MAG_GAME_CONTROLS_RECEIPT_EXTRA}\nsources=${_sources}\nlifted=${_lifted}\n"

@@ -22,8 +22,9 @@
 // when focus returns and when the confinement was lost (the window moved or something else
 // changed it), and released when focus goes.
 //
-// Controllers stay with cellPad's XInput backend, whose readings also reach the capture layer
-// (player_input_win32_pad.c). Keyboard and mouse capture never depends on whether an XInput device
+// Controllers stay with cellPad's controller backend (SDL2 by default, XInput with
+// PS3RECOMP_PAD_USE_SDL2=OFF), whose readings also reach the capture layer (player_input_sdl_pad.c
+// or player_input_win32_pad.c). Keyboard and mouse capture never depends on whether a controller
 // (real or virtual) is present.
 #ifndef _WIN32
 #error "the Win32 desktop capture backend builds only for Windows"
