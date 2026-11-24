@@ -616,6 +616,14 @@ def _smoke(binary, scratch):
                             cwd=scratch, env=env, timeout=60)
     if 'synthetic-complete' not in result.stdout or not (output / 'SYNTHETIC-RESULT.txt').is_file():
         raise InstallerError('Frozen synthetic demonstration did not complete')
+    # The player build route loads its modules lazily, so a module left out of the frozen
+    # installer shows only there: an invalid job count must be refused by the build itself.
+    jobs = subprocess.run([str(binary), 'build', '--source', str(source), '--output', str(scratch / 'jobs check' / 'MAG'),
+                           '--cache', str(scratch / 'cache'), '--jobs', '0'],
+                          cwd=scratch, env=env, timeout=30, capture_output=True, text=True)
+    if jobs.returncode == 0 or 'Compile jobs must be a whole number' not in jobs.stdout + jobs.stderr:
+        raise InstallerError('Frozen player build did not check its job count (a module may be missing).\n'
+                             f'stdout:\n{jobs.stdout[-6000:]}\nstderr:\n{jobs.stderr[-6000:]}')
 
 
 def _check_tk_runtime():
