@@ -285,7 +285,13 @@ bool has_menus() {
     return s->form->controls && (!settings_form_rows(*s->form, SettingsDevice::KeyboardMouse, settings_scope_menu).empty() ||
                                  !settings_form_rows(*s->form, SettingsDevice::Controller, settings_scope_menu).empty());
 }
-bool scale_supported() { return false; }  // rendering scale and FXAA are the Metal renderer's
+// Rendering scale comes with the Vulkan renderer's adapter (MAG_PLAYER_RENDER_SCALE_SUPPORTED);
+// FXAA is the Metal renderer's.
+#if MAG_PLAYER_RENDER_SCALE_SUPPORTED
+bool scale_supported() { return true; }
+#else
+bool scale_supported() { return false; }
+#endif
 
 void layout();
 void show_error(const std::string& message) {
@@ -961,7 +967,7 @@ bool save_general(const PortableSettings& draft) {
     show(s->error, false);
     EnableWindow(s->play, true);
     changed();
-    set_text(s->status, scale_supported() ? MAG_SETTINGS_STATUS_SAVED : MAG_SETTINGS_STATUS_SAVED_NO_SCALE);
+    set_text(s->status, scale_supported() ? MAG_SETTINGS_STATUS_SAVED_NO_AA : MAG_SETTINGS_STATUS_SAVED_NO_SCALE);
     layout();
     return true;
 }
@@ -1391,12 +1397,12 @@ void build() {
     w.output = combo(IdOutput, mag_settings_output_labels, MAG_SETTINGS_OUTPUT_SIZES);
     row(w.graphics_rows, MAG_SETTINGS_OUTPUT, MAG_SETTINGS_OUTPUT_HINT, w.output);
     w.rendering = combo(IdRendering, mag_settings_render_scale_labels, MAG_SETTINGS_RENDER_SCALES);
-    row(w.graphics_rows, MAG_SETTINGS_RENDERING, scale_supported() ? MAG_SETTINGS_NEXT_LAUNCH_HINT : MAG_SETTINGS_METAL_ONLY_HINT, w.rendering);
+    row(w.graphics_rows, MAG_SETTINGS_RENDERING, scale_supported() ? MAG_SETTINGS_NEXT_LAUNCH_HINT : MAG_SETTINGS_SCALE_UNSUPPORTED_HINT,
+        w.rendering);
     w.anti_aliasing = combo(IdAntiAliasing, mag_settings_anti_aliasing_labels, MAG_SETTINGS_ANTI_ALIASING_MODES);
-    row(w.graphics_rows, MAG_SETTINGS_ANTI_ALIASING, scale_supported() ? MAG_SETTINGS_NEXT_LAUNCH_HINT : MAG_SETTINGS_METAL_ONLY_HINT,
-        w.anti_aliasing);
+    row(w.graphics_rows, MAG_SETTINGS_ANTI_ALIASING, MAG_SETTINGS_METAL_ONLY_HINT, w.anti_aliasing);
     EnableWindow(w.rendering, scale_supported());
-    EnableWindow(w.anti_aliasing, scale_supported());
+    EnableWindow(w.anti_aliasing, false);
     w.graphics_note = small_label(scale_supported() ? MAG_SETTINGS_GRAPHICS_NOTE : MAG_SETTINGS_GRAPHICS_NOTE_NO_SCALE);
     // General: Reports.
     w.heading_reports = label(MAG_SETTINGS_HEADING_REPORTS, s->heading);

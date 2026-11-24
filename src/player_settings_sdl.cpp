@@ -247,11 +247,19 @@ SettingsPanel::Layout SettingsPanel::layout() const {
         y += words(Margin, y, MAG_SETTINGS_HEADING_GRAPHICS, 0, Content, true) + 8;
         group({{MAG_SETTINGS_DISPLAY_MODE, "", "choice:display", Kind::Choice, "", true},
                {MAG_SETTINGS_OUTPUT, MAG_SETTINGS_OUTPUT_HINT, "choice:output", Kind::Choice, "", !form_.borderless},
-               {MAG_SETTINGS_RENDERING, MAG_SETTINGS_METAL_ONLY_HINT, "choice:rendering", Kind::Choice, "", false},
+#if MAG_PLAYER_RENDER_SCALE_SUPPORTED
+               {MAG_SETTINGS_RENDERING, MAG_SETTINGS_NEXT_LAUNCH_HINT, "choice:rendering", Kind::Choice, "", true},
+#else
+               {MAG_SETTINGS_RENDERING, MAG_SETTINGS_SCALE_UNSUPPORTED_HINT, "choice:rendering", Kind::Choice, "", false},
+#endif
                {MAG_SETTINGS_ANTI_ALIASING, MAG_SETTINGS_METAL_ONLY_HINT, "choice:aa", Kind::Choice, "", false}},
               false);
         y += 6;
+#if MAG_PLAYER_RENDER_SCALE_SUPPORTED
+        y += words(Margin, y, MAG_SETTINGS_GRAPHICS_NOTE, 1, Content) + 14;
+#else
         y += words(Margin, y, MAG_SETTINGS_GRAPHICS_NOTE_NO_SCALE, 1, Content) + 14;
+#endif
         y += words(Margin, y, MAG_SETTINGS_HEADING_REPORTS, 0, Content, true) + 8;
         const char* blocker = report_blocker();
         group({{MAG_SETTINGS_SEND_REPORTS, MAG_SETTINGS_SEND_REPORTS_HINT, "check:reports", Kind::Check, MAG_SETTINGS_SEND_REPORTS_ON, true},
@@ -471,7 +479,11 @@ bool SettingsPanel::save_general(const PortableSettings& draft) {
     if (!options_.setup) saved_anything_ = true;
     error_.clear();
     changed();
+#if MAG_PLAYER_RENDER_SCALE_SUPPORTED
+    status_ = MAG_SETTINGS_STATUS_SAVED_NO_AA;
+#else
     status_ = MAG_SETTINGS_STATUS_SAVED_NO_SCALE;
+#endif
     return true;
 }
 

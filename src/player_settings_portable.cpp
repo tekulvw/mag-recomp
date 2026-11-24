@@ -195,6 +195,15 @@ extern "C" int mag_player_settings_prepare(void) {
         // (player_settings_session.h).
         export_variable("MAG_PLAYER_OUTPUT_SIZE", std::to_string(settings.output_width) + "x" + std::to_string(settings.output_height));
     }
+#if MAG_PLAYER_RENDER_SCALE_SUPPORTED
+    // The rendering-resolution adapter on the Vulkan backend (src/player_render_scale.cpp) reads the
+    // integer percentage; at 100 it hands the engine the backend unchanged.
+    export_variable("MAG_PLAYER_RENDER_SCALE", std::to_string(settings.render_scale));
+#else
+    if (settings.render_scale != 100)
+        say("Rendering resolution " + std::to_string(settings.render_scale) +
+            "% needs the Vulkan renderer; this build renders at 100%.");
+#endif
     if (!settings.player_name.empty()) {
         // The runtime takes the online ID from this, and the sign-in keyboard opens with it typed in.
         export_variable("PS3_NP_ONLINE_ID", settings.player_name);

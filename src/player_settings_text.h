@@ -67,9 +67,11 @@
 #define MAG_SETTINGS_RENDERING "Rendering resolution"
 #define MAG_SETTINGS_ANTI_ALIASING "Anti-aliasing"
 #define MAG_SETTINGS_NEXT_LAUNCH_HINT "Applies on the next launch"
-/* Where the renderer has no such option (rendering scale and FXAA are the Metal renderer's): the
- * control stays visible, disabled, with this hint. */
+/* Where the renderer has no such option the control stays visible, disabled, with its hint: FXAA is
+ * the Metal renderer's; rendering scale is the Metal and Vulkan renderers' (a build without the
+ * Vulkan adapter, MAG_PLAYER_RENDER_SCALE_SUPPORTED, has none). */
 #define MAG_SETTINGS_METAL_ONLY_HINT "macOS (Metal) only for now"
+#define MAG_SETTINGS_SCALE_UNSUPPORTED_HINT "Needs the Metal or Vulkan renderer"
 #define MAG_SETTINGS_GRAPHICS_NOTE \
     "Rendering percentages scale the game's 720p-height targets. Output resolution sets the window size."
 #define MAG_SETTINGS_GRAPHICS_NOTE_NO_SCALE "Output resolution sets the window size."
@@ -126,6 +128,8 @@ static const char *const mag_settings_anti_aliasing_values[MAG_SETTINGS_ANTI_ALI
 #define MAG_SETTINGS_STATUS_CLEAN "No unsaved changes"
 #define MAG_SETTINGS_STATUS_SAVED "Saved · connection, rendering and AA apply next launch"
 #define MAG_SETTINGS_STATUS_SAVED_NO_SCALE "Saved · connection and display apply next launch"
+/* Windows and Linux with rendering scale (the Vulkan renderer) but no FXAA. */
+#define MAG_SETTINGS_STATUS_SAVED_NO_AA "Saved · connection, display and rendering apply next launch"
 
 /* Messages: validation, recovery and launch. */
 #define MAG_SETTINGS_PORT_DIGITS "Ports must contain digits, or be blank for the game default."
