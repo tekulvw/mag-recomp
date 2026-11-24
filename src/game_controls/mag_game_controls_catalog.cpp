@@ -62,6 +62,11 @@ ActionId mag_game_controls_token_action(uint32_t token) {
     case 0x9716c7a1: return Stance;
     case 0x71c8f2f0: return Interact;  // contaction: the held form of action
     case CommandScreen: return Select;  // watched on the Select button
+    // Watched on the Start button and the D-pad's up and down, as the census of a match shows: the
+    // same buttons, so the same keys (Escape, Up, Down), and prompts naming them show those keys.
+    case 0xe88eb86f: return Start;      // respawn
+    case 0xf280dd78: return DpadUp;     // scopeup (scope zoom)
+    case 0x6bf6ca31: return DpadDown;   // scopedown
     default: return token;
     }
 }

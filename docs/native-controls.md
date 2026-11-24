@@ -238,7 +238,9 @@ bindings to retired actions (`mag_game_controls_retired_actions`, the settings r
 
 Token aliases (a watched token that stands for a catalog action): `0x68C3570D` is Aim,
 `0x9716C7A1` is Crouch/prone, `0x71C8F2F0` (contaction, the held form) is Interact, `0xC6DCD89F`
-(commandscreen) is Select. Every other token stands for itself.
+(commandscreen) is Select, `0xE88EB86F` (respawn) is Start, `0xF280DD78` and `0x6BF6CA31`
+(scopeup, scopedown: scope zoom) are D-pad up and down. The census shows each watched on that
+button, so these aliases change no recognition; they let prompts such as `[Respawn]` name the key. Every other token stands for itself.
 
 Look tokens (the four look-axis channels): `0xC8A3E21D`, `0x941734A2`, `0x661CB595`, `0xC34F3A66`.
 
