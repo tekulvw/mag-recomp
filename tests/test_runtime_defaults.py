@@ -32,7 +32,29 @@ NATIVE_PM={'PS3RECOMP_SPURS_NATIVE_PM':'1'}
 if sys.platform=='win32' or sys.platform.startswith('linux'): DEFAULTS.update(NATIVE_PM)   # off on macOS
 PAD_CLAIM={'PS3RECOMP_PAD_CLAIM_ON_INPUT':'1'}
 if sys.platform=='win32': DEFAULTS.update(PAD_CLAIM)   # Windows controllers through SDL2
-KEYS=tuple(DEFAULTS)+tuple(PAD_CLAIM)+('RUST_MIN_STACK','MAG_NATIVE_EDGEGEOM')+tuple(LINUX_VULKAN)+tuple(MACOS_METAL)+tuple(MFC_FAST)+tuple(CHANNEL_INLINE)+tuple(WALKER)+tuple(IB_FAST)+tuple(NATIVE_PM)
+# SDL watches for Windows controllers on its own thread, which reads the message window its Raw
+# Input controller driver registers; unread, it starved the game window's keyboard and mouse Raw Input.
+SDL_THREAD={'SDL_JOYSTICK_THREAD':'1'}
+if sys.platform=='win32': DEFAULTS.update(SDL_THREAD)
+KEYS=tuple(DEFAULTS)+tuple(PAD_CLAIM)+tuple(SDL_THREAD)+('RUST_MIN_STACK','MAG_NATIVE_EDGEGEOM')+tuple(LINUX_VULKAN)+tuple(MACOS_METAL)+tuple(MFC_FAST)+tuple(CHANNEL_INLINE)+tuple(WALKER)+tuple(IB_FAST)+tuple(NATIVE_PM)
+
+
+def windows_block_settings():
+    """The Setting{} names and values inside the header's `#if defined(_WIN32)` blocks."""
+    import re
+    text=(ROOT/'src/mag_runtime_defaults.h').read_text()
+    found={}
+    for block in re.findall(r'#if defined\(_WIN32\)\n(.*?)#endif', text, re.S):
+        found.update(re.findall(r'Setting\{"([A-Z0-9_]+)", "([^"]*)"\}', block))
+    return found
+
+
+class WindowsControllerDefaultsTests(unittest.TestCase):
+    def test_windows_runs_sdl_controller_watching_on_its_own_thread(self):
+        """With a controller attached, keyboard and mouse Raw Input must still reach the game window."""
+        settings=windows_block_settings()
+        self.assertEqual(settings.get('SDL_JOYSTICK_THREAD'),'1')
+        self.assertEqual(settings.get('PS3RECOMP_PAD_CLAIM_ON_INPUT'),'1')
 
 @unittest.skipUnless(shutil.which('clang++'),'clang++ required')
 class RuntimeDefaultsTests(unittest.TestCase):
