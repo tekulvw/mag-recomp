@@ -305,7 +305,7 @@ the session; events from every other thread are ignored entirely.
 **Census.** With `MAG_GAME_CONTROLS_TRACE=1`, or when a file named `controls-trace` exists next to the
 controls preferences (the packaged players pass no `MAG_` variables to the engine; on macOS that is
 `~/Library/Application Support/MAG/controls-trace`, on Windows `%APPDATA%\MAG\controls-trace`, on
-Linux `$XDG_CONFIG_HOME/MAG/controls-trace` or `~/.config/MAG/controls-trace`), the runtime prints, once per distinct description, each
+Linux `$XDG_CONFIG_HOME/MAG/controls-trace` or `~/.config/MAG/controls-trace`; MAG Settings' Debug page, **Record controls trace**, makes and removes it), the runtime prints, once per distinct description, each
 handler the game updates: its role (the local player's handler, a gameplay route, another system
 route or other), the attached context, whether it is enabled, the local player's movement state id
 and vtable, and every watched token with its channel (`[game-controls] census ...`). It reads guest

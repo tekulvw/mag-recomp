@@ -180,6 +180,7 @@ int main(int argc,char **argv) { @autoreleasepool {
   report.self=NSBundle.mainBundle.executablePath.fileSystemRepresentation;report.active=true;
   mag::reports::start_session(s,report.self);}
  env[@"MAG_PLAYER_OVERLAY_ROOT"]=ownedOverlay;env[@"MAG_PLAYER_SETUP"]=@"1";
+ env[@"MAG_PLAYER_LOGS_ROOT"]=[root stringByAppendingPathComponent:@"logs"];  // MAG Settings' Debug page: Open logs folder
  // Setup opens at every launch. --no-prompt, or MAG_SKIP_SETUP=1 from the caller, skips it (automation);
  // --settings (or Option, now redundant) still forces it.
  BOOL showSettings=(NSEvent.modifierFlags & NSEventModifierFlagOption)!=0,skipSetup=NO;

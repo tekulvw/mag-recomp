@@ -2,6 +2,7 @@
 // SDL events into the real panel, drawn into a software renderer; no window or display.
 #include "player_controls_settings.h"
 #include "player_portal.h"
+#include "player_settings_debug.h"
 #include "player_settings_form.h"
 #include "player_settings_sdl_panel.h"
 #include <cstdio>
@@ -143,8 +144,9 @@ static void general(const fs::path& folder) {
     SettingsWindowOptions setup;
     setup.setup = true;
     SettingsPanel panel(form, settings, setup, &display);
-    // The macOS panel's General page: no Controls segment without a catalog; no file yet, so Apply is on.
-    CHECK(!panel.shown("segment:general") && panel.focused() == "text:server");
+    // The macOS panel's General page: General and Debug, no Controls segment without a catalog; no file yet, so Apply is on.
+    CHECK(panel.shown("segment:general") && !panel.shown("segment:controls") && panel.shown("segment:debug") &&
+          panel.focused() == "text:server");
     CHECK(panel.label("button:play") == "Play MAG" && panel.enabled("button:play"));
     CHECK(panel.enabled("button:apply") && panel.status() == "Unsaved changes");
     CHECK(panel.account_status() == "Sign in with your account at https://magtest.online");
@@ -227,10 +229,9 @@ static void general(const fs::path& folder) {
     CHECK(linking.label("button:account") == "Link Account\xE2\x80\xA6");
     click(linking, "button:account");
     CHECK(linking.label("button:account") == "Cancel");
-    for (int i = 0; i < 400 && linking.account_status().find("Linked as") == std::string::npos; ++i) {
-        SDL_Delay(10);
-        linking.tick(now += 10);
-    }
+    // Wait for the link's worker itself (it sleeps the portal's 1-second poll interval on its own
+    // thread), not for a fixed number of ticks, which a loaded machine can outlast.
+    CHECK(linking.wait_for_account_link(60000));
     CHECK(linking.account_status() == "Linked as Rook_9" && linking.label("button:account") == "Unlink");
     CHECK(opened == "https://magtest.online/link?code=BCDF-GHJK" && account.player_name == "Rook_9");
     CHECK(fs::exists(folder / "portal-link.json"));
@@ -356,6 +357,57 @@ static void general_apply(const fs::path& folder) {
     CHECK(!settings_form_load(settings, form, error) && form.recovery && form.needs_save && settings_form_general_dirty(form));
     CHECK(read(settings) == "{broken");
     std::printf("general apply: draft, dirty, display change, ports, cancel, kept fields, recovery\n");
+}
+
+// The Debug page: the controls trace switch is the file the game looks for, made and removed at
+// once; Open logs folder opens the supervisor's logs folder. Apply and Cancel do not touch them.
+static void debug(const fs::path& folder) {
+    fs::create_directories(folder);
+    const fs::path settings = folder / "settings.json", trace = folder / "controls-trace", logs = folder / "logs";
+    std::ofstream(settings) << "{\"server_address\": \"\"}";
+    SettingsForm form;
+    std::string error;
+    CHECK(settings_form_load(settings, form, error));
+    // The portable switches, as every host's window uses them.
+    CHECK(controls_trace_path(settings) == trace && !debug_switch("controls_trace", settings));
+    CHECK(set_debug_switch("controls_trace", settings, true, error) && fs::exists(trace) && fs::file_size(trace) == 0);
+    CHECK(debug_switch("controls_trace", settings) && set_debug_switch("controls_trace", settings, true, error));
+    CHECK(set_debug_switch("controls_trace", settings, false, error) && !fs::exists(trace));
+    CHECK(set_debug_switch("controls_trace", settings, false, error));  // already off
+    CHECK(!set_debug_switch("unknown", settings, true, error) && !debug_switch("unknown", settings));
+    unsetenv("MAG_PLAYER_LOGS_ROOT");
+    char buffer[4096];
+    CHECK(logs_folder().empty() && !mag_settings_logs_folder(buffer, sizeof buffer));
+    {
+        SettingsPanel panel(form, settings, SettingsWindowOptions{});
+        click(panel, "segment:debug");
+        CHECK(panel.debug_page() && !panel.enabled("button:debug:open_logs"));  // no supervisor: no logs folder
+    }
+    setenv("MAG_PLAYER_LOGS_ROOT", logs.c_str(), 1);
+    CHECK(logs_folder() == logs && mag_settings_logs_folder(buffer, sizeof buffer) && logs == buffer);
+    CHECK(mag_settings_set_debug_switch("controls_trace", settings.c_str(), 1) && mag_settings_debug_switch("controls_trace", settings.c_str()));
+    CHECK(mag_settings_set_debug_switch("controls_trace", settings.c_str(), 0) && !fs::exists(trace));
+    // The window: General, Controls and Debug segments; Debug lists each item from the shared table.
+    SettingsPanel panel(form, settings, SettingsWindowOptions{});
+    std::string opened;
+    panel.open_page = [&](const std::string& path) { opened = path; };
+    CHECK(panel.shown("segment:general") && panel.shown("segment:debug"));
+    click(panel, "segment:debug");
+    CHECK(panel.debug_page() && !panel.controls_page() && !panel.shown("text:server") && !panel.enabled("button:apply"));
+    CHECK(panel.label("check:debug:controls_trace") == "Record controls trace" && panel.label("button:debug:open_logs") == "Open logs folder");
+    click(panel, "check:debug:controls_trace");
+    CHECK(fs::exists(trace) && panel.status() == "On \xC2\xB7 takes effect at the next launch");
+    draw(panel);
+    click(panel, "check:debug:controls_trace");
+    CHECK(!fs::exists(trace) && panel.status() == "Off \xC2\xB7 takes effect at the next launch");
+    click(panel, "button:debug:open_logs");
+    CHECK(opened == logs.string() && fs::is_directory(logs));
+    // Ctrl+Tab goes around the pages; Escape after a switch reports nothing saved.
+    send(panel, key(SDL_SCANCODE_TAB, KMOD_CTRL));
+    CHECK(!panel.debug_page() && !panel.controls_page());
+    CHECK(send(panel, key(SDL_SCANCODE_ESCAPE)) == SettingsPanel::State::Cancelled);
+    unsetenv("MAG_PLAYER_LOGS_ROOT");
+    std::printf("debug: controls trace switch, logs folder, pages\n");
 }
 
 static void controls(const fs::path& folder) {
@@ -535,6 +587,7 @@ int main(int argc, char** argv) {
     const fs::path folder = argv[1];
     general(folder / "general");
     general_apply(folder / "apply");
+    debug(folder / "debug");
     fs::create_directories(folder / "controls");
     controls(folder / "controls");
     forward();

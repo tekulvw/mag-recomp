@@ -15,7 +15,7 @@ function(mag_enable_player_settings target sdk)
     endif()
     target_sources(${target} PRIVATE "${_controls_source}" "${player_src}/player_controls_store.cpp" "${player_src}/player_input_capture.cpp" "${player_src}/player_preferences_file.cpp")
     target_sources(${target} PRIVATE
-        "${player_src}/player_settings_store.m" "${player_src}/player_settings_macos.m"
+        "${player_src}/player_settings_debug.cpp" "${player_src}/player_settings_store.m" "${player_src}/player_settings_macos.m"
         "${player_src}/player_settings_runtime.mm" "${player_src}/player_server_overlay.mm" "${player_src}/player_input_desktop_macos.mm"
         "${player_src}/player_archive.cpp" "${player_src}/player_render_scale.cpp"
         "${player_src}/player_portal.cpp" "${player_src}/player_portal_macos.mm")

@@ -357,7 +357,7 @@ else()
     # Also inert without MAG_PLAYER_SETTINGS_PATH. Its Controls pages and the F10 seams come with
     # MAG_GAME_CONTROLS (cmake/MagControls.cmake).
     target_sources(${PROJECT_NAME} PRIVATE src/player_settings_session.cpp src/player_settings_form.cpp
-        src/player_report_request.cpp)
+        src/player_report_request.cpp src/player_settings_debug.cpp)
     if(WIN32)
         # The window's Account row links through the portal over WinHTTP, as MAG.exe --link does.
         target_sources(${PROJECT_NAME} PRIVATE src/player_settings_win32.cpp src/player_input_win32_map.c

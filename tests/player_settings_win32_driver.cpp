@@ -44,6 +44,7 @@ std::unique_ptr<Transport> make_platform_transport() { return std::make_unique<F
 enum {
     IdGeneral = 100, IdControls, IdServer, IdName, IdAccount, IdAdvanced, IdTcp, IdUdp, IdDisplay, IdOutput, IdRendering, IdAntiAliasing,
     IdSendReports, IdReportNow,
+    IdDebugPage = 120, IdDebugNote, IdDebugItem = 400, IdDebugHint = 450,
     IdKeyboardMouse = 200, IdController, IdMode, IdScope, IdSensitivity, IdInvert, IdReset, IdRows, IdHint,
     IdError = 300, IdRevert, IdKeep, IdCancel, IdApply, IdPlay, IdStatus, IdAccountStatus, IdReportStatus,
     IdBinding = 1000,
@@ -81,8 +82,8 @@ static bool wait_until(const std::function<bool()>& ready, int milliseconds = 50
     }
     return ready();
 }
-static bool wait_text(HWND window, int id, const char* wanted) {
-    if (wait_until([&] { return contains(window, id, wanted); })) return true;
+static bool wait_text(HWND window, int id, const char* wanted, int milliseconds = 5000) {
+    if (wait_until([&] { return contains(window, id, wanted); }, milliseconds)) return true;
     std::printf("[driver] waiting for \"%s\" in %d, found \"%s\"\n", wanted, id, item(window, id).c_str());
     return false;
 }
@@ -152,6 +153,9 @@ static void in_game(const fs::path& folder) {
     RECT game_before;
     GetWindowRect(game, &game_before);
     HANDLE controls_saved = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+    // The packaged supervisor names the logs folder for the Debug page.
+    const fs::path logs = folder / "logs";
+    _wputenv_s(L"MAG_PLAYER_LOGS_ROOT", logs.c_str());
 
     std::thread player([&] {
         HWND window = wait_window(L"MAGSettingsWindow", L"MAG Settings");
@@ -189,8 +193,9 @@ static void in_game(const fs::path& folder) {
         CHECK(item(window, IdAccount) == "Link Account\xE2\x80\xA6");
         click(window, IdAccount);
         CHECK(item(window, IdAccount) == "Cancel");
-        CHECK(wait_text(window, IdAccountStatus, "Enter BCDF-GHJK at https://magtest.online/link"));
-        CHECK(wait_text(window, IdAccountStatus, "Linked as Rook_9"));
+        CHECK(wait_text(window, IdAccountStatus, "Enter BCDF-GHJK at https://magtest.online/link", 60000));
+        // The link's worker sleeps the portal's 1-second poll interval on its own thread: allow for a slow machine.
+        CHECK(wait_text(window, IdAccountStatus, "Linked as Rook_9", 60000));
         {
             std::lock_guard<std::mutex> lock(opened_lock);
             CHECK(opened == "https://magtest.online/link?code=BCDF-GHJK");
@@ -312,6 +317,29 @@ static void in_game(const fs::path& folder) {
         // The controller page lists controller bindings only.
         click(window, IdController);
         CHECK(item(window, IdReset).find("Reset Controller") != std::string::npos && !visible(window, IdSensitivity));
+        // Debug: the controls trace switch makes and removes its file at once; Open logs folder.
+        click(window, IdDebugPage);
+        CHECK(visible(window, IdDebugItem) && visible(window, IdDebugItem + 1) && !visible(window, IdRows) && !visible(window, IdServer));
+        CHECK(item(window, IdDebugItem) == "Record controls trace" && item(window, IdDebugItem + 1) == "Open logs folder");
+        CHECK(!enabled(window, IdApply) && enabled(window, IdDebugItem + 1));
+        CHECK(SendMessageW(GetDlgItem(window, IdDebugItem), BM_GETCHECK, 0, 0) == BST_UNCHECKED && !fs::exists(folder / "controls-trace"));
+        SendMessageW(GetDlgItem(window, IdDebugItem), BM_SETCHECK, BST_CHECKED, 0);
+        click(window, IdDebugItem);
+        CHECK(fs::exists(folder / "controls-trace") && fs::file_size(folder / "controls-trace") == 0);
+        CHECK(contains(window, IdStatus, "next launch"));
+        SendMessageW(GetDlgItem(window, IdDebugItem), BM_SETCHECK, BST_UNCHECKED, 0);
+        click(window, IdDebugItem);
+        CHECK(!fs::exists(folder / "controls-trace"));
+        std::ofstream(folder / "controls-trace").close();  // made elsewhere: the page shows it
+        click(window, IdGeneral);
+        click(window, IdDebugPage);
+        CHECK(SendMessageW(GetDlgItem(window, IdDebugItem), BM_GETCHECK, 0, 0) == BST_CHECKED);
+        click(window, IdDebugItem + 1);
+        {
+            std::lock_guard<std::mutex> lock(opened_lock);
+            CHECK(fs::path(opened) == logs && fs::is_directory(logs));
+        }
+        fs::remove(folder / "controls-trace");
         PostMessageW(window, WM_COMMAND, MAKEWPARAM(IdCancel, BN_CLICKED), 0);
     });
     SettingsWindowOptions options;
