@@ -11,6 +11,15 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 @unittest.skipUnless(platform.system() == 'Darwin', 'native macOS settings')
 class PlayerSettingsTests(unittest.TestCase):
+    @staticmethod
+    def debug_object(folder):
+        # The panel's Debug page calls src/player_settings_debug.cpp (C++): an object for the
+        # Objective-C link, which then needs libc++.
+        obj = pathlib.Path(folder) / 'player_settings_debug.o'
+        subprocess.run(['xcrun', 'clang++', '-std=c++20', '-Wall', '-Wextra', '-Werror', '-I' + str(ROOT / 'src'), '-c',
+                        str(ROOT / 'src/player_settings_debug.cpp'), '-o', str(obj)], check=True, capture_output=True, timeout=60)
+        return [str(obj), '-lc++']
+
     def test_debug_page_switch_and_logs_folder(self):
         """The C interface the macOS panel's Debug page uses (src/player_settings_debug.h), headless."""
         with tempfile.TemporaryDirectory() as tmp:
@@ -72,7 +81,7 @@ int main(int argc, char **argv) { @autoreleasepool {
                 '-Wno-unused-parameter', '-I' + str(ROOT / 'src'),
                 str(ROOT / 'tests/player_settings_window.m'),
                 str(ROOT / 'src/player_settings_store.m'), str(ROOT / 'src/player_settings_macos.m'),
-                '-framework', 'AppKit', '-framework', 'QuartzCore', '-o', str(binary)],
+                *self.debug_object(tmp), '-framework', 'AppKit', '-framework', 'QuartzCore', '-o', str(binary)],
                 capture_output=True, text=True, timeout=30)
             self.assertEqual(result.returncode, 0, result.stderr)
             result = subprocess.run([str(binary), tmp], capture_output=True, text=True, timeout=25)
@@ -88,7 +97,7 @@ int main(int argc, char **argv) { @autoreleasepool {
                 '-Wno-unused-parameter', '-I' + str(ROOT / 'src'),
                 str(ROOT / 'tests/player_settings_reports.m'),
                 str(ROOT / 'src/player_settings_store.m'), str(ROOT / 'src/player_settings_macos.m'),
-                '-framework', 'AppKit', '-framework', 'QuartzCore', '-o', str(binary)],
+                *self.debug_object(tmp), '-framework', 'AppKit', '-framework', 'QuartzCore', '-o', str(binary)],
                 capture_output=True, text=True, timeout=30)
             self.assertEqual(result.returncode, 0, result.stderr)
             result = subprocess.run([str(binary), tmp], capture_output=True, text=True, timeout=25)

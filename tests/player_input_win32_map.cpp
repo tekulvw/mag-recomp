@@ -91,6 +91,18 @@ void mouse() {
     require(mag_win32_raw_mouse_motion(MAG_WIN32_MOUSE_MOVE_ABSOLUTE, 30000, 20000, &dx, &dy) == 0 && dx == 99 && dy == 99,
             "absolute-position devices do not drive look");
     require(mag_win32_raw_mouse_motion(0, 0, 0, &dx, &dy) == 0, "no movement, no motion");
+
+    // The wheel: 120 to a notch, up positive, fine-grained deltas accumulate into whole steps.
+    int32_t rest = 0;
+    require(mag_win32_raw_mouse_wheel(0, 120, &rest) == 0 && rest == 0, "no wheel flag, no steps");
+    require(mag_win32_raw_mouse_wheel(MAG_WIN32_MOUSE_WHEEL, 120, &rest) == 1, "one notch up");
+    require(mag_win32_raw_mouse_wheel(MAG_WIN32_MOUSE_WHEEL, uint16_t(-240), &rest) == -2, "two notches down");
+    require(mag_win32_raw_mouse_wheel(MAG_WIN32_MOUSE_WHEEL, 60, &rest) == 0 && rest == 60, "half a notch waits");
+    require(mag_win32_raw_mouse_wheel(MAG_WIN32_MOUSE_WHEEL, 60, &rest) == 1 && rest == 0, "the second half steps");
+    require(mag_win32_raw_mouse_wheel(MAG_WIN32_MOUSE_WHEEL, 80, &rest) == 0 &&
+                mag_win32_raw_mouse_wheel(MAG_WIN32_MOUSE_WHEEL, uint16_t(-80), &rest) == 0 && rest == -80,
+            "turning back drops the part of a step the other way");
+    require(mag_win32_raw_mouse_edges(MAG_WIN32_MOUSE_WHEEL, edges) == 0, "the wheel is no button edge");
 }
 
 void xinput() {

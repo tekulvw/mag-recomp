@@ -236,9 +236,18 @@ the command screen into an on-foot Select key where Select has room for it. Load
 bindings to retired actions (`mag_game_controls_retired_actions`, the settings registration's
 `retired`) so that a revision 2 file still loads; the upgrade removes them before validation.
 
+**Catalog revision 4** adds the mouse wheel for scope zoom: wheel up and down (mouse codes 8 and
+9, `MouseWheelUp`, `MouseWheelDown`) are on-foot keys for D-pad up and down, which the game's
+scopeup and scopedown tokens use; the arrows keep working. On foot the wheel also moves anything
+else the game reads on D-pad up and down, since the adapter cannot tell a scope from the outside.
+Upgrading adds each wheel step only where the player uses it for nothing on foot and the D-pad
+direction has fewer than two keyboard or mouse controls there.
+
 Token aliases (a watched token that stands for a catalog action): `0x68C3570D` is Aim,
 `0x9716C7A1` is Crouch/prone, `0x71C8F2F0` (contaction, the held form) is Interact, `0xC6DCD89F`
-(commandscreen) is Select. Every other token stands for itself.
+(commandscreen) is Select, `0xE88EB86F` (respawn) is Start, `0xF280DD78` and `0x6BF6CA31`
+(scopeup, scopedown: scope zoom) are D-pad up and down. The census shows each watched on that
+button, so these aliases change no recognition; they let prompts such as `[Respawn]` name the key. Every other token stands for itself.
 
 Look tokens (the four look-axis channels): `0xC8A3E21D`, `0x941734A2`, `0x661CB595`, `0xC34F3A66`.
 
@@ -766,6 +775,12 @@ while Command is held and leaves the engine's window fields unfocused when captu
   such as firing or aiming, leaves it alone, so look motion around the click is kept. Motion counts only if it was
   observed while ready and relative under the current mode. An intentional mouse-mode change
   (menu versus gameplay) changes relative motion only and keeps held keys and buttons.
+- The mouse wheel's whole steps (up, away from the user, positive) are presses each followed at
+  once by a release of mouse code 8 (up) or 9 (down), at most 8 a report; they count while ready,
+  in menus as well as on foot, and nothing stays held. Fractional reports (fine-grained wheels)
+  accumulate into whole steps; a turn the other way drops the partial step. Natural ("flipped")
+  scrolling is turned back to the wheel's own direction. macOS reads GameController's scroll
+  input, SDL its wheel events, Win32 Raw Input's wheel delta (120 to a notch).
 - The left and right GUI keys are never captured.
 
 The SDL backend runs on the game window's thread. The SDK's window pump polls SDL events and then

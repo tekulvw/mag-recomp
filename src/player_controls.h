@@ -43,6 +43,9 @@ struct ControllerLookRequest {
 };
 enum class InputContext : uint32_t { OnFoot=1, Vehicle=2, Turret=4, Tactical=8, Menu=16, Settings=32, Rebinding=64 };
 using ActionId=uint32_t;
+// Mouse codes: buttons 0 left, 1 right, 2 middle, 3 and 4 the side buttons; the wheel's steps are
+// the codes below, each step a press and an immediate release.
+constexpr uint32_t MouseWheelUp=8, MouseWheelDown=9;
 struct PhysicalControl {
     InputSource source=InputSource::Keyboard;
     uint32_t code=0;
