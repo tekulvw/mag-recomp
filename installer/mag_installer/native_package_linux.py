@@ -39,6 +39,7 @@ _SUPERVISOR = r'''
 #include "player_portal.h"
 #include "player_reports.h"
 #include "player_settings_portable.h"
+#include "player_social.h"
 #include "supervisor_config.h"
 #ifndef MAG_RUNTIME_DEFAULTS  // a config written before packaged defaults existed: none
 #define MAG_RUNTIME_DEFAULTS {}
@@ -238,6 +239,21 @@ static void portal_ticket(std::map<std::string,std::string>& env,const fs::path&
  if(!mag::portal::fall_back_to_name_sign_in)fail(result.message);
  std::cerr<<"MAG account: "<<result.message<<" This time MAG signs in with your player name instead.\n";
 }
+// Friends and presence while the engine runs (docs/player-social.md): this supervisor holds the
+// device token and runs the portal worker; the game exchanges lines with it through a spool folder
+// next to the ticket. Quiet when not linked; MAG_SOCIAL=0 turns it off.
+static std::unique_ptr<mag::social::SpoolServer> social;
+static void social_start(std::map<std::string,std::string>& env,const fs::path& link_file,const fs::path& ticket,
+                         const mag::PortableSettings& settings) {
+ env.erase("MAG_SOCIAL_SPOOL");social.reset();
+ const char* off=getenv("MAG_SOCIAL");
+ if((off&&std::string(off)=="0")||!env.count("MAG_PLAYER_PORTAL_TICKET"))return;
+ const std::string portal=mag::portal::portal_for(settings.server_address,settings.portal_url);
+ const fs::path dir=ticket.parent_path()/"social";
+ social=mag::social::SpoolServer::start(mag::portal::make_platform_transport,link_file,portal,dir,
+                                        [](const std::string& line){std::cerr<<"MAG friends: "<<line<<"\n";});
+ if(social)env["MAG_SOCIAL_SPOOL"]=dir.string();
+}
 int main(int argc,char** argv) {
  umask(0077);
  try {
@@ -337,9 +353,10 @@ int main(int argc,char** argv) {
  for(auto i=env.begin();i!=env.end();)if(i->first.find("MAG_HANDOFF_")==0||i->first.find("MAG_ENGINE_")==0||i->first=="MAG_PLAYER_SETUP"||i->first=="MAG_PLAYER_SET_SERVER"||i->first=="MAG_PLAYER_SET_NAME"||i->first=="MAG_SKIP_SETUP")i=env.erase(i);else ++i;
  // The engine signs in again (MAS, statistics) and gets its own fresh ticket; it reads the name the
  // launcher saved, so the settings are read again here.
- {std::map<std::string,std::string> none;portal_ticket(env,link_file,ticket,player_settings(settings,none,settings_usable),false);}
+ {std::map<std::string,std::string> none;auto engine_settings=player_settings(settings,none,settings_usable);
+  portal_ticket(env,link_file,ticket,engine_settings,false);social_start(env,link_file,ticket,engine_settings);}
  env["PS3_BOOT_PATH"]="/dev_bdvd/PS3_GAME/USRDIR/bin/mage_g.self";
- report.engine_exit=run(engine,ee,logs,env,"engine.log");show_sign_in_notice(ticket,logs,interactive);end_report();return int(report.engine_exit);
+ report.engine_exit=run(engine,ee,logs,env,"engine.log");social.reset();show_sign_in_notice(ticket,logs,interactive);end_report();return int(report.engine_exit);
  }catch(const std::exception& e){if(reporting&&report.launch_error.empty())report.launch_error=e.what();end_report();std::string msg="MAG could not start: "+std::string(e.what())+"\n";std::cerr<<msg;if(!root.empty()){int fd=open((root/"launch-error.log").c_str(),O_WRONLY|O_CREAT|O_TRUNC|O_NOFOLLOW,0600);if(fd>=0){write(fd,msg.data(),msg.size());close(fd);}}return 1;}
 }
 '''
@@ -348,7 +365,9 @@ int main(int argc,char** argv) {
 # Portable sources the supervisor compiles with it (HTTPS through OpenSSL's libssl).
 SUPERVISOR_SOURCES = ('player_portal.h', 'player_portal.cpp', 'player_portal_openssl.cpp', 'player_settings_portable.h',
                       'player_settings_file.cpp', 'player_settings_text.h', 'player_sign_in.h',
-                      'player_reports.h', 'player_reports.cpp', 'player_gzip.h', 'player_gzip.cpp', 'player_sign_in_refusal.h')
+                      'player_reports.h', 'player_reports.cpp', 'player_gzip.h', 'player_gzip.cpp', 'player_sign_in_refusal.h',
+                      'player_report_request.h', 'player_report_request.cpp',
+                      'player_social.h', 'player_social.cpp')
 
 
 def _copy_dependencies(binaries, destination, token, dynamic_libraries=()):

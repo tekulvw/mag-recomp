@@ -655,12 +655,16 @@ struct TicketRefill::State {
     std::string last_said;
     std::string last_failure;  // the last fetch problem, for an expiry note
     std::string server_refusal;  // the game server refused a sign-in: kept until the session ends
+    std::string portal_refusal;  // the portal refused the account (unlinked, banned...): kept until a ticket arrives
     std::thread worker;
 
-    // Keep (or drop) the note for the player beside the ticket.
-    void note(const std::string &given) {
+    // Keep (or drop) the note for the player beside the ticket. A refusal outranks an expiry: once
+    // the portal or the server has refused the account, an expiry it causes later (no ticket can
+    // replace the last one) never replaces the advice to link again or restart.
+    void note(const std::string &given, bool expiry = false) {
         if (policy.notice_file.empty()) return;
-        const std::string text = given.empty() ? server_refusal : given;
+        if (expiry && !(portal_refusal.empty() && server_refusal.empty())) return;
+        const std::string text = !given.empty() ? given : !portal_refusal.empty() ? portal_refusal : server_refusal;
         std::error_code code;
         if (text.empty()) { fs::remove(policy.notice_file, code); return; }
         std::string error;
@@ -706,7 +710,7 @@ struct TicketRefill::State {
                 fs::remove(file, code);
                 present = false;
                 say("The waiting sign-in ticket expired before a fresh one arrived; it was removed.");
-                note(sign_in_notice(Status::Expired, last_failure));
+                note(sign_in_notice(Status::Expired, last_failure), true);
             }
             const bool renew = present && renew_at > 0 && now >= renew_at;
             if ((!present || renew) && now >= retry_at) {
@@ -716,6 +720,7 @@ struct TicketRefill::State {
                     retry_at = 0;
                     ++fetched;
                     last_failure.clear();
+                    portal_refusal.clear();
                     note("");
                     say(present ? "Replaced the waiting sign-in ticket before it expired."
                                 : "A fresh sign-in ticket is ready for the next sign-in.");
@@ -726,10 +731,11 @@ struct TicketRefill::State {
                     // only matters once the waiting ticket expires (above).
                     if (ticket.status == Status::Unlinked || ticket.status == Status::Banned ||
                         ticket.status == Status::NoPlayerName || ticket.status == Status::Expired ||
-                        ticket.status == Status::UnknownAudience)
-                        note(sign_in_notice(ticket.status, ticket.message));
-                    else if (!present && expires_at > 0 && now >= expires_at)
-                        note(sign_in_notice(Status::Expired, last_failure));  // no ticket left, and why
+                        ticket.status == Status::UnknownAudience) {
+                        portal_refusal = sign_in_notice(ticket.status, ticket.message);
+                        note(portal_refusal);
+                    } else if (!present && expires_at > 0 && now >= expires_at)
+                        note(sign_in_notice(Status::Expired, last_failure), true);  // no ticket left, and why
                     say("Cannot fetch a fresh sign-in ticket: " +
                         (ticket.message.empty() ? std::string("this computer is no longer linked to a portal account.") : ticket.message));
                 }

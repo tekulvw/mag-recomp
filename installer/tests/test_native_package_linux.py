@@ -507,6 +507,107 @@ int main(void){
             self.assertFalse((install/'home/player/sign-in-notice.txt').exists())  # shown once
             self.assertFalse(link.exists())  # the refused token is forgotten
 
+    # A game stand-in for friends (docs/player-social.md): the engine phase publishes presence through
+    # the spool and waits for the friends list the supervisor's worker polled from the portal.
+    SOCIAL_GAME=r'''
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+extern char** environ;
+int main(void) {
+ const char* request=getenv("MAG_HANDOFF_REQUEST");const char* spool=getenv("MAG_SOCIAL_SPOOL");
+ FILE* out=fopen(request?"launcher.env":"engine.env","w");if(!out)return 40;
+ fprintf(out,"social=%s\n",spool?spool:"");
+ int token=0;for(char** e=environ;*e;e++)if(strstr(*e,"mgd_"))token=1;
+ fprintf(out,"token_in_env=%d\n",token);
+ if(request){fclose(out);FILE* f=fopen(request,"wx");if(!f)return 46;
+  fprintf(f,"{\"version\":1,\"token\":\"%s\",\"guest_path\":\"/dev_bdvd/PS3_GAME/USRDIR/bin/mage_g.self\",\"kind\":\"mage_g\"}\n",getenv("MAG_HANDOFF_TOKEN"));fclose(f);return 90;}
+ if(spool){
+  char path[4096];snprintf(path,sizeof path,"%s/from-game",spool);
+  FILE* cmd=fopen(path,"a");if(!cmd)return 41;fputs("{\"t\":\"presence\",\"data_b64\":\"AQI=\"}\n",cmd);fclose(cmd);
+  snprintf(path,sizeof path,"%s/to-game",spool);
+  char line[4096]="";
+  for(int i=0;i<200&&!strstr(line,"\"event\"");i++){FILE* in=fopen(path,"r");if(in){if(!fgets(line,sizeof line,in))line[0]=0;fclose(in);}usleep(50000);}
+  fprintf(out,"event=%s",line[0]?line:"\n");
+  usleep(300000);   /* the presence publish */
+ }
+ fclose(out);return 23;
+}
+'''
+
+    @unittest.skipUnless(sys.platform=='linux','requires Linux ELF loader and OpenSSL development headers')
+    def test_native_supervisor_runs_friends_beside_the_engine(self):
+        """Friends and presence (docs/player-social.md): for a linked account the supervisor runs the
+        portal worker during the engine phase only, the game talks to it through the spool folder and
+        never sees the device token, and the player is marked offline after the game exits."""
+        import base64, http.server, threading
+        TOKEN='mgd_'+'Fixture0123456789-_abcdefghijklmnopqrstuvw'
+        ticket=b'MAGT\x01\x01'+bytes(8)+(100).to_bytes(8,'big')+(42).to_bytes(4,'big')+b'n'*16+b'\x0bexample.org\x06Rook_7'+b's'*64
+        seen=[]
+        class Portal(http.server.BaseHTTPRequestHandler):
+            def log_message(self,*args): pass
+            def reply(self,status,value):
+                body=json.dumps(value).encode();self.send_response(status)
+                self.send_header('Content-Type','application/json');self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body)
+            def body(self):
+                length=self.headers.get('Content-Length');return json.loads(self.rfile.read(int(length)) or b'{}') if length else None
+            def do_POST(self):
+                self.body()
+                if self.path=='/api/v1/ticket':
+                    return self.reply(200,dict(ticket=base64.b64encode(ticket).decode(),expires_at=1800000600,account_id=42,
+                                               player_name='Rook_7',audience='example.org'))
+                self.reply(404,{'error':'not_found'})
+            def do_GET(self):
+                seen.append(('GET',self.path,self.headers.get('Authorization'),None))
+                if self.path=='/api/v1/social':
+                    return self.reply(200,{'self':'Rook_7','friends':[{'name':'alice','online':True,
+                                           'presence':{'data_b64':'BQY=','updated_at':'2026-11-24T00:00:00Z'}}],
+                                           'incoming':[],'outgoing':[],'blocked':[],'poll_seconds':15})
+                self.reply(404,{'error':'not_found'})
+            def do_PUT(self):
+                seen.append(('PUT',self.path,self.headers.get('Authorization'),self.body()))
+                self.send_response(204);self.send_header('Content-Length','0');self.end_headers()
+        server=http.server.ThreadingHTTPServer(('127.0.0.1',0),Portal);port=server.server_address[1]
+        threading.Thread(target=server.serve_forever,daemon=True).start()
+        self.addCleanup(server.server_close);self.addCleanup(server.shutdown)
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            install=self.install_fixture(root,self.SOCIAL_GAME)
+            config=root/'config/MAG';config.mkdir(parents=True,mode=0o700)
+            portal=f'http://127.0.0.1:{port}'
+            (config/'settings.json').write_text(json.dumps({'server_address':'example.org','player_name':'Rook_7','portal_url':portal}))
+            link=config/'portal-link.json'
+            link.write_text(json.dumps({'schema_version':1,'portal':portal,'device_token':TOKEN,'player_name':'Rook_7'}));link.chmod(0o600)
+            env={k:v for k,v in os.environ.items() if k not in ('DISPLAY','WAYLAND_DISPLAY','MAG_SOCIAL')}
+            env['XDG_CONFIG_HOME']=str(root/'config');env['MAG_REPORTS']='0'
+            def launch(extra=None):
+                run=subprocess.run([str(install/'MAG/MAG'),'--no-prompt'],env={**env,**(extra or {})},capture_output=True,text=True,timeout=90)
+                self.assertEqual(run.returncode,23,run.stdout+run.stderr)
+                logs=max((install/'logs').glob('launch-*'),key=lambda p:p.stat().st_mtime)
+                read=lambda name:dict(line.split('=',1) for line in (logs/name).read_text().splitlines() if '=' in line)
+                return read('launcher.env'),read('engine.env'),run
+            launcher,engine,run=launch()
+            spool=install/'home/player/social'
+            self.assertEqual(launcher['social'],'');self.assertEqual(engine['social'],str(spool))
+            self.assertEqual((launcher['token_in_env'],engine['token_in_env']),('0','0'))
+            event=json.loads(engine['event'])
+            self.assertEqual((event['t'],event['event'],event['name'],event['data_b64']),('event',1,'alice','BQY='))
+            self.assertIn(('GET','/api/v1/social','Bearer '+TOKEN,None),seen)
+            puts=[r[3] for r in seen if r[0]=='PUT']
+            self.assertEqual(puts[0],{'data_b64':'AQI=','state':'online'});self.assertEqual(puts[-1],{'data_b64':'AQI=','state':'offline'})
+            self.assertEqual(spool.stat().st_mode&0o777,0o700)
+            for name in ('to-game','from-game'):self.assertNotIn(TOKEN,(spool/name).read_text())
+            self.assertNotIn(TOKEN,run.stdout+run.stderr)
+            # MAG_SOCIAL=0: no worker, no spool for the game, nothing asked of the portal.
+            del seen[:]
+            launcher,engine,run=launch({'MAG_SOCIAL':'0'})
+            self.assertEqual(engine['social'],'');self.assertEqual(seen,[])
+            # Not linked: quiet.
+            link.unlink()
+            launcher,engine,run=launch()
+            self.assertEqual(engine['social'],'');self.assertEqual(seen,[]);self.assertNotIn('MAG friends',run.stderr)
+
     @unittest.skipUnless(sys.platform=='linux','requires Linux ELF loader and OpenSSL development headers')
     def test_native_supervisor_imports_a_service_account_token(self):
         """--link-token: a staff-minted token from standard input, checked against a ticket-enforcing test server's portal."""

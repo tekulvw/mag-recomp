@@ -34,6 +34,16 @@ int mag_portal_phase(const wchar_t *settings_file, const wchar_t *server_choice,
  * holds it ("Your MAG sign-in expired ... Restart MAG to sign in again."); 0: nothing to say. */
 int mag_portal_take_notice(const wchar_t *ticket_file, wchar_t *message, int capacity);
 
+/* Friends and presence while the engine runs (docs/player-social.md): when this computer is linked
+ * to the portal that applies to the settings, prepare the spool folder `spool_dir`, run the portal
+ * worker here with the device token, and set MAG_SOCIAL_SPOOL for the game. `log_file` (may be
+ * NULL) receives the worker's lines. Returns 1 when started; 0 (quietly) when not linked, when the
+ * portal does not apply, or when `off`. */
+int mag_social_start(const wchar_t *settings_file, const wchar_t *server_choice, const wchar_t *spool_dir, const wchar_t *log_file,
+                     int off);
+/* After the game: mark the player offline and stop (waits a few seconds at most). */
+void mag_social_stop(void);
+
 #ifdef __cplusplus
 }
 #endif

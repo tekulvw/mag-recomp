@@ -203,6 +203,8 @@ int main(int argc,char **argv) { @autoreleasepool {
  for(int i=1;i<argc;i++){if(!strcmp(argv[i],"--settings"))showSettings=YES;else if(!strcmp(argv[i],"--no-prompt"))skipSetup=YES;}
  const char *callerSkip=getenv("MAG_SKIP_SETUP");if(callerSkip&&*callerSkip&&strcmp(callerSkip,"0"))skipSetup=YES;
  if(showSettings)env[@"MAG_PLAYER_SHOW_SETTINGS"]=@"1";else if(skipSetup)env[@"MAG_SKIP_SETUP"]=@"1";
+ // MAG_SOCIAL=0 from the caller: no friends or presence (docs/player-social.md).
+ const char *callerSocial=getenv("MAG_SOCIAL");if(callerSocial&&!strcmp(callerSocial,"0"))env[@"MAG_SOCIAL"]=@"0";
  int result=run(launcher,launcherElf,logs,env,[logs stringByAppendingPathComponent:@"launcher.log"]);
  report.session.launcher_exit=result;
  if(result!=90){signInNotice(ownedOverlay,logs,skipSetup);return result;}
@@ -230,6 +232,7 @@ int main(int argc,char **argv) { @autoreleasepool {
 # Sources the supervisor compiles with it: the reports (src/player_reports.h), their gzip, and the
 # portal transport that sends them with the linked account's token.
 SUPERVISOR_SOURCES = ('player_reports.h', 'player_reports.cpp', 'player_gzip.h', 'player_gzip.cpp', 'player_portal.h',
+                      'player_report_request.h', 'player_report_request.cpp', 'player_settings_text.h',
                       'player_portal.cpp', 'player_portal_macos.h', 'player_portal_macos.mm', 'player_settings_macos.h',
                       'player_settings_store.h', 'player_sign_in_refusal.h')
 

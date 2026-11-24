@@ -43,7 +43,7 @@ std::unique_ptr<Transport> make_platform_transport() { return std::make_unique<F
 // Control identifiers of player_settings_win32.cpp.
 enum {
     IdGeneral = 100, IdControls, IdServer, IdName, IdAccount, IdAdvanced, IdTcp, IdUdp, IdDisplay, IdOutput, IdRendering, IdAntiAliasing,
-    IdSendReports, IdReportNow,
+    IdSendReports, IdReportNow, IdReportComment, IdReportCounter,
     IdDebugPage = 120, IdDebugNote, IdDebugItem = 400, IdDebugHint = 450,
     IdKeyboardMouse = 200, IdController, IdMode, IdScope, IdSensitivity, IdInvert, IdReset, IdRows, IdHint,
     IdError = 300, IdRevert, IdKeep, IdCancel, IdApply, IdPlay, IdStatus, IdAccountStatus, IdReportStatus,
@@ -234,10 +234,23 @@ static void in_game(const fs::path& folder) {
         std::string link_error;
         CHECK(portal::save_link(folder / "portal-link.json", {"https://magtest.online", "mgd_synthetic_token", "Rook_9"}, link_error));
         type(window, IdServer, L"play.magtest.online ");
-        CHECK(enabled(window, IdReportNow));
+        CHECK(enabled(window, IdReportNow) && enabled(window, IdReportComment) && visible(window, IdReportComment));
+        // The comment: CR LF becomes LF, other characters stay; the counter counts code points.
+        CHECK(item(window, IdReportCounter) == "0/1000");
+        type(window, IdReportComment, L"Froze on deploy\r\nCaf\u00e9 \"twice\"");
+        SendMessageW(window, WM_COMMAND, MAKEWPARAM(IdReportComment, EN_CHANGE), LPARAM(GetDlgItem(window, IdReportComment)));
+        CHECK(item(window, IdReportCounter) == "28/1000");
         click(window, IdReportNow);
         const std::string request = read(marker);
         CHECK(request.rfind("{\"requested_at\":", 0) == 0);
+        CHECK(request.find("\"comment\":\"Froze on deploy\\nCaf\xc3\xa9 \\\"twice\\\"\"}") != std::string::npos);
+        // Sent: the box is empty again for the next report.
+        CHECK(item(window, IdReportComment).empty() && item(window, IdReportCounter) == "0/1000");
+        // Past the limit the box is cut back to 1000 code points.
+        type(window, IdReportComment, std::wstring(1200, L'x').c_str());
+        SendMessageW(window, WM_COMMAND, MAKEWPARAM(IdReportComment, EN_CHANGE), LPARAM(GetDlgItem(window, IdReportComment)));
+        CHECK(item(window, IdReportCounter) == "1000/1000");
+        type(window, IdReportComment, L"");
         const size_t id_at = request.find("\"report_id\":\"");
         CHECK(id_at != std::string::npos);
         if (id_at != std::string::npos)

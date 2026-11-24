@@ -51,7 +51,7 @@ void (*settings_window_open_page)(const std::string& url) = nullptr;
 namespace {
 enum : int {
     IdGeneral = 100, IdControls, IdServer, IdName, IdAccount, IdAdvanced, IdTcp, IdUdp,
-    IdDisplay, IdOutput, IdRendering, IdAntiAliasing, IdSendReports, IdReportNow,
+    IdDisplay, IdOutput, IdRendering, IdAntiAliasing, IdSendReports, IdReportNow, IdReportComment, IdReportCounter,
     IdKeyboardMouse = 200, IdController, IdMode, IdScope, IdSensitivity, IdInvert, IdReset, IdRows, IdHint,
     IdError = 300, IdRevert, IdKeep, IdCancel, IdApply, IdPlay, IdStatus, IdAccountStatus, IdReportStatus,
     IdDebugPage = 120, IdDebugNote,
@@ -188,6 +188,8 @@ struct Window {
     HWND display = nullptr, output = nullptr, rendering = nullptr, anti_aliasing = nullptr;
     HWND heading_reports = nullptr, send_reports = nullptr, report_button = nullptr, report_status = nullptr;
     std::string report_requested;  // after Send report: requested, or why it failed
+    // Send report's comment: a multi-line box under the Reports group, its title, hint and counter.
+    HWND report_comment_title = nullptr, report_comment_hint = nullptr, report_comment = nullptr, report_counter = nullptr;
     std::vector<Row> connection_rows, graphics_rows, reports_rows;
     // Debug: one row per mag_settings_debug_items entry.
     HWND heading_debug = nullptr, debug_note = nullptr;
@@ -355,13 +357,33 @@ void refresh_account() {
 void refresh_report() {
     const char* blocker = report_request_blocker(s->account->linked_name(account_portal()).has_value());
     EnableWindow(s->report_button, !blocker && !s->pending);
+    EnableWindow(s->report_comment, !blocker && !s->pending);
     set_text(s->report_status, !s->report_requested.empty() ? s->report_requested
                                : blocker ? blocker : MAG_SETTINGS_SEND_REPORT_HINT);
+}
+// The comment as it will be sent: LF line ends, at most MAG_SETTINGS_REPORT_COMMENT_LIMIT code points.
+std::string report_comment_text() { return clip_report_comment(narrow(text_of(s->report_comment))); }
+// After each edit: the counter, and the box cut back to the limit (the edit control's own limit
+// counts UTF-16 units, so a long paste of characters outside the BMP is cut here).
+void report_comment_changed() {
+    const std::string typed = narrow(text_of(s->report_comment)), kept = clip_report_comment(typed);
+    if (report_comment_length(clip_report_comment(typed, size_t(-1))) > MAG_SETTINGS_REPORT_COMMENT_LIMIT) {
+        std::wstring shown_text;
+        for (wchar_t c : wide(kept)) { if (c == L'\n') shown_text += L'\r'; shown_text += c; }
+        SetWindowTextW(s->report_comment, shown_text.c_str());
+        SendMessageW(s->report_comment, EM_SETSEL, WPARAM(shown_text.size()), LPARAM(shown_text.size()));
+    }
+    set_text(s->report_counter, report_comment_counter(kept));
 }
 void request_report_now() {
     if (report_request_blocker(s->account->linked_name(account_portal()).has_value())) return;
     std::string error, id;
-    s->report_requested = request_report(id, error) ? report_requested_status(id) : std::string(MAG_SETTINGS_REPORT_FAILED);
+    const bool requested = request_report(id, report_comment_text(), error);
+    s->report_requested = requested ? report_requested_status(id) : std::string(MAG_SETTINGS_REPORT_FAILED);
+    if (requested) {  // the comment went with this report; the box is ready for the next one
+        SetWindowTextW(s->report_comment, L"");
+        set_text(s->report_counter, report_comment_counter(""));
+    }
     refresh_report();
     layout();
 }
@@ -468,6 +490,16 @@ void layout() {
         y += 20 + spacing;
         layout_group(y, s->reports_rows, false);
         y += spacing;
+        // Send report's comment: its title with the counter at the right, the box (about four lines),
+        // then the hint.
+        const int title = text_height(s->report_comment_title, width - 128), hint = text_height(s->report_comment_hint, width);
+        place(s->report_comment_title, left, y, width - 128, title);
+        place(s->report_counter, left + width - 120, y + 1, 120, 16);
+        y += title + 4;
+        place(s->report_comment, left, y, width, 64);
+        y += 64 + 3;
+        place(s->report_comment_hint, left, y, width, hint);
+        y += hint + spacing;
     }
     const bool controls = s->controls_page;
     for (HWND h : {s->device[0], s->device[1], s->mode_label, s->mode, s->assist, s->column[0], s->column[1], s->column[2], s->rows,
@@ -1241,6 +1273,9 @@ void command(int id, int code) {
         return;
     case IdSendReports: changed(); return;
     case IdReportNow: request_report_now(); return;
+    case IdReportComment:
+        if (code == EN_CHANGE) report_comment_changed();
+        return;
     case IdKeyboardMouse:
     case IdController:
         end_capture(nullptr);
@@ -1471,6 +1506,15 @@ void build() {
     row(w.reports_rows, MAG_SETTINGS_SEND_REPORTS, MAG_SETTINGS_SEND_REPORTS_HINT, w.send_reports);
     w.report_button = button(MAG_SETTINGS_SEND_REPORT_NOW, IdReportNow);
     w.report_status = row(w.reports_rows, MAG_SETTINGS_SEND_REPORT_NOW, " ", w.report_button, IdReportStatus).hint;
+    w.report_comment_title = label(MAG_SETTINGS_REPORT_COMMENT);
+    w.report_comment_hint = small_label(MAG_SETTINGS_REPORT_COMMENT_HINT);
+    w.report_comment = make(L"EDIT", L"", WS_TABSTOP | WS_VSCROLL | ES_MULTILINE | ES_WANTRETURN | ES_AUTOVSCROLL, IdReportComment,
+                            nullptr, WS_EX_CLIENTEDGE);
+    // UTF-16 units: 1000 code points need at most twice that; report_comment_changed() counts them.
+    SendMessageW(w.report_comment, EM_LIMITTEXT, 2 * MAG_SETTINGS_REPORT_COMMENT_LIMIT, 0);
+    w.report_counter = make(L"STATIC", shown(report_comment_counter("")), SS_RIGHT, IdReportCounter);
+    small_text.push_back(w.report_counter);
+    w.general.insert(w.general.end(), {w.report_comment_title, w.report_comment_hint, w.report_comment, w.report_counter});
     w.general.insert(w.general.end(), {w.heading_connection, w.advanced_link, w.connection_note, w.heading_graphics, w.graphics_note,
                                        w.heading_reports});
     // Controls.

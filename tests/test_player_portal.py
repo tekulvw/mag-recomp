@@ -46,8 +46,10 @@ class LocalServer:
             protocol_version = 'HTTP/1.1'
             def log_message(self, *args): pass
             def do_POST(self):
-                seen.append((self.path, self.headers.get('Content-Type'), self.headers.get('X-Test'),
-                             self.rfile.read(int(self.headers['Content-Length']))))
+                length = self.headers.get('Content-Length')
+                record = (self.path, self.headers.get('Content-Type'), self.headers.get('X-Test'),
+                          self.rfile.read(int(length)) if length else b'')
+                seen.append(record if self.command == 'POST' else (self.command,) + record)
                 body = b'{"ok":true}'
                 self.send_response(201); self.send_header('Content-Type', 'application/json')
                 if chunked:
@@ -57,6 +59,7 @@ class LocalServer:
                     self.send_header('Content-Length', str(len(body))); self.send_header('Connection', 'close'); self.end_headers()
                     self.wfile.write(body)
                 self.close_connection = True
+            do_GET = do_PUT = do_DELETE = do_POST
         server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
         if certificate:
             context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
@@ -67,12 +70,22 @@ class LocalServer:
         self.addCleanup(server.server_close); self.addCleanup(server.shutdown)
         return server.server_address[1], seen
 
-    def post(self, url, trust=None):
+    def post(self, url, trust=None, method=None, body='{"a":1}'):
         env = {'PATH': '/usr/bin:/bin'}
         if trust:
             env['SSL_CERT_FILE'] = str(pathlib.Path(self.temp.name) / (trust + '.pem'))
-        result = subprocess.run([str(self.binary), url, '{"a":1}', 'value'], capture_output=True, text=True, timeout=60, env=env)
+        result = subprocess.run([str(self.binary), *([method] if method else []), url, body, 'value'],
+                                capture_output=True, text=True, timeout=60, env=env)
         return result.returncode, result.stdout
+
+    def check_methods(self, base, trust=None):
+        """GET and DELETE without a body carry no Content-Type; PUT carries its JSON (social API)."""
+        port, seen = self.serve(trust)
+        for method, body in (('GET', ''), ('PUT', '{"state":"online"}'), ('DELETE', '')):
+            self.assertEqual(self.post(base.format(port) + '/api/v1/social', trust, method, body), (0, '201\n{"ok":true}'))
+        self.assertEqual(seen, [('GET', '/api/v1/social', None, 'value', b''),
+                                ('PUT', '/api/v1/social', 'application/json', 'value', b'{"state":"online"}'),
+                                ('DELETE', '/api/v1/social', None, 'value', b'')])
 
 
 @unittest.skipUnless(openssl_headers(), 'Linux with OpenSSL development headers')
@@ -102,6 +115,9 @@ class OpenSslTransportTests(LocalServer, unittest.TestCase):
         port, seen = self.serve('good')
         self.assertEqual(self.post(f'https://localhost:{port}/api/v1/ticket', 'good'), (0, '201\n{"ok":true}'))
         self.assertEqual(seen, [('/api/v1/ticket', 'application/json', 'value', b'{"a":1}')])
+
+    def test_other_methods(self):
+        self.check_methods('https://localhost:{}', 'good')
 
     def test_chunked_reply(self):
         port, _ = self.serve('good', chunked=True)
@@ -160,6 +176,9 @@ class SessionTransportTests(LocalServer, unittest.TestCase):
         server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), http.server.BaseHTTPRequestHandler)
         closed = server.server_address[1]; server.server_close()
         self.assertEqual(self.post(f'http://127.0.0.1:{closed}/x')[0], 1)
+
+    def test_other_methods(self):
+        self.check_methods('http://127.0.0.1:{}')
 
     def test_redirects_are_not_followed(self):
         hits = []

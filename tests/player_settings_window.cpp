@@ -283,11 +283,48 @@ static void general(const fs::path& folder) {
         setenv("MAG_REPORT_REQUEST", marker.string().c_str(), 1);
         SettingsPanel unlinked(reports, settings, SettingsWindowOptions{}, &game);
         CHECK(!unlinked.enabled("button:report") && !fs::exists(marker));
+        // The comment box is shown, and disabled with the button: no link here, then no request path.
+        CHECK(unlinked.shown("note:report") && !unlinked.enabled("note:report"));
+        unsetenv("MAG_REPORT_REQUEST");
+        {
+            SettingsPanel no_path(reports, settings, SettingsWindowOptions{}, &game);
+            CHECK(no_path.shown("note:report") && !no_path.enabled("note:report") && !no_path.enabled("button:report"));
+        }
+        setenv("MAG_REPORT_REQUEST", marker.string().c_str(), 1);
         std::string link_error;
         CHECK(portal::save_link(folder / "portal-link.json", {"https://magtest.online", "mgd_synthetic_token", "Rook_9"}, link_error));
         reports.send_reports = false;  // an explicit request works with reports off
         SettingsPanel linked(reports, settings, SettingsWindowOptions{}, &game);
-        CHECK(linked.enabled("button:report"));
+        CHECK(linked.enabled("button:report") && linked.enabled("note:report"));
+        // The comment: typed text (ASCII and UTF-8), Enter for a new line, Backspace one code point.
+        click(linked, "note:report");
+        CHECK(linked.focused() == "note:report");
+        send(linked, typed("Froze at "));
+        send(linked, typed("caf\xc3\xa9"));
+        send(linked, key(SDL_SCANCODE_RETURN));  // a new line, not Apply
+        send(linked, typed("ok \xf0\x9f\x98\x80"));
+        CHECK(linked.report_comment() == "Froze at caf\xc3\xa9\nok \xf0\x9f\x98\x80" && linked.label("note:report") == linked.report_comment());
+        send(linked, key(SDL_SCANCODE_BACKSPACE));  // the whole four-byte code point
+        CHECK(linked.report_comment() == "Froze at caf\xc3\xa9\nok ");
+        send(linked, key(SDL_SCANCODE_SPACE));  // Space types (TEXTINPUT); as a key it does nothing here
+        CHECK(linked.report_comment() == "Froze at caf\xc3\xa9\nok " && linked.focused() == "note:report");
+        CHECK(report_comment_length(linked.report_comment()) == 17 && report_comment_counter(linked.report_comment()) == "17/1000");
+        draw(linked);
+        // At most MAG_SETTINGS_REPORT_COMMENT_LIMIT code points.
+        {
+            SettingsPanel full(reports, settings, SettingsWindowOptions{}, &game);
+            click(full, "note:report");
+            for (int i = 0; i < 260; ++i) send(full, typed("\xc3\xa9\xc3\xa9xy"));  // 1040 code points
+            CHECK(report_comment_length(full.report_comment()) == MAG_SETTINGS_REPORT_COMMENT_LIMIT);
+            CHECK(report_comment_counter(full.report_comment()) == "1000/1000");
+            send(full, typed("z"));
+            CHECK(report_comment_length(full.report_comment()) == MAG_SETTINGS_REPORT_COMMENT_LIMIT);
+            draw(full);  // a long comment shows its last lines
+        }
+        // Tab reaches the box, and Send report follows it.
+        CHECK(linked.focus("text:server"));
+        for (int i = 0; i < 40 && linked.focused() != "note:report"; ++i) send(linked, key(SDL_SCANCODE_TAB));
+        CHECK(linked.focused() == "note:report");
         click(linked, "button:report");
         const std::string request = read(marker);
         CHECK(request.rfind("{\"requested_at\":", 0) == 0 && request.back() == '\n');
@@ -297,6 +334,9 @@ static void general(const fs::path& folder) {
         const std::string id = id_at == std::string::npos ? std::string() : request.substr(id_at + 13, 36);
         CHECK(id.size() == 36 && id[14] == '4' && id.find_first_not_of("0123456789abcdef-") == std::string::npos);
         CHECK(linked.report_status() == "Report " + id.substr(0, 8) + " will be sent when MAG closes.");
+        // The comment went with the request, escaped, and the box is empty again for the next one.
+        CHECK(request.find("\"comment\":\"Froze at caf\xc3\xa9\\nok \"}") != std::string::npos);
+        CHECK(linked.report_comment().empty() && linked.label("note:report").empty());
         CHECK((fs::status(marker).permissions() & (fs::perms::group_all | fs::perms::others_all)) == fs::perms::none);
         draw(linked);
         unsetenv("MAG_REPORT_REQUEST");
