@@ -59,11 +59,15 @@ The client calls these endpoints, each with `Authorization: Bearer <device token
   5 minutes.
 - `PUT /api/v1/social/presence` with `{"data_b64", "state": "online" | "offline"}`.
 - `POST /api/v1/social/requests` with `{"name"}`. MAG reads these replies:
-  - 2xx or 409 (already requested, or already friends) as sent;
-  - 404 as no such player.
+  - 201, or 409 `already_friends`, as sent;
+  - 404 `unknown_name` as no such player;
+  - anything else (403 `blocked`, 409 `friend_limit` or `request_limit`, 400 `self`) as not
+    sent, with the code in the log.
 - `GET /api/v1/social/lookup?name=<name>`. MAG reads these replies:
-  - 200 with `{"name": "<exact name>"}` as found;
+  - 200 with `{"name": "<exact name>", "exists": true}` as found;
   - 404 as not found.
+
+The portal's contract, including its limits, is `docs/portal-social.md` in mag-recomp-server.
 
 Accepting, declining and withdrawing requests, removing friends and blocking are done on the
 portal (`/api/v1/social/requests/{name}/accept|decline`, `DELETE /api/v1/social/friends/{name}`,
@@ -85,8 +89,12 @@ MAG stays quiet and never blocks the game:
   under the transport's timeouts (about 20 s).
 - **An unreachable portal** gives one log line. MAG retries with a growing delay, up to 2 minutes
   apart, and logs one line when the portal answers again.
-- **A refused token** (401 or 403) turns friends off for the launch, with one line that says to
-  link MAG again. Name lookups then answer "failed".
+- **A refused account** turns friends off for the launch, with one line, and name lookups then
+  answer "failed". The line depends on the reason:
+  - 401 `invalid_token`: link MAG again;
+  - 403 `banned`: the account is banned;
+  - 409 `no_player_name`: claim a player name.
+- **A rate limit** (429 `rate_limited`) waits at least 60 s before the next poll.
 
 The lines go to the engine's log on macOS. On Linux they go to the supervisor's standard error,
 prefixed `MAG friends:`. On Windows they go to `friends.log` in the launch's log folder.

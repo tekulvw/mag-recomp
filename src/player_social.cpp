@@ -264,11 +264,22 @@ std::string url_escape(const std::string &text) {
 Reply Portal::call(const std::string &method, const std::string &path, const std::string &body, portal::Response &response) {
     response = transport_.send(method, portal_ + path, body, {{"Authorization", "Bearer " + token_}});
     Reply reply;
+    reply.status = response.status;
     if (response.status == 0) { reply.detail = response.error.empty() ? "no reply" : response.error; return reply; }
-    if (response.status == 401 || response.status == 403) { reply.result = Result::Unlinked; reply.detail = "HTTP " + std::to_string(response.status); return reply; }
+    Json root;
+    if (response.status >= 400 && parse_json(response.body, root))
+        if (const Json *e = root.get("error"); e && e->kind == Json::Kind::String) reply.error = e->text;
+    // docs/portal-social.md: these say the account cannot use friends; a 403 for anything else
+    // (a request to a player the caller blocks) is about that one call.
+    if (response.status == 401 || (response.status == 403 && (reply.error == "banned" || reply.error.empty())) ||
+        (response.status == 409 && reply.error == "no_player_name")) {
+        reply.result = Result::Unlinked;
+        reply.detail = "HTTP " + std::to_string(response.status) + (reply.error.empty() ? "" : " " + reply.error);
+        return reply;
+    }
     if (response.status == 404) { reply.result = Result::NotFound; return reply; }
     if (response.status >= 200 && response.status < 300) { reply.result = Result::Ok; return reply; }
-    reply.detail = "HTTP " + std::to_string(response.status);
+    reply.detail = "HTTP " + std::to_string(response.status) + (reply.error.empty() ? "" : " " + reply.error);
     return reply;
 }
 
@@ -294,7 +305,10 @@ Reply Portal::put_presence(const std::string &data, bool online) {
 Reply Portal::request_friend(const std::string &name) {
     portal::Response response;
     Reply reply = call("POST", "/api/v1/social/requests", "{\"name\":" + portal::json_string(name) + "}", response);
-    if (reply.result == Result::Failed && response.status == 409) { reply.result = Result::Ok; reply.detail = "already requested or friends"; }
+    if (reply.result == Result::Failed && response.status == 409 && reply.error == "already_friends") {
+        reply.result = Result::Ok;
+        reply.detail = "already friends";
+    }
     return reply;
 }
 
@@ -446,8 +460,12 @@ void run(std::shared_ptr<Service::Shared> s) {
     clock::time_point next_poll = clock::now(), last_put{};
     std::string presence;
     bool have_presence = false, presence_dirty = false, presence_sent = false, unlinked = false;
-    auto refused = [&] {
-        if (!unlinked) say("friends are off: the portal refused this computer's account link; link MAG again to see friends");
+    auto refused = [&](const Reply &r) {
+        if (!unlinked) {
+            if (r.error == "banned") say("friends are off: the account is banned");
+            else if (r.error == "no_player_name") say("friends are off: the account has no player name yet; claim one on the portal");
+            else say("friends are off: the portal refused this computer's account link; link MAG again to see friends");
+        }
         unlinked = true;
     };
     for (;;) {
@@ -474,7 +492,8 @@ void run(std::shared_ptr<Service::Shared> s) {
                 Reply r = portal.request_friend(command.name);
                 if (r.result == Result::Ok) say("friend request sent to " + command.name);
                 else if (r.result == Result::NotFound) say("friend request not sent: the portal knows no player " + command.name);
-                else if (r.result == Result::Unlinked) refused();
+                else if (r.error == "blocked") say("friend request to " + command.name + " not sent: you block that player");
+                else if (r.result == Result::Unlinked) refused(r);
                 else say("friend request to " + command.name + " not sent: " + r.detail);
                 next_poll = std::min(next_poll, clock::now() + 1s);
                 break;
@@ -488,7 +507,7 @@ void run(std::shared_ptr<Service::Shared> s) {
                     Reply r = portal.lookup(command.name, out.name);
                     if (r.result == Result::Ok) out.result = 0;
                     else if (r.result == Result::NotFound) out.result = lookup_not_found;
-                    else if (r.result == Result::Unlinked) refused();
+                    else if (r.result == Result::Unlinked) refused(r);
                     else problem(lookup_problem, "friends: a name lookup failed (" + r.detail + ")");
                     if (r.result == Result::Ok || r.result == Result::NotFound) last_problem[lookup_problem].clear();
                 }
@@ -513,10 +532,11 @@ void run(std::shared_ptr<Service::Shared> s) {
                 if (!last_problem[poll_problem].empty()) { say("friends: the portal answers again"); last_problem[poll_problem].clear(); }
                 next_poll = now + interval;
             } else if (r.result == Result::Unlinked) {
-                refused();
+                refused(r);
                 continue;
             } else {
                 backoff = backoff.count() ? std::min(backoff * 2, o.retry_max) : std::min(interval, o.retry_max);
+                if (r.status == 429) backoff = std::max(backoff, o.rate_limit_wait);   // Retry-After: 60
                 problem(poll_problem, "friends: the portal could not be reached (" + r.detail + "); trying again");
                 next_poll = now + backoff;
             }
@@ -526,7 +546,7 @@ void run(std::shared_ptr<Service::Shared> s) {
             last_put = now;
             presence_dirty = false;  // a failure waits for the next heartbeat
             if (r.result == Result::Ok) { presence_sent = true; last_problem[presence_problem].clear(); }
-            else if (r.result == Result::Unlinked) refused();
+            else if (r.result == Result::Unlinked) refused(r);
             else problem(presence_problem, "friends: presence not published (" + r.detail + "); trying again");
         }
     }

@@ -81,9 +81,13 @@ private:
 
 // ---- Portal calls (bearer device token) ----
 enum class Result { Ok, NotFound, Unlinked, Failed };
+// Unlinked: the account cannot use friends at all (401 invalid_token, 403 banned, 409
+// no_player_name; `error` says which). NotFound: 404, the named player does not exist.
 struct Reply {
     Result result = Result::Failed;
     std::string detail;   // why it failed, for the log; never holds the token
+    std::string error;    // the portal's {"error": "<code>"}, when it sent one
+    int status = 0;
 };
 class Portal {
 public:
@@ -134,6 +138,7 @@ struct ServiceOptions {
     std::chrono::milliseconds min_poll{5000};     // the portal's poll_seconds, clamped to [min_poll, 5 min]
     std::chrono::milliseconds heartbeat{30000};   // presence is renewed this often (the portal keeps it 60 s)
     std::chrono::milliseconds retry_max{120000};  // a failing portal is retried at most this far apart
+    std::chrono::milliseconds rate_limit_wait{60000};  // after 429 rate_limited (Retry-After: 60)
 };
 // A background thread: polls the social state, emits the events, keeps the player's presence
 // fresh, and answers commands. Network calls happen only on that thread; submit() never waits for

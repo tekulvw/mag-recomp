@@ -28,6 +28,7 @@ struct FakePortal {
     std::vector<Call> calls;
     std::string social = "{\"self\":\"me\",\"friends\":[],\"poll_seconds\":15}";
     int social_status = 200, presence_status = 204, request_status = 201;
+    std::string error_body = "{}";   // the body sent with an error status
     std::map<std::string, std::string> names;   // lookup: lowercase -> canonical
     bool down = false;
     void set_social(const std::string &s) { std::lock_guard<std::mutex> l(mutex); social = s; }
@@ -50,15 +51,16 @@ struct FakeTransport : portal::Transport {
         p->calls.push_back({method, url, body, auth});
         if (p->down) return {0, "", "connection refused"};
         const std::string base = "https://portal.test/api/v1/social";
-        if (method == "GET" && url == base) return {p->social_status, p->social, ""};
+        if (method == "GET" && url == base) return {p->social_status, p->social_status == 200 ? p->social : p->error_body, ""};
         if (method == "PUT" && url == base + "/presence") return {p->presence_status, "", ""};
-        if (method == "POST" && url == base + "/requests") return {p->request_status, "{}", ""};
+        if (method == "POST" && url == base + "/requests")
+            return {p->request_status, p->request_status < 300 ? "{\"status\":\"requested\",\"name\":\"x\"}" : p->error_body, ""};
         if (method == "GET" && url.rfind(base + "/lookup?name=", 0) == 0) {
             std::string q = url.substr((base + "/lookup?name=").size()), lower;
             for (char c : q) lower += char(std::tolower((unsigned char)c));
             auto f = p->names.find(lower);
             if (f == p->names.end()) return {404, "{\"error\":\"not_found\"}", ""};
-            return {200, "{\"name\":\"" + f->second + "\"}", ""};
+            return {200, "{\"name\":\"" + f->second + "\",\"exists\":true}", ""};
         }
         return {500, "", ""};
     }
@@ -209,12 +211,29 @@ static void portal_calls() {
     CHECK(calls[2].body == "{\"data_b64\":\"\",\"state\":\"offline\"}");
     CHECK(calls[3].method == "POST" && calls[3].url == "https://portal.test/api/v1/social/requests" && calls[3].body == "{\"name\":\"bob\"}");
     CHECK(calls[5].url == "https://portal.test/api/v1/social/lookup?name=a%20b%26c");
-    p->request_status = 409;
-    CHECK(portal_client.request_friend("bob").result == Result::Ok);
-    p->request_status = 404;
-    CHECK(portal_client.request_friend("nobody").result == Result::NotFound);
-    p->social_status = 401;
+    // docs/portal-social.md error codes.
+    auto request_answer = [&](int status, const std::string &error) {
+        p->request_status = status; p->error_body = "{\"error\":\"" + error + "\"}";
+        return portal_client.request_friend("bob");
+    };
+    CHECK(request_answer(409, "already_friends").result == Result::Ok);
+    CHECK(request_answer(409, "friend_limit").result == Result::Failed);
+    CHECK(request_answer(409, "request_limit").result == Result::Failed);
+    Reply blocked = request_answer(403, "blocked");
+    CHECK(blocked.result == Result::Failed && blocked.error == "blocked");   // about this call, not the account
+    CHECK(request_answer(403, "banned").result == Result::Unlinked);
+    CHECK(request_answer(409, "no_player_name").result == Result::Unlinked);
+    CHECK(request_answer(404, "unknown_name").result == Result::NotFound);
+    CHECK(request_answer(400, "self").result == Result::Failed);
+    p->request_status = 201;
+    p->social_status = 401; p->error_body = "{\"error\":\"invalid_token\"}";
     CHECK(portal_client.get_social(s).result == Result::Unlinked);
+    p->social_status = 403; p->error_body = "{\"error\":\"banned\"}";
+    Reply banned = portal_client.get_social(s);
+    CHECK(banned.result == Result::Unlinked && banned.error == "banned");
+    p->social_status = 429; p->error_body = "{\"error\":\"rate_limited\"}";
+    Reply limited = portal_client.get_social(s);
+    CHECK(limited.result == Result::Failed && limited.status == 429 && limited.detail == "HTTP 429 rate_limited");
     p->social_status = 404;
     CHECK(portal_client.get_social(s).result == Result::Failed);
     p->social_status = 200; p->social = "{\"oops\":1}";
@@ -298,6 +317,28 @@ static void service() {
         CHECK(refused.take()[0].result == lookup_failed);
         svc.stop();
         CHECK(q->count("PUT", "/presence") == 0);
+    }
+
+    // A banned account: said so (not "link again"); a rate limit waits at least rate_limit_wait.
+    auto b = std::make_shared<FakePortal>();
+    b->social_status = 403; b->error_body = "{\"error\":\"banned\"}";
+    Sink bans;
+    {
+        Service svc(options(b, bans));
+        CHECK(eventually([&] { return bans.logged("the account is banned") == 1; }));
+        CHECK(bans.logged("link MAG again") == 0);
+    }
+    auto rl = std::make_shared<FakePortal>();
+    rl->social_status = 429; rl->error_body = "{\"error\":\"rate_limited\"}";
+    Sink limits;
+    {
+        ServiceOptions lo = options(rl, limits);
+        lo.rate_limit_wait = 400ms;   // retry_max is 80 ms here: the rate limit wins
+        Service svc(lo);
+        CHECK(eventually([&] { return rl->count("GET", "/social") >= 1; }));
+        std::this_thread::sleep_for(250ms);
+        CHECK(rl->count("GET", "/social") == 1);
+        CHECK(eventually([&] { return rl->count("GET", "/social") >= 2; }, 1000ms));
     }
 
     // No transport: says so once and ends; stop does not wait.
