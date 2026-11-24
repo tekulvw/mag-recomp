@@ -15,7 +15,7 @@ from mag_installer.pipeline import run_command
 from mag_installer.safety import Cancellation
 
 GENERATOR = r'''
-import os, subprocess, sys
+import json, os, subprocess, sys
 from pathlib import Path
 workspace = Path(sys.argv[1]); output = Path(sys.argv[2])
 data = (workspace / 'tools/data.txt').read_text()
@@ -34,7 +34,7 @@ if os.environ.get('SYNTHETIC_CHILD'):
     subprocess.run([sys.executable, '-c', 'open(%r).read()' % os.environ['SYNTHETIC_CHILD']], check=True)
 output.mkdir(parents=True, exist_ok=True)
 (output / 'out.cpp').write_text(f'// {data} {game.hex()} {listing} {optional}\n')
-(output / 'provenance.json').write_text('{"command": "%s"}\n' % sys.argv[0])
+(output / 'provenance.json').write_text(json.dumps({'command': sys.argv[0]}) + '\n')
 (output / 'empty').mkdir(exist_ok=True)
 with open(Path(sys.argv[3]), 'a') as counter:
     counter.write('ran\n')
