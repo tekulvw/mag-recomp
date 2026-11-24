@@ -1,6 +1,7 @@
 // Portal linking and tickets: the portable flow (player_portal.h). No I/O except the link and
 // ticket files; HTTP goes through the injected transport.
 #include "player_portal.h"
+#include "player_sign_in_refusal.h"
 #include <algorithm>
 #include <cctype>
 #include <cerrno>
@@ -653,11 +654,13 @@ struct TicketRefill::State {
     std::atomic<unsigned> fetched{0};
     std::string last_said;
     std::string last_failure;  // the last fetch problem, for an expiry note
+    std::string server_refusal;  // the game server refused a sign-in: kept until the session ends
     std::thread worker;
 
     // Keep (or drop) the note for the player beside the ticket.
-    void note(const std::string &text) {
+    void note(const std::string &given) {
         if (policy.notice_file.empty()) return;
+        const std::string text = given.empty() ? server_refusal : given;
         std::error_code code;
         if (text.empty()) { fs::remove(policy.notice_file, code); return; }
         std::string error;
@@ -685,6 +688,19 @@ struct TicketRefill::State {
             const long long now = clock();
             std::error_code code;
             bool present = fs::exists(fs::symlink_status(file, code));
+            if (fs::exists(fs::symlink_status(mag::refused_sign_in_marker(file), code))) {
+                // The game's error screen followed a ticket sign-in: ask the portal why. A token
+                // it no longer accepts means link again; otherwise the server refused this sign-in.
+                fs::remove(mag::refused_sign_in_marker(file), code);
+                LaunchTicket check = fetch();
+                if (check.state == LaunchTicket::State::Ready) track(check.expires_at, now);
+                server_refusal = check.status == Status::Unlinked || check.status == Status::Banned
+                                     ? sign_in_notice(check.status, check.message)
+                                     : "Your MAG sign-in was refused by the game server. Restart MAG to sign in again.";
+                note(server_refusal);
+                say("The game server refused a sign-in: " + server_refusal);
+                present = fs::exists(fs::symlink_status(file, code));
+            }
             if (present && expires_at > 0 && now >= expires_at) {
                 // Expired while waiting and not replaced in time: never let the game present it.
                 fs::remove(file, code);
