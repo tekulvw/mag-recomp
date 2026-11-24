@@ -196,7 +196,13 @@ class ReachTests(unittest.TestCase):
         config = fixture.load(folder, dict(fixture.config(folder), jobs=jobs))
         workspace = fixture.workspace(folder)
         from mag_installer.native_recipe import build_plan
-        replace = lambda text: str(text).replace(str(folder), '<root>')
+        # The recipe resolves paths (on Windows a temporary folder's short name becomes its long one).
+        spellings = sorted({str(folder), str(folder.resolve())}, key=len, reverse=True)
+        def replace(text):
+            text = str(text)
+            for spelling in spellings:
+                text = text.replace(spelling, '<root>')
+            return text
         return config, [{'id': s['id'], 'argv': [replace(a) for a in s['argv']]} for s in build_plan(config, workspace)]
 
     def test_count_reaches_parallel_and_environment_only(self):
