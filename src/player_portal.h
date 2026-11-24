@@ -159,7 +159,19 @@ struct RefillPolicy {
                                            // (at most half its lifetime, so short tickets are not refetched in a loop)
     int poll_milliseconds = 100;
     int retry_seconds = 5;
+    // While the account's sign-in is refused or has expired, the note for the player is kept here
+    // (sign_in_notice), and removed again once a ticket arrives; empty: not kept.
+    std::filesystem::path notice_file;
 };
+// What the player is told after the game exits when a sign-in during the session was refused or
+// expired and never recovered: "Your MAG sign-in expired (reason). Restart MAG to sign in again.",
+// "... was refused (reason) ...", and for an unlinked computer, to link again in MAG Settings.
+std::string sign_in_notice(Status status, const std::string &reason);
+// Where a refill for this ticket file keeps that note (beside the ticket).
+std::filesystem::path sign_in_notice_path(const std::filesystem::path &ticket_file);
+// The note the session left, if any; it is removed, so each is shown once. Supervisors call this
+// after the game exits, and once before a launch to drop a note from an earlier one.
+bool take_sign_in_notice(const std::filesystem::path &ticket_file, std::string &text);
 class TicketRefill {
 public:
     using Fetch = std::function<LaunchTicket()>;              // writes a fresh ticket into the file

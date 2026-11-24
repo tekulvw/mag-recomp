@@ -8,6 +8,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <iterator>
 #include <sstream>
 #include <atomic>
 #include <chrono>
@@ -610,6 +611,34 @@ LaunchTicket prepare_launch_ticket(Transport &transport, const fs::path &link_fi
 
 // ---- Keeping a single-use ticket file filled ----
 
+std::string sign_in_notice(Status status, const std::string &reason) {
+    std::string why = reason;
+    while (!why.empty() && (why.back() == '.' || why.back() == ' ')) why.pop_back();
+    if (status == Status::Unlinked)
+        return "Your MAG sign-in was refused: this computer is no longer linked to your account. "
+               "Link your account again in MAG Settings (Account), then restart MAG.";
+    if (status == Status::Banned || status == Status::NoPlayerName || status == Status::UnknownAudience)
+        return "Your MAG sign-in was refused" + (why.empty() ? std::string() : " (" + why + ")") + ". Restart MAG to sign in again.";
+    return "Your MAG sign-in expired" + (why.empty() ? std::string() : " (" + why + ")") + ". Restart MAG to sign in again.";
+}
+
+fs::path sign_in_notice_path(const fs::path &ticket_file) { return ticket_file.parent_path() / "sign-in-notice.txt"; }
+
+bool take_sign_in_notice(const fs::path &ticket_file, std::string &text) {
+    text.clear();
+    const fs::path path = sign_in_notice_path(ticket_file);
+    std::error_code code;
+    if (!fs::is_regular_file(fs::symlink_status(path, code))) { fs::remove(path, code); return false; }
+    std::ifstream in(path, std::ios::binary);
+    std::string bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    in.close();
+    fs::remove(path, code);
+    if (bytes.size() > 4096) bytes.resize(4096);
+    while (!bytes.empty() && (bytes.back() == '\n' || bytes.back() == '\r')) bytes.pop_back();
+    text = bytes;
+    return !text.empty();
+}
+
 struct TicketRefill::State {
     fs::path file;
     long long expires_at;
@@ -623,7 +652,17 @@ struct TicketRefill::State {
     bool stopping = false;
     std::atomic<unsigned> fetched{0};
     std::string last_said;
+    std::string last_failure;  // the last fetch problem, for an expiry note
     std::thread worker;
+
+    // Keep (or drop) the note for the player beside the ticket.
+    void note(const std::string &text) {
+        if (policy.notice_file.empty()) return;
+        std::error_code code;
+        if (text.empty()) { fs::remove(policy.notice_file, code); return; }
+        std::string error;
+        write_private_file(policy.notice_file, text + "\n", error);
+    }
 
     void say(const std::string &line) {
         if (line == last_said) return;  // once per distinct problem, not every retry
@@ -651,6 +690,7 @@ struct TicketRefill::State {
                 fs::remove(file, code);
                 present = false;
                 say("The waiting sign-in ticket expired before a fresh one arrived; it was removed.");
+                note(sign_in_notice(Status::Expired, last_failure));
             }
             const bool renew = present && renew_at > 0 && now >= renew_at;
             if ((!present || renew) && now >= retry_at) {
@@ -659,10 +699,21 @@ struct TicketRefill::State {
                     track(ticket.expires_at, now);
                     retry_at = 0;
                     ++fetched;
+                    last_failure.clear();
+                    note("");
                     say(present ? "Replaced the waiting sign-in ticket before it expired."
                                 : "A fresh sign-in ticket is ready for the next sign-in.");
                 } else {
                     retry_at = now + policy.retry_seconds;
+                    if (!ticket.message.empty()) last_failure = ticket.message;
+                    // A refusal stands until a ticket arrives again; an unreachable or busy portal
+                    // only matters once the waiting ticket expires (above).
+                    if (ticket.status == Status::Unlinked || ticket.status == Status::Banned ||
+                        ticket.status == Status::NoPlayerName || ticket.status == Status::Expired ||
+                        ticket.status == Status::UnknownAudience)
+                        note(sign_in_notice(ticket.status, ticket.message));
+                    else if (!present && expires_at > 0 && now >= expires_at)
+                        note(sign_in_notice(Status::Expired, last_failure));  // no ticket left, and why
                     say("Cannot fetch a fresh sign-in ticket: " +
                         (ticket.message.empty() ? std::string("this computer is no longer linked to a portal account.") : ticket.message));
                 }
@@ -708,7 +759,9 @@ std::unique_ptr<TicketRefill> start_ticket_refill(TransportFactory make_transpor
         }
         return prepare_launch_ticket(*transport, link_file, ticket_file, portal, server, relink);
     };
-    return std::unique_ptr<TicketRefill>(new TicketRefill(ticket_file, expires_at, fetch, std::move(report)));
+    RefillPolicy policy;
+    policy.notice_file = sign_in_notice_path(ticket_file);
+    return std::unique_ptr<TicketRefill>(new TicketRefill(ticket_file, expires_at, fetch, std::move(report), policy));
 }
 
 // ---- A link without the device-code page ----

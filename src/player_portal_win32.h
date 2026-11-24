@@ -29,6 +29,10 @@ enum { MAG_PORTAL_NONE = 0, MAG_PORTAL_READY = 1, MAG_PORTAL_FALL_BACK = 2, MAG_
  * `message`, when not empty, is for the player. */
 int mag_portal_phase(const wchar_t *settings_file, const wchar_t *server_choice, const wchar_t *ticket_file, int launcher,
                      wchar_t *name, int name_capacity, wchar_t *message, int message_capacity);
+/* After the game exits (and once before a launch, to drop an earlier note): stop the refill and
+ * take the note it left when a sign-in was refused or expired and never recovered. 1: `message`
+ * holds it ("Your MAG sign-in expired ... Restart MAG to sign in again."); 0: nothing to say. */
+int mag_portal_take_notice(const wchar_t *ticket_file, wchar_t *message, int capacity);
 
 #ifdef __cplusplus
 }

@@ -447,7 +447,7 @@ int main(void){
         import base64, http.server, threading, time
         TOKEN='mgd_'+'Refill0123456789-_abcdefghijklmnopqrstuvwx'
         issued={}  # ticket bytes (hex) -> (issued at, expires at)
-        lock=threading.Lock()
+        lock=threading.Lock();state={'revoke_after':None}
         class Portal(http.server.BaseHTTPRequestHandler):
             def log_message(self,*args): pass
             def reply(self,status,value):
@@ -456,6 +456,7 @@ int main(void){
             def do_POST(self):
                 self.rfile.read(int(self.headers['Content-Length']))
                 if self.path!='/api/v1/ticket' or self.headers.get('Authorization')!='Bearer '+TOKEN:return self.reply(401,{'error':'invalid_token'})
+                if state['revoke_after'] is not None and len(issued)>=state['revoke_after']:return self.reply(401,{'error':'invalid_token'})
                 with lock:
                     serial=len(issued)+1;now=int(time.time())
                     ticket=(b'MAGT\x01\x01'+bytes(8)+(100).to_bytes(8,'big')+(42).to_bytes(4,'big')+serial.to_bytes(16,'big')+
@@ -493,6 +494,18 @@ int main(void){
                 self.assertTrue(start<=at<end,(at,start,end))
             self.assertNotIn(TOKEN,run.stdout+run.stderr)
             self.assertFalse((install/'home/player/portal-ticket.bin.claimed').exists())
+            self.assertNotIn('Your MAG sign-in',run.stderr)  # nothing went wrong: no note
+            # Unlinked on the website mid-session: the launch ticket works, the reconnect gets none,
+            # and after the game exits the player is told to link again in MAG Settings, once.
+            state['revoke_after']=len(issued)+1
+            run=subprocess.run([str(install/'MAG/MAG')],env=env,capture_output=True,text=True,timeout=120)
+            self.assertNotEqual(run.returncode,0)
+            self.assertIn('Your MAG sign-in was refused: this computer is no longer linked to your account. '
+                          'Link your account again in MAG Settings (Account), then restart MAG.',run.stderr)
+            logs=max((install/'logs').glob('launch-*'),key=lambda p:p.stat().st_mtime)
+            self.assertIn('Link your account again in MAG Settings',(logs/'sign-in-notice.txt').read_text())
+            self.assertFalse((install/'home/player/sign-in-notice.txt').exists())  # shown once
+            self.assertFalse(link.exists())  # the refused token is forgotten
 
     @unittest.skipUnless(sys.platform=='linux','requires Linux ELF loader and OpenSSL development headers')
     def test_native_supervisor_imports_a_service_account_token(self):

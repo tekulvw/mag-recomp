@@ -279,6 +279,15 @@ extern "C" int mag_portal_unlink(const wchar_t *settings_file, wchar_t *message,
 // The phase's single-use ticket file, kept filled while the game runs (player_portal.h).
 static std::unique_ptr<TicketRefill> ticket_refill;
 
+extern "C" int mag_portal_take_notice(const wchar_t *ticket_file, wchar_t *message, int capacity) {
+    ticket_refill.reset();
+    copy_out("", message, capacity);
+    std::string text;
+    if (!take_sign_in_notice(fs::path(ticket_file), text)) return 0;
+    copy_out(text, message, capacity);
+    return 1;
+}
+
 extern "C" int mag_portal_phase(const wchar_t *settings_file, const wchar_t *server_choice, const wchar_t *ticket_file, int launcher,
                                 wchar_t *name, int name_capacity, wchar_t *message, int message_capacity) {
     ticket_refill.reset();  // a new phase fetches its own ticket below

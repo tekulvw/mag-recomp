@@ -398,6 +398,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR arguments, int
         if (chosen) notice(logs, L"The settings window could not open; starting with the saved settings.", 0, MB_ICONWARNING);
     }
     wchar_t ticket[MAX_PATH]; join(ticket, player_root, L"portal-ticket.bin");
+    wchar_t sign_in[1024];
+    mag_portal_take_notice(ticket, sign_in, 1024);  /* an earlier launch's note is done */
     portal_phase(settings, server, ticket, 1, logs, prompt);
     join(log, logs, L"launcher.log");
     DWORD result = run(job, launcher, launcher_elf, logs, log);
@@ -420,6 +422,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR arguments, int
     }
     DeleteFileW(marker);
     if (result != 90) {
+        /* A sign-in refused or expired during the session: say so once the game is gone. */
+        if (mag_portal_take_notice(ticket, sign_in, 1024)) notice(logs, sign_in, prompt, MB_ICONWARNING);
         /* A launch the player must correct (such as choosing a name) explains itself. */
         wchar_t note[MAX_PATH]; join(note, player_root, L"launch-message.txt");
         if (GetFileAttributesW(note) != INVALID_FILE_ATTRIBUTES) {
@@ -449,6 +453,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR arguments, int
     DWORD code = run(job, engine, engine_elf, logs, log);
     mag_reports_engine_exit(code);
     mag_reports_end(NULL);
+    if (mag_portal_take_notice(ticket, sign_in, 1024)) notice(logs, sign_in, prompt, MB_ICONWARNING);
     return (int)code;
 }
 '''

@@ -392,6 +392,8 @@ static void refill(const fs::path &scratch) {
     };
     auto report = [&](const std::string &line) { std::lock_guard<std::mutex> g(lock); said.push_back(line); };
     RefillPolicy policy; policy.renew_before_seconds = 10; policy.poll_milliseconds = 5; policy.retry_seconds = 1;
+    policy.notice_file = sign_in_notice_path(file);
+    CHECK(policy.notice_file == scratch / "refill" / "sign-in-notice.txt");
     CHECK(write_private_file(file, "MAGT-ticket-0", error));  // the ticket fetched before the phase
     {
         TicketRefill refill(file, now + 60, fetch, report, policy, [&] { return now.load(); });
@@ -413,7 +415,8 @@ static void refill(const fs::path &scratch) {
         for (int waited = 0; issued == before && waited < 2000; waited += 5) std::this_thread::sleep_for(std::chrono::milliseconds(5));
         CHECK(issued == before + 1);  // renewed ahead of expiry, without a sign-in asking
         now += 30;                     // past the old ticket's lifetime, inside the new one's
-        CHECK(take_within(file, got, 2000) && got == "MAGT-ticket-" + std::to_string(issued.load()));
+        const std::string renewed = "MAGT-ticket-" + std::to_string(issued.load());
+        CHECK(take_within(file, got, 2000) && got == renewed);
         // The portal is down and the waiting ticket expires: it is removed, never presented.
         CHECK(present_within(file, 2000));
         refusing = 1;
@@ -426,10 +429,20 @@ static void refill(const fs::path &scratch) {
         }
         CHECK(gone);
         CHECK(!take(file, got));  // a reconnect now waits rather than sending an expired ticket
+        // ... and the player would be told why, after the game exits.
+        const std::string expired_note = "Your MAG sign-in expired (The account portal is busy). Restart MAG to sign in again.\n";
+        for (int waited = 0; read(policy.notice_file) != expired_note && waited < 2000; waited += 5)
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        CHECK(read(policy.notice_file) == expired_note);
         // The portal recovers: the next fetch (after the retry delay) fills the file again.
+        const int before_recovery = issued;
         refusing = 0;
         now += 2;
-        CHECK(take_within(file, got, 2000) && got == "MAGT-ticket-" + std::to_string(issued.load()));
+        CHECK(take_within(file, got, 2000) && got == "MAGT-ticket-" + std::to_string(before_recovery + 1));
+        std::error_code ignored;
+        for (int waited = 0; fs::exists(policy.notice_file, ignored) && waited < 2000; waited += 5)
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        CHECK(!fs::exists(policy.notice_file, ignored));  // recovered: nothing to tell
     }
     {   // the log says what happened, once per problem, and never holds the token
         std::lock_guard<std::mutex> g(lock);
@@ -466,6 +479,26 @@ static void refill(const fs::path &scratch) {
         auto none = start_ticket_refill(nullptr, link_file, file, portal, server, "x", 0);
         std::this_thread::sleep_for(std::chrono::milliseconds(300));
         CHECK(!fs::exists(file, ignored));  // no transport: nothing is written
+    }
+    {   // a refusal (the computer was unlinked on the website) leaves a note to link again, shown once
+        std::error_code ignored; fs::remove(file, ignored);
+        RefillPolicy noted = policy;
+        auto refused = [&]() {
+            LaunchTicket t; t.state = LaunchTicket::State::Failed; t.status = Status::Unlinked;
+            t.message = "This computer is no longer linked to your account (it was unlinked on the website). Link it again."; return t;
+        };
+        {
+            TicketRefill refill(file, 0, refused, {}, noted, [&] { return now.load(); });
+            CHECK(present_within(noted.notice_file, 2000));
+        }
+        std::string text;
+        CHECK(take_sign_in_notice(file, text));
+        CHECK(text == "Your MAG sign-in was refused: this computer is no longer linked to your account. "
+                      "Link your account again in MAG Settings (Account), then restart MAG.");
+        CHECK(!take_sign_in_notice(file, text) && text.empty());  // shown once
+        CHECK(sign_in_notice(Status::Banned, "Your account is banned from online play: griefing.") ==
+              "Your MAG sign-in was refused (Your account is banned from online play: griefing). Restart MAG to sign in again.");
+        CHECK(sign_in_notice(Status::Expired, "") == "Your MAG sign-in expired. Restart MAG to sign in again.");
     }
     {   // a short-lived ticket is renewed once, half-way, not refetched on every poll
         std::error_code ignored; fs::remove(file, ignored);
