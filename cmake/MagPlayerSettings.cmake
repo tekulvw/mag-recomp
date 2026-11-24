@@ -39,7 +39,8 @@ function(mag_enable_player_settings target sdk)
         APPEND PROPERTY COMPILE_DEFINITIONS SDL_GameControllerGetButton=mag_player_controller_button
         SDL_GameControllerGetAxis=mag_player_controller_axis
         SDL_GameControllerUpdate=mag_player_controller_update SDL_GameControllerOpen=mag_player_controller_open
-        SDL_GameControllerClose=mag_player_controller_close SDL_GameControllerGetAttached=mag_player_controller_attached)
+        SDL_GameControllerClose=mag_player_controller_close SDL_GameControllerGetAttached=mag_player_controller_attached
+        SDL_GameControllerSetPlayerIndex=mag_player_controller_set_player_index)
     set_property(SOURCE "${sdk}/libs/input/pad_macos.m" DIRECTORY "${sdk}"
         APPEND PROPERTY COMPILE_DEFINITIONS ps3recomp_pad_macos_state=mag_sdk_pad_macos_state
         ps3recomp_pad_macos_buttons=mag_sdk_pad_macos_buttons)

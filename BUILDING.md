@@ -382,6 +382,12 @@ the configure options and `installer/mag_installer/managed_tools.py` for the pin
   build). Configure with `-DPS3RECOMP_SAIL_FFMPEG=ON -DPS3RECOMP_FFMPEG_RUNTIME=ON`, its `include`
   directory and its `.lib` import libraries. Place `avcodec-63.dll`, `avformat-63.dll`,
   `avutil-61.dll`, `swscale-10.dll` and `swresample-7.dll` beside the executables.
+- **Controllers.** Windows builds read controllers through SDL2 by default
+  (`PS3RECOMP_PAD_USE_SDL2=ON`), so PlayStation pads work as well as XInput ones. The installer
+  uses the official prebuilt SDL2 2.32.10 (`SDL2-devel-2.32.10-VC.zip`): pass
+  `-DSDL2_DIR=<extracted package>/cmake` (or put the package on `CMAKE_PREFIX_PATH`). The build
+  copies its `lib/x64/SDL2.dll` beside `MagRecomp.exe`; ship it beside the executables.
+  `-DPS3RECOMP_PAD_USE_SDL2=OFF` keeps the XInput-only controller path.
 - **Paths.** Keep the build and installation path ASCII-only and short. The runtime opens guest
   files and its ELF argument through narrow-character APIs, and long build paths exceed Windows'
   length limit. The installer refuses an installation path with non-ASCII characters or more than

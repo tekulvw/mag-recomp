@@ -146,6 +146,42 @@ class ManagedToolTests(unittest.TestCase):
         # libavcodec/libavformat 63 and libavutil 61: the majors the runtime's FFmpeg 9.0 headers expect.
         self.assertIn('avcodec-63.dll',WINDOWS_FFMPEG_DLLS);self.assertIn('avutil-61.dll',WINDOWS_FFMPEG_DLLS)
         self.assertEqual(WINDOWS_FFMPEG_LIBRARIES,('avcodec','avformat','avutil','swscale'))
+    def test_windows_controllers_use_the_official_prebuilt_sdl2_outside_the_dependency_identity(self):
+        from mag_installer.managed_tools import WINDOWS_LOCK, WINDOWS_DEPENDENCIES
+        record=WINDOWS_LOCK['sdl2']
+        self.assertEqual(record['id'],'sdl2-windows');self.assertEqual(record['archive'],'zip');self.assertEqual(record['root'],'SDL2-2.32.10')
+        self.assertEqual(record['url'],'https://github.com/libsdl-org/SDL/releases/download/release-2.32.10/SDL2-devel-2.32.10-VC.zip')
+        self.assertEqual((record['size'],record['sha256']),(7172966,'af347939395a58b365846aaea27391e69f9ec9d4dd650d6ac40802159b418a6e'))
+        # A source build would change MANAGED-DEPENDENCIES.json and refuse existing installs.
+        self.assertNotIn('sdl2',WINDOWS_DEPENDENCIES)
+    def test_windows_bootstrap_returns_the_sdl2_record_and_refuses_an_incomplete_package(self):
+        import json as _json
+        from mag_installer import managed_tools
+        from mag_installer.managed_tools import WINDOWS_LOCK, WINDOWS_DEPENDENCIES, WINDOWS_FFMPEG_LIBRARIES, WINDOWS_FFMPEG_DLLS
+        from mag_installer.safety import Cancellation
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp)/'managed'
+            def materialize(spec,artifacts,cache,token,events):
+                location=Path(temp)/'artifacts'/spec['id']
+                if 'root' in spec: (location/spec['root']).mkdir(parents=True,exist_ok=True)
+                return location
+            ffmpeg=Path(temp)/'artifacts/ffmpeg-windows'/WINDOWS_LOCK['ffmpeg']['root']
+            sdl2=Path(temp)/'artifacts/sdl2-windows/SDL2-2.32.10'
+            files=[*(ffmpeg/'lib'/(n+'.lib') for n in WINDOWS_FFMPEG_LIBRARIES),*(ffmpeg/'bin'/n for n in WINDOWS_FFMPEG_DLLS),
+                   sdl2/'cmake/sdl2-config.cmake',sdl2/'include/SDL.h',sdl2/'lib/x64/SDL2.dll',sdl2/'lib/x64/SDL2.lib',sdl2/'LICENSE.txt']
+            for path in files: path.parent.mkdir(parents=True,exist_ok=True);path.write_text('fixture')
+            (ffmpeg/'include').mkdir()
+            prefix=root/'prefix';prefix.mkdir(parents=True)
+            (prefix/'MANAGED-DEPENDENCIES.json').write_text(_json.dumps({k:WINDOWS_LOCK[k]['sha256'] for k in WINDOWS_DEPENDENCIES}))
+            (prefix/'MANAGED-INVENTORY.json').write_text(_json.dumps(managed_tools._inventory(prefix,Cancellation())))
+            with patch('mag_installer.managed_tools.materialize',side_effect=materialize), \
+                 patch('mag_installer.managed_tools._install_wheels'), patch('mag_installer.managed_tools.run_command'), \
+                 patch.dict(os.environ,{'SystemRoot':str(Path(temp)/'Windows')}):
+                result=managed_tools._bootstrap_windows(root,Path(temp)/'cache',None,None)
+                self.assertEqual(result['sdl2'],{'cmake_dir':str(sdl2/'cmake'),'dll':str(sdl2/'lib/x64/SDL2.dll'),'license':str(sdl2/'LICENSE.txt')})
+                (sdl2/'lib/x64/SDL2.dll').unlink()
+                with self.assertRaisesRegex(InstallerError,r'pinned SDL2 build is missing: .*SDL2\.dll'):
+                    managed_tools._bootstrap_windows(root,Path(temp)/'cache',None,None)
 if __name__=='__main__':unittest.main()
 
 class ManagedBytecodeTests(unittest.TestCase):

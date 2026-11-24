@@ -365,6 +365,13 @@ else()
         set_source_files_properties(src/player_settings_win32.cpp TARGET_DIRECTORY ${PROJECT_NAME}
             PROPERTIES COMPILE_DEFINITIONS "UNICODE;_UNICODE")
         target_link_libraries(${PROJECT_NAME} PRIVATE user32 gdi32 comctl32 xinput shell32 winhttp)
+        if(PS3RECOMP_PAD_USE_SDL2)
+            # Controller captures read controllers as the game does, through SDL2 (MagRuntimeOptions.cmake).
+            set_property(SOURCE src/player_settings_win32.cpp TARGET_DIRECTORY ${PROJECT_NAME}
+                APPEND PROPERTY COMPILE_DEFINITIONS MAG_PAD_SDL2=1)
+            find_package(SDL2 REQUIRED)
+            target_link_libraries(${PROJECT_NAME} PRIVATE SDL2::SDL2)
+        endif()
     else()
         # The window's Account row links through the portal over OpenSSL, as ./MAG --link does.
         # player_settings_sdl_x11.cpp: the window's second activation request on X11, through the
@@ -462,6 +469,17 @@ if(WIN32)
         bcrypt      # SHA-256 of the prepared engine files (src/retail_handoff.cpp)
     )
     mag_win32_posix_target(${PROJECT_NAME})
+    if(PS3RECOMP_PAD_USE_SDL2)
+        # cellPad's controllers come through SDL2 (cmake/MagRuntimeOptions.cmake): SDL2.dll beside
+        # the executable, so the build directory's copy runs as the packaged one does.
+        find_package(SDL2 REQUIRED)
+        get_target_property(_mag_sdl2_type SDL2::SDL2 TYPE)
+        if(_mag_sdl2_type STREQUAL "SHARED_LIBRARY")
+            add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+                COMMAND "${CMAKE_COMMAND}" -E copy_if_different "$<TARGET_FILE:SDL2::SDL2>" "$<TARGET_FILE_DIR:${PROJECT_NAME}>"
+                VERBATIM)
+        endif()
+    endif()
 endif()
 
 # ---------------------------------------------------------------------------

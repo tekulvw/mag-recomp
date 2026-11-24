@@ -4,7 +4,10 @@
  * - every XInput reading reaches the capture layer (player_input_capture.h) before the settings
  *   input block masks what the SDK sees, as the SDL GameController seam does on macOS and Linux.
  *   cellPad sweeps ports 0..3 in order on each poll, so port 0 starts a capture refresh; each
- *   port keeps one identity for the life of the process.
+ *   port keeps one identity for the life of the process. When cellPad reads controllers through
+ *   SDL2 instead (PS3RECOMP_PAD_USE_SDL2, MAG_PAD_SDL2 here), the SDL seam
+ *   (player_input_sdl_pad.c) takes this part and the input block, and only the keyboard part below
+ *   is built.
  * - the keyboard fallback reads nothing while the adapter plays on-foot gameplay with the keyboard,
  *   so keys bound to actions do not also press pad buttons; in an in-match menu it reads keys again,
  *   each still held one only after a release (player_input_keyboard_pad_gate.h). Whether a
@@ -19,7 +22,9 @@
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <windows.h>
+#ifndef MAG_PAD_SDL2
 #include <xinput.h>
+#endif
 #include <stdatomic.h>
 #include <string.h>
 #include "player_input_capture.h"
@@ -27,6 +32,7 @@
 #include "player_input_win32_map.h"
 #include "player_settings_runtime.h"
 
+#ifndef MAG_PAD_SDL2
 _Static_assert(XINPUT_GAMEPAD_A == MAG_XINPUT_A && XINPUT_GAMEPAD_B == MAG_XINPUT_B &&
                XINPUT_GAMEPAD_X == MAG_XINPUT_X && XINPUT_GAMEPAD_Y == MAG_XINPUT_Y &&
                XINPUT_GAMEPAD_BACK == MAG_XINPUT_BACK && XINPUT_GAMEPAD_START == MAG_XINPUT_START &&
@@ -75,6 +81,7 @@ DWORD WINAPI mag_player_xinput_get_state(DWORD port, XINPUT_STATE* state)
         memset(&state->Gamepad, 0, sizeof state->Gamepad);
     return result;
 }
+#endif /* !MAG_PAD_SDL2 */
 
 SHORT WINAPI mag_player_get_async_key_state(int key)
 {
@@ -92,5 +99,7 @@ SHORT WINAPI mag_player_get_async_key_state(int key)
  * linker does not offer and MSVC's reports as a warning. 64-bit targets name it plainly. */
 #if defined(_M_X64) || defined(__x86_64__) || defined(_M_ARM64) || defined(__aarch64__)
 SHORT(WINAPI* __imp_mag_player_get_async_key_state)(int) = mag_player_get_async_key_state;
+#ifndef MAG_PAD_SDL2
 DWORD(WINAPI* __imp_mag_player_xinput_get_state)(DWORD, XINPUT_STATE*) = mag_player_xinput_get_state;
+#endif
 #endif

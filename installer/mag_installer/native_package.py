@@ -231,7 +231,7 @@ int main(int argc,char **argv) { @autoreleasepool {
 # portal transport that sends them with the linked account's token.
 SUPERVISOR_SOURCES = ('player_reports.h', 'player_reports.cpp', 'player_gzip.h', 'player_gzip.cpp', 'player_portal.h',
                       'player_portal.cpp', 'player_portal_macos.h', 'player_portal_macos.mm', 'player_settings_macos.h',
-                      'player_settings_store.h')
+                      'player_settings_store.h', 'player_sign_in_refusal.h')
 
 
 # The runtime's movie playback switches, as tools/boot.py applies them (MOVIE_PLAYBACK_ENV there).

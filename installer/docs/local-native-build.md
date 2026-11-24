@@ -63,7 +63,10 @@ Host differences:
 - **Windows**: replace `ffmpeg` with
   `"msvc": {"vcvars": ".../VC/Auxiliary/Build/vcvars64.bat", "clang_cl": ".../VC/Tools/Llvm/x64/bin/clang-cl.exe"}`.
   `ffmpeg` is optional there; it names the prebuilt's `include` directory and its `avcodec.lib`,
-  `avformat.lib`, `avutil.lib` and `swscale.lib` import libraries. The output path must be ASCII
+  `avformat.lib`, `avutil.lib` and `swscale.lib` import libraries. `sdl2` (optional, Windows
+  only) names the official SDL2 development package's `cmake_dir` (holding `sdl2-config.cmake`),
+  its x64 `dll` and its `license`; the build then reads controllers through SDL2
+  (`-DPS3RECOMP_PAD_USE_SDL2=ON`), and without it through XInput. The output path must be ASCII
   and at most 100 characters.
 
 `managed_prefix` (optional) names a directory of built dependencies, such as the installer's

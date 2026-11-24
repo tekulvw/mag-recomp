@@ -118,41 +118,45 @@ class PlayerBuildTests(unittest.TestCase):
                     self.assertEqual((source / 'PS3_GAME/USRDIR/EBOOT.elf').read_bytes(), b'synthetic input')
 
     def test_windows_route_uses_build_tools_msvc_record_and_mag_folder(self):
-        with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp).resolve(); source = root / 'inputs'; self.inputs(source)
-            output = root / 'MAG'; cache = root / 'cache'; steps = []
-            kit = {'source_tree': 'source', 'sdks': {role: {'path': 'sdks/' + role, 'revision': 'a' * 40}
-                   for role in ('analysis', 'ppu', 'runtime', 'spu')}}
-            toolchain = {'vcvars': 'C:/VS/VC/Auxiliary/Build/vcvars64.bat', 'clang_cl': 'C:/VS/VC/Tools/Llvm/x64/bin/clang-cl.exe',
-                         'installation': 'C:/VS', 'version': '17.14', 'product': 'Microsoft.VisualStudio.Product.BuildTools'}
-            def build_tools(**kwargs):
-                steps.append('build-tools'); return toolchain
-            def tools(managed, **kwargs):
-                steps.append('tools')
-                return {'root': 'C:/m', 'python': 'C:/m/python.exe', 'cmake': 'C:/m/cmake.exe', 'ninja': 'C:/m/ninja.exe', 'git': 'C:/m/git.exe'}
-            def native(config_path, native_output, **kwargs):
-                steps.append('native')
-                config = json.loads(config_path.read_text())
-                self.assertEqual(config['msvc'], toolchain)
-                self.assertNotIn('ffmpeg', config)
-                (native_output / 'workspace').mkdir(parents=True)
-            def package(config, workspace, destination, **kwargs):
-                steps.append('package')
-                self.assertEqual(destination, root / 'MAG-build/package/MAG')
-                destination.mkdir(); return destination
-            with patch.object(player_build, 'readiness', return_value={'ready': True}), \
-                 patch.object(player_build, '_manifest', return_value={'kit': {}, 'host': 'windows-x86_64'}), \
-                 patch.object(player_build, '_load_kit', return_value=kit), \
-                 patch('mag_installer.native_build._verify_identities'), \
-                 patch('mag_installer.native_build.check_windows_location'), \
-                 patch('mag_installer.managed_tools.ensure_windows_build_tools', side_effect=build_tools), \
-                 patch('mag_installer.managed_tools.ensure_apple_sdk', side_effect=AssertionError('no Apple SDK on Windows')), \
-                 patch('mag_installer.managed_tools.bootstrap', side_effect=tools), \
-                 patch('mag_installer.native_build.install', side_effect=native), \
-                 patch('mag_installer.native_package.package', side_effect=package):
-                self.assertEqual(player_build.install(root, source, output, cache), output)
-            self.assertEqual(steps, ['build-tools', 'tools', 'native', 'package'])
-            self.assertTrue((output / 'MAG').is_dir())
+        prebuilt = {'ffmpeg': {'include': 'C:/m/ffmpeg/include', 'avcodec': 'C:/m/ffmpeg/lib/avcodec.lib'},
+                    'sdl2': {'cmake_dir': 'C:/m/SDL2/cmake', 'dll': 'C:/m/SDL2/lib/x64/SDL2.dll', 'license': 'C:/m/SDL2/LICENSE.txt'}}
+        for extra in ({}, prebuilt):
+            with self.subTest(prebuilt=sorted(extra)), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp).resolve(); source = root / 'inputs'; self.inputs(source)
+                output = root / 'MAG'; cache = root / 'cache'; steps = []
+                kit = {'source_tree': 'source', 'sdks': {role: {'path': 'sdks/' + role, 'revision': 'a' * 40}
+                       for role in ('analysis', 'ppu', 'runtime', 'spu')}}
+                toolchain = {'vcvars': 'C:/VS/VC/Auxiliary/Build/vcvars64.bat', 'clang_cl': 'C:/VS/VC/Tools/Llvm/x64/bin/clang-cl.exe',
+                             'installation': 'C:/VS', 'version': '17.14', 'product': 'Microsoft.VisualStudio.Product.BuildTools'}
+                def build_tools(**kwargs):
+                    steps.append('build-tools'); return toolchain
+                def tools(managed, **kwargs):
+                    steps.append('tools')
+                    return {'root': 'C:/m', 'python': 'C:/m/python.exe', 'cmake': 'C:/m/cmake.exe', 'ninja': 'C:/m/ninja.exe', 'git': 'C:/m/git.exe', **extra}
+                def native(config_path, native_output, **kwargs):
+                    steps.append('native')
+                    config = json.loads(config_path.read_text())
+                    self.assertEqual(config['msvc'], toolchain)
+                    # The prebuilt movie decoder and controller library pass through when acquired.
+                    for key in ('ffmpeg', 'sdl2'): self.assertEqual(config.get(key), extra.get(key))
+                    (native_output / 'workspace').mkdir(parents=True)
+                def package(config, workspace, destination, **kwargs):
+                    steps.append('package')
+                    self.assertEqual(destination, root / 'MAG-build/package/MAG')
+                    destination.mkdir(); return destination
+                with patch.object(player_build, 'readiness', return_value={'ready': True}), \
+                     patch.object(player_build, '_manifest', return_value={'kit': {}, 'host': 'windows-x86_64'}), \
+                     patch.object(player_build, '_load_kit', return_value=kit), \
+                     patch('mag_installer.native_build._verify_identities'), \
+                     patch('mag_installer.native_build.check_windows_location'), \
+                     patch('mag_installer.managed_tools.ensure_windows_build_tools', side_effect=build_tools), \
+                     patch('mag_installer.managed_tools.ensure_apple_sdk', side_effect=AssertionError('no Apple SDK on Windows')), \
+                     patch('mag_installer.managed_tools.bootstrap', side_effect=tools), \
+                     patch('mag_installer.native_build.install', side_effect=native), \
+                     patch('mag_installer.native_package.package', side_effect=package):
+                    self.assertEqual(player_build.install(root, source, output, cache), output)
+                self.assertEqual(steps, ['build-tools', 'tools', 'native', 'package'])
+                self.assertTrue((output / 'MAG').is_dir())
 
     def test_missing_prepared_input_prevents_tool_download_and_output_creation(self):
         with tempfile.TemporaryDirectory() as temp:

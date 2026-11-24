@@ -27,7 +27,15 @@
 #include <windows.h>
 #include <commctrl.h>
 #include <shellapi.h>
+#ifdef MAG_PAD_SDL2
+#if __has_include(<SDL2/SDL.h>)
+#include <SDL2/SDL.h>
+#else
+#include <SDL.h>  // the official Windows development package's flat include/
+#endif
+#else
 #include <xinput.h>
+#endif
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -712,6 +720,57 @@ void accept(PhysicalControl control) {
     changed();
 }
 
+// The connected controllers, in the capture layer's form (player_input_win32_map.h), for Controller
+// captures. They are read the way the game reads them: through SDL2's GameController API when it
+// does (PS3RECOMP_PAD_USE_SDL2, MAG_PAD_SDL2 here), so a PlayStation pad binds too, otherwise
+// through XInput.
+#ifdef MAG_PAD_SDL2
+unsigned read_controllers(MagXInputCapture (&out)[4]) {
+    static int started = 0;  // 1 ready, -1 SDL's controller support failed to start
+    static SDL_GameController* open[4];
+    static SDL_JoystickID ids[4];
+    if (!started) started = SDL_InitSubSystem(SDL_INIT_GAMECONTROLLER) == 0 ? 1 : -1;
+    if (started < 0) return 0;
+    SDL_GameControllerUpdate();
+    SDL_FlushEvents(SDL_JOYAXISMOTION, SDL_FINGERDOWN - 1);  // no SDL window drains its queue here
+    for (unsigned i = 0; i < 4; ++i)
+        if (open[i] && !SDL_GameControllerGetAttached(open[i])) { SDL_GameControllerClose(open[i]); open[i] = nullptr; }
+    for (int device = 0; device < SDL_NumJoysticks(); ++device) {
+        if (!SDL_IsGameController(device)) continue;
+        const SDL_JoystickID id = SDL_JoystickGetDeviceInstanceID(device);
+        unsigned slot = 4, known = 0;
+        for (unsigned i = 0; i < 4; ++i) {
+            known |= open[i] && ids[i] == id;
+            if (!open[i] && slot == 4) slot = i;
+        }
+        if (known || slot == 4) continue;
+        if ((open[slot] = SDL_GameControllerOpen(device))) ids[slot] = id;
+    }
+    unsigned count = 0;
+    for (SDL_GameController* controller : open) {
+        if (!controller) continue;
+        MagXInputCapture& now = out[count++];
+        now = MagXInputCapture{};
+        for (unsigned button = 0; button < 15; ++button)
+            if (SDL_GameControllerGetButton(controller, SDL_GameControllerButton(button))) now.buttons |= 1u << button;
+        for (unsigned axis = 0; axis < 6; ++axis) now.axes[axis] = SDL_GameControllerGetAxis(controller, SDL_GameControllerAxis(axis));
+    }
+    return count;
+}
+#else
+unsigned read_controllers(MagXInputCapture (&out)[4]) {
+    unsigned count = 0;
+    for (DWORD port = 0; port < 4; ++port) {
+        XINPUT_STATE state{};
+        if (XInputGetState(port, &state) != ERROR_SUCCESS) continue;
+        const MagXInputGamepad reading = {state.Gamepad.wButtons, state.Gamepad.bLeftTrigger, state.Gamepad.bRightTrigger,
+                                          state.Gamepad.sThumbLX, state.Gamepad.sThumbLY, state.Gamepad.sThumbRX, state.Gamepad.sThumbRY};
+        mag_win32_xinput_capture(&reading, &out[count++]);
+    }
+    return count;
+}
+#endif
+
 void begin_capture(size_t row, unsigned slot) {
     end_capture(nullptr);
     Capture& capture = s->capture;
@@ -725,13 +784,10 @@ void begin_capture(size_t row, unsigned slot) {
     for (int key = 1; key < 256; ++key) capture.held[key] = (GetAsyncKeyState(key) & 0x8000) != 0;
     if (capture.device == SettingsDevice::Controller) {
         // Held controls must be released first: only fresh presses bind.
-        for (DWORD port = 0; port < 4; ++port) {
-            XINPUT_STATE state{};
-            if (XInputGetState(port, &state) != ERROR_SUCCESS) continue;
-            const MagXInputGamepad reading = {state.Gamepad.wButtons, state.Gamepad.bLeftTrigger, state.Gamepad.bRightTrigger,
-                                              state.Gamepad.sThumbLX, state.Gamepad.sThumbLY, state.Gamepad.sThumbRX, state.Gamepad.sThumbRY};
-            MagXInputCapture now;
-            mag_win32_xinput_capture(&reading, &now);
+        MagXInputCapture controllers[4];
+        const unsigned count = read_controllers(controllers);
+        for (unsigned i = 0; i < count; ++i) {
+            const MagXInputCapture& now = controllers[i];
             capture.blocked |= now.buttons;
             if (now.axes[4] > 32767 * 45 / 100) capture.blocked |= 1ull << 32;
             if (now.axes[5] > 32767 * 45 / 100) capture.blocked |= 1ull << 33;
@@ -746,13 +802,10 @@ void begin_capture(size_t row, unsigned slot) {
 void poll_controller() {
     Capture& capture = s->capture;
     uint64_t down = 0;
-    for (DWORD port = 0; port < 4; ++port) {
-        XINPUT_STATE state{};
-        if (XInputGetState(port, &state) != ERROR_SUCCESS) continue;
-        const MagXInputGamepad reading = {state.Gamepad.wButtons, state.Gamepad.bLeftTrigger, state.Gamepad.bRightTrigger,
-                                          state.Gamepad.sThumbLX, state.Gamepad.sThumbLY, state.Gamepad.sThumbRX, state.Gamepad.sThumbRY};
-        MagXInputCapture now;
-        mag_win32_xinput_capture(&reading, &now);
+    MagXInputCapture controllers[4];
+    const unsigned count = read_controllers(controllers);
+    for (unsigned i = 0; i < count; ++i) {
+        const MagXInputCapture& now = controllers[i];
         down |= now.buttons;
         // Trigger hysteresis: down at 0.55 or more, held down above 0.45.
         for (unsigned trigger = 0; trigger < 2; ++trigger) {
