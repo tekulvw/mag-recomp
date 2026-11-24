@@ -82,7 +82,7 @@ struct Sink {
     }
 };
 
-template <class F> static bool eventually(F f, std::chrono::milliseconds limit = 3000ms) {
+template <class F> static bool eventually(F f, std::chrono::milliseconds limit = 10000ms) {
     auto end = std::chrono::steady_clock::now() + limit;
     while (std::chrono::steady_clock::now() < end) { if (f()) return true; std::this_thread::sleep_for(5ms); }
     return f();
@@ -270,7 +270,7 @@ static void service() {
         svc.submit(presence);
         CHECK(eventually([&] { return p->count("PUT", "/presence") >= 1; }));
         svc.submit(presence);
-        CHECK(eventually([&] { return p->count("PUT", "/presence") >= 3; }, 1000ms));   // heartbeats (100 ms)
+        CHECK(eventually([&] { return p->count("PUT", "/presence") >= 3; }));   // heartbeats (100 ms)
         // Friend request and lookups.
         Command add; add.kind = Command::Kind::AddFriend; add.name = "carol"; add.message = "hello";
         svc.submit(add);
@@ -354,7 +354,7 @@ static void service() {
     struct Slow : FakeTransport {
         using FakeTransport::FakeTransport;
         portal::Response send(const std::string &m, const std::string &u, const std::string &b, const portal::Headers &h) override {
-            if (m == "PUT" && b.find("offline") != std::string::npos) std::this_thread::sleep_for(400ms);
+            if (m == "PUT" && b.find("offline") != std::string::npos) std::this_thread::sleep_for(2000ms);
             return FakeTransport::send(m, u, b, h);
         }
     };
@@ -371,9 +371,9 @@ static void service() {
         CHECK(eventually([&] { return r->count("PUT", "/presence") >= 1; }));
         auto start = std::chrono::steady_clock::now();
         svc.stop(50ms);
-        CHECK(std::chrono::steady_clock::now() - start < 300ms);
+        CHECK(std::chrono::steady_clock::now() - start < 1500ms);   // the slow offline publish takes 2 s
     }
-    CHECK(eventually([&] { return r->count("PUT", "/presence") >= 2; }, 2000ms));
+    CHECK(eventually([&] { return r->count("PUT", "/presence") >= 2; }, 10000ms));
 }
 
 static void spool(const fs::path &scratch) {

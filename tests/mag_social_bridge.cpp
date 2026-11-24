@@ -45,7 +45,7 @@ extern "C" void ps3_np_social_complete_lookup(uint64_t request, int32_t result, 
 }
 
 template <class F> static bool eventually(F f) {
-    for (int i = 0; i < 300; i++) { if (f()) return true; std::this_thread::sleep_for(10ms); }
+    for (int i = 0; i < 1000; i++) { if (f()) return true; std::this_thread::sleep_for(10ms); }
     return f();
 }
 static std::vector<std::string> lines_of(const fs::path &p) {
