@@ -4,8 +4,8 @@
   "upstream": "https://github.com/sp00nznet/ps3recomp",
   "ps3recomp": {
     "runtime": {
-      "tag": "mag-recomp/runtime-2026.11.23-audiostats",
-      "commit": "4f63f8063679d73122d0df89e05859ad45ec0760",
+      "tag": "mag-recomp/runtime-2026.11.24-pmfallback",
+      "commit": "c106f4ada29e62c66d9dc5a6a9e17f7a66101175",
       "path": "local/ps3recomp-runtime"
     },
     "lifter-spu": {
@@ -35,13 +35,13 @@
     }
   },
   "allowed_runtime_revisions": [
-    "4f63f8063679d73122d0df89e05859ad45ec0760"
+    "c106f4ada29e62c66d9dc5a6a9e17f7a66101175"
   ],
   "strict_runtime_revisions": [
-    "4f63f8063679d73122d0df89e05859ad45ec0760"
+    "c106f4ada29e62c66d9dc5a6a9e17f7a66101175"
   ],
   "strict_hle_runtime_revisions": [
-    "4f63f8063679d73122d0df89e05859ad45ec0760"
+    "c106f4ada29e62c66d9dc5a6a9e17f7a66101175"
   ],
   "first_nonblack_capture_revisions": [],
   "allowed_lifter_revisions": [
