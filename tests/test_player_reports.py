@@ -16,7 +16,8 @@ import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 COMPILER = shutil.which('c++') or shutil.which('clang++') or shutil.which('g++')
-SOURCES = ['tests/player_reports.cpp', 'src/player_reports.cpp', 'src/player_gzip.cpp', 'src/player_portal.cpp']
+SOURCES = ['tests/player_reports.cpp', 'src/player_reports.cpp', 'src/player_gzip.cpp', 'src/player_portal.cpp',
+           'src/player_report_request.cpp']
 TOKEN = 'mgd_SyntheticDeviceToken0123456789abcdef'
 UUID = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$')
 LOG_NAME = re.compile(r'^[a-z0-9][a-z0-9._-]{0,63}$')
@@ -43,8 +44,11 @@ def check_contract(test, body):
     test.assertTrue(1 <= len(client['version']) <= 64)
     test.assertIn(client['platform'], {'macos', 'linux', 'windows'})
     test.assertLessEqual(len(json.dumps(client).encode()), 16 << 10)
-    test.assertLessEqual(len(json.dumps(report.get('session', {})).encode()), 4 << 10)
+    test.assertLessEqual(len(json.dumps(report.get('session', {})).encode()), 12 << 10)
     test.assertLessEqual(len(json.dumps(report.get('metrics', {})).encode()), 64 << 10)
+    test.assertNotIn(b'\\u0000', body)  # the portal's database refuses NUL
+    if 'user_comment' in report.get('session', {}):
+        test.assertLessEqual(len(report['session']['user_comment']), 1000)  # Unicode scalar values
     logs = report.get('logs', {})
     test.assertLessEqual(len(logs), 8)
     total, decoded = 0, {}
@@ -98,6 +102,10 @@ class PlayerReportsTests(unittest.TestCase):
             report, logs = check_contract(self, body)
             self.assertEqual(report['trigger'], 'crash')
             self.assertEqual(report['session']['engine_exit'], 139)
+            # The player's Send report: its id, and its comment redacted inside session.
+            self.assertEqual(report['report_id'], '0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d')
+            self.assertEqual(report['session']['user_comment'], 'Froze in ~/MAG\nafter [redacted]')  # the linked token itself
+            self.assertNotIn('user_comment', report)
             self.assertEqual(report['client']['render']['output'], '1280x720')
             self.assertEqual(report['client']['cpu_threads'], 8)  # counts are numbers
             self.assertEqual(report['metrics']['engine']['role'], 'engine')

@@ -1,6 +1,7 @@
 // Performance and error reports (src/player_reports.h).
 #include "player_reports.h"
 #include "player_gzip.h"
+#include "player_report_request.h"
 #include <algorithm>
 #include <cctype>
 #include <cerrno>
@@ -223,6 +224,7 @@ std::string quote(const std::string &value) {
     std::string out = "\"";
     for (size_t i = 0; i < value.size();) {
         const unsigned char c = (unsigned char)value[i];
+        if (c == 0) { ++i; continue; }  // never NUL (see the header)
         if (c < 0x80) {
             switch (c) {
             case '"': out += "\\\""; break;
@@ -541,7 +543,10 @@ Decision decide(const Session &s) {
     Decision d;
     std::error_code code;
     d.manual = fs::is_regular_file(fs::symlink_status(s.logs / "report-requested", code));
-    if (d.manual) d.request_id = requested_report_id(s.logs / "report-requested");
+    if (d.manual) {
+        d.request_id = requested_report_id(s.logs / "report-requested");
+        d.user_comment = requested_comment(s.logs / "report-requested");
+    }
     const std::string halt = halt_line(s.logs);
     auto exit_reason = [&](const char *phase, long long exit) {
         return std::string(phase) + " exited with code " + std::to_string(exit);
@@ -578,13 +583,27 @@ bool valid_id(const std::string &id);
 
 std::string requested_report_id(const fs::path &marker) {
     Json request;
-    if (!parse_json(read_file(marker, 4096), request) || request.kind != Json::Kind::Object) return {};
+    if (!parse_json(read_file(marker, 64u << 10), request) || request.kind != Json::Kind::Object) return {};
     const Json *id = request.get("report_id");
     if (!id || id->kind != Json::Kind::String || !valid_id(id->text)) return {};
     for (char c : id->text)
         if (c >= 'A' && c <= 'F') return {};
     return id->text;
 }
+std::string requested_comment(const fs::path &marker) {
+    Json request;
+    if (!parse_json(read_file(marker, 64u << 10), request) || request.kind != Json::Kind::Object) return {};
+    const Json *comment = request.get("comment");
+    return comment && comment->kind == Json::Kind::String ? clip_report_comment(comment->text) : std::string();
+}
+
+std::string utf8_prefix(const std::string &text, size_t bytes) {
+    if (text.size() <= bytes) return text;
+    size_t end = bytes;
+    while (end > 0 && ((unsigned char)text[end] & 0xC0) == 0x80) --end;  // back to a sequence's start
+    return text.substr(0, end);
+}
+
 std::string new_report_id() {
     std::random_device device;
     std::seed_seq seed{device(), device(), device(), device(),
@@ -701,6 +720,16 @@ std::string build_report(const Session &s, const Decision &d, const std::string 
     for (size_t i = 0; i < d.reasons.size() && i < 8; ++i) reasons += (i ? "," : "") + quote(clip(redact(d.reasons[i], r), 300));
     session += ",\"reasons\":[" + reasons + "]";
     if (!s.launch_error.empty() && !s.player_stop) session += ",\"launch_error\":" + quote(clip(redact(s.launch_error, r), 1000));
+    // The player's own words, only in a report the player asked for: redacted like the logs, and
+    // cut between code points so the session stays within its limit.
+    if (d.manual && !d.user_comment.empty()) {
+        const std::string comment = clip_report_comment(redact(d.user_comment, r));
+        const std::string key = ",\"user_comment\":", cut = ",\"user_comment_truncated\":true";
+        const size_t room = session_max_bytes > session.size() + key.size() + cut.size() + 1 ? session_max_bytes - session.size() - key.size() - cut.size() - 1 : 0;
+        std::string kept = comment;
+        while (!kept.empty() && quote(kept).size() > room) kept = utf8_prefix(kept, kept.size() - std::max<size_t>(1, (quote(kept).size() - room) / 2));
+        if (!kept.empty()) session += key + quote(kept) + (kept.size() < comment.size() ? cut : std::string());
+    }
     session += "}";
     if (session.size() > session_max_bytes) session = "{\"launch\":" + quote(log_name(s.logs.filename().string())) + "}";
     // metrics: the session summaries as they are, slimmed when too large
@@ -769,15 +798,18 @@ bool valid_id(const std::string &id) {
 }
 
 // <trigger> <attempts> <next attempt (unix seconds)> <created (unix milliseconds, for the order)>
-struct State { std::string trigger; int attempts = 0; long long next = 0, created = 0; };
+// A fifth field, the 500 replies so far, came later; a state without it has had none.
+struct State { std::string trigger; int attempts = 0; long long next = 0, created = 0; int server_errors = 0; };
 bool read_state(const fs::path &path, State &out) {
     std::istringstream in(read_file(path, 256));
-    return bool(in >> out.trigger >> out.attempts >> out.next >> out.created);
+    if (!(in >> out.trigger >> out.attempts >> out.next >> out.created)) return false;
+    if (!(in >> out.server_errors)) out.server_errors = 0;
+    return true;
 }
 bool write_state(const fs::path &path, const State &state) {
     std::string error;
     return portal::write_private_file(path, state.trigger + " " + std::to_string(state.attempts) + " " + std::to_string(state.next) +
-                                                " " + std::to_string(state.created) + "\n", error);
+                                                " " + std::to_string(state.created) + " " + std::to_string(state.server_errors) + "\n", error);
 }
 void remove_report(const fs::path &queue, const std::string &id) {
     std::error_code code;
@@ -801,7 +833,7 @@ std::vector<std::pair<Queued, long long>> scan(const fs::path &queue) {
             if (!age && fs::file_time_type::clock::now() - written > std::chrono::minutes(1)) fs::remove(path, age);
             continue;
         }
-        Queued q{stem, state.trigger, state.attempts, state.next, fs::file_size(path, code)};
+        Queued q{stem, state.trigger, state.attempts, state.next, fs::file_size(path, code), state.server_errors};
         out.emplace_back(q, state.created);
     }
     std::sort(out.begin(), out.end(), [](const auto &a, const auto &b) { return a.second != b.second ? a.second < b.second : a.first.report_id < b.first.report_id; });
@@ -989,7 +1021,7 @@ Sent send_queued(portal::Transport &transport, const fs::path &queue, const fs::
         const portal::Response reply =
             transport.post(link.portal + "/api/v1/reports", body, {{"Authorization", "Bearer " + link.device_token}});
         last = reply.status ? std::to_string(reply.status) : "no connection";
-        State state{item.trigger, item.attempts, item.next_attempt, created};
+        State state{item.trigger, item.attempts, item.next_attempt, created, item.server_errors};
         if (reply.status == 200 || reply.status == 201) {
             remove_report(queue, item.report_id);
             ++result.sent;
@@ -1003,7 +1035,8 @@ Sent send_queued(portal::Transport &transport, const fs::path &queue, const fs::
             continue;
         }
         if (reply.status == 0 || reply.status >= 500) {
-            if (++state.attempts >= send_max_attempts) {
+            if (reply.status == 500) ++state.server_errors;
+            if (++state.attempts >= send_max_attempts || state.server_errors >= server_error_max) {
                 remove_report(queue, item.report_id);
                 ++result.dropped;
             } else {

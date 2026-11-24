@@ -89,6 +89,13 @@
 #define MAG_SETTINGS_REPORT_NEEDS_LINK "Link an account to send reports"
 #define MAG_SETTINGS_REPORT_UNAVAILABLE "Reports are sent only when MAG starts from its app"
 #define MAG_SETTINGS_REPORT_FAILED "The report request could not be saved."
+/* Send report's comment box: what the player saw, sent with that report only (session.user_comment).
+ * At most MAG_SETTINGS_REPORT_COMMENT_LIMIT characters (Unicode code points); the counter shows
+ * the count against the limit. Automatic reports never carry a comment. */
+#define MAG_SETTINGS_REPORT_COMMENT "Describe the problem"
+#define MAG_SETTINGS_REPORT_COMMENT_HINT "Optional. What happened, and when? Sent with this report only."
+#define MAG_SETTINGS_REPORT_COMMENT_LIMIT 1000
+#define MAG_SETTINGS_REPORT_COMMENT_COUNTER "%d/%d"  /* characters used, the limit */
 
 /* Choices, in menu order, with the values the settings file stores. */
 #define MAG_SETTINGS_DISPLAY_MODES 2
