@@ -92,7 +92,7 @@ class SdlKeyboardSeamTests(unittest.TestCase):
 
 
 class SdlDesktopCaptureTests(unittest.TestCase):
-    def test_sdl_events_reach_the_core_and_escape_is_withheld_only_while_owned(self):
+    def test_sdl_events_reach_the_core_and_escape_never_quits_the_focused_game(self):
         flags = sdl_flags()
         cxx = shutil.which('clang++') or shutil.which('g++')
         if not flags or not cxx:

@@ -767,10 +767,11 @@ first runs the capture backend with the same window and dialog flag, then the SD
 state is neutral (window flag kept) while the adapter mutes the keyboard pad (8.2), as the macOS window
 pad is. While capture is requested an SDL event filter (chained after any filter already set)
 observes keyboard, mouse and window events and queues them for the pump; it passes every event
-on except one: a press of Escape on the focused game window while the adapter owns the keyboard
-and requests capture and no dialog owns the keyboard, which the pump would treat as quit (the
-controls bind Escape to Start). Closing the window still quits; Escape quits again as soon as any
-of those conditions ends. SDL scancodes 4..231 are the HID usages; mouse buttons map left 0,
+on except one: a press of Escape on the focused game window while no dialog owns the keyboard,
+which the pump would treat as quit (in a match the controls bind Escape to Start). Closing the
+window still quits. The filter is installed only while capture is requested, so before the first
+match (the front end and lobby) Escape still quits the SDL window; the Win32 backend withholds it
+from the start. SDL scancodes 4..231 are the HID usages; mouse buttons map left 0,
 right 1, middle 2, X1 3, X2 4 on one logical mouse; touch-synthesized mouse events are ignored;
 motion is SDL relative mode, reported down-positive (moving the mouse down is positive). While the mouse is locked the backend also
 holds an explicit window grab (`SDL_SetWindowGrab`), so the pointer stays confined to the game
@@ -820,10 +821,11 @@ CMake refuses to configure without it.
 While capture is requested the window registers for Raw Input from keyboards and mice, with no
 flags (legacy key and mouse messages still flow, and input arrives only while the application is
 in the foreground); the registration is removed when capture stops or the window changes. The
-backend reads `WM_INPUT` for the game window and never consumes it. It withholds a key press of
-Escape on the focused game window while the adapter owns the keyboard and requests capture and no
-dialog owns the keyboard, which the window procedure would treat as quit (the Linux rule; closing
-the window still quits). While capture is installed it also withholds the messages that would put
+backend reads `WM_INPUT` for the game window and never consumes it. It withholds every key press of
+Escape on the focused game window while no dialog owns the keyboard, with or without capture (in
+the front end and lobby too), because the window procedure would end the game on it without asking.
+Players press Escape to go back or pause, and lost their session to it. Closing the window (its
+close button, Alt+F4) still quits. While capture is installed it also withholds the messages that would put
 the window in its menu mode: the release of a lone Alt or of F10 (`WM_SYSKEYUP`) and Alt with a
 character key (`WM_SYSCHAR`, a menu mnemonic or Alt+Space). The game window has no menu, and the
 modal menu loop would stop the pump, and the game with it, until another key or a click. Alt+F4 is

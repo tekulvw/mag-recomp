@@ -142,21 +142,19 @@ private:
     std::set<Button> buttons_;
 };
 
-// Whether the backend withholds the host's quit key (Escape) from the SDK's window pump. The
-// controls bind Escape to Start, so while the adapter owns the keyboard and captures the focused
-// game window Escape must not end the game. A dialog that owns the keyboard (the on-screen
-// keyboard) always receives it.
+// Whether the backend withholds the host's quit key (Escape) from the SDK's window pump. The SDK's
+// window ends the game on an Escape press, with no question asked. Players press Escape to go back
+// or pause, in the front end and lobby as well as in a match (where the controls bind it to Start),
+// so it never ends the game on the focused game window: closing the window (its close button,
+// Alt+F4) still does. A dialog that owns the keyboard (the on-screen keyboard) always receives it.
 struct DesktopQuitKeyContext {
     bool quit_key_down = false;        // the event is a press (or repeat) of the quit key
-    bool keyboard_owned = false;       // the adapter owns keyboard interpretation
-    bool capture_requested = false;    // the adapter requests desktop capture
     bool on_game_window = false;       // the event targets the game window
     bool game_window_focused = false;  // the game window has keyboard focus
     bool dialog_active = false;        // a native dialog owns the keyboard
 };
 constexpr bool desktop_capture_withholds_quit_key(const DesktopQuitKeyContext& c) {
-    return c.quit_key_down && c.keyboard_owned && c.capture_requested && c.on_game_window &&
-           c.game_window_focused && !c.dialog_active;
+    return c.quit_key_down && c.on_game_window && c.game_window_focused && !c.dialog_active;
 }
 
 // One log line for a change of capture state, or nullptr when nothing a player would notice

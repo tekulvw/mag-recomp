@@ -12,7 +12,7 @@ void mag_input_desktop_win32_window(void* hwnd);
 void mag_input_desktop_win32_pump(int dialog_active);
 /* Window thread, for every message the pump reads, before anything else sees it (`message` is a
  * MSG*). Observes only; returns nonzero for the messages the pump must not process: a press of
- * Escape on the focused game window while the adapter owns the keyboard and captures it, and while
+ * Escape on the focused game window unless a dialog owns the keyboard (it would end the game), and while
  * capture is installed the messages that would put the window in its menu mode (a lone Alt or F10
  * released, Alt with a character key), whose modal loop stalls the pump. */
 int mag_input_desktop_win32_message(void* message, int dialog_active);

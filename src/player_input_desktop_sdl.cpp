@@ -6,8 +6,9 @@
 // mag_input_desktop_sdl_pump first, with the game window and whether a native dialog owns the
 // keyboard. While capture is requested an SDL event filter observes keyboard, mouse and window
 // events as SDL queues them, before the SDK's pump reads them. The filter passes every event on,
-// except one: a press of Escape on the focused game window while the adapter owns the keyboard
-// and captures it, because the pump would treat it as quit and the controls bind it to Start.
+// except one: a press of Escape on the focused game window while no dialog owns the keyboard,
+// because the pump would end the game on it (the controls bind it to Start). Without the filter
+// (capture not yet requested, as in the front end) the SDK still quits on Escape here.
 // The filter queues what it observed; the pump seam hands the queue to the core and refreshes it,
 // so the core only ever runs on the window thread.
 //
@@ -219,8 +220,6 @@ int SDLCALL filter(void* data, SDL_Event* event) {
             const Uint32 id = b.window_id.load(std::memory_order_acquire);
             DesktopQuitKeyContext context;
             context.quit_key_down = true;
-            context.keyboard_owned = mag_input_capture_keyboard_owned() != 0;
-            context.capture_requested = b.core.enabled_requested();
             context.on_game_window = id != 0 && event->key.windowID == id;
             context.game_window_focused = game && SDL_GetKeyboardFocus() == game;
             context.dialog_active = b.dialog.load(std::memory_order_acquire);
