@@ -156,7 +156,12 @@ static void general(const fs::path& folder) {
     CHECK(panel.label("button:play") == "Play MAG" && panel.enabled("button:play"));
     CHECK(panel.enabled("button:apply") && panel.status() == "Unsaved changes");
     CHECK(panel.account_status() == "Sign in with your account at https://magtest.online");
+#if MAG_PLAYER_RENDER_SCALE_SUPPORTED
+    // The Vulkan renderer's rendering scale (Linux builds); FXAA stays the Metal renderer's.
+    CHECK(panel.enabled("choice:rendering") && !panel.enabled("choice:aa"));
+#else
     CHECK(!panel.enabled("choice:rendering") && !panel.enabled("choice:aa"));
+#endif
     CHECK(panel.label("choice:output") == "1280 \xC3\x97 720");
     type_into(panel, "text:server", "Example.org");
     CHECK(panel.account_status() == "Accounts are for play.magtest.online" && !panel.enabled("button:account"));

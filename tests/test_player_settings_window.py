@@ -56,7 +56,9 @@ class SdlSettingsPanelTests(unittest.TestCase):
         link = ['-framework', 'Security', '-framework', 'SystemConfiguration', '-liconv', '-lresolv'] \
             if sys.platform == 'darwin' else ['-ldl', '-lm']
         cls.binary = cls.root / 'driver'
+        # As Linux players build it: the Vulkan renderer, so with rendering scale.
         subprocess.run([cls.compiler, '-std=c++20', '-Wall', '-Wextra', '-Werror', '-pthread', '-DMAG_PLAYER_ARCHIVE_NO_ZLIB=1', '-DMAG_PLAYER_SETTINGS_CONTROLS=1',
+                        '-DMAG_PLAYER_RENDER_SCALE_SUPPORTED=1',
                         '-I' + str(ROOT / 'src'), '-I' + str(SDK), '-I' + str(cls.root),
                         *[f for f in cls.sdl if not f.startswith('-l') and not f.startswith('-L') and f != '-framework'],
                         str(ROOT / 'tests/player_settings_window.cpp'), str(ROOT / 'src/player_settings_sdl.cpp'),
@@ -154,7 +156,8 @@ class Win32SettingsWindowTests(unittest.TestCase):
                        'src/player_settings_account.cpp', 'src/player_report_request.cpp', 'src/player_settings_debug.cpp',
                        'tests/player_settings_win32_driver.cpp')
             for source in sources:
-                for controls in ([], ['-DMAG_PLAYER_SETTINGS_CONTROLS=1', '-DMAG_PLAYER_INPUT_HOLD=1']):
+                for controls in ([], ['-DMAG_PLAYER_SETTINGS_CONTROLS=1', '-DMAG_PLAYER_INPUT_HOLD=1',
+                                      '-DMAG_PLAYER_RENDER_SCALE_SUPPORTED=1']):
                     result = subprocess.run([compiler, '-std=c++20', '-Wall', '-Wextra', '-Werror', '-Wno-unknown-pragmas',
                                              '-DUNICODE', '-D_UNICODE', *controls, '-I' + str(ROOT / 'src'), '-c',
                                              str(ROOT / source), '-o', str(Path(folder) / 'object.o')],
@@ -177,7 +180,8 @@ class Win32SettingsWindowTests(unittest.TestCase):
             subprocess.run([compiler, '/nologo', '/c', '/W3', '/WX', '/MT', str(ROOT / 'src/player_input_win32_map.c'),
                             '/Fo' + str(root / 'map.obj')], check=True, timeout=120)
             subprocess.run([compiler, '/nologo', '/std:c++20', '/EHsc', '/W3', '/WX', '/MT', '/DUNICODE', '/D_UNICODE',
-                            '/DMAG_PLAYER_ARCHIVE_NO_ZLIB=1', '/DMAG_PLAYER_SETTINGS_CONTROLS=1', '/D_CRT_SECURE_NO_WARNINGS', '/I' + str(ROOT / 'src'), '/I' + str(root),
+                            '/DMAG_PLAYER_ARCHIVE_NO_ZLIB=1', '/DMAG_PLAYER_SETTINGS_CONTROLS=1', '/DMAG_PLAYER_RENDER_SCALE_SUPPORTED=1',
+                            '/D_CRT_SECURE_NO_WARNINGS', '/I' + str(ROOT / 'src'), '/I' + str(root),
                             str(ROOT / 'tests/player_settings_win32_driver.cpp'), str(ROOT / 'src/player_settings_win32.cpp'),
                             str(ROOT / 'src/player_settings_account.cpp'), str(ROOT / 'src/player_settings_debug.cpp'), str(root / 'map.obj'), *[str(ROOT / s) for s in FORM],
                             '/Fo' + str(root) + '\\', '/Fe' + str(binary), '/link', '/SUBSYSTEM:CONSOLE', str(root / 'cargo/release/mag_input.lib'),

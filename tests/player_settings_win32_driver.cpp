@@ -167,7 +167,12 @@ static void in_game(const fs::path& folder) {
         CHECK(visible(window, IdControls));
         CHECK(!visible(window, IdPlay));
         CHECK(item(window, IdApply) == "Apply" && enabled(window, IdApply) && contains(window, IdStatus, "Unsaved changes"));
+#if MAG_PLAYER_RENDER_SCALE_SUPPORTED
+        // Vulkan builds scale rendering; FXAA stays the Metal renderer's.
+        CHECK(enabled(window, IdRendering) && !enabled(window, IdAntiAliasing));
+#else
         CHECK(!enabled(window, IdRendering) && !enabled(window, IdAntiAliasing));  // the Metal renderer's
+#endif
         CHECK(!visible(window, IdTcp));
         click(window, IdAdvanced);
         CHECK(visible(window, IdTcp));

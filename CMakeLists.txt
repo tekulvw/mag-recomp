@@ -391,6 +391,16 @@ else()
             target_link_libraries(${PROJECT_NAME} PRIVATE ${SDL2_LIBRARIES})
         endif()
     endif()
+    # Rendering resolution on the Vulkan backend (Linux, and Windows Vulkan builds): the same
+    # adapter as Metal's, inert at 100%. The launch hook passes the setting on and the settings
+    # window offers it only where this is built (MAG_PLAYER_RENDER_SCALE_SUPPORTED),
+    # appended after the window sources set their own definitions.
+    if(PS3RECOMP_RSX_VULKAN)
+        include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/MagRenderScale.cmake")
+        mag_enable_player_render_scale(${PROJECT_NAME} "${PS3RECOMP_DIR}" vulkan)
+        set_property(SOURCE src/player_settings_portable.cpp src/player_settings_sdl.cpp src/player_settings_win32.cpp
+            TARGET_DIRECTORY ${PROJECT_NAME} APPEND PROPERTY COMPILE_DEFINITIONS MAG_PLAYER_RENDER_SCALE_SUPPORTED=1)
+    endif()
 endif()
 
 # Friends and presence in the engine (docs/player-social.md): the runtime's NP social provider,

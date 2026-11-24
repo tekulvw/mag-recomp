@@ -1,5 +1,10 @@
 #include "player_render_scale.h"
 #include "libs/video/rsx_draw_engine.h"
+#if MAG_PLAYER_RENDER_SCALE_VULKAN
+// The Vulkan backend blits every flip into a display image of the guest's display size; it keeps
+// the enlarged targets' detail only when that image is enlarged with them.
+extern "C" int rsx_vulkan_backend_set_present_scale(u32 percent);
+#endif
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -197,7 +202,8 @@ void readback(void*u,u32 h,u32 x,u32 y,u32 w,u32 ht,void*out,u32 pitch) {
 int depthReadback(void*u,u32 h,u32 x,u32 y,u32 w,u32 ht,float*out,u32 pitch) {
     const Image im=image(h);const Region r=readRegion(im,x,y,w,ht,pitch);auto pixels=buffer(r.w,r.h,4);
     const int status=original.depth_readback(u,h,r.x,r.y,r.w,r.h,(float*)pixels.data(),r.w*4);
-    if(!status)reduce(im,r,pixels.data(),x,y,w,ht,out,pitch);return status;
+    if(!status)reduce(im,r,pixels.data(),x,y,w,ht,out,pitch);
+    return status;
 }
 // Newer SDKs supply these optional paths. Keep the pinned public runtime
 // compatible while preserving exact rectangle/depth-view behavior when present.
@@ -243,5 +249,11 @@ extern "C" const rsx_draw_backend *mag_player_render_backend(const rsx_draw_back
     return &scaled;
 }
 extern "C" void mag_player_set_render_backend(const rsx_draw_backend *backend) {
-    rsx_draw_engine_set_backend(mag_player_render_backend(backend));
+    const rsx_draw_backend *chosen=mag_player_render_backend(backend);
+#if MAG_PLAYER_RENDER_SCALE_VULKAN
+    // Registration runs inside the backend's init, before anything is presented.
+    if(backend&&chosen!=backend&&rsx_vulkan_backend_set_present_scale(percent))
+        fail("the Vulkan backend refused the rendering resolution's present size");
+#endif
+    rsx_draw_engine_set_backend(chosen);
 }

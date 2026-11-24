@@ -41,11 +41,13 @@ class PortablePlayerSettingsTests(unittest.TestCase):
         (root / 'sdata_decrypt.h').write_text('#include <stddef.h>\n#include <stdint.h>\n'
             'static inline uint8_t* sdata_decrypt(const uint8_t*,size_t,size_t*) { return NULL; }\n')
         cls.binary = root / 'driver'
-        sources = ['tests/player_settings_portable.cpp', 'src/player_settings_portable.cpp', 'src/player_settings_file.cpp',
+        cls.sources = sources = ['tests/player_settings_portable.cpp', 'src/player_settings_portable.cpp', 'src/player_settings_file.cpp',
                    'src/player_portal.cpp',
                    'src/player_server_overlay_portable.cpp', 'src/player_archive.cpp',
                    'src/player_inflate.cpp', 'src/player_sha256.cpp']
+        # As Windows and Linux players build it: the Vulkan renderer, with rendering scale.
         result = subprocess.run([COMPILER, '-std=c++20', '-Wall', '-Wextra', '-Werror', '-DMAG_PLAYER_ARCHIVE_NO_ZLIB=1',
+                                 '-DMAG_PLAYER_RENDER_SCALE_SUPPORTED=1',
                                  '-I' + str(ROOT / 'src'), '-I' + str(root), *[str(ROOT / s) for s in sources],
                                  '-o', str(cls.binary)], capture_output=True, text=True, timeout=120)
         if result.returncode:
@@ -244,6 +246,39 @@ class PortablePlayerSettingsTests(unittest.TestCase):
         result = self.run_driver('prepare', env=env)
         values = dict(line.split('=', 1) for line in result.stdout.decode().splitlines())
         return result.returncode, values, result.stderr.decode()
+
+    def test_rendering_resolution_reaches_the_adapter(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp); vfs = self.vfs(root, b'-- not the retail member\n')
+            settings = root / 'config/MAG/settings.json'; settings.parent.mkdir(parents=True)
+            common = {'MAG_PLAYER_SETTINGS_PATH': str(settings), 'MAG_PLAYER_OVERLAY_ROOT': str(root / 'owned'),
+                      'PS3_VFS_ROOT': str(vfs)}
+            for scale in (100, 150, 200, 300):
+                settings.write_text(json.dumps({'server_address': '', 'render_scale': scale}))
+                for phase in ({'MAG_PLAYER_SETUP': '1'}, {}):  # the launcher, then the engine from its snapshot
+                    code, values, err = self.prepare(root, **common, **phase)
+                    self.assertEqual((code, values['MAG_PLAYER_RENDER_SCALE']), (0, str(scale)), err)
+            settings.write_text(json.dumps({'server_address': ''}))
+            self.assertEqual(self.prepare(root, **common, MAG_PLAYER_SETUP='1')[1]['MAG_PLAYER_RENDER_SCALE'], '100')
+
+    def test_rendering_resolution_without_the_vulkan_adapter_is_reported(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp); vfs = self.vfs(root, b'-- not the retail member\n')
+            shutil.copyfile(self.binary.parent / 'sdata_decrypt.h', root / 'sdata_decrypt.h')
+            binary = root / 'driver-no-scale'
+            result = subprocess.run([COMPILER, '-std=c++20', '-Wall', '-Wextra', '-Werror', '-DMAG_PLAYER_ARCHIVE_NO_ZLIB=1',
+                                     '-I' + str(ROOT / 'src'), '-I' + str(root), *[str(ROOT / s) for s in self.sources],
+                                     '-o', str(binary)], capture_output=True, text=True, timeout=120)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            settings = root / 'config/MAG/settings.json'; settings.parent.mkdir(parents=True)
+            settings.write_text(json.dumps({'server_address': '', 'render_scale': 200}))
+            env = {k: v for k, v in os.environ.items() if not k.startswith(('MAG_', 'PS3'))}
+            env.update(MAG_PLAYER_SETTINGS_PATH=str(settings), MAG_PLAYER_OVERLAY_ROOT=str(root / 'owned'),
+                       PS3_VFS_ROOT=str(vfs), MAG_PLAYER_SETUP='1')
+            result = subprocess.run([str(binary), 'prepare'], capture_output=True, text=True, timeout=30, env=env)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn('MAG_PLAYER_RENDER_SCALE=\n', result.stdout)
+            self.assertIn('Rendering resolution 200% needs the Vulkan renderer', result.stderr)
 
     def test_launch_hook(self):
         with tempfile.TemporaryDirectory() as tmp:

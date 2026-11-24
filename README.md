@@ -55,8 +55,9 @@ your computer and packages the result. Download it from a release.
 MAG has a [settings window](docs/player-settings.md) for the game server, player name, account,
 display and controls on every system: press **F10** while playing. It also
 opens before the game at every launch, filled with your saved settings, so **Play MAG** is one
-click (`--no-prompt` skips it, for scripts). macOS also has **MAG → Settings…** and Command-comma,
-and its Metal renderer adds rendering resolution and FXAA. Settings survive updates and rebuilds.
+click (`--no-prompt` skips it, for scripts). Rendering resolution (150%, 200% or 300% of the game's
+720p) works on every system; macOS also has **MAG → Settings…**, Command-comma and FXAA on its
+Metal renderer. Settings survive updates and rebuilds.
 
 ## For players
 
