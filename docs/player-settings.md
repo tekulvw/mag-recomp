@@ -41,6 +41,7 @@ What happens:
 - **The account's name wins.** The ticket carries your account's player name, and the game must sign in with it. When it differs from `player_name`, MAG saves the account's name as your player name and tells you (in the terminal on Linux, in a message box on macOS and Windows, where `--no-prompt` keeps it to the launch's `supervisor.log`).
 - **When the ticket cannot be fetched,** MAG says why and signs in with your player name for that launch, as an unlinked MAG does, while the game server still accepts that. The reasons: the computer was unlinked on the website (MAG forgets the token; link again), the account is banned (with the reason), the account has no player name yet (claim one at `https://magtest.online/account`), the portal does not issue tickets for this server, or the portal is unreachable or busy. `fall_back_to_name_sign_in` in `src/player_portal.h` turns that fallback off once the server requires tickets; the launch then stops with the message.
 - **Not linked:** nothing changes. The launch uses the no-ticket profile with your player name.
+- **Friends.** A linked MAG also shows the portal's friends in the game's friends list, and publishes your in-game presence to them while the game runs ([player-social.md](player-social.md)); `MAG_SOCIAL=0` turns that off.
 
 #### Test computers: a service-account token
 

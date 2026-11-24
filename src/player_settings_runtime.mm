@@ -117,6 +117,14 @@ int mag_player_settings_prepare(void) { @autoreleasepool {
                     // ticket setting its init turns on, and the runtime returns this file's bytes.
                     setenv("PS3RECOMP_NP_LOCAL_TICKET","1",1);
                     setenv("PS3RECOMP_NP_TICKET_FILE",ticket.fileSystemRepresentation,1);
+                    if(portalTicket&&!launcherPhase){
+                        // Friends and presence while the engine runs (docs/player-social.md): the
+                        // game process holds the account link on macOS, so the portal worker runs
+                        // here (src/mag_social_bridge.cpp). These name the link; never the token.
+                        setenv("MAG_SOCIAL_PORTAL",mag::portal::portal_for([settings[@"server_address"] UTF8String],
+                                                                           [settings[@"portal_url"] UTF8String]?:"").c_str(),1);
+                        setenv("MAG_SOCIAL_LINK_FILE",mag::portal::link_path(path.fileSystemRepresentation).string().c_str(),1);
+                    }
                 }else{
                     // The existing retail compatibility hook honors the configured
                     // no-ticket setting after the launcher's own ticket override.

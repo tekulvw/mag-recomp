@@ -46,6 +46,10 @@ struct Handle {
 class WinHttpTransport final : public Transport {
 public:
     Response post(const std::string &url_text, const std::string &body, const Headers &headers) override {
+        return send("POST", url_text, body, headers);
+    }
+    Response send(const std::string &method, const std::string &url_text, const std::string &body,
+                  const Headers &headers) override {
         Response response;
         Url url;
         if (!split_url(url_text, url)) { response.error = "the portal address is not a valid URL"; return response; }
@@ -62,12 +66,13 @@ public:
         }
         Handle connection{WinHttpConnect(session.h, wide(url.host).c_str(), INTERNET_PORT(url.port), 0)};
         if (!connection.h) return failed();
-        Handle request{WinHttpOpenRequest(connection.h, L"POST", wide(url.path).c_str(), nullptr, WINHTTP_NO_REFERER,
+        Handle request{WinHttpOpenRequest(connection.h, wide(method).c_str(), wide(url.path).c_str(), nullptr, WINHTTP_NO_REFERER,
                                           WINHTTP_DEFAULT_ACCEPT_TYPES, url.scheme == "https" ? WINHTTP_FLAG_SECURE : 0)};
         if (!request.h) return failed();
         DWORD never = WINHTTP_OPTION_REDIRECT_POLICY_NEVER;
         WinHttpSetOption(request.h, WINHTTP_OPTION_REDIRECT_POLICY, &never, sizeof never);
-        std::string extra = "Content-Type: application/json\r\nAccept: application/json\r\n";
+        const bool content = !body.empty() || (method != "GET" && method != "DELETE");
+        std::string extra = std::string(content ? "Content-Type: application/json\r\n" : "") + "Accept: application/json\r\n";
         for (const auto &[name, value] : headers) extra += name + ": " + value + "\r\n";
         const std::wstring header_text = wide(extra);
         if (!WinHttpSendRequest(request.h, header_text.c_str(), DWORD(header_text.size()), (LPVOID)body.data(), DWORD(body.size()),

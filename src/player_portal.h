@@ -32,6 +32,16 @@ public:
     // POST a JSON body (Content-Type: application/json) with these extra headers. Implementations
     // verify TLS certificates and the host name, and time out rather than hang.
     virtual Response post(const std::string &url, const std::string &json_body, const Headers &headers) = 0;
+    // Any of GET, POST, PUT and DELETE. A request without a body (an empty `json_body` on GET or
+    // DELETE) carries no Content-Type. The platform transports answer every method; this default
+    // passes POST to post() and refuses the others (status 0), which suits fakes that only post.
+    virtual Response send(const std::string &method, const std::string &url, const std::string &json_body,
+                          const Headers &headers) {
+        if (method == "POST") return post(url, json_body, headers);
+        Response refused;
+        refused.error = "this transport sends only POST";
+        return refused;
+    }
 };
 // The platform's HTTPS transport, where one is built in; nullptr otherwise.
 std::unique_ptr<Transport> make_platform_transport();

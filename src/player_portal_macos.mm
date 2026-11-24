@@ -18,12 +18,15 @@
 
 namespace mag::portal {
 namespace {
-// Synchronous POST: the caller is the launch preparation or a background link thread. The
+// Synchronous requests: the caller is the launch preparation or a background link thread. The
 // completion runs on the session's own queue, so waiting on the main thread is safe. NSURLSession
 // verifies the certificate and host name (App Transport Security: TLS 1.2 or newer).
 class SessionTransport final : public Transport {
 public:
     Response post(const std::string &url, const std::string &body, const Headers &headers) override {
+        return send("POST", url, body, headers);
+    }
+    Response send(const std::string &method, const std::string &url, const std::string &body, const Headers &headers) override {
         @autoreleasepool {
             Response response;
             NSURL *address = [NSURL URLWithString:[NSString stringWithUTF8String:url.c_str()]];
@@ -31,9 +34,11 @@ public:
             NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:address
                                                                    cachePolicy:NSURLRequestReloadIgnoringLocalCacheData
                                                                timeoutInterval:20];
-            request.HTTPMethod = @"POST";
-            request.HTTPBody = [NSData dataWithBytes:body.data() length:body.size()];
-            [request setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
+            request.HTTPMethod = [NSString stringWithUTF8String:method.c_str()];
+            if (!body.empty() || (method != "GET" && method != "DELETE")) {
+                request.HTTPBody = [NSData dataWithBytes:body.data() length:body.size()];
+                [request setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
+            }
             [request setValue:@"application/json" forHTTPHeaderField:@"Accept"];
             [request setValue:@"MAG-launcher" forHTTPHeaderField:@"User-Agent"];
             for (const auto &[name, value] : headers)

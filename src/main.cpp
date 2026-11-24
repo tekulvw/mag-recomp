@@ -43,6 +43,9 @@
 #include "mag_extension.h"
 #include "mag_frame_clock.h"
 #include "mag_session_monitor.h"
+#if defined(MAG_SOCIAL_BRIDGE)
+#include "mag_social_bridge.h"
+#endif
 #if defined(MAG_PLAYER_SETTINGS) || defined(MAG_PLAYER_PORTABLE_SETTINGS)
 #include "player_settings_runtime.h"
 #endif
@@ -414,6 +417,10 @@ int main(int argc, char** argv)
     // Setup and recovery run before allocating guest memory or connecting.
     const int settings_result = mag_player_settings_prepare();
     if (settings_result <= 0) return settings_result < 0 ? 1 : 0;
+#endif
+#if defined(MAG_SOCIAL_BRIDGE)
+    // Friends and presence for a linked account, before the game first reaches NP (docs/player-social.md).
+    mag_social_start();
 #endif
 
 #ifdef _WIN32

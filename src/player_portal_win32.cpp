@@ -3,6 +3,7 @@
 #include "player_portal_win32.h"
 #include "player_portal.h"
 #include "player_settings_portable.h"
+#include "player_social.h"
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <shellapi.h>
@@ -303,4 +304,33 @@ extern "C" int mag_portal_phase(const wchar_t *settings_file, const wchar_t *ser
     default:
         return MAG_PORTAL_NONE;
     }
+}
+
+namespace {
+std::unique_ptr<mag::social::SpoolServer> social_server;
+}
+
+extern "C" int mag_social_start(const wchar_t *settings_file, const wchar_t *server_choice, const wchar_t *spool_dir, const wchar_t *log_file,
+                                int off) {
+    mag_social_stop();
+    if (off) return 0;
+    mag::PortableSettings settings;
+    if (!launch_settings(settings_file, server_choice, settings)) return 0;
+    const std::string portal = portal_of(settings);
+    if (portal.empty() || !settings.ticket_file.empty()) return 0;
+    const fs::path log = log_file ? fs::path(log_file) : fs::path();
+    social_server = mag::social::SpoolServer::start(make_platform_transport, link_path(fs::path(settings_file)), portal, fs::path(spool_dir),
+                                                    [log](const std::string &line) {
+                                                        if (log.empty()) return;
+                                                        std::ofstream out(log, std::ios::binary | std::ios::app);
+                                                        out << "MAG friends: " << line << "\n";
+                                                    });
+    if (!social_server) return 0;
+    SetEnvironmentVariableW(L"MAG_SOCIAL_SPOOL", spool_dir);
+    return 1;
+}
+
+extern "C" void mag_social_stop(void) {
+    SetEnvironmentVariableW(L"MAG_SOCIAL_SPOOL", nullptr);
+    social_server.reset();
 }
