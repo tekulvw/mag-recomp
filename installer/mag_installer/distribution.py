@@ -24,6 +24,7 @@ SHIPPABLE_FILES = (
     'mag_installer/native_kit.py', 'scripts/prepare_native_kit.py',
     'mag_installer/native_package_windows.py', 'mag_installer/native_package_linux.py',
     'scripts/prepare_player_kit.py',
+    'mag_installer/build_cache.py', 'mag_installer/compile_cache.py', 'mag_installer/lift_cache.py',
     'profiles/mag-unconfigured.json', 'profiles/synthetic-demonstration.json',
     'docs/design.md', 'docs/testing.md', 'docs/profile-format.md',
     'mag_installer/releasing.py', 'scripts/release_installer.py',

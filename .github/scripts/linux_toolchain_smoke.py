@@ -14,12 +14,16 @@ import sys
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'installer'))
 
-from mag_installer import managed_tools, native_build  # noqa: E402
+from mag_installer import build_cache, compile_cache, managed_tools, native_build  # noqa: E402
 from mag_installer.model import InstallerError  # noqa: E402
 from mag_installer.safety import Cancellation  # noqa: E402
+import compile_cache_check  # noqa: E402
+
+SEEN = []
 
 
 def events(event):
+    SEEN.append(event)
     if event.get('event') not in ('stage-activity', 'download'):
         print(json.dumps(event), flush=True)
 
@@ -38,8 +42,15 @@ def main():
     toolchain, detail = managed_tools.linux_toolchain_probe()
     if not toolchain: raise InstallerError(detail)
     print('toolchain:', json.dumps(toolchain), flush=True)
+    # The build cache: the dependency prefix built once is restored into a second managed root,
+    # which the runtime below builds against.
+    store = build_cache.BuildCache(work / 'user-cache/build-cache', token, events)
+    managed_tools.bootstrap(work / 'managed-first', cache=work / 'cache', token=token,
+                            events=events, build_dependencies=True, build_cache=store)
     managed = managed_tools.bootstrap(work / 'managed', cache=work / 'cache', token=token,
-                                      events=events, build_dependencies=True)
+                                      events=events, build_dependencies=True, build_cache=store)
+    if not any(e.get('event') == 'build-cache-hit' and e.get('kind') == 'tools' for e in SEEN):
+        raise InstallerError('the second managed root did not reuse the cached dependency prefix')
     if not managed['dependencies_ready']: raise InstallerError('Managed dependency build was skipped')
     config = {**{key: managed[key] for key in ('python', 'cmake', 'ninja', 'git', 'managed_prefix', 'linux_toolchain')},
               'host': 'linux-x86_64', 'jobs': 2}
@@ -86,6 +97,21 @@ def main():
     # inventory on every later invocation, including a retry.
     if not (prefix / 'MANAGED-DEPENDENCIES.json').is_file():
         raise InstallerError('Managed dependencies have no completed identity receipt')
+    # The compile cache: the runtime again, in two more build folders through the pinned ccache,
+    # then the exact-identity check on a small project.
+    ccache = compile_cache.ccache_tool(managed['root'], 'linux-x86_64', cache=work / 'cache', token=token, events=events)
+    identity = compile_cache.compiler_identity(config, env)
+    compilers = ['-DCMAKE_C_COMPILER=' + toolchain['cc'], '-DCMAKE_CXX_COMPILER=' + toolchain['cxx']]
+    def configure(folder):
+        print(f'== configure runtime in {folder.name}', flush=True)
+        return [managed['cmake'], '-S', wrapper, '-B', folder, '-G', 'Ninja', '-DCMAKE_BUILD_TYPE=Release', *compilers,
+                '-DCMAKE_MAKE_PROGRAM=' + managed['ninja'], '-DPython3_EXECUTABLE=' + managed['python'],
+                '-DCMAKE_PREFIX_PATH=' + str(prefix), '-DPS3RECOMP_RSX_VULKAN=ON',
+                '-DPS3RECOMP_FFMPEG_RUNTIME=ON', '-DPS3RECOMP_FFMPEG_INCLUDE_DIR=' + managed['ffmpeg']['include']]
+    compile_cache_check.rebuild_hits(managed['cmake'], ccache, env, identity, store.root, work, configure,
+                                     ['--target', 'ps3recomp_runtime', '--parallel', '2'],
+                                     [work / 'runtime-cached', work / 'runtime-cached-again'])
+    compile_cache_check.check(managed['cmake'], managed['ninja'], ccache, compilers, env, identity, work / 'cache-check')
     print('Linux managed toolchain and Vulkan runtime build verified (no game data)', flush=True)
     return 0
 

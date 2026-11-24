@@ -549,7 +549,9 @@ def dependency_plan(paths, prefix):
                        {'id':'build-'+key,'cwd':source,'argv':[cmake,'--build',str(build),'--parallel','2']},
                        {'id':'install-'+key,'cwd':source,'argv':[cmake,'--install',str(build)]}])
     ffmpeg=Path(paths['source-ffmpeg']); build=prefix.parent/'build-ffmpeg'
-    stages.extend([{'id':'configure-ffmpeg','cwd':build,'argv':[str(ffmpeg/'configure'),'--prefix='+str(prefix),'--disable-programs','--disable-doc','--disable-debug','--disable-static','--enable-shared','--disable-autodetect','--disable-avdevice','--disable-avfilter','--disable-network','--enable-zlib',*(['--disable-x86asm'] if paths.get('host')=='linux-x86_64' else [])]},
+    # macOS: @rpath install names (as SDL2 has), so the prefix works wherever it is placed (a
+    # build cache restore puts it in a new build folder); the executables carry the rpath.
+    stages.extend([{'id':'configure-ffmpeg','cwd':build,'argv':[str(ffmpeg/'configure'),'--prefix='+str(prefix),'--disable-programs','--disable-doc','--disable-debug','--disable-static','--enable-shared','--disable-autodetect','--disable-avdevice','--disable-avfilter','--disable-network','--enable-zlib',*(['--disable-x86asm'] if paths.get('host')=='linux-x86_64' else ['--install-name-dir=@rpath'])]},
                    {'id':'build-ffmpeg','cwd':build,'argv':['/usr/bin/make','-j2']},
                    {'id':'install-ffmpeg','cwd':build,'argv':['/usr/bin/make','install']}])
     return stages
@@ -662,16 +664,86 @@ def _dependency_paths(prefix, linux=False):
     return [Path(str(p).replace('.63.dylib', '.so.63').replace('.61.dylib', '.so.61').replace('.10.dylib', '.so.10')) for p in paths] if linux else paths
 
 
-def bootstrap(root, cache=None, token=None, events=None, build_dependencies=True):
+# The dependency prefix recipe version: a change to how a prefix is built that its LOCK identity
+# does not show (2: macOS FFmpeg with @rpath install names).
+PREFIX_RECIPE = 2
+# Files of a prefix written per location; not part of a build cache entry.
+_PREFIX_RECORDS = ('MANAGED-DEPENDENCIES.json', 'MANAGED-INVENTORY.json')
+
+
+def _normalized_plan(stages, replacements):
+    """A dependency plan with its machine-specific paths replaced by their roles, for the cache key."""
+    def text(value):
+        value = str(value)
+        for path, role in sorted(replacements.items(), key=lambda item: -len(item[0])):
+            value = value.replace(path, role)
+        return value
+    return [{'id': stage['id'], 'cwd': text(stage['cwd']), 'argv': [text(a) for a in stage['argv']]} for stage in stages]
+
+
+def _dependency_prefix(prefix, identity, stages, required, run_stages, token, events, build_cache=None, key_material=None,
+                       message='dependencies'):
+    """Build the managed dependency prefix, or reuse it.
+
+    A prefix already in this managed root (a Retry of the same build) is verified and kept. Else,
+    with a build cache, an entry with the same key (recipe, pinned identities, toolchain and host)
+    is restored and verified; else the plan runs and its result is stored for later builds."""
+    import time as _time
+    marker = prefix/'MANAGED-DEPENDENCIES.json'
+    if marker.exists():
+        inventory = prefix/'MANAGED-INVENTORY.json'
+        if json.loads(marker.read_text()) != identity or not inventory.is_file() or json.loads(inventory.read_text()) != _inventory(prefix, token):
+            raise InstallerError('Managed dependency identity changed; use fresh managed storage')
+        return None
+    key = None
+    if build_cache is not None and key_material is not None:
+        from .build_cache import digest
+        key = digest({'kind': 'managed-dependencies', 'recipe_version': PREFIX_RECIPE, 'identity': identity, **key_material})
+        staging = prefix.with_name(prefix.name + '.restore')
+        if staging.exists():
+            shutil.rmtree(staging)
+        record = build_cache.restore('tools', key, staging, replacements={'prefix': str(prefix)})
+        if record is not None:
+            missing = [str(path) for path in required if not (staging / Path(path).relative_to(prefix)).exists()]
+            if missing:
+                shutil.rmtree(staging)
+            else:
+                if prefix.exists():
+                    shutil.rmtree(prefix)
+                staging.rename(prefix)
+                _write_json(marker, identity)
+                _write_json(prefix/'MANAGED-INVENTORY.json', _inventory(prefix, token))
+                from .build_cache import duration_text
+                events({'event': 'build-cache-hit', 'kind': 'tools', 'saved_seconds': record.get('seconds', 0),
+                        'message': f'Build cache: reused the {message} built earlier on this computer '
+                                   f'(about {duration_text(record.get("seconds", 0))} saved).'})
+                return record
+    started = _time.monotonic()
+    run_stages()
+    missing = [str(path) for path in required if not path.exists()]
+    if missing: raise InstallerError('Managed dependencies did not produce required files: '+', '.join(missing))
+    _write_json(marker, identity)
+    _write_json(prefix/'MANAGED-INVENTORY.json', _inventory(prefix, token))
+    if key is not None:
+        names = [p.name for p in prefix.iterdir() if p.name not in _PREFIX_RECORDS]
+        build_cache.store('tools', key, prefix, names, key_material, _time.monotonic() - started,
+                          replacements={'prefix': str(prefix)})
+        events({'event': 'build-cache-stored', 'kind': 'tools',
+                'message': f'Build cache: kept the {message} for later builds on this computer.'})
+    return None
+
+
+def bootstrap(root, cache=None, token=None, events=None, build_dependencies=True, build_cache=None):
     """Acquire managed tools, Python wheel closure and optional native dependencies.
 
     This requires the OS-managed Apple command-line SDK, never Homebrew.
     Returns tool paths, Python module roots and exact FFmpeg/CMake prefix paths.
+    build_cache (build_cache.BuildCache) reuses a dependency prefix built earlier on this computer.
     """
     if host_key()=='windows-x86_64':
-        return _bootstrap_windows(root, cache, token, events)
+        return _bootstrap_windows(root, cache, token, events, build_cache)
     if host_key()=='linux-x86_64':
-        return _bootstrap_linux(root, cache, token, events, build_dependencies)
+        return _bootstrap_linux(root, cache, token, events, build_dependencies, build_cache)
     if host_key()!='macos-arm64': raise InstallerError('Managed native tools support Apple Silicon Macs and 64-bit Windows PCs')
     if not Path('/usr/bin/xcrun').is_file(): raise InstallerError('Apple Command Line Tools are required. Install them using the standard macOS developer-tools dialog, then retry Build MAG.')
     token=token or Cancellation(); events=events or (lambda event:None)
@@ -695,22 +767,20 @@ def bootstrap(root, cache=None, token=None, events=None, build_dependencies=True
     run_command([str(paths['python']),'-c','import Crypto,capstone,construct,tabulate,tqdm'],root,logs/'python-modules.log',token,env,events,'python-modules')
     prefix=root/'prefix'
     if build_dependencies:
-        marker=prefix/'MANAGED-DEPENDENCIES.json'
         identity={k:v['sha256'] for k,v in LOCK.items()}
-        if marker.exists():
-            if json.loads(marker.read_text()) != identity: raise InstallerError('Managed dependency identity changed; use a fresh managed directory')
-            inventory=prefix/'MANAGED-INVENTORY.json'
-            if not inventory.is_file() or json.loads(inventory.read_text()) != _inventory(prefix,token):
-                raise InstallerError('Managed dependency files changed; use fresh managed storage')
-        else:
-            for stage in dependency_plan(paths,prefix):
+        stages=dependency_plan(paths,prefix)
+        def run_stages():
+            for stage in stages:
                 Path(stage['cwd']).mkdir(parents=True,exist_ok=True)
                 events({'event':'stage-start','stage':stage['id']})
                 run_command(stage['argv'],stage['cwd'],logs/(stage['id']+'.log'),token,env,events,stage['id'])
-            missing=[str(path) for path in _dependency_paths(prefix) if not path.exists()]
-            if missing: raise InstallerError('Managed dependencies did not produce required files: '+', '.join(missing))
-            _write_json(marker,identity)
-            _write_json(prefix/'MANAGED-INVENTORY.json',_inventory(prefix,token))
+        material=None
+        if build_cache is not None:
+            from .compile_cache import toolchain_identity
+            material={'host':'macos-arm64','toolchain':toolchain_identity('macos-arm64'),
+                      'recipe':_normalized_plan(stages,{str(prefix.parent):'<managed>',**{str(paths[k]):'<'+k+'>' for k in paths if k!='git'}})}
+        _dependency_prefix(prefix,identity,stages,_dependency_paths(prefix),run_stages,token,events,build_cache,material,
+                           'SDL2, glslang, SPIRV-Cross and FFmpeg')
     paths.update(root=root,dependencies_ready=build_dependencies,cmake_args=['-DCMAKE_PREFIX_PATH='+str(prefix)],python_site=[str(p) for p in sites],prefix=str(prefix),logs=str(logs),
                  ffmpeg={'include':str(prefix/'include'),'avcodec':str(prefix/'lib/libavcodec.63.dylib'),'avformat':str(prefix/'lib/libavformat.63.dylib'),'avutil':str(prefix/'lib/libavutil.61.dylib'),'swscale':str(prefix/'lib/libswscale.10.dylib')})
     return {k:str(v) if isinstance(v,Path) else v for k,v in paths.items()}
@@ -965,7 +1035,7 @@ def _windows_dependency_paths(prefix):
             prefix / 'lib/SPIRV-Tools-opt.lib']
 
 
-def _bootstrap_windows(root, cache, token, events):
+def _bootstrap_windows(root, cache, token, events, build_cache=None):
     token = token or Cancellation(); events = events or (lambda event: None)
     root = Path(root).absolute(); root.mkdir(parents=True, exist_ok=True)
     if root.is_symlink(): raise InstallerError('Managed root must not be a symlink')
@@ -989,25 +1059,30 @@ def _bootstrap_windows(root, cache, token, events):
                 logs / 'python-modules.log', token, env, events, 'python-modules')
     run_command([str(paths['git']), '--version'], root, logs / 'git.log', token, env, events, 'git')
     prefix = root / 'prefix'
-    marker = prefix / 'MANAGED-DEPENDENCIES.json'
     identity = {key: WINDOWS_LOCK[key]['sha256'] for key in WINDOWS_DEPENDENCIES}
-    if marker.exists():
-        inventory = prefix / 'MANAGED-INVENTORY.json'
-        if json.loads(marker.read_text()) != identity or not inventory.is_file() or json.loads(inventory.read_text()) != _inventory(prefix, token):
-            raise InstallerError('Managed Windows dependency identity changed; use fresh managed storage')
-    else:
+    if not (prefix / 'MANAGED-DEPENDENCIES.json').exists():
         toolchain, detail = windows_toolchain_probe()
         if not toolchain: raise InstallerError(detail + '. Retry Build MAG to install Visual Studio Build Tools.')
         build_env = msvc_environment(toolchain['vcvars'])
         build_env.update(TEMP=str(home), TMP=str(home), CMAKE_BUILD_PARALLEL_LEVEL='2')
-        for stage in windows_dependency_plan(paths, prefix, toolchain['clang_cl']):
-            Path(stage['cwd']).mkdir(parents=True, exist_ok=True)
-            events({'event': 'stage-start', 'stage': stage['id']})
-            run_command(stage['argv'], stage['cwd'], logs / (stage['id'] + '.log'), token, build_env, events, stage['id'])
-        missing = [str(p) for p in _windows_dependency_paths(prefix) if not p.exists()]
-        if missing: raise InstallerError('Managed Windows dependencies did not produce: ' + ', '.join(missing))
-        _write_json(marker, identity)
-        _write_json(prefix / 'MANAGED-INVENTORY.json', _inventory(prefix, token))
+        stages = windows_dependency_plan(paths, prefix, toolchain['clang_cl'])
+        def run_stages():
+            for stage in stages:
+                Path(stage['cwd']).mkdir(parents=True, exist_ok=True)
+                events({'event': 'stage-start', 'stage': stage['id']})
+                run_command(stage['argv'], stage['cwd'], logs / (stage['id'] + '.log'), token, build_env, events, stage['id'])
+        material = None
+        if build_cache is not None:
+            from .compile_cache import toolchain_identity
+            replacements = {str(prefix.parent): '<managed>', prefix.parent.as_posix(): '<managed>',
+                            str(toolchain['clang_cl']): '<clang-cl>', Path(toolchain['clang_cl']).as_posix(): '<clang-cl>',
+                            **{str(paths[k]): '<' + k + '>' for k in paths}, **{Path(paths[k]).as_posix(): '<' + k + '>' for k in paths}}
+            material = {'host': 'windows-x86_64', 'toolchain': toolchain_identity('windows-x86_64', toolchain, build_env),
+                        'recipe': _normalized_plan(stages, replacements)}
+        _dependency_prefix(prefix, identity, stages, _windows_dependency_paths(prefix), run_stages, token, events,
+                           build_cache, material, 'Vulkan headers, SPIRV-Tools and glslang')
+    else:
+        _dependency_prefix(prefix, identity, [], _windows_dependency_paths(prefix), None, token, events)
     ffmpeg = {'include': str(ffmpeg_root / 'include'),
               **{name: str(ffmpeg_root / 'lib' / (name + '.lib')) for name in WINDOWS_FFMPEG_LIBRARIES}}
     missing = [p for p in [ffmpeg['include'], *(ffmpeg[n] for n in WINDOWS_FFMPEG_LIBRARIES),
@@ -1099,7 +1174,7 @@ def ensure_linux_build_tools(cache=None, token=None, events=None):
     return toolchain
 
 
-def _bootstrap_linux(root, cache, token, events, build_dependencies):
+def _bootstrap_linux(root, cache, token, events, build_dependencies, build_cache=None):
     token = token or Cancellation(); events = events or (lambda event: None)
     root = Path(root).absolute()
     if root.is_symlink(): raise InstallerError('Managed root must not be a symlink')
@@ -1125,21 +1200,21 @@ def _bootstrap_linux(root, cache, token, events, build_dependencies):
                 logs / 'python-modules.log', token, env, events, 'python-modules')
     prefix = root / 'prefix'
     if build_dependencies:
-        marker = prefix / 'MANAGED-DEPENDENCIES.json'
         identity = {key: spec['sha256'] for key, spec in LINUX_LOCK.items()}
-        if marker.exists():
-            inventory = prefix / 'MANAGED-INVENTORY.json'
-            if json.loads(marker.read_text()) != identity or not inventory.is_file() or json.loads(inventory.read_text()) != _inventory(prefix, token):
-                raise InstallerError('Managed Linux dependency identity changed; use fresh managed storage')
-        else:
-            for stage in dependency_plan(paths, prefix):
+        stages = dependency_plan(paths, prefix)
+        def run_stages():
+            for stage in stages:
                 Path(stage['cwd']).mkdir(parents=True, exist_ok=True)
                 events({'event': 'stage-start', 'stage': stage['id']})
                 run_command(stage['argv'], stage['cwd'], logs / (stage['id'] + '.log'), token, env, events, stage['id'])
-            missing = [str(p) for p in _dependency_paths(prefix, linux=True) if not p.exists()]
-            if missing: raise InstallerError('Managed Linux dependencies did not produce: ' + ', '.join(missing))
-            _write_json(marker, identity)
-            _write_json(prefix / 'MANAGED-INVENTORY.json', _inventory(prefix, token))
+        material = None
+        if build_cache is not None:
+            from .compile_cache import toolchain_identity
+            material = {'host': 'linux-x86_64', 'toolchain': toolchain_identity('linux-x86_64', toolchain, env),
+                        'recipe': _normalized_plan(stages, {str(prefix.parent): '<managed>',
+                                                            **{str(paths[k]): '<' + k + '>' for k in paths if k not in ('git', 'host')}})}
+        _dependency_prefix(prefix, identity, stages, _dependency_paths(prefix, linux=True), run_stages, token, events,
+                           build_cache, material, 'SDL2, glslang, SPIRV-Cross and FFmpeg')
     paths.update(root=root, dependencies_ready=build_dependencies, cmake_args=['-DCMAKE_PREFIX_PATH=' + str(prefix)],
                  python_site=[str(p) for p in sites], prefix=str(prefix), managed_prefix=str(prefix), logs=str(logs),
                  linux_toolchain={key: toolchain[key] for key in ('cc', 'cxx')},

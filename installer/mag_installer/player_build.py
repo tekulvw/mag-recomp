@@ -445,6 +445,9 @@ def install(root, source, output, cache, token=None, events=None, retry=False):
     # Keyboard and mouse controls (mouse aim) unless MAG_GAME_CONTROLS=0; also checked before downloads.
     from .native_recipe import game_controls_enabled
     controls = game_controls_enabled(os.environ)
+    # The per-user build cache (build_cache.py) unless MAG_BUILD_CACHE=0; also checked before downloads.
+    from . import build_cache as build_caches
+    reuse = build_caches.enabled(os.environ)
     binding = _binding(inputs, record, token)
     # The OS vendor owns the compiler/SDK installation; settle it before downloads.
     from .managed_tools import bootstrap, ensure_apple_sdk, ensure_windows_build_tools
@@ -452,7 +455,15 @@ def install(root, source, output, cache, token=None, events=None, retry=False):
     from .native_package import package
     if windows:
         check_windows_location(output, WINDOWS_BUILD_RESERVE)
-    with _exclusive_lock(lock, retry, events):
+    reused = {'tools': 0.0, 'lift': 0.0, 'compile': 0.0}
+    def counted(event):
+        if event.get('event') == 'build-cache-hit' and event.get('kind') in reused:
+            reused[event['kind']] += event.get('saved_seconds', 0) or 0
+        elif event.get('event') == 'compile-cache':
+            reused['compile'] += event.get('saved_seconds', 0) or 0
+        events(event)
+    cache_store = build_caches.BuildCache.for_cache(cache, token, counted) if reuse else None
+    with _exclusive_lock(lock, retry, events), (cache_store.session() if cache_store else nullcontext()):
         if retry:
             if not build.exists() and not build.is_symlink():
                 legacy = legacy_journal(output)
@@ -502,7 +513,8 @@ def install(root, source, output, cache, token=None, events=None, retry=False):
             else:
                 ensure_apple_sdk(token=token, events=events)
             events({'event': 'stage-start', 'stage': 'acquire', 'logs': str(build / 'managed-tools/logs')})
-            managed = bootstrap(build / 'managed-tools', cache=cache, token=token, events=events)
+            managed = bootstrap(build / 'managed-tools', cache=cache, token=token, events=counted,
+                                **({'build_cache': cache_store} if cache_store else {}))
             status['managed_complete'] = True
             _write_json(journal, status)
             toolchain_fields = ({'msvc': {key: toolchain[key] for key in ('vcvars', 'clang_cl', 'installation', 'version', 'product')},
@@ -522,13 +534,18 @@ def install(root, source, output, cache, token=None, events=None, retry=False):
                 config['game_controls'] = rust_toolchain(managed['root'], cache=cache, token=token, events=events)
             if x86_level:
                 config['cmake_args'] = x86_level
+            if cache_store:
+                # Reused generation and compiled objects; they stay in the per-user cache only.
+                from .compile_cache import ccache_tool
+                config['build_cache'] = {'root': str(cache_store.root), 'base_dir': str(build),
+                                         'ccache': ccache_tool(managed['root'], host, cache=cache, token=token, events=events)}
             config_path = build / 'build-settings.json'
             _write_json(config_path, config)
             native_output = build / 'build-work'
             def progress(event):
                 if event.get('event') == 'experimental-local-build-complete':
                     return
-                events(event)
+                counted(event)
             events({'event': 'stage-start', 'stage': 'build', 'logs': str(native_output / 'logs')})
             build_native(config_path, native_output, token=token, events=progress, **({'retry_lock': True} if recovering else {}))
             events({'event': 'stage-start', 'stage': 'package', 'logs': str(native_output / 'logs')})
@@ -537,6 +554,16 @@ def install(root, source, output, cache, token=None, events=None, retry=False):
             stage.mkdir(mode=0o700)
             package(config, native_output / 'workspace', stage / name, token=token, events=progress)
             token.check()
+            if cache_store:
+                saved = sum(reused.values())
+                summary = {'event': 'build-cache-summary', **{k + '_saved_seconds': round(v, 1) for k, v in reused.items()},
+                           'message': ('Build cache: this build reused earlier work, saving about '
+                                       f'{build_caches.duration_text(saved)} (tools {build_caches.duration_text(reused["tools"])}, '
+                                       f'generated sources {build_caches.duration_text(reused["lift"])}, compiler time '
+                                       f'{build_caches.duration_text(reused["compile"])}).' if saved >= 1 else
+                                       'Build cache: nothing was reused this time; this build\'s work is kept for later builds on this computer.')}
+                events(summary)
+                status['build_cache'] = {k: round(v, 1) for k, v in reused.items()}
             status['logs'] = str(native_output / 'logs')
             _publish(output, build, status, name)
             app = output / name

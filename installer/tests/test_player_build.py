@@ -14,6 +14,9 @@ from mag_installer.model import InstallerError
 RUST = {'cargo': '/managed/cargo', 'rustc': '/managed/rustc'}
 
 
+CCACHE = '/managed/artifacts/ccache/ccache'
+
+
 class PlayerBuildTests(unittest.TestCase):
     def setUp(self):
         # No test downloads the pinned Rust toolchain; each sees where the build would get it.
@@ -23,6 +26,10 @@ class PlayerBuildTests(unittest.TestCase):
         environment = patch.dict('os.environ')
         environment.start(); self.addCleanup(environment.stop)
         os.environ.pop('MAG_GAME_CONTROLS', None)
+        os.environ.pop('MAG_BUILD_CACHE', None)
+        # Nor the pinned ccache: each sees where the build would get it.
+        ccache = patch('mag_installer.compile_cache.ccache_tool', return_value=CCACHE)
+        self.ccache = ccache.start(); self.addCleanup(ccache.stop)
 
     def test_player_cli_uses_same_automatic_flow_without_recipe_argument(self):
         from mag_installer.__main__ import main
@@ -70,6 +77,7 @@ class PlayerBuildTests(unittest.TestCase):
                        for role in ('analysis', 'ppu', 'runtime', 'spu')}}
                 def tools(managed, **kwargs):
                     steps.append('tools')
+                    self.assertEqual(kwargs['build_cache'].root, cache / 'build-cache')
                     self.assertFalse(output.exists())  # the MAG folder appears only when complete
                     self.assertEqual(managed, build / 'managed-tools')
                     return {'root': '/managed', 'python': '/managed/python', 'cmake': '/managed/cmake', 'ninja': '/managed/ninja',
@@ -79,6 +87,9 @@ class PlayerBuildTests(unittest.TestCase):
                     config = json.loads(config_path.read_text())
                     self.assertEqual(config['managed_prefix'], '/managed/prefix')
                     self.assertEqual(config['jobs'], 2)
+                    # The per-user build cache: inside the installer cache, never the build folder.
+                    self.assertEqual(config['build_cache'], {'root': str(cache / 'build-cache'), 'base_dir': str(build),
+                                                             'ccache': CCACHE})
                     (native_output / 'workspace').mkdir(parents=True)
                 def package(config, workspace, destination, **kwargs):
                     steps.append('package')
@@ -116,6 +127,41 @@ class PlayerBuildTests(unittest.TestCase):
                     with self.assertRaisesRegex(InstallerError, 'already exists' if not fail_package else 'Build files from an earlier MAG build'):
                         player_build.install(root, source, output, cache)
                     self.assertEqual((source / 'PS3_GAME/USRDIR/EBOOT.elf').read_bytes(), b'synthetic input')
+
+    def test_build_cache_switch_off_builds_without_it_and_invalid_values_stop_early(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve(); source = root / 'inputs'; self.inputs(source)
+            output = root / 'MAG'; cache = root / 'cache'
+            kit = {'source_tree': 'source', 'sdks': {role: {'path': 'sdks/' + role, 'revision': 'a' * 40}
+                   for role in ('analysis', 'ppu', 'runtime', 'spu')}}
+            seen = {}
+            def tools(managed, **kwargs):
+                seen['tools'] = kwargs
+                return {'root': '/managed', 'python': '/managed/python', 'cmake': '/managed/cmake', 'ninja': '/managed/ninja',
+                        'git': '/usr/bin/git', 'ffmpeg': {}, 'prefix': '/managed/prefix'}
+            def native(config_path, native_output, **kwargs):
+                seen['config'] = json.loads(config_path.read_text())
+                (native_output / 'workspace').mkdir(parents=True)
+            def package(config, workspace, destination, **kwargs):
+                destination.mkdir(); return destination
+            with patch.object(player_build, 'readiness', return_value={'ready': True}), \
+                 patch.object(player_build, '_manifest', return_value={'kit': {}, 'host': 'macos-arm64'}), \
+                 patch.object(player_build, '_load_kit', return_value=kit), \
+                 patch('mag_installer.native_build._verify_identities'), \
+                 patch('mag_installer.managed_tools.ensure_apple_sdk'), \
+                 patch('mag_installer.managed_tools.bootstrap', side_effect=tools), \
+                 patch('mag_installer.native_build.install', side_effect=native), \
+                 patch('mag_installer.native_package.package', side_effect=package):
+                os.environ['MAG_BUILD_CACHE'] = 'yes'
+                with self.assertRaisesRegex(InstallerError, 'MAG_BUILD_CACHE must be 0 or 1'):
+                    player_build.install(root, source, output, cache)
+                self.assertFalse(output.with_name('MAG-build').exists())
+                os.environ['MAG_BUILD_CACHE'] = '0'
+                self.assertEqual(player_build.install(root, source, output, cache), output)
+            self.assertNotIn('build_cache', seen['tools'])
+            self.assertNotIn('build_cache', seen['config'])
+            self.assertFalse((cache / 'build-cache').exists())
+            self.ccache.assert_not_called()
 
     def test_windows_route_uses_build_tools_msvc_record_and_mag_folder(self):
         with tempfile.TemporaryDirectory() as temp:

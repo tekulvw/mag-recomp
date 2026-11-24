@@ -17,6 +17,25 @@ class PlayerControllerTests(unittest.TestCase):
             self.assertEqual(c.state,'complete')
             self.assertEqual(calls,[(Path('/kit'),parent/'disc',parent/'MAG',parent/'cache')])
 
+    def test_build_cache_is_shown_and_cleared_but_never_during_a_build(self):
+        import threading
+        from mag_installer.build_cache import BuildCache
+        release=threading.Event()
+        def build(root,source,output,cache,token=None,events=None):
+            release.wait(5);return output
+        c=PlayerBuildController(Path('/kit'), readiness=lambda root:{'ready':True,'reason':''},installer=build)
+        with tempfile.TemporaryDirectory() as temp:
+            cache=Path(temp)/'cache'
+            self.assertEqual(c.build_cache_usage(cache)['bytes'],0)
+            store=BuildCache.for_cache(cache)
+            (store.objects_directory()/'object').write_bytes(b'x'*64)
+            self.assertGreaterEqual(c.build_cache_usage(cache)['bytes'],64)
+            c.start(Path(temp)/'disc',Path(temp),cache)
+            with self.assertRaisesRegex(InstallerError,'Wait for the build'):c.clear_build_cache(cache)
+            release.set();c.worker.join(5);c.poll()
+            self.assertGreaterEqual(c.clear_build_cache(cache),64)
+            self.assertFalse((store.objects_directory()/'object').exists())
+
     def test_missing_maintained_kit_blocks_build_without_local_workaround(self):
         c=PlayerBuildController(Path('/kit'),readiness=lambda root:{'ready':False,'reason':'Maintained MAG build kit is missing.'})
         self.assertIn('build kit',c.blocked)

@@ -9,6 +9,7 @@ import stat
 import subprocess
 import shutil
 import tempfile
+import time
 
 from .model import InstallerError, host_key
 from .pipeline import _exclusive_lock, _write_json, run_command
@@ -91,9 +92,9 @@ def check_windows_location(output, reserve=0):
 
 # Inherited variables that would redirect or reconfigure a player build: the
 # repository's own overrides (workspace, lift hooks, lifter paths), runtime
-# diagnostics, and CMake/compiler defaults. macOS builds start from an empty
+# diagnostics, CMake/compiler defaults and ccache settings (the build sets its own). macOS builds start from an empty
 # environment; Windows needs the system's, so these are removed from it.
-INHERITED_PREFIXES = ('MAG_', 'PS3_', 'PS3RECOMP_', 'RSX_', 'SPU_', 'CMAKE_')
+INHERITED_PREFIXES = ('MAG_', 'PS3_', 'PS3RECOMP_', 'RSX_', 'SPU_', 'CMAKE_', 'CCACHE_')
 INHERITED_NAMES = {'CC', 'CXX', 'CFLAGS', 'CXXFLAGS', 'CPPFLAGS', 'LDFLAGS', 'CL', '_CL_', 'LINK', '_LINK_'}
 
 
@@ -270,6 +271,13 @@ def preflight(config_path, output, token=None):
     for key, value in config.get('ffmpeg', {}).items():
         inputs.append(_ordinary(value, key == 'include'))
     _verify_identities(source, disc, config, token)
+    if config.get('build_cache'):
+        base = Path(config['build_cache']['base_dir'])
+        if base != output.parent:
+            raise InstallerError('build_cache.base_dir must be the folder that holds the build destination')
+        cache_root = Path(config['build_cache']['root'])
+        if cache_root.is_relative_to(output) or output.is_relative_to(cache_root):
+            raise InstallerError('The build cache must be separate from the build destination')
     if config.get('native_graphics', False):
         raise InstallerError('Experimental local build supports only the legacy renderer; current private native graphics registrations are not configured')
     files = list(_source_files(source, token))
@@ -435,11 +443,37 @@ def install(config_path, output, resume=False, token=None, events=None, retry_lo
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 run_command([config['git'], 'clone', '--no-hardlinks', '--no-checkout', '--', sdk['path'], str(destination)], output, logs / f'clone-{role}.log', token, env, events, 'clone-' + role)
                 run_command([config['git'], '-C', str(destination), 'checkout', '--detach', sdk['revision']], output, logs / f'checkout-{role}.log', token, env, events, 'checkout-' + role)
-            for stage in build_plan(config, workspace):
-                token.check(); stage_id = stage['id']
-                if not stage_id.replace('-', '').replace('_', '').isalnum(): raise InstallerError('Invalid native stage identifier')
-                events({'event': 'stage-start', 'stage': stage_id})
-                run_command(stage['argv'], workspace, logs / (stage_id + '.log'), token, env, events, stage_id)
+            plan = build_plan(config, workspace)
+            if any(not stage['id'].replace('-', '').replace('_', '').isalnum() for stage in plan):
+                raise InstallerError('Invalid native stage identifier')
+            def run_stage(stage, stage_env=None):
+                token.check()
+                events({'event': 'stage-start', 'stage': stage['id']})
+                run_command(stage['argv'], workspace, logs / (stage['id'] + '.log'), token, stage_env or env, events, stage['id'])
+            # Generation (prepare, inventory, lift, splices) runs before the first configure step.
+            first_configure = next((i for i, stage in enumerate(plan) if stage['id'].startswith('configure-')), len(plan))
+            if config.get('build_cache'):
+                from .lift_cache import run_generation
+                run_generation(config, workspace, plan[:first_configure], run_stage, env, token, events)
+            else:
+                for stage in plan[:first_configure]:
+                    run_stage(stage)
+            compiler = None
+            if config.get('build_cache'):
+                from . import compile_cache
+                compiler = compile_cache.compiler_identity(config, env)
+            for stage in plan[first_configure:]:
+                if compiler is None:
+                    run_stage(stage)
+                    continue
+                stats = logs / ('ccache-' + stage['id'] + '.log')
+                started = time.monotonic()
+                run_stage(stage, {**env, **compile_cache.environment(config, compiler, stats)})
+                if stage['id'].startswith('build-') and '--build' in stage['argv']:
+                    summary = compile_cache.summarize(stage['id'], Path(stage['argv'][stage['argv'].index('--build') + 1]),
+                                                      stats, config['ninja'], env, compile_cache.timings_path(config),
+                                                      time.monotonic() - started)
+                    events({**summary, 'message': compile_cache.message(summary)})
             binaries = _validate_receipts(workspace, config['sdks']['runtime']['revision'], token)
             token.check()
             state.update(status='complete', binaries=binaries)

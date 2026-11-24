@@ -193,6 +193,17 @@ class PlayerBuildController(WizardController):
         status = legacy_journal(ux.destination(parent))
         return status is not None and status.get('state') == 'complete'
 
+    def build_cache_usage(self, cache):
+        from . import build_cache
+        return build_cache.usage(cache)
+
+    def clear_build_cache(self, cache):
+        """Delete the per-user build cache (never while this installer is building); bytes freed."""
+        if self.busy:
+            raise InstallerError('Wait for the build to finish before clearing the build cache.')
+        from . import build_cache
+        return build_cache.clear(cache)
+
     def start(self, source, parent, cache, retry=False):
         if self.blocked:
             raise InstallerError(self.blocked)
@@ -284,6 +295,21 @@ def launch(root: Path, synthetic: bool = False) -> int:
     cancel=ttk.Button(actions,text='Cancel',command=controller.cancel);cancel.pack(side='left',padx=8)
     open_output=ttk.Button(actions,text='Open output',command=lambda:folder(controller.display_output(Path(parent.get()).expanduser())));open_output.pack(side='right')
     open_logs=ttk.Button(actions,text='Open logs',command=lambda:folder(controller.logs));open_logs.pack(side='right',padx=8)
+    clear_cache=None
+    if not synthetic:
+        def clear_build_cache():
+            from .build_cache import size_text
+            try:
+                held=controller.build_cache_usage(ux.default_cache())['bytes']
+                if not held:
+                    status.set('The build cache is empty.');return
+                if not messagebox.askyesno('Clear build cache?',
+                        f'The build cache holds {size_text(held)} of tools, generated sources and compiled objects from earlier builds '
+                        'on this computer, so the next build can reuse them. They are made from your own game files and never leave '
+                        'this computer. Clearing frees the space; the next build then does all of its work again. Downloads are kept.',parent=window):return
+                status.set(f'Build cache cleared ({size_text(controller.clear_build_cache(ux.default_cache()))} freed).')
+            except (InstallerError,OSError) as exc:status.set(str(exc))
+        clear_cache=ttk.Button(actions,text='Clear build cache…',command=clear_build_cache);clear_cache.pack(side='right',padx=8)
     def refresh():
         for widget in controls:widget.configure(state='disabled' if controller.busy else 'normal')
         build.configure(state='disabled' if controller.busy or controller.blocked else 'normal')
@@ -292,6 +318,7 @@ def launch(root: Path, synthetic: bool = False) -> int:
             build.configure(text='Retry build' if controller.has_journal(Path(parent.get()).expanduser()) else 'Build MAG')
             legacy=not controller.busy and controller.legacy_install(Path(parent.get()).expanduser())
         cancel.configure(state='normal' if controller.busy else 'disabled')
+        if clear_cache is not None:clear_cache.configure(state='disabled' if controller.busy else 'normal')
         output=controller.display_output(Path(parent.get()).expanduser())
         destination_label.configure(text=(f'{output} was built by an earlier installer. Build MAG moves its build files beside it, to {output}{BUILD_SUFFIX}, without rebuilding.'
                                            if legacy else f'New output folder: {output}' + ('' if synthetic else f' (build files: {output}{BUILD_SUFFIX})')))
