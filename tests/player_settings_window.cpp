@@ -277,9 +277,14 @@ static void general(const fs::path& folder) {
         SettingsPanel linked(reports, settings, SettingsWindowOptions{}, &game);
         CHECK(linked.enabled("button:report"));
         click(linked, "button:report");
-        CHECK(linked.report_status() == "A report will be sent when MAG closes.");
         const std::string request = read(marker);
         CHECK(request.rfind("{\"requested_at\":", 0) == 0 && request.back() == '\n');
+        // The status shows the first 8 characters of the id the marker carries, for staff to match.
+        const size_t id_at = request.find("\"report_id\":\"");
+        CHECK(id_at != std::string::npos && request.size() >= id_at + 13 + 36);
+        const std::string id = id_at == std::string::npos ? std::string() : request.substr(id_at + 13, 36);
+        CHECK(id.size() == 36 && id[14] == '4' && id.find_first_not_of("0123456789abcdef-") == std::string::npos);
+        CHECK(linked.report_status() == "Report " + id.substr(0, 8) + " will be sent when MAG closes.");
         CHECK((fs::status(marker).permissions() & (fs::perms::group_all | fs::perms::others_all)) == fs::perms::none);
         draw(linked);
         unsetenv("MAG_REPORT_REQUEST");

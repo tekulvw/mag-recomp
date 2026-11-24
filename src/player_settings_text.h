@@ -82,7 +82,8 @@
 #define MAG_SETTINGS_SEND_REPORTS_ON "On"  /* the checkbox's own label */
 #define MAG_SETTINGS_SEND_REPORT_NOW "Send report"
 #define MAG_SETTINGS_SEND_REPORT_HINT "Send one now, for a problem you just saw"
-#define MAG_SETTINGS_REPORT_REQUESTED "A report will be sent when MAG closes."
+/* After Send report: the first 8 characters of the report id, which staff match on the portal. */
+#define MAG_SETTINGS_REPORT_REQUESTED "Report %s will be sent when MAG closes."
 #define MAG_SETTINGS_REPORT_NEEDS_LINK "Link an account to send reports"
 #define MAG_SETTINGS_REPORT_UNAVAILABLE "Reports are sent only when MAG starts from its app"
 #define MAG_SETTINGS_REPORT_FAILED "The report request could not be saved."

@@ -19,7 +19,7 @@ BOOL MAGSettingsSetupWanted(BOOL launcherPhase, BOOL damaged);
 // and the request itself, {"requested_at":<unix seconds>} written owner-only at
 // MAG_REPORT_REQUEST, which the supervisor sends a report for when MAG closes.
 NSString *MAGReportRequestBlocker(BOOL linked);
-BOOL MAGReportRequestWrite(NSError **error);
+BOOL MAGReportRequestWrite(NSString **reportId, NSError **error);
 #ifdef __cplusplus
 }
 #endif

@@ -337,8 +337,8 @@ void refresh_report() {
 }
 void request_report_now() {
     if (report_request_blocker(s->account->linked_name(account_portal()).has_value())) return;
-    std::string error;
-    s->report_requested = request_report(error) ? MAG_SETTINGS_REPORT_REQUESTED : MAG_SETTINGS_REPORT_FAILED;
+    std::string error, id;
+    s->report_requested = request_report(id, error) ? report_requested_status(id) : std::string(MAG_SETTINGS_REPORT_FAILED);
     refresh_report();
     layout();
 }
