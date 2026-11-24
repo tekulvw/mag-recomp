@@ -590,7 +590,9 @@ struct MagGameControlsAdapter::State {
             mag_input_capture_set_keyboard_owner(0);
             throw;
         }
-        mag_input_capture_set_keyboard_pad_live(owned && !on_foot);
+        // A menu that holds look on foot (the in-match pause menu, the loadout screen) is served
+        // by the pad as well.
+        mag_input_capture_set_keyboard_pad_live(owned && (!on_foot || look_held_by_menu));
         mag_input_capture_set_keyboard_owner(owned);
     }
     void sample_seal() {
@@ -935,6 +937,8 @@ struct MagGameControlsAdapter::State {
                 gameplay_eligible = mouse_eligible = false;
                 return false;
             }
+            // While a menu holds look on foot the pad serves every handler but the player's (8.2).
+            if (!gameplay && look_held_by_menu) return false;
             // Situational actions may be watched by any system route (a vehicle's or a menu's own
             // handler); other actions only by the owner or a gameplay route.
             if (gameplay ? mag_game_controls_token_action(*token) != action
