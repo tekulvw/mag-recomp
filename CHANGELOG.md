@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.9.0](https://github.com/tekulvw/mag-recomp/compare/v0.8.0...v0.9.0) (2026-11-24)
+
+
+### Features
+
+* **installer:** let players choose the compile job count ([#291](https://github.com/tekulvw/mag-recomp/issues/291)) ([1640721](https://github.com/tekulvw/mag-recomp/commit/16407215a3c4a25f087dbc2492bd832fbb7e6f7d))
+
+
+### Bug Fixes
+
+* **controls:** never take over Confirm and Back, so a closed menu ignores them ([#289](https://github.com/tekulvw/mag-recomp/issues/289)) ([86b048e](https://github.com/tekulvw/mag-recomp/commit/86b048e7ee9112a4677eef76262705448a8f06f5))
+* **installer:** cache generated sources when generation checks pinned lifter tags ([#292](https://github.com/tekulvw/mag-recomp/issues/292)) ([ac5684b](https://github.com/tekulvw/mag-recomp/commit/ac5684bd6a23ac2918081aabf3f57ea309825c49))
+* **installer:** release the player build lock and take over one left by an exited installer ([#290](https://github.com/tekulvw/mag-recomp/issues/290)) ([0580308](https://github.com/tekulvw/mag-recomp/commit/05803089ba64422dd14a5c6b8a5ae810b9a8e87a))
+* **installer:** ship the compile jobs module in the frozen installer ([#295](https://github.com/tekulvw/mag-recomp/issues/295)) ([3a8c09a](https://github.com/tekulvw/mag-recomp/commit/3a8c09a3e528ee2668694571705e2f80bcd33899))
+
+
+### Documentation
+
+* **controls:** record which menu button pictures the key caps cannot reach ([#296](https://github.com/tekulvw/mag-recomp/issues/296)) ([73ed381](https://github.com/tekulvw/mag-recomp/commit/73ed381415f2e90346b476b4578d7a1ca6c07998))
+
 ## [0.8.0](https://github.com/tekulvw/mag-recomp/compare/v0.7.0...v0.8.0) (2026-11-24)
 
 
