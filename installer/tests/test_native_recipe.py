@@ -67,6 +67,11 @@ class NativeRecipeTests(unittest.TestCase):
             self.assertIn(launcher, plan['configure-engine'])
             plain = {stage['id']: stage['argv'] for stage in build_plan(self.load(root, data), root / 'workspace')}
             self.assertFalse(any('LAUNCHER' in a for a in plain['configure-engine']))
+            # Without ccache (Windows): the build cache for tools and generation only, no launchers.
+            windowsish = self.load(root, dict(data, build_cache={'root': 'user-cache', 'base_dir': '.'}))
+            self.assertNotIn('ccache', windowsish['build_cache'])
+            plan = {stage['id']: stage['argv'] for stage in build_plan(windowsish, root / 'workspace')}
+            self.assertFalse(any('LAUNCHER' in a for a in plan['configure-engine']))
             for broken in ({'root': 'user-cache', 'ccache': 'ccache'}, {'root': 'missing', 'ccache': 'ccache', 'base_dir': '.'},
                            {'root': 'user-cache', 'ccache': 'ccache', 'base_dir': '.', 'extra': 1}):
                 with self.subTest(broken=broken), self.assertRaises(InstallerError):

@@ -538,9 +538,10 @@ def install(root, source, output, cache, token=None, events=None, retry=False):
                 config['cmake_args'] = x86_level
             if cache_store:
                 # Reused generation and compiled objects; they stay in the per-user cache only.
-                from .compile_cache import ccache_tool
-                config['build_cache'] = {'root': str(cache_store.root), 'base_dir': str(build),
-                                         'ccache': ccache_tool(managed['root'], host, cache=cache, token=token, events=events)}
+                from .compile_cache import SUPPORTED_HOSTS, ccache_tool
+                config['build_cache'] = {'root': str(cache_store.root), 'base_dir': str(build)}
+                if host in SUPPORTED_HOSTS:
+                    config['build_cache']['ccache'] = ccache_tool(managed['root'], host, cache=cache, token=token, events=events)
             config_path = build / 'build-settings.json'
             _write_json(config_path, config)
             native_output = build / 'build-work'

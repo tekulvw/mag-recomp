@@ -459,7 +459,7 @@ def install(config_path, output, resume=False, token=None, events=None, retry_lo
                 for stage in plan[:first_configure]:
                     run_stage(stage)
             compiler = None
-            if config.get('build_cache'):
+            if config.get('build_cache', {}).get('ccache'):
                 from . import compile_cache
                 compiler = compile_cache.compiler_identity(config, env)
             for stage in plan[first_configure:]:
@@ -469,10 +469,8 @@ def install(config_path, output, resume=False, token=None, events=None, retry_lo
                 stats = logs / ('ccache-' + stage['id'] + '.log')
                 building = stage['id'].startswith('build-') and '--build' in stage['argv']
                 build_dir = Path(stage['argv'][stage['argv'].index('--build') + 1]) if building else None
-                # clang-cl's /clang: options, configured by now, enter the compiler identity.
-                passthrough = compile_cache.passthrough_options(config['ninja'], build_dir, env) if building else None
                 started = time.monotonic()
-                run_stage(stage, {**env, **compile_cache.environment(config, compiler, stats, passthrough)})
+                run_stage(stage, {**env, **compile_cache.environment(config, compiler, stats)})
                 if building:
                     summary = compile_cache.summarize(stage['id'], build_dir, stats, config['ninja'], env,
                                                       compile_cache.timings_path(config), time.monotonic() - started)

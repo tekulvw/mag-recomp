@@ -155,7 +155,9 @@ its cache folder (above), and reuses:
 - **compiled objects:** through a pinned ccache (downloaded and checked like the other tools), per
   source file, when the compiler, its options, and the file with everything it includes are
   unchanged. This includes the large generated sources whenever they come out byte-identical,
-  wherever MAG is built.
+  wherever MAG is built. macOS and Linux only for now: on Windows every clang-cl compilation
+  carries options ccache cannot cache, so Windows builds compile everything and reuse the tool
+  builds and generated sources.
 
 The build log reports what was reused: the generated sources and tool builds it restored, the
 compile cache's hit rate per compile step with an estimate of the time saved, and a total at the

@@ -8,7 +8,7 @@ environment the installer's compile steps use (installer/mag_installer/compile_c
 3. in folder two again, with a second empty cache: a cold build in the same place.
 
 The objects of 2 (from the cache) and 3 (compiled) must be identical: a cache hit gives what the
-compiler would have produced there. COFF objects carry a creation time, which is masked.
+compiler would have produced there. The installer uses the compile cache on macOS and Linux only.
 """
 import argparse
 import json
@@ -27,11 +27,7 @@ SOURCES = {
     'CMakeLists.txt': 'cmake_minimum_required(VERSION 3.20)\nproject(cache_check C CXX)\n'
                       'add_library(cache_check STATIC a.c b.cpp nested/c.c)\n'
                       'target_include_directories(cache_check PRIVATE include)\n'
-                      'set_target_properties(cache_check PROPERTIES C_STANDARD 11 C_EXTENSIONS ON)\n'
-                      # clang-cl options ccache cannot parse, as cmake/MagX86Level.cmake adds them.
-                      'if(CMAKE_C_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")\n'
-                      '  target_compile_options(cache_check PRIVATE /clang:-ffp-contract=off)\n'
-                      'endif()\n',
+                      'set_target_properties(cache_check PROPERTIES C_STANDARD 11 C_EXTENSIONS ON)\n',
     'include/shared.h': '#define SHARED_VALUE 41\nstatic inline int shared_add(int x) { return x + SHARED_VALUE; }\n',
     'a.c': '#include "shared.h"\nconst char *a_file = __FILE__;\nint a(int x) { return shared_add(x); }\n',
     'b.cpp': '#include "shared.h"\n#include <string>\n#include <vector>\n'
@@ -64,7 +60,7 @@ def build(cmake, ninja, ccache, compilers, env, identity, folder, cache_root, la
     subprocess.run([str(cmake), '-S', str(source), '-B', str(out), '-G', 'Ninja', '-DCMAKE_BUILD_TYPE=Release',
                     '-DCMAKE_MAKE_PROGRAM=' + Path(ninja).as_posix(), *compilers, *launcher],
                    env=env, check=True, stdout=subprocess.DEVNULL)
-    stage_env = {**env, **compile_cache.environment(config, identity, stats, compile_cache.passthrough_options(ninja, out, env))}
+    stage_env = {**env, **compile_cache.environment(config, identity, stats)}
     subprocess.run([str(cmake), '--build', str(out)], env=stage_env, check=True)
     results, hits, misses = compile_cache.read_stats(stats)
     print(f'{label}: {hits} hits, {misses} misses: {json.dumps(results)}', flush=True)
@@ -118,11 +114,7 @@ def rebuild_hits(cmake, ccache, env, identity, cache_root, base_dir, configure, 
     for folder in folders:
         stats = folder.with_name(folder.name + '-ccache.log')
         subprocess.run([str(a) for a in configure(folder)] + launcher, env=env, check=True)
-        # As the installer does: clang-cl's /clang: options enter the identity once configured.
-        ninja = shutil.which('ninja', path=env.get('PATH') or env.get('Path'))
-        passthrough = compile_cache.passthrough_options(ninja, folder, env)
-        print(f'{folder.name}: /clang: options {passthrough["options"]}', flush=True)
-        stage_env = {**env, **compile_cache.environment(config, identity, stats, passthrough)}
+        stage_env = {**env, **compile_cache.environment(config, identity, stats)}
         subprocess.run([str(cmake), '--build', str(folder), *map(str, build_args)], env=stage_env, check=True)
         counts.append(compile_cache.read_stats(stats)[1:])
         print(f'{folder.name}: {counts[-1][0]} hits, {counts[-1][1]} misses', flush=True)
@@ -145,8 +137,8 @@ def main():
     for key in [k for k in env if k.upper().startswith('CCACHE_')]:
         env.pop(key)
     if os.name == 'nt':
-        config = {'msvc': {'clang_cl': args.cc}}
-    elif sys.platform.startswith('linux'):
+        raise SystemExit('Windows builds do not use the compile cache (installer/mag_installer/compile_cache.py)')
+    if sys.platform.startswith('linux'):
         config = {'host': 'linux-x86_64', 'linux_toolchain': {'cc': args.cc, 'cxx': args.cxx}}
     else:
         config = {}

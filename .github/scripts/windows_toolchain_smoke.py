@@ -16,9 +16,8 @@ import sys
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'installer'))
 
-from mag_installer import build_cache, compile_cache, managed_tools, native_build, native_package_windows  # noqa: E402
+from mag_installer import build_cache, managed_tools, native_build, native_package_windows  # noqa: E402
 from mag_installer.safety import Cancellation  # noqa: E402
-import compile_cache_check  # noqa: E402
 
 SEEN = []
 
@@ -65,25 +64,20 @@ def main():
     wrapper = work / 'runtime-project'; wrapper.mkdir(exist_ok=True)
     (wrapper / 'CMakeLists.txt').write_text(
         'cmake_minimum_required(VERSION 3.20)\nproject(runtime_smoke C CXX)\n'
-        # The x86-64 level first, as the MAG build applies it: its options must pass the compile cache.
-        f'include("{posix(ROOT / "cmake/MagX86Level.cmake")}")\nmag_x86_level_apply()\n'
         f'add_subdirectory("{posix(sdk)}" sdk EXCLUDE_FROM_ALL)\n'
         f'include("{posix(ROOT / "cmake/MagWin32Posix.cmake")}")\n'
         f'mag_win32_posix_runtime("{posix(sdk)}")\n')
-    compilers = ['-DCMAKE_C_COMPILER=' + posix(toolchain['clang_cl']), '-DCMAKE_CXX_COMPILER=' + posix(toolchain['clang_cl']),
-                 '-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded']
-    def configure(build):
-        print(f'== configure runtime in {build.name}', flush=True)
-        return [managed['cmake'], '-S', wrapper, '-B', build, '-G', 'Ninja', '-DCMAKE_BUILD_TYPE=Release',
-                '-DCMAKE_MAKE_PROGRAM=' + posix(managed['ninja']), *compilers, '-DPython3_EXECUTABLE=' + posix(managed['python']),
-                # Controllers through the managed SDL2 package, as the player build does.
-                '-DPS3RECOMP_PAD_USE_SDL2=ON', '-DSDL2_DIR=' + posix(managed['sdl2']['cmake_dir'])]
-    # The runtime builds through the pinned ccache, as Build MAG compiles; a second build folder reuses it.
-    ccache = compile_cache.ccache_tool(managed['root'], 'windows-x86_64', cache=work / 'cache', token=token, events=events)
-    identity = compile_cache.compiler_identity({'msvc': {'clang_cl': toolchain['clang_cl']}}, env)
-    compile_cache_check.rebuild_hits(managed['cmake'], ccache, env, identity, store.root, work, configure,
-                                     ['--target', 'ps3recomp_runtime'], [work / 'runtime-build', work / 'runtime-build-again'])
-    compile_cache_check.check(managed['cmake'], managed['ninja'], ccache, compilers, env, identity, work / 'cache-check')
+    build = work / 'runtime-build'
+    step('configure runtime', [managed['cmake'], '-S', wrapper, '-B', build, '-G', 'Ninja',
+                               '-DCMAKE_BUILD_TYPE=Release', '-DCMAKE_MAKE_PROGRAM=' + posix(managed['ninja']),
+                               '-DCMAKE_C_COMPILER=' + posix(toolchain['clang_cl']),
+                               '-DCMAKE_CXX_COMPILER=' + posix(toolchain['clang_cl']),
+                               '-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded',
+                               '-DPython3_EXECUTABLE=' + posix(managed['python']),
+                               # Controllers through the managed SDL2 package, as the player build does.
+                               '-DPS3RECOMP_PAD_USE_SDL2=ON', '-DSDL2_DIR=' + posix(managed['sdl2']['cmake_dir'])], work)
+    # Windows builds do not use the compile cache (installer/mag_installer/compile_cache.py).
+    step('build runtime', [managed['cmake'], '--build', build, '--target', 'ps3recomp_runtime'], work)
 
     scratch = work / 'supervisor'; scratch.mkdir(exist_ok=True)
     (scratch / 'supervisor_config.h').write_text(

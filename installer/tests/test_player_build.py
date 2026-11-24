@@ -183,6 +183,8 @@ class PlayerBuildTests(unittest.TestCase):
                     steps.append('native')
                     config = json.loads(config_path.read_text())
                     self.assertEqual(config['msvc'], toolchain)
+                    # Windows reuses tool builds and generation, but compiles without ccache.
+                    self.assertEqual(set(config['build_cache']), {'root', 'base_dir'})
                     # The prebuilt movie decoder and controller library pass through when acquired.
                     for key in ('ffmpeg', 'sdl2'): self.assertEqual(config.get(key), extra.get(key))
                     (native_output / 'workspace').mkdir(parents=True)
@@ -203,6 +205,7 @@ class PlayerBuildTests(unittest.TestCase):
                     self.assertEqual(player_build.install(root, source, output, cache), output)
                 self.assertEqual(steps, ['build-tools', 'tools', 'native', 'package'])
                 self.assertTrue((output / 'MAG').is_dir())
+                self.ccache.assert_not_called()
 
     def test_missing_prepared_input_prevents_tool_download_and_output_creation(self):
         with tempfile.TemporaryDirectory() as temp:

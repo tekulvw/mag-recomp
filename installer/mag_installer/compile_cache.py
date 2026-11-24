@@ -13,8 +13,11 @@ all of those are byte-identical: an unchanged generated lift source, runtime fil
   object.
 - Only our configuration file is read (``CCACHE_CONFIGPATH``); inherited ``CCACHE_*`` variables
   are removed from the build environment.
-- ccache refuses clang-cl's ``/clang:`` options, which every Windows compilation has; ccache passes
-  them through unhashed and the compiler identity covers them instead (passthrough_options).
+- Not on Windows yet (SUPPORTED_HOSTS): every clang-cl compilation there carries ``/clang:``
+  options ccache refuses (cmake/MagX86Level.cmake's, and CMake 4's per-file
+  ``-clang:-MD -clang:-MF<object>.d`` dependency files), so it would cache nothing; hiding them
+  from ccache would also lose the dependency files of cache hits. Windows builds compile as
+  before and still reuse tool builds and generated sources.
 
 The objects live in the per-user build cache (build_cache.py), never in the MAG or build folder.
 """
@@ -24,7 +27,6 @@ import hashlib
 import json
 import os
 from pathlib import Path
-import re
 import subprocess
 
 from .model import InstallerError
@@ -44,14 +46,11 @@ CCACHE_LOCKS = {
                      'url': f'https://github.com/ccache/ccache/releases/download/v{CCACHE_VERSION}/ccache-{CCACHE_VERSION}-linux-x86_64-glibc.tar.xz',
                      'executable': f'ccache-{CCACHE_VERSION}-linux-x86_64-glibc/ccache',
                      'max_expanded_bytes': 104857600, 'max_entries': 100},
-    'windows-x86_64': {'id': 'ccache-windows', 'archive': 'zip', 'size': 1855889,
-                       'sha256': 'c845c3d65be81954c75659145a522a793a27586bf940c5dcfe18af33fa1a67dd',
-                       'url': f'https://github.com/ccache/ccache/releases/download/v{CCACHE_VERSION}/ccache-{CCACHE_VERSION}-windows-x86_64.zip',
-                       'executable': f'ccache-{CCACHE_VERSION}-windows-x86_64/ccache.exe',
-                       'max_expanded_bytes': 104857600, 'max_entries': 100},
 }
 # CMake languages the MAG and runtime builds compile on each host.
-LANGUAGES = {'macos-arm64': ('C', 'CXX', 'OBJC', 'OBJCXX'), 'linux-x86_64': ('C', 'CXX'), 'windows-x86_64': ('C', 'CXX')}
+LANGUAGES = {'macos-arm64': ('C', 'CXX', 'OBJC', 'OBJCXX'), 'linux-x86_64': ('C', 'CXX')}
+# Hosts whose builds compile through the cache (see the module notes for Windows).
+SUPPORTED_HOSTS = tuple(CCACHE_LOCKS)
 
 
 def ccache_tool(root, host, cache=None, token=None, events=None):
@@ -135,18 +134,14 @@ def cmake_arguments(config, cmake_path):
     """The compiler launcher arguments for each language of this host."""
     from .native_recipe import config_host
     build_cache = config.get('build_cache')
-    if not build_cache:
+    if not build_cache or not build_cache.get('ccache'):
         return []
     return [f'-DCMAKE_{language}_COMPILER_LAUNCHER=' + cmake_path(build_cache['ccache'])
             for language in LANGUAGES[config_host(config)]]
 
 
-def environment(config, identity, stats_log, passthrough=None):
-    """The CCACHE_* variables of one compile stage.
-
-    passthrough (from passthrough_options) names the clang-cl options ccache cannot parse; ccache
-    then passes them to the compiler without hashing them, and their placement in this build
-    becomes part of the compiler identity instead."""
+def environment(config, identity, stats_log):
+    """The CCACHE_* variables of one compile stage."""
     from .build_cache import BuildCache
     cache = BuildCache(config['build_cache']['root'])
     directory = cache.objects_directory()
@@ -155,52 +150,10 @@ def environment(config, identity, stats_log, passthrough=None):
     text = f'max_size = {cache.objects_max_bytes() // (1024 * 1024)}MiB\n'
     if not configuration.is_file() or configuration.read_text(encoding='utf-8') != text:
         configuration.write_text(text, encoding='utf-8')
-    variables = {'CCACHE_DIR': str(directory), 'CCACHE_CONFIGPATH': str(configuration),
-                 'CCACHE_BASEDIR': str(config['build_cache']['base_dir']),
-                 'CCACHE_COMPILERCHECK': 'string:' + identity,
-                 'CCACHE_STATSLOG': str(stats_log)}
-    if passthrough and passthrough['options']:
-        variables['CCACHE_IGNOREOPTIONS'] = ' '.join(passthrough['options'])
-        variables['CCACHE_COMPILERCHECK'] = 'string:' + hashlib.sha256(
-            (identity + passthrough['placement']).encode()).hexdigest()
-    return variables
-
-
-# clang-cl options that hand a switch to the Clang driver (/clang:-march=..., and CMake's own
-# -clang:-std=gnu11 for C standards). ccache refuses to cache any command that has one.
-_PASSTHROUGH = re.compile(r'(?<![^\s"])([-/]clang:[^\s"]+)')
-
-
-def passthrough_options(ninja, build_dir, env):
-    """The /clang: options of the compilations in a configured build directory, for environment().
-
-    ccache would not cache those commands at all. Ignoring the options in ccache's own hash is safe
-    because the compiler identity covers them instead: for each target and source language, the
-    set of option lists its compilations use. Adding a source with the same options changes
-    nothing; any change to the options themselves makes every compilation of this build miss."""
-    try:
-        result = subprocess.run([str(ninja), '-C', str(build_dir), '-t', 'compdb'], env=env, stdin=subprocess.DEVNULL,
-                                capture_output=True, text=True, timeout=300)
-        records = json.loads(result.stdout) if result.returncode == 0 else None
-    except (OSError, subprocess.SubprocessError, ValueError):
-        records = None
-    if not isinstance(records, list):
-        raise InstallerError(f'Cannot read the compile commands of {build_dir} for the compile cache')
-    placement = {}
-    for record in records:
-        if not isinstance(record, dict) or not record.get('output') or not record.get('file'):
-            continue
-        command = record.get('command') or ' '.join(record.get('arguments', []))
-        found = _PASSTHROUGH.findall(command)
-        if not found:
-            continue
-        output = str(record['output']).replace('\\', '/')
-        target = output[:output.index('.dir/') + 4] if '.dir/' in output else output
-        language = Path(str(record['file'])).suffix.lower()
-        placement.setdefault(f'{target} {language}', set()).add(tuple(found))
-    options = sorted({option for lists in placement.values() for found in lists for option in found})
-    canonical = {key: sorted(lists) for key, lists in placement.items()}
-    return {'options': options, 'placement': hashlib.sha256(json.dumps(canonical, sort_keys=True).encode()).hexdigest()}
+    return {'CCACHE_DIR': str(directory), 'CCACHE_CONFIGPATH': str(configuration),
+            'CCACHE_BASEDIR': str(config['build_cache']['base_dir']),
+            'CCACHE_COMPILERCHECK': 'string:' + identity,
+            'CCACHE_STATSLOG': str(stats_log)}
 
 
 def timings_path(config):
