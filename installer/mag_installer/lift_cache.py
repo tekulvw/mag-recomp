@@ -212,11 +212,12 @@ def _allowed_outside(path, config, prefixes=()):
     normalized = _norm(path)
     root = _python_root(config)
     for folder in ([root] if root is not None else []) + [Path(p) for p in prefixes if p]:
-        if normalized.startswith(_norm(folder) + os.sep):
+        # The folder itself too: Windows Python lists its prefix, which is on sys.path.
+        if normalized == _norm(folder) or normalized.startswith(_norm(folder) + os.sep):
             return True
     if os.name == 'nt':
         windows = os.environ.get('SystemRoot', 'C:\\Windows')
-        return normalized.startswith(_norm(windows) + os.sep) or Path(path).name.lower() == 'nul' or path.startswith('\\\\.\\')
+        return normalized == _norm(windows) or normalized.startswith(_norm(windows) + os.sep) or Path(path).name.lower() == 'nul' or path.startswith('\\\\.\\')
     system = ('/dev/', '/etc/', '/usr/lib/', '/usr/share/', '/proc/', '/sys/')
     if sys.platform == 'darwin':
         system += ('/System/', '/private/etc/')
