@@ -79,6 +79,9 @@ void labels() {
     require(mag_prompt_fallback_label({InputSource::Keyboard, 39}) == "0", "digit 0");
     require(mag_prompt_fallback_label({InputSource::Keyboard, 44}) == "SPACE", "space");
     require(mag_prompt_fallback_label({InputSource::Keyboard, 40}) == "ENTER", "return");
+    require(mag_prompt_fallback_label({InputSource::Mouse, MouseWheelUp}) == "WHEEL UP" &&
+                mag_prompt_fallback_label({InputSource::Mouse, MouseWheelDown}) == "WHEEL DN",
+            "the wheel's steps");
     require(mag_prompt_fallback_label({InputSource::Keyboard, 225}) == "SHIFT", "left shift");
     require(mag_prompt_fallback_label({InputSource::Keyboard, 62}) == "F5", "function key");
     require(mag_prompt_fallback_label({InputSource::Keyboard, 92}) == "NUM4", "keypad");
@@ -120,6 +123,7 @@ void resolve() {
     require(mag_game_prompts_label("fire", s) == "LMB", "names are case-insensitive");
     require(mag_game_prompts_label("Bleedout", s) == "ENTER", "[Bleedout]");
     require(mag_game_prompts_label("CommandScreen", s) == "TAB", "[CommandScreen] is the Select key");
+    require(mag_game_prompts_label("Respawn", s) == "ESC", "[Respawn] is the Start key");
     require(mag_game_prompts_label("NoSuchAction", s).empty(), "unknown name keeps the icon");
     // Menu buttons: the SDK keyboard pad's Cross and Circle keys, whatever the profile binds.
     require(mag_game_prompts_label("OS_Enter", s) == "X", "menu confirm is the pad's Cross key");

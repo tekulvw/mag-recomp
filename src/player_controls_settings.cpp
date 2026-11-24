@@ -78,7 +78,7 @@ void mag_controls_settings_reset(ControlsProfile& p,bool controller){
     validate(r,next);p=std::move(next);
 }
 std::string mag_controls_settings_control_name(PhysicalControl c){
-    if(c.source==InputSource::Mouse)return c.code==0?"Left mouse":c.code==1?"Right mouse":c.code==2?"Middle mouse":"Mouse "+std::to_string(c.code+1);
+    if(c.source==InputSource::Mouse)return c.code==0?"Left mouse":c.code==1?"Right mouse":c.code==2?"Middle mouse":c.code==MouseWheelUp?"Wheel up":c.code==MouseWheelDown?"Wheel down":"Mouse "+std::to_string(c.code+1);
     if(c.source==InputSource::Controller){
         static const char* names[]={"Cross / A","Circle / B","Square / X","Triangle / Y","Select / Back","Guide","Start / Menu","L3","R3","L1 / LB","R1 / RB","D-pad Up","D-pad Down","D-pad Left","D-pad Right"};
         if(c.code<std::size(names))return names[c.code];

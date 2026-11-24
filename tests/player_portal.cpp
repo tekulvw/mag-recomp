@@ -7,6 +7,11 @@
 #include <fstream>
 #include <iostream>
 #include <sstream>
+#include <atomic>
+#include <chrono>
+#include <ctime>
+#include <mutex>
+#include <thread>
 #ifndef _WIN32
 #include <sys/stat.h>
 #endif
@@ -55,7 +60,7 @@ static std::string base64(const std::string &in) {
     return out;
 }
 static std::string ticket_reply(const std::string &bytes, const std::string &name, const std::string &audience = "play.magtest.online") {
-    return "{\"ticket\":\"" + base64(bytes) + "\",\"expires_at\":1800000600,\"account_id\":42,\"player_name\":\"" + name +
+    return "{\"ticket\":\"" + base64(bytes) + "\",\"expires_at\":4102444800,\"account_id\":42,\"player_name\":\"" + name +
            "\",\"audience\":\"" + audience + "\"}";
 }
 
@@ -196,7 +201,7 @@ static void tickets() {
     {
         FakeTransport t; t.add(200, ticket_reply(bytes, "Rook_7")); Ticket ticket;
         Outcome o = fetch_ticket(t, portal, token, server, ticket);
-        CHECK(o.ok() && ticket.bytes == bytes && ticket.player_name == "Rook_7" && ticket.account_id == 42 && ticket.expires_at == 1800000600);
+        CHECK(o.ok() && ticket.bytes == bytes && ticket.player_name == "Rook_7" && ticket.account_id == 42 && ticket.expires_at == 4102444800);
         CHECK(t.requests.size() == 1 && t.requests[0].url == portal + "/api/v1/ticket");
         CHECK(t.requests[0].headers.size() == 1 && t.requests[0].headers[0].first == "Authorization" &&
               t.requests[0].headers[0].second == "Bearer " + token);
@@ -258,6 +263,14 @@ static void tickets() {
         CHECK(o.status == e.expected);
         if (o.message.find(e.says) == std::string::npos) { std::fprintf(stderr, "message: %s\n", o.message.c_str()); ++failures; }
         CHECK(o.message.find(token) == std::string::npos);
+    }
+    {   // a ticket that has already expired is refused, with what to check
+        std::string reply = ticket_reply(bytes, "Rook_7");
+        reply.replace(reply.find("4102444800"), 10, std::to_string(static_cast<long long>(std::time(nullptr)) - 5));
+        FakeTransport t; t.add(200, reply); Ticket ticket;
+        Outcome o = fetch_ticket(t, portal, token, server, ticket);
+        CHECK(o.status == Status::Expired && ticket.bytes.empty());
+        CHECK(o.message.find("already expired") != std::string::npos && o.message.find("date and time") != std::string::npos);
     }
     {   // a malformed token is never sent
         FakeTransport t; Ticket ticket;
@@ -331,6 +344,188 @@ static void storage_and_launch(const fs::path &scratch) {
         CHECK(prepare_launch_ticket(t, link_file, ticket_file, portal, server, "x").state == LaunchTicket::State::NotLinked);
     }
     CHECK(forget_link(link_file, error));  // already gone: fine
+}
+
+// The single-use ticket file (PS3RECOMP_NP_TICKET_REFILL): the game takes a ticket for each sign-in,
+// as the runtime does (rename aside, read, delete), and the refill keeps a fresh one waiting.
+// The longest any wait for the refill thread may take: a safety limit for loaded machines, not a
+// timing expectation (every wait ends as soon as its condition holds).
+static constexpr int kWait = 60000;
+static bool take(const fs::path &file, std::string &out) {
+    const fs::path claimed = file.string() + ".claimed";
+    std::error_code code;
+    fs::rename(file, claimed, code);
+    if (code) return false;
+    out = read(claimed);
+    fs::remove(claimed, code);
+    return true;
+}
+// Wait (real time) for the refill to put a ticket back; the runtime waits the same way.
+static bool take_within(const fs::path &file, std::string &out, int milliseconds) {
+    for (int waited = 0; waited <= milliseconds; waited += 10) {
+        if (take(file, out)) return true;
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    return false;
+}
+static bool present_within(const fs::path &file, int milliseconds) {
+    for (int waited = 0; waited <= milliseconds; waited += 5) {
+        std::error_code code;
+        if (fs::exists(file, code)) return true;
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    return false;
+}
+static void refill(const fs::path &scratch) {
+    const fs::path file = scratch / "refill" / "portal-ticket.bin";
+    std::string error;
+    std::atomic<long long> now{1000};                // a fake clock, in seconds
+    std::mutex lock; std::vector<std::string> said;  // the log lines
+    std::atomic<int> issued{0}, refusing{0};
+    // A fake portal: each ticket is new, lives 60 s from the fake now, and is written as
+    // prepare_launch_ticket writes it. While `refusing`, the portal is down.
+    auto fetch = [&]() {
+        LaunchTicket t;
+        if (refusing) { t.state = LaunchTicket::State::Failed; t.status = Status::Busy; t.message = "The account portal is busy."; return t; }
+        const std::string bytes = "MAGT-ticket-" + std::to_string(++issued);
+        std::string why;
+        CHECK(write_private_file(file, bytes, why));
+        t.state = LaunchTicket::State::Ready; t.file = file; t.expires_at = now + 60;
+        return t;
+    };
+    auto report = [&](const std::string &line) { std::lock_guard<std::mutex> g(lock); said.push_back(line); };
+    RefillPolicy policy; policy.renew_before_seconds = 10; policy.poll_milliseconds = 5; policy.retry_seconds = 1;
+    policy.notice_file = sign_in_notice_path(file);
+    CHECK(policy.notice_file == scratch / "refill" / "sign-in-notice.txt");
+    CHECK(write_private_file(file, "MAGT-ticket-0", error));  // the ticket fetched before the phase
+    {
+        TicketRefill refill(file, now + 60, fetch, report, policy, [&] { return now.load(); });
+        std::string got;
+        // The first sign-in takes the launch ticket; every later one gets a ticket never presented before.
+        CHECK(take(file, got) && got == "MAGT-ticket-0");
+        std::vector<std::string> seen{got};
+        for (int i = 0; i < 4; i++) {
+            CHECK(take_within(file, got, kWait));
+            for (auto &earlier : seen) CHECK(got != earlier);
+            seen.push_back(got);
+        }
+        CHECK(refill.fetches() >= 4 && refill.fetches() <= 5);  // the fifth may already be under way
+        // A reconnect long after the lifetime (the server dropped the players, then recovered):
+        // the waiting ticket was replaced before it expired, so what the game gets is still valid.
+        CHECK(present_within(file, kWait));  // a fresh ticket waits in the file
+        const int before = issued;
+        now += 55;  // within renew_before_seconds of the waiting ticket's expiry
+        for (int waited = 0; issued == before && waited < kWait; waited += 5) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        // renewed ahead of expiry, without a sign-in asking (once; a poll racing the clock may
+        // renew the ticket it just fetched again, never more)
+        if (!(issued >= before + 1 && issued <= before + 2)) std::fprintf(stderr, "renewals: %d\n", issued - before);
+        CHECK(issued >= before + 1 && issued <= before + 2);
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        now += 30;                     // past the old ticket's lifetime, inside the new one's
+        // What the game gets now is the renewal (or a later ticket), never the expired one.
+        CHECK(take_within(file, got, kWait) && got.rfind("MAGT-ticket-", 0) == 0 &&
+              std::stoi(got.substr(12)) >= before + 1);
+        // The portal is down and the waiting ticket expires: it is removed, never presented.
+        CHECK(present_within(file, kWait));
+        refusing = 1;
+        now += 120;
+        bool gone = false;
+        for (int waited = 0; waited < kWait && !gone; waited += 5) {
+            std::error_code code;
+            gone = !fs::exists(file, code);
+            if (!gone) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        CHECK(gone);
+        CHECK(!take(file, got));  // a reconnect now waits rather than sending an expired ticket
+        // ... and the player would be told why, after the game exits.
+        const std::string expired_note = "Your MAG sign-in expired (The account portal is busy). Restart MAG to sign in again.\n";
+        for (int waited = 0; read(policy.notice_file) != expired_note && waited < kWait; waited += 5)
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        CHECK(read(policy.notice_file) == expired_note);
+        // The portal recovers: the next fetch (after the retry delay) fills the file again.
+        const int before_recovery = issued;
+        refusing = 0;
+        now += 2;
+        CHECK(take_within(file, got, kWait) && got == "MAGT-ticket-" + std::to_string(before_recovery + 1));
+        std::error_code ignored;
+        for (int waited = 0; fs::exists(policy.notice_file, ignored) && waited < kWait; waited += 5)
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        CHECK(!fs::exists(policy.notice_file, ignored));  // recovered: nothing to tell
+    }
+    {   // the log says what happened, once per problem, and never holds the token
+        std::lock_guard<std::mutex> g(lock);
+        bool expired = false, busy = false;
+        int busy_lines = 0;
+        for (auto &line : said) {
+            expired |= line.find("expired before a fresh one arrived") != std::string::npos;
+            if (line.find("The account portal is busy.") != std::string::npos) { busy = true; ++busy_lines; }
+            CHECK(line.find(token) == std::string::npos);
+        }
+        CHECK(expired && busy && busy_lines == 1);
+    }
+    // Stopping joins the thread: nothing is written afterwards.
+    std::error_code code;
+    fs::remove(file, code);
+    {
+        TicketRefill refill(file, 0, fetch, {}, policy, [&] { return now.load(); });
+        std::string got;
+        CHECK(take_within(file, got, kWait));
+    }
+    {   // start_ticket_refill: tickets come from the linked account through prepare_launch_ticket
+        const fs::path settings = scratch / "refill" / "settings.json", link_file = link_path(settings);
+        CHECK(save_link(link_file, {portal, token, "Rook_7"}, error));
+        const std::string first = make_ticket("play.magtest.online", "Rook_7");
+        auto make = [&]() -> std::unique_ptr<Transport> {
+            auto t = std::make_unique<FakeTransport>(); t->add(200, ticket_reply(first, "Rook_7")); return t;
+        };
+        std::error_code ignored; fs::remove(file, ignored);
+        auto started = start_ticket_refill(make, link_file, file, portal, server, "Link it again.", 0);
+        std::string got;
+        CHECK(take_within(file, got, kWait) && got == first);
+        started.reset();
+        fs::remove(file, ignored);
+        auto none = start_ticket_refill(nullptr, link_file, file, portal, server, "x", 0);
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        CHECK(!fs::exists(file, ignored));  // no transport: nothing is written
+    }
+    {   // a refusal (the computer was unlinked on the website) leaves a note to link again, shown once
+        std::error_code ignored; fs::remove(file, ignored);
+        RefillPolicy noted = policy;
+        auto refused = [&]() {
+            LaunchTicket t; t.state = LaunchTicket::State::Failed; t.status = Status::Unlinked;
+            t.message = "This computer is no longer linked to your account (it was unlinked on the website). Link it again."; return t;
+        };
+        {
+            TicketRefill refill(file, 0, refused, {}, noted, [&] { return now.load(); });
+            CHECK(present_within(noted.notice_file, kWait));
+        }
+        std::string text;
+        CHECK(take_sign_in_notice(file, text));
+        CHECK(text == "Your MAG sign-in was refused: this computer is no longer linked to your account. "
+                      "Link your account again in MAG Settings (Account), then restart MAG.");
+        CHECK(!take_sign_in_notice(file, text) && text.empty());  // shown once
+        CHECK(sign_in_notice(Status::Banned, "Your account is banned from online play: griefing.") ==
+              "Your MAG sign-in was refused (Your account is banned from online play: griefing). Restart MAG to sign in again.");
+        CHECK(sign_in_notice(Status::Expired, "") == "Your MAG sign-in expired. Restart MAG to sign in again.");
+    }
+    {   // a short-lived ticket is renewed once, half-way, not refetched on every poll
+        std::error_code ignored; fs::remove(file, ignored);
+        RefillPolicy eager; eager.poll_milliseconds = 5;  // renew_before (300 s) far exceeds the lifetime
+        const int before = issued;
+        CHECK(write_private_file(file, "MAGT-short", error));
+        TicketRefill refill(file, now + 4, [&] { LaunchTicket t = fetch(); t.expires_at = now + 4; return t; }, {}, eager,
+                            [&] { return now.load(); });
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        CHECK(issued == before);       // fresh: nothing fetched
+        now += 2;                       // half-way through its 4 s
+        for (int waited = 0; issued == before && waited < kWait; waited += 5) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        CHECK(issued == before + 1);   // exactly one renewal for this half-life
+    }
+    const int final_count = issued;
+    fs::remove(file, code);
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    CHECK(issued == final_count && !fs::exists(file, code));
 }
 
 // --link-token: a service-account token installed without the device-code page.
@@ -407,6 +602,7 @@ int main(int argc, char **argv) {
     storage_and_launch(argv[1]);
     token_import(argv[1]);
     handwritten_link(argv[1]);
+    refill(argv[1]);
     if (failures) { std::fprintf(stderr, "%d portal checks failed\n", failures); return 1; }
     std::puts("portal link and ticket checks passed");
     return 0;

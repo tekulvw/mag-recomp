@@ -99,6 +99,10 @@ public:
                       DesktopCaptureGate::Stamp stamp);
     // Relative motion: dx right-positive, dy down-positive. Returns whether it reached the engine.
     bool mouse_motion(double dx, double dy, DesktopCaptureGate::Stamp stamp);
+    // Whole wheel steps, positive away from the user (up). Each step is a press and release of
+    // MouseWheelUp or MouseWheelDown; at most MaxWheelSteps per call. Counts only while ready.
+    static constexpr int MaxWheelSteps = 8;
+    void mouse_wheel(int steps, uint64_t device, uint64_t time_ns, DesktopCaptureGate::Stamp stamp);
     // The motion epoch a stamp carries, and the current one, for diagnostics.
     static uint32_t motion_epoch(DesktopCaptureGate::Stamp stamp) { return uint32_t(stamp.state >> 33); }
     uint32_t motion_epoch() const { return motion_epoch(gate_.stamp()); }
