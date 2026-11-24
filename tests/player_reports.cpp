@@ -281,6 +281,28 @@ static void sending(const fs::path &root) {
     CHECK(sent.line.find("another sender") != std::string::npos && queued(s.queue).size() == 1);
     sent = send_queued(t, s.queue, s.settings, now + lock_stale_seconds + 1);  // a stale lock is taken over
     CHECK(sent.line.find("another sender") == std::string::npos);
+    // 500 (server_error) three times for the same report: the report is the problem, so it is
+    // dropped; 503 (and 502, or no connection) keeps it for the backoff and the attempt limit.
+    fs::remove(s.queue / "send.lock");
+    for (auto &e : queued(s.queue)) { fs::remove(s.queue / (e.report_id + ".json")); fs::remove(s.queue / (e.report_id + ".state")); }
+    CHECK(enqueue(s.queue, id(), Trigger::Crash, "{}", error));
+    long long at = now + 1000;
+    for (int i = 0; i < server_error_max - 1; ++i) {
+        t.add(500);
+        sent = send_queued(t, s.queue, s.settings, at);
+        CHECK(sent.kept == 1 && queued(s.queue).size() == 1 && queued(s.queue)[0].server_errors == i + 1);
+        at += retry_max_seconds;
+    }
+    t.add(500);
+    sent = send_queued(t, s.queue, s.settings, at);
+    CHECK(sent.dropped == 1 && queued(s.queue).empty());
+    CHECK(enqueue(s.queue, id(), Trigger::Crash, "{}", error));
+    for (int i = 0; i < server_error_max + 1; ++i) { t.add(503); send_queued(t, s.queue, s.settings, at); at += retry_max_seconds; }
+    CHECK(queued(s.queue).size() == 1 && queued(s.queue)[0].server_errors == 0 && queued(s.queue)[0].attempts == server_error_max + 1);
+    // A state written before the 500 count existed reads as none.
+    const std::string older = queued(s.queue)[0].report_id;
+    write(s.queue / (older + ".state"), "crash 1 0 1\n");
+    CHECK(queued(s.queue).size() == 1 && queued(s.queue)[0].server_errors == 0 && queued(s.queue)[0].attempts == 1);
     // A report queued more than queue_max_age_seconds ago is dropped unsent.
     fs::remove(s.queue / "send.lock");
     for (auto &e : queued(s.queue)) { fs::remove(s.queue / (e.report_id + ".json")); fs::remove(s.queue / (e.report_id + ".state")); }
@@ -350,18 +372,47 @@ static void comments(const fs::path &root) {
     s.engine_exit = 139;
     d = decide(s);
     CHECK(d.trigger == Trigger::Crash && d.manual && d.user_comment == said);
-    // The longest comment (1000 four-byte code points) is cut to keep the session within 4 KiB.
+    // The longest comment (1000 four-byte scalar values) fits the session's 12 KiB whole.
     CHECK(mag::write_report_request(s.logs / "report-requested", 1800000000, "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d", many, error));
     s.engine_exit = 0;
     d = decide(s);
-    const std::string body = build_report(s, d, d.request_id);
+    std::string body = build_report(s, d, d.request_id);
     CHECK(parse_json(body, report, 8u << 20));
     const Json *session = report.get("session");
     CHECK(session && to_json(*session).size() <= session_max_bytes);
     comment = session ? session->get("user_comment") : nullptr;
-    CHECK(comment && comment->text.size() > 3000 && comment->text.size() % 4 == 0);  // whole code points
-    CHECK(session && session->get("user_comment_truncated") && session->get("user_comment_truncated")->boolean);
+    CHECK(comment && mag::report_comment_length(comment->text) == 1000 && comment->text.size() == 4000);
+    CHECK(session && !session->get("user_comment_truncated"));
     std::ofstream(root / "long-comment.json", std::ios::binary) << body;
+    // Redaction can lengthen a comment (a 12-character token becomes "mgd_[redacted]"): the report
+    // still carries at most 1000 scalar values, which is the portal's limit.
+    std::string tokens;
+    while (mag::report_comment_length(tokens) + 13 <= 1000) tokens += "mgd_abcdefgh ";
+    CHECK(mag::write_report_request(s.logs / "report-requested", 1800000000, "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d", tokens, error));
+    d = decide(s);
+    CHECK(parse_json(build_report(s, d, d.request_id), report, 8u << 20));
+    comment = report.get("session")->get("user_comment");
+    CHECK(comment && mag::report_comment_length(comment->text) <= 1000 && comment->text.find("abcdefgh") == std::string::npos);
+
+    // NUL never reaches the portal (its database refuses it, and the 500 would repeat): not from
+    // the system description, a log (the GPU line, a halt line), the launch error, a summary or the player.
+    CHECK(quote(std::string("a\0b", 3)) == "\"ab\"");
+    Session nul = launch(root / "nul");
+    nul.system["cpu"] = std::string("Synthetic\0CPU", 13);
+    nul.launch_error = std::string("stopped\0here", 12);
+    write(nul.logs / "engine.log", std::string("[RSX vulkan] using device 0: GPU\0X\n", 36));
+    write(nul.logs / "session-engine.json", "{\"schema_version\": 1, \"role\": \"eng\\u0000ine\", \"frames\": {\"count\": 1}}\n");
+    Decision crash_with_comment;
+    crash_with_comment.trigger = Trigger::Crash;
+    crash_with_comment.manual = true;
+    crash_with_comment.user_comment = std::string("it\0froze", 9);
+    crash_with_comment.reasons = {std::string("[hle] UNRESOLVED NID\0 halting", 29)};
+    body = build_report(nul, crash_with_comment, new_report_id());
+    CHECK(body.find('\0') == std::string::npos && body.find("\\u0000") == std::string::npos);
+    CHECK(parse_json(body, report, 8u << 20));
+    CHECK(report.get("client")->get("cpu")->text == "SyntheticCPU" && report.get("client")->get("gpu")->text == "GPUX");
+    CHECK(report.get("metrics")->get("engine")->get("role")->text == "engine");
+    CHECK(report.get("session")->get("user_comment")->text == "itfroze");
 }
 
 int main(int argc, char **argv) {

@@ -224,6 +224,7 @@ std::string quote(const std::string &value) {
     std::string out = "\"";
     for (size_t i = 0; i < value.size();) {
         const unsigned char c = (unsigned char)value[i];
+        if (c == 0) { ++i; continue; }  // never NUL (see the header)
         if (c < 0x80) {
             switch (c) {
             case '"': out += "\\\""; break;
@@ -797,15 +798,18 @@ bool valid_id(const std::string &id) {
 }
 
 // <trigger> <attempts> <next attempt (unix seconds)> <created (unix milliseconds, for the order)>
-struct State { std::string trigger; int attempts = 0; long long next = 0, created = 0; };
+// A fifth field, the 500 replies so far, came later; a state without it has had none.
+struct State { std::string trigger; int attempts = 0; long long next = 0, created = 0; int server_errors = 0; };
 bool read_state(const fs::path &path, State &out) {
     std::istringstream in(read_file(path, 256));
-    return bool(in >> out.trigger >> out.attempts >> out.next >> out.created);
+    if (!(in >> out.trigger >> out.attempts >> out.next >> out.created)) return false;
+    if (!(in >> out.server_errors)) out.server_errors = 0;
+    return true;
 }
 bool write_state(const fs::path &path, const State &state) {
     std::string error;
     return portal::write_private_file(path, state.trigger + " " + std::to_string(state.attempts) + " " + std::to_string(state.next) +
-                                                " " + std::to_string(state.created) + "\n", error);
+                                                " " + std::to_string(state.created) + " " + std::to_string(state.server_errors) + "\n", error);
 }
 void remove_report(const fs::path &queue, const std::string &id) {
     std::error_code code;
@@ -829,7 +833,7 @@ std::vector<std::pair<Queued, long long>> scan(const fs::path &queue) {
             if (!age && fs::file_time_type::clock::now() - written > std::chrono::minutes(1)) fs::remove(path, age);
             continue;
         }
-        Queued q{stem, state.trigger, state.attempts, state.next, fs::file_size(path, code)};
+        Queued q{stem, state.trigger, state.attempts, state.next, fs::file_size(path, code), state.server_errors};
         out.emplace_back(q, state.created);
     }
     std::sort(out.begin(), out.end(), [](const auto &a, const auto &b) { return a.second != b.second ? a.second < b.second : a.first.report_id < b.first.report_id; });
@@ -1017,7 +1021,7 @@ Sent send_queued(portal::Transport &transport, const fs::path &queue, const fs::
         const portal::Response reply =
             transport.post(link.portal + "/api/v1/reports", body, {{"Authorization", "Bearer " + link.device_token}});
         last = reply.status ? std::to_string(reply.status) : "no connection";
-        State state{item.trigger, item.attempts, item.next_attempt, created};
+        State state{item.trigger, item.attempts, item.next_attempt, created, item.server_errors};
         if (reply.status == 200 || reply.status == 201) {
             remove_report(queue, item.report_id);
             ++result.sent;
@@ -1031,7 +1035,8 @@ Sent send_queued(portal::Transport &transport, const fs::path &queue, const fs::
             continue;
         }
         if (reply.status == 0 || reply.status >= 500) {
-            if (++state.attempts >= send_max_attempts) {
+            if (reply.status == 500) ++state.server_errors;
+            if (++state.attempts >= send_max_attempts || state.server_errors >= server_error_max) {
                 remove_report(queue, item.report_id);
                 ++result.dropped;
             } else {

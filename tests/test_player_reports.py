@@ -44,8 +44,11 @@ def check_contract(test, body):
     test.assertTrue(1 <= len(client['version']) <= 64)
     test.assertIn(client['platform'], {'macos', 'linux', 'windows'})
     test.assertLessEqual(len(json.dumps(client).encode()), 16 << 10)
-    test.assertLessEqual(len(json.dumps(report.get('session', {})).encode()), 4 << 10)
+    test.assertLessEqual(len(json.dumps(report.get('session', {})).encode()), 12 << 10)
     test.assertLessEqual(len(json.dumps(report.get('metrics', {})).encode()), 64 << 10)
+    test.assertNotIn(b'\\u0000', body)  # the portal's database refuses NUL
+    if 'user_comment' in report.get('session', {}):
+        test.assertLessEqual(len(report['session']['user_comment']), 1000)  # Unicode scalar values
     logs = report.get('logs', {})
     test.assertLessEqual(len(logs), 8)
     total, decoded = 0, {}
