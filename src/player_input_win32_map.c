@@ -109,7 +109,7 @@ int mag_win32_raw_mouse_motion(uint16_t flags, int32_t last_x, int32_t last_y, d
 {
     if ((flags & MAG_WIN32_MOUSE_MOVE_ABSOLUTE) || (last_x == 0 && last_y == 0)) return 0;
     *dx = (double)last_x;
-    *dy = -(double)last_y;  /* Raw Input reports down-positive; look wants up-positive. */
+    *dy = (double)last_y;  /* Raw Input reports down-positive, as the controls take it. */
     return 1;
 }
 

@@ -105,6 +105,7 @@ void mainQueue(void (^block)(void)) {if(NSThread.isMainThread)block();else dispa
             MAGRawDesktopInput* receipt=weakSelf;const auto stamp=receipt?receipt->gate.stamp():DesktopCaptureGate::Stamp{};
             if(prior)prior(source,dx,dy);
             mainQueue(^{MAGRawDesktopInput* owner=weakSelf;[owner refresh];if(owner && owner->gate.accepts(stamp,true) && owner.installed && owner.ready && owner.relative && owner.epoch==epoch) {
+                // GCMouse reports up-positive; the controls take down-positive counts (player_controls.h).
                 try {mag_controls_push_relative_mouse(dx,-double(dy));}catch(...) {mag_controls_release_source(InputSource::Mouse);}
             }});
         };

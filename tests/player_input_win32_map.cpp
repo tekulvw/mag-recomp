@@ -84,9 +84,9 @@ void mouse() {
     require(mag_win32_raw_mouse_edges(0x3FF, edges) == 10, "every edge at once");
 
     double dx = 0, dy = 0;
-    require(mag_win32_raw_mouse_motion(0, 5, -3, &dx, &dy) == 1 && dx == 5 && dy == 3,
-            "relative motion: right-positive, raw up (negative) becomes up-positive");
-    require(mag_win32_raw_mouse_motion(0, -2, 4, &dx, &dy) == 1 && dx == -2 && dy == -4, "left and down");
+    require(mag_win32_raw_mouse_motion(0, 5, -3, &dx, &dy) == 1 && dx == 5 && dy == -3,
+            "relative motion: right- and down-positive, as Raw Input reports it and the controls take it");
+    require(mag_win32_raw_mouse_motion(0, -2, 4, &dx, &dy) == 1 && dx == -2 && dy == 4, "left and down");
     dx = dy = 99;
     require(mag_win32_raw_mouse_motion(MAG_WIN32_MOUSE_MOVE_ABSOLUTE, 30000, 20000, &dx, &dy) == 0 && dx == 99 && dy == 99,
             "absolute-position devices do not drive look");
