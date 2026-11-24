@@ -10,6 +10,14 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
 @unittest.skipUnless(platform.system() == 'Darwin', 'native macOS settings')
+def debug_object(folder):
+    """src/player_settings_debug.cpp compiled for linking with the macOS panel."""
+    target = pathlib.Path(folder) / 'debug.o'
+    subprocess.run(['xcrun', 'clang++', '-std=c++20', '-c', str(ROOT / 'src/player_settings_debug.cpp'), '-I' + str(ROOT / 'src'),
+                    '-Wall', '-Wextra', '-Werror', '-o', str(target)], check=True, capture_output=True, timeout=60)
+    return target
+
+
 class PlayerSettingsTests(unittest.TestCase):
     def test_debug_page_switch_and_logs_folder(self):
         """The C interface the macOS panel's Debug page uses (src/player_settings_debug.h), headless."""
@@ -67,11 +75,12 @@ int main(int argc, char **argv) { @autoreleasepool {
     def test_native_panel_apply_cancel_and_display_rollback(self):
         with tempfile.TemporaryDirectory() as tmp:
             binary = pathlib.Path(tmp) / 'window-test'
+            debug = debug_object(tmp)  # the Debug page's interface (src/player_settings_debug.h)
             result = subprocess.run([
                 'xcrun', 'clang', '-fobjc-arc', '-Wall', '-Wextra', '-Werror',
                 '-Wno-unused-parameter', '-I' + str(ROOT / 'src'),
                 str(ROOT / 'tests/player_settings_window.m'),
-                str(ROOT / 'src/player_settings_store.m'), str(ROOT / 'src/player_settings_macos.m'),
+                str(ROOT / 'src/player_settings_store.m'), str(ROOT / 'src/player_settings_macos.m'), str(debug), '-lc++',
                 '-framework', 'AppKit', '-framework', 'QuartzCore', '-o', str(binary)],
                 capture_output=True, text=True, timeout=30)
             self.assertEqual(result.returncode, 0, result.stderr)
@@ -83,11 +92,12 @@ int main(int argc, char **argv) { @autoreleasepool {
         # Headless: the window is never ordered front and the application may not activate.
         with tempfile.TemporaryDirectory() as tmp:
             binary = pathlib.Path(tmp) / 'reports-test'
+            debug = debug_object(tmp)  # the Debug page's interface (src/player_settings_debug.h)
             result = subprocess.run([
                 'xcrun', 'clang', '-fobjc-arc', '-Wall', '-Wextra', '-Werror',
                 '-Wno-unused-parameter', '-I' + str(ROOT / 'src'),
                 str(ROOT / 'tests/player_settings_reports.m'),
-                str(ROOT / 'src/player_settings_store.m'), str(ROOT / 'src/player_settings_macos.m'),
+                str(ROOT / 'src/player_settings_store.m'), str(ROOT / 'src/player_settings_macos.m'), str(debug), '-lc++',
                 '-framework', 'AppKit', '-framework', 'QuartzCore', '-o', str(binary)],
                 capture_output=True, text=True, timeout=30)
             self.assertEqual(result.returncode, 0, result.stderr)

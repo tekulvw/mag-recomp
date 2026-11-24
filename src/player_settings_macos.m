@@ -58,7 +58,7 @@ static NSStackView *row(NSString *title,NSString *hint,NSView *control) {
     return view;
 }
 
-@interface MAGSettingsController ()
+@interface MAGSettingsController () <NSTextViewDelegate>
 @property(nonatomic,readwrite) NSDictionary *settings;
 @property(nonatomic,readwrite) BOOL editing;
 @end
@@ -78,7 +78,8 @@ static NSStackView *row(NSString *title,NSString *hint,NSView *control) {
     NSBox *_accountSeparator;
     NSTextField *_accountStatus;
     NSButton *_sendReports,*_reportButton;
-    NSTextField *_reportStatus;
+    NSTextField *_reportStatus,*_reportCounter;
+    NSTextView *_reportComment;
     NSString *_reportRequested;
     id<MAGAccountLinking> _linker;
     BOOL _linking;
@@ -188,7 +189,23 @@ static NSStackView *row(NSString *title,NSString *hint,NSView *control) {
     add(reports,row(@MAG_SETTINGS_SEND_REPORTS,@MAG_SETTINGS_SEND_REPORTS_HINT,_sendReports));add(reports,separator());
     NSStackView *reportRow=row(@MAG_SETTINGS_SEND_REPORT_NOW,@"",_reportButton);
     [(NSStackView *)reportRow.arrangedSubviews.firstObject addArrangedSubview:_reportStatus];
-    add(reports,reportRow);add(_general,group(reports));
+    add(reports,reportRow);
+    // Send report's comment: a few lines, at most MAG_SETTINGS_REPORT_COMMENT_LIMIT characters, counted.
+    NSStackView *comment=stack(NSUserInterfaceLayoutOrientationVertical,4);
+    [comment addArrangedSubview:label(@MAG_SETTINGS_REPORT_COMMENT,13,NO)];
+    [comment addArrangedSubview:label(@MAG_SETTINGS_REPORT_COMMENT_HINT,11,YES)];
+    NSScrollView *scroll=[NSScrollView new];scroll.hasVerticalScroller=YES;scroll.borderType=NSBezelBorder;
+    _reportComment=[NSTextView new];_reportComment.identifier=@"report_comment";_reportComment.delegate=self;
+    _reportComment.richText=NO;_reportComment.font=[NSFont systemFontOfSize:12];
+    _reportComment.automaticQuoteSubstitutionEnabled=NO;_reportComment.automaticDashSubstitutionEnabled=NO;
+    _reportComment.verticallyResizable=YES;_reportComment.horizontallyResizable=NO;
+    _reportComment.autoresizingMask=NSViewWidthSizable;_reportComment.textContainer.widthTracksTextView=YES;
+    scroll.documentView=_reportComment;
+    [scroll.heightAnchor constraintEqualToConstant:66].active=YES;
+    add(comment,scroll);
+    _reportCounter=label(@"",11,YES);_reportCounter.identifier=@"report_counter";_reportCounter.alignment=NSTextAlignmentRight;
+    add(comment,_reportCounter);
+    add(reports,separator());add(reports,comment);add(_general,group(reports));
     add(_root,_errorLabel);
     _confirmation=stack(NSUserInterfaceLayoutOrientationVertical,7);_confirmation.identifier=@"display_confirmation";
     add(_confirmation,label(@MAG_SETTINGS_CONFIRM_QUESTION,13,NO));_countdown=label(@"",11,YES);add(_confirmation,_countdown);
@@ -310,14 +327,25 @@ static NSStackView *row(NSString *title,NSString *hint,NSView *control) {
 - (void)refreshReport {
     NSString *blocker=MAGReportRequestBlocker([self linked]);
     _reportButton.enabled=!blocker&&!_pending;
+    _reportComment.editable=!blocker&&!_pending;_reportComment.selectable=_reportComment.editable;
+    _reportCounter.stringValue=[NSString stringWithFormat:@MAG_SETTINGS_REPORT_COMMENT_COUNTER,
+                                (int)MAGReportCommentLength(MAGReportCommentClip(_reportComment.string)),MAG_SETTINGS_REPORT_COMMENT_LIMIT];
     _reportStatus.stringValue=_reportRequested?:blocker?:@MAG_SETTINGS_SEND_REPORT_HINT;
 }
 - (void)sendReport:(id)sender {
     if(MAGReportRequestBlocker([self linked]))return;
     NSString *identifier=nil;
-    _reportRequested=MAGReportRequestWrite(&identifier,NULL)
-        ?[NSString stringWithFormat:@MAG_SETTINGS_REPORT_REQUESTED,[identifier substringToIndex:8].UTF8String]:@MAG_SETTINGS_REPORT_FAILED;
+    BOOL ok=MAGReportRequestWrite(&identifier,_reportComment.string,NULL);
+    _reportRequested=ok?[NSString stringWithFormat:@MAG_SETTINGS_REPORT_REQUESTED,[identifier substringToIndex:8].UTF8String]:@MAG_SETTINGS_REPORT_FAILED;
+    if(ok)_reportComment.string=@"";  // sent with that report; the next one starts empty
     [self refreshReport];[self fit];
+}
+// The comment box keeps to the limit as the player types or pastes, and its counter follows.
+- (void)textDidChange:(NSNotification *)notification {
+    if(notification.object!=_reportComment)return;
+    NSString *text=_reportComment.string;
+    if(MAGReportCommentLength(text)>MAG_SETTINGS_REPORT_COMMENT_LIMIT)_reportComment.string=MAGReportCommentClip(text);
+    [self refreshReport];
 }
 - (void)setAccountLinker:(id<MAGAccountLinking>)linker {_linker=linker;[self refreshAccount];[self refreshReport];[self fit];}
 - (void)adoptSettings:(NSDictionary *)settings {self.settings=settings;[self fill:settings];[self changed:nil];}

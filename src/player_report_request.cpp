@@ -95,7 +95,8 @@ size_t mag::report_comment_length(const std::string &utf8) {
 
 std::string mag::report_comment_counter(const std::string &utf8) {
     char text[32];
-    std::snprintf(text, sizeof text, MAG_SETTINGS_REPORT_COMMENT_COUNTER, int(report_comment_length(utf8)), MAG_SETTINGS_REPORT_COMMENT_LIMIT);
+    std::snprintf(text, sizeof text, MAG_SETTINGS_REPORT_COMMENT_COUNTER, int(report_comment_length(clip_report_comment(utf8))),
+                  MAG_SETTINGS_REPORT_COMMENT_LIMIT);
     return text;
 }
 

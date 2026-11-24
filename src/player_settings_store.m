@@ -188,7 +188,38 @@ NSString *MAGReportRequestBlocker(BOOL linked) {
     return linked ? nil : @MAG_SETTINGS_REPORT_NEEDS_LINK;
 }
 
-BOOL MAGReportRequestWrite(NSString **reportId, NSError **error) {
+NSString *MAGReportCommentClip(NSString *text) {
+    NSString *s = [[text ?: @"" stringByReplacingOccurrencesOfString:@"\r\n" withString:@"\n"]
+                   stringByReplacingOccurrencesOfString:@"\r" withString:@"\n"];
+    NSMutableString *out = [NSMutableString string];
+    NSUInteger points = 0, n = s.length;
+    for (NSUInteger i = 0; i < n && points < MAG_SETTINGS_REPORT_COMMENT_LIMIT;) {
+        unichar c = [s characterAtIndex:i];
+        NSUInteger length = 1;
+        UTF32Char point = c;
+        if (CFStringIsSurrogateHighCharacter(c) && i + 1 < n && CFStringIsSurrogateLowCharacter([s characterAtIndex:i + 1])) {
+            point = CFStringGetLongCharacterForSurrogatePair(c, [s characterAtIndex:i + 1]);
+            length = 2;
+        } else if (CFStringIsSurrogateHighCharacter(c) || CFStringIsSurrogateLowCharacter(c)) { ++i; continue; }
+        if ((point < 0x20 && point != '\n' && point != '\t') || (point >= 0x7F && point < 0xA0)) { i += length; continue; }
+        [out appendString:[s substringWithRange:NSMakeRange(i, length)]];
+        i += length;
+        ++points;
+    }
+    return out;
+}
+
+NSUInteger MAGReportCommentLength(NSString *text) {
+    NSUInteger points = 0, n = text.length;
+    for (NSUInteger i = 0; i < n; ++i) {
+        if (CFStringIsSurrogateHighCharacter([text characterAtIndex:i]) && i + 1 < n &&
+            CFStringIsSurrogateLowCharacter([text characterAtIndex:i + 1])) ++i;
+        ++points;
+    }
+    return points;
+}
+
+BOOL MAGReportRequestWrite(NSString **reportId, NSString *comment, NSError **error) {
     NSString *identifier = NSUUID.UUID.UUIDString.lowercaseString;  // version 4
     if (reportId) *reportId = identifier;
     const char *path = getenv("MAG_REPORT_REQUEST");
@@ -198,9 +229,11 @@ BOOL MAGReportRequestWrite(NSString **reportId, NSError **error) {
     int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW | O_CLOEXEC, 0600);
     if (fd < 0) { invalid(error, @MAG_SETTINGS_REPORT_FAILED); return NO; }
     fchmod(fd, 0600);
-    char line[128];
-    int n = snprintf(line, sizeof line, "{\"requested_at\":%lld,\"report_id\":\"%s\"}\n", (long long)time(NULL), identifier.UTF8String);
-    BOOL ok = n > 0 && write(fd, line, (size_t)n) == n;
+    NSMutableData *line = [[NSJSONSerialization dataWithJSONObject:@{@"requested_at":@((long long)time(NULL)), @"report_id":identifier,
+                                                                      @"comment":MAGReportCommentClip(comment)}
+                                                            options:NSJSONWritingSortedKeys error:nil] mutableCopy];
+    [line appendBytes:"\n" length:1];
+    BOOL ok = line.length > 1 && write(fd, line.bytes, line.length) == (ssize_t)line.length;
     if (close(fd)) ok = NO;
     if (!ok) invalid(error, @MAG_SETTINGS_REPORT_FAILED);
     return ok;

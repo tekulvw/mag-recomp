@@ -24,7 +24,7 @@ bool write_report_request(const std::filesystem::path &path, int64_t unix_second
 std::string clip_report_comment(const std::string &utf8, size_t limit = MAG_SETTINGS_REPORT_COMMENT_LIMIT);
 // Code points in well-formed UTF-8 (what the counter shows).
 size_t report_comment_length(const std::string &utf8);
-// The counter's text, MAG_SETTINGS_REPORT_COMMENT_COUNTER: "12/1000".
+// The counter's text, MAG_SETTINGS_REPORT_COMMENT_COUNTER ("12/1000"), counting what is sent.
 std::string report_comment_counter(const std::string &utf8);
 // A new report id: a random, lowercase UUID version 4.
 std::string new_report_request_id();
