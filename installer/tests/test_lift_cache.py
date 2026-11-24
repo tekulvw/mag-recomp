@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -32,6 +33,14 @@ if os.environ.get('SYNTHETIC_PROGRAM'):
     subprocess.run([os.environ['SYNTHETIC_PROGRAM']], check=True, stdout=subprocess.DEVNULL)
 if os.environ.get('SYNTHETIC_CHILD'):
     subprocess.run([sys.executable, '-c', 'open(%r).read()' % os.environ['SYNTHETIC_CHILD']], check=True)
+for argv in json.loads(os.environ.get('SYNTHETIC_COMMANDS', '[]')):
+    argv = [a.replace('{workspace}', str(workspace)).replace('{python}', sys.executable) for a in argv]
+    if os.environ.get('SYNTHETIC_WINDOWS_AUDIT'):
+        # What Python on Windows reports to audit hooks for a list: one command line, no executable.
+        sys.audit('subprocess.Popen', None, subprocess.list2cmdline(argv), None, None)
+    subprocess.run(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+if os.environ.get('SYNTHETIC_SHELL'):
+    os.system(os.environ['SYNTHETIC_SHELL'])
 output.mkdir(parents=True, exist_ok=True)
 (output / 'out.cpp').write_text(f'// {data} {game.hex()} {listing} {optional}\n')
 (output / 'provenance.json').write_text(json.dumps({'command': sys.argv[0]}) + '\n')
@@ -44,7 +53,7 @@ PINS = {'ps3recomp': {role: {'tag': 'mag-recomp/' + role, 'commit': 'a' * 40, 'p
                       for role in ('runtime', 'lifter-spu', 'lifter-ppu', 'spu-programs')}}
 
 
-class GenerationCacheTests(unittest.TestCase):
+class GenerationFixture(unittest.TestCase):
     def setUp(self):
         temp = tempfile.TemporaryDirectory(); self.addCleanup(temp.cleanup)
         self.temp = Path(temp.name).resolve()
@@ -88,6 +97,8 @@ class GenerationCacheTests(unittest.TestCase):
     def runs(self):
         return self.counter.read_text().count('ran') if self.counter.exists() else 0
 
+
+class GenerationCacheTests(GenerationFixture):
     def test_generation_again_in_the_same_location_is_restored_and_elsewhere_runs(self):
         first, workspace = self.build_folder('MAG-build')
         result, events = self.generate(first, workspace)
@@ -165,6 +176,140 @@ class GenerationCacheTests(unittest.TestCase):
                 skipped = [e for e in events if e['event'] == 'build-cache-skipped']
                 self.assertEqual(len(skipped), 1, events)
                 self.assertEqual(BuildCache(self.cache_root).entries(), [])
+
+
+
+CHECKOUT = '{workspace}/local/sdk-lifter-ppu'
+FIX_TAG = 'mag-recomp/lifter-ppu-fix'
+# Fixed identities, so every synthetic checkout of the same history has the same commits.
+GIT_IDENTITY = {'GIT_AUTHOR_NAME': 'Synthetic', 'GIT_AUTHOR_EMAIL': 'synthetic@example.invalid',
+                'GIT_COMMITTER_NAME': 'Synthetic', 'GIT_COMMITTER_EMAIL': 'synthetic@example.invalid',
+                'GIT_AUTHOR_DATE': '2026-01-01T00:00:00Z', 'GIT_COMMITTER_DATE': '2026-01-01T00:00:00Z',
+                'GIT_CONFIG_NOSYSTEM': '1'}
+
+
+@unittest.skipUnless(shutil.which('git'), 'needs git')
+class PinnedCheckoutTests(GenerationFixture):
+    """Generation asks git about the pinned ps3recomp checkouts (their HEAD, cleanliness, pinned
+    tags and files at pinned commits), as the lift and splice tools do."""
+
+    def git(self, folder, *args):
+        env = {**os.environ, **GIT_IDENTITY, 'GIT_CONFIG_GLOBAL': os.devnull}
+        return subprocess.run(['git', '-C', str(folder), *args], check=True, capture_output=True,
+                              text=True, env=env).stdout.strip()
+
+    def build_folder(self, name, game=b'\x01\x02', data='recipe-1', head='base', fix='fix'):
+        """A build folder whose lifter-ppu checkout is a real repository: `base` (its pinned commit)
+        and `fix` (the pinned fixed lifter, tagged FIX_TAG); `head` and `fix` choose where HEAD and
+        the tag point."""
+        build, workspace = super().build_folder(name, game, data)
+        checkout = workspace / 'local/sdk-lifter-ppu'
+        checkout.mkdir(parents=True)
+        self.git(checkout, 'init', '-q')
+        commits = {}
+        for label in ('base', 'fix'):
+            (checkout / 'tools').mkdir(exist_ok=True)
+            (checkout / 'tools/lifter.py').write_text(f'# synthetic {label} lifter\n')
+            self.git(checkout, 'add', '-A')
+            self.git(checkout, 'commit', '-q', '-m', label)
+            commits[label] = self.git(checkout, 'rev-parse', 'HEAD')
+        self.git(checkout, 'tag', 'mag-recomp/lifter-ppu', commits['base'])
+        self.git(checkout, 'tag', FIX_TAG, commits[fix])
+        self.git(checkout, 'checkout', '-q', '--detach', commits[head])
+        pins = json.loads(json.dumps(PINS))
+        pins['ps3recomp']['lifter-ppu'].update(commit=commits['base'], splice_after=[{'tag': FIX_TAG, 'commit': commits['fix']}])
+        (workspace / 'profiles/framework.json').write_text(json.dumps(pins))
+        self.commits = commits
+        return build, workspace
+
+    def checks(self):
+        """The git questions the generation tools ask (tools/inventory.py, installer_ppu_splice.py,
+        verified_spu_jobs.py): all read-only, all about pinned checkouts or the output location."""
+        return [['git', '-C', CHECKOUT, 'rev-parse', 'HEAD'],
+                ['git', '-C', CHECKOUT, 'status', '--porcelain', '--untracked-files=no'],
+                ['git', '-C', CHECKOUT, 'rev-parse', self.commits['base'] + '^{commit}'],
+                ['git', '-C', CHECKOUT, 'show', self.commits['fix'] + ':tools/lifter.py'],
+                ['git', '-C', CHECKOUT, 'rev-parse', '--verify', '--quiet', 'refs/tags/' + FIX_TAG + '^{commit}'],
+                ['git', '-C', '{workspace}/local/game', 'rev-parse', '--show-toplevel'],
+                ['git', '-C', '{workspace}/local/game', 'rev-parse', '--is-inside-git-dir'],
+                ['{python}', '-c', 'pass']]
+
+    def test_generation_that_checks_pinned_checkouts_is_kept_on_every_platform(self):
+        # Windows Python reports a started program to audit hooks as one command line; POSIX as a list.
+        for label, windows in (('posix', None), ('windows', '1')):
+            with self.subTest(label):
+                shutil.rmtree(self.cache_root, ignore_errors=True)
+                build, workspace = self.build_folder(f'{label}/MAG-build')
+                extra = {'SYNTHETIC_COMMANDS': json.dumps(self.checks())}
+                if windows:
+                    extra['SYNTHETIC_WINDOWS_AUDIT'] = windows
+                before = self.runs()
+                result, events = self.generate(build, workspace, extra)
+                self.assertIsNone(result)
+                self.assertEqual([e['event'] for e in events if e['event'].startswith('build-cache')],
+                                 ['build-cache-miss', 'build-cache-stored'], events)
+                shutil.rmtree(build)
+                build, workspace = self.build_folder(f'{label}/MAG-build')
+                result, events = self.generate(build, workspace, extra)
+                self.assertIsNotNone(result, events)
+                self.assertEqual(self.runs(), before + 1)
+
+    def test_git_beyond_read_only_checks_of_pinned_checkouts_is_not_kept(self):
+        outside = str(self.temp)
+        cases = {'git elsewhere': [['git', '-C', outside, 'rev-parse', 'HEAD']],
+                 'git without a checkout': [['git', 'rev-parse', 'HEAD']],
+                 'git that writes': [['git', '-C', CHECKOUT, 'tag', 'mag-recomp/new']],
+                 'unpinned tag': [['git', '-C', CHECKOUT, 'rev-parse', '--verify', 'refs/tags/other^{commit}']],
+                 'unpinned revision': [['git', '-C', CHECKOUT, 'show', 'HEAD~1:tools/lifter.py']],
+                 'other git query': [['git', '-C', CHECKOUT, 'log', '--all']],
+                 'workspace query': [['git', '-C', '{workspace}/local/game', 'status']]}
+        for index, (label, commands) in enumerate(cases.items()):
+            for windows in (None, '1'):
+                with self.subTest(label, windows=bool(windows)):
+                    shutil.rmtree(self.cache_root, ignore_errors=True)
+                    build, workspace = self.build_folder(f'{index}-{bool(windows)}/MAG-build')
+                    extra = {'SYNTHETIC_COMMANDS': json.dumps(commands)}
+                    if windows:
+                        extra['SYNTHETIC_WINDOWS_AUDIT'] = windows
+                    result, events = self.generate(build, workspace, extra)
+                    self.assertIsNone(result)
+                    self.assertEqual([e['event'] for e in events if e['event'] == 'build-cache-skipped'],
+                                     ['build-cache-skipped'], events)
+                    self.assertEqual(BuildCache(self.cache_root).entries(), [])
+        with self.subTest('shell'):
+            shutil.rmtree(self.cache_root, ignore_errors=True)
+            build, workspace = self.build_folder('shell/MAG-build')
+            result, events = self.generate(build, workspace, {'SYNTHETIC_SHELL': 'git --version'})
+            self.assertEqual(BuildCache(self.cache_root).entries(), [])
+
+    def test_the_resolved_pins_of_the_checkouts_are_part_of_the_key(self):
+        build, workspace = self.build_folder('MAG-build')
+        extra = {'SYNTHETIC_COMMANDS': json.dumps(self.checks())}
+        self.generate(build, workspace, extra)
+        self.assertEqual(self.runs(), 1)
+        # Same profiles (same pins), but the checkout's pinned tag or HEAD names another commit.
+        for runs, change in enumerate((dict(fix='base'), dict(head='fix')), start=2):
+            with self.subTest(**change):
+                shutil.rmtree(build)
+                build, workspace = self.build_folder('MAG-build', **change)
+                result, events = self.generate(build, workspace, extra)
+                self.assertIsNone(result, events)
+                self.assertEqual(self.runs(), runs)
+        shutil.rmtree(build)
+        build, workspace = self.build_folder('MAG-build')
+        self.assertIsNotNone(self.generate(build, workspace, extra)[0])
+        self.assertEqual(self.runs(), 3)
+
+
+class CommandLineTests(unittest.TestCase):
+    def test_windows_command_lines_split_back_into_their_arguments(self):
+        for argv in (['git', '-C', 'C:\\Users\\Some One\\MAG-build\\workspace\\local\\sdk', 'rev-parse',
+                      '--verify', '--quiet', 'refs/tags/mag-recomp/lifter-ppu-ctr64-2026.11.09^{commit}'],
+                     ['C:\\Program Files\\Python\\python.exe', '-c', 'print("a \\"b\\" c")', '', 'tail\\',
+                      'x\\\\"y', 'tab\there', '\\\\server\\share\\x y\\', '"'],
+                     ['a']):
+            with self.subTest(argv=argv):
+                self.assertEqual(lift_cache.split_command_line(subprocess.list2cmdline(argv)), argv)
 
 
 if __name__ == '__main__':
