@@ -1241,12 +1241,28 @@ each of those icons, labelled with the key that presses that button now (12.6):
   next time each is drawn. Guest memory is never written; controller players keep the game's icons,
   and a button with no key keeps its icon.
 
-Not reached: the Training pause menu's EXIT GAME square and Kill Self stick ring keep the game's
-pictures (they are not among the four textures), and the L1/R1 tab boxes of the training menu and
-the pause menu and the L2/R2 boxes of character creation are text the movies carry themselves, with
-no request to the game that names the button (checked: neither the text seam nor a lab rewrite of
-the image-name answer changes them). Not covered: the D3D12 renderer (parked), which does not decode through the draw
-engine.
+Not reached: the in-match pause menu's footer (in Training and in hosted matches) keeps the game's
+pictures. That is the R3 stick ring beside Kill Self, the Triangle beside LEADERSHIP and the Square
+beside EXIT GAME. The results screen's CONTINUE arrow (the Start button, which Return presses on the
+keyboard pad) keeps the game's picture too. These are not the four icon textures, and they reach the
+game by no other path the prompts can use:
+
+- A lab build (2026-11-24, Windows, hosted Sabotage, the pause menu opened and the match played to the
+  results screen) recorded every 2D texture up to 512 px that the draw engine asked the override
+  about. The only face-button pictures among them were the four icons above, and the override
+  replaced each of them when the HUD loaded.
+- The footer still showed the game's Square, Triangle and stick ring, so it does not draw them from
+  those textures. No other recorded texture holds them, and the results screen loaded no arrow
+  texture. The movies draw these pictures themselves, most likely as filled shapes: the CONTINUE
+  arrow's shading matches the movies' 256x1 gradient ramps.
+- No localized text names them. Neither the labels nor the "R3" beside the ring is fetched; of the
+  shoulder and stick names only L1, L2, R1 and R2 are (12.6).
+
+Reaching them would mean changing how the movies draw these symbols, which the prompts do not do.
+The L1/R1 tab boxes of the training menu and the pause menu and the L2/R2 boxes of character
+creation are likewise text the movies carry themselves, with no request to the game that names the
+button (checked: neither the text seam nor a lab rewrite of the image-name answer changes them).
+Not covered: the D3D12 renderer (parked), which does not decode through the draw engine.
 
 ### 12.6 Shoulder and stick prompts, and the key for a button
 
@@ -1268,6 +1284,8 @@ The key for a button (`mag_game_prompts_button_key`), for the face-button pictur
 3. No such key: the game's text or icon stays.
 
 A box holds about five characters: a longer name keeps its first four (`RSHIFT` becomes `RSHI`).
+The "R3" beside the pause menu's Kill Self ring is not one of these texts: the movie draws it itself
+(12.5), so it stays "R3" while G presses it from the keyboard pad.
 
 Some of these texts are fetched when a movie is built (the pause menu's with the HUD), so they show
 the key of the context at that moment, the same limit as 12.2.
