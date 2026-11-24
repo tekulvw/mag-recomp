@@ -16,10 +16,15 @@ BOOL MAGSettingsSave(NSString *path, NSDictionary *settings, NSError **error);
 BOOL MAGSettingsSetupWanted(BOOL launcherPhase, BOOL damaged);
 // The Send report button (src/player_report_request.h has the same rules for Windows and Linux):
 // why it is disabled (no MAG_REPORT_REQUEST from the supervisor, or no linked account), or nil;
-// and the request itself, {"requested_at":<unix seconds>} written owner-only at
-// MAG_REPORT_REQUEST, which the supervisor sends a report for when MAG closes.
+// and the request itself, {"requested_at":<unix seconds>,"report_id":"<uuid>","comment":"<text>"}
+// written owner-only at MAG_REPORT_REQUEST, which the supervisor sends a report for when MAG closes.
 NSString *MAGReportRequestBlocker(BOOL linked);
-BOOL MAGReportRequestWrite(NSString **reportId, NSError **error);
+BOOL MAGReportRequestWrite(NSString **reportId, NSString *comment, NSError **error);
+// The comment as the report carries it (clip_report_comment in src/player_report_request.h): no
+// control characters but newlines and tabs, CR LF and CR as LF, no lone surrogates, at most
+// MAG_SETTINGS_REPORT_COMMENT_LIMIT code points.
+NSString *MAGReportCommentClip(NSString *text);
+NSUInteger MAGReportCommentLength(NSString *text);  // code points
 #ifdef __cplusplus
 }
 #endif

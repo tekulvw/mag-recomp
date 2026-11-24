@@ -36,8 +36,72 @@ std::string mag::report_requested_status(const std::string &report_id) {
     return text;
 }
 
+namespace {
+// The length of the well-formed UTF-8 sequence at s[i], or 0.
+size_t sequence(const std::string &s, size_t i) {
+    const unsigned char c = (unsigned char)s[i];
+    const size_t n = c < 0x80 ? 1 : c >= 0xC2 && c < 0xE0 ? 2 : c >= 0xE0 && c < 0xF0 ? 3 : c >= 0xF0 && c < 0xF5 ? 4 : 0;
+    if (!n || i + n > s.size()) return 0;
+    for (size_t k = 1; k < n; ++k)
+        if (((unsigned char)s[i + k] & 0xC0) != 0x80) return 0;
+    const unsigned char d = n > 1 ? (unsigned char)s[i + 1] : 0;
+    if ((c == 0xE0 && d < 0xA0) || (c == 0xED && d >= 0xA0) || (c == 0xF0 && d < 0x90) || (c == 0xF4 && d >= 0x90)) return 0;
+    return n;
+}
+std::string json_text(const std::string &s) {
+    std::string out = "\"";
+    for (unsigned char c : s) {
+        if (c == '"' || c == '\\') { out += '\\'; out += char(c); }
+        else if (c == '\n') out += "\\n";
+        else if (c == '\t') out += "\\t";
+        else if (c < 0x20 || c == 0x7F) { char escape[8]; std::snprintf(escape, sizeof escape, "\\u%04x", c); out += escape; }
+        else out += char(c);
+    }
+    return out + "\"";
+}
+}  // namespace
+
+std::string mag::clip_report_comment(const std::string &utf8, size_t limit) {
+    std::string out;
+    size_t points = 0;
+    for (size_t i = 0; i < utf8.size() && points < limit;) {
+        const size_t n = sequence(utf8, i);
+        if (!n) { ++i; continue; }  // not UTF-8: dropped
+        const unsigned char c = (unsigned char)utf8[i];
+        if (c == '\r') {
+            out += '\n';
+            i += i + 1 < utf8.size() && utf8[i + 1] == '\n' ? 2 : 1;
+            ++points;
+            continue;
+        }
+        if ((c < 0x20 && c != '\n' && c != '\t') || c == 0x7F) { i += n; continue; }
+        if (n == 2 && c == 0xC2 && (unsigned char)utf8[i + 1] < 0xA0) { i += n; continue; }  // C1 controls
+        out.append(utf8, i, n);
+        i += n;
+        ++points;
+    }
+    return out;
+}
+
+size_t mag::report_comment_length(const std::string &utf8) {
+    size_t points = 0;
+    for (size_t i = 0; i < utf8.size();) {
+        const size_t n = sequence(utf8, i);
+        i += n ? n : 1;
+        if (n) ++points;
+    }
+    return points;
+}
+
+std::string mag::report_comment_counter(const std::string &utf8) {
+    char text[32];
+    std::snprintf(text, sizeof text, MAG_SETTINGS_REPORT_COMMENT_COUNTER, int(report_comment_length(clip_report_comment(utf8))),
+                  MAG_SETTINGS_REPORT_COMMENT_LIMIT);
+    return text;
+}
+
 bool mag::write_report_request(const std::filesystem::path &path, int64_t unix_seconds, const std::string &report_id,
-                               std::string &error) {
+                               const std::string &comment, std::string &error) {
     namespace fs = std::filesystem;
     if (path.empty()) { error = "No report request path."; return false; }
     std::error_code ignored;
@@ -46,7 +110,8 @@ bool mag::write_report_request(const std::filesystem::path &path, int64_t unix_s
     {
         std::ofstream out(path, std::ios::binary | std::ios::trunc);
         if (!out) { error = "Cannot write " + path.string() + "."; return false; }
-        out << "{\"requested_at\":" << unix_seconds << ",\"report_id\":\"" << report_id << "\"}\n";
+        out << "{\"requested_at\":" << unix_seconds << ",\"report_id\":\"" << report_id << "\",\"comment\":"
+            << json_text(clip_report_comment(comment)) << "}\n";
         out.flush();
         if (!out) { error = "Cannot write " + path.string() + "."; return false; }
     }
@@ -57,10 +122,10 @@ bool mag::write_report_request(const std::filesystem::path &path, int64_t unix_s
     return true;
 }
 
-bool mag::request_report(std::string &report_id, std::string &error) {
+bool mag::request_report(std::string &report_id, const std::string &comment, std::string &error) {
     const auto now = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
     report_id = new_report_request_id();
-    return write_report_request(report_request_path(), int64_t(now), report_id, error);
+    return write_report_request(report_request_path(), int64_t(now), report_id, comment, error);
 }
 
 const char *mag::report_request_blocker(bool linked) {

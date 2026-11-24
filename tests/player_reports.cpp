@@ -6,6 +6,7 @@
 #include "player_reports.h"
 #include "player_settings_text.h"
 #include "player_gzip.h"
+#include "player_report_request.h"
 #include <cstdio>
 #include <cstdlib>
 #include <deque>
@@ -280,6 +281,28 @@ static void sending(const fs::path &root) {
     CHECK(sent.line.find("another sender") != std::string::npos && queued(s.queue).size() == 1);
     sent = send_queued(t, s.queue, s.settings, now + lock_stale_seconds + 1);  // a stale lock is taken over
     CHECK(sent.line.find("another sender") == std::string::npos);
+    // 500 (server_error) three times for the same report: the report is the problem, so it is
+    // dropped; 503 (and 502, or no connection) keeps it for the backoff and the attempt limit.
+    fs::remove(s.queue / "send.lock");
+    for (auto &e : queued(s.queue)) { fs::remove(s.queue / (e.report_id + ".json")); fs::remove(s.queue / (e.report_id + ".state")); }
+    CHECK(enqueue(s.queue, id(), Trigger::Crash, "{}", error));
+    long long at = now + 1000;
+    for (int i = 0; i < server_error_max - 1; ++i) {
+        t.add(500);
+        sent = send_queued(t, s.queue, s.settings, at);
+        CHECK(sent.kept == 1 && queued(s.queue).size() == 1 && queued(s.queue)[0].server_errors == i + 1);
+        at += retry_max_seconds;
+    }
+    t.add(500);
+    sent = send_queued(t, s.queue, s.settings, at);
+    CHECK(sent.dropped == 1 && queued(s.queue).empty());
+    CHECK(enqueue(s.queue, id(), Trigger::Crash, "{}", error));
+    for (int i = 0; i < server_error_max + 1; ++i) { t.add(503); send_queued(t, s.queue, s.settings, at); at += retry_max_seconds; }
+    CHECK(queued(s.queue).size() == 1 && queued(s.queue)[0].server_errors == 0 && queued(s.queue)[0].attempts == server_error_max + 1);
+    // A state written before the 500 count existed reads as none.
+    const std::string older = queued(s.queue)[0].report_id;
+    write(s.queue / (older + ".state"), "crash 1 0 1\n");
+    CHECK(queued(s.queue).size() == 1 && queued(s.queue)[0].server_errors == 0 && queued(s.queue)[0].attempts == 1);
     // A report queued more than queue_max_age_seconds ago is dropped unsent.
     fs::remove(s.queue / "send.lock");
     for (auto &e : queued(s.queue)) { fs::remove(s.queue / (e.report_id + ".json")); fs::remove(s.queue / (e.report_id + ".state")); }
@@ -298,6 +321,100 @@ static void sending(const fs::path &root) {
     CHECK(sent.dropped == 1 && sent.sent == 1 && t.requests.size() == 1 && queued(s.queue).empty());
 }
 
+// Send report's comment: the marker round trip, clipping, redaction and the payload field.
+static void comments(const fs::path &root) {
+    // Clipping: well-formed UTF-8 only, no control characters but newlines and tabs, CR LF to LF,
+    // at most the limit in code points, cut between code points.
+    CHECK(mag::clip_report_comment("a\r\nb\rc\x01\x7f\td\xff\xc3") == "a\nb\nc\td");
+    CHECK(mag::clip_report_comment("\xc2\x85x") == "x");  // a C1 control
+    const std::string e_acute = "\xc3\xa9", emoji = "\xf0\x9f\x98\x80";
+    std::string many;
+    for (int i = 0; i < 1200; ++i) many += emoji;
+    const std::string clipped = mag::clip_report_comment(many);
+    CHECK(mag::report_comment_length(clipped) == MAG_SETTINGS_REPORT_COMMENT_LIMIT && clipped.size() == 4u * MAG_SETTINGS_REPORT_COMMENT_LIMIT);
+    CHECK(mag::report_comment_length(e_acute + "x" + emoji) == 3);
+    CHECK(mag::report_comment_counter(e_acute + "x") == "2/1000");
+    CHECK(utf8_prefix(e_acute + emoji, 4) == e_acute);  // never half a code point
+    CHECK(utf8_prefix("abc", 9) == "abc");
+
+    // The marker round trip, with quotes, backslashes and newlines.
+    const fs::path marker = root / "comment-marker";
+    const std::string text = "It froze \"twice\" in C:\\games\nthen " + e_acute;
+    std::string error;
+    CHECK(mag::write_report_request(marker, 1800000000, "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d", text, error));
+    CHECK(requested_report_id(marker) == "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d");
+    CHECK(requested_comment(marker) == text);
+    CHECK(mag::write_report_request(marker, 1800000000, "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d", "", error));
+    CHECK(requested_comment(marker).empty());  // an empty comment is allowed
+    write(marker, "{\"requested_at\":1,\"report_id\":\"0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d\"}\n");  // before comments
+    CHECK(requested_comment(marker).empty() && !requested_report_id(marker).empty());
+
+    // In the report: redacted like the logs, only when the player asked.
+    Session s = launch(root / "comment");
+    s.launcher_exit = 90; s.engine_exit = 0;
+    fs::remove(s.logs / "session-engine.json");
+    const std::string said = "Stutter at " + home + "/MAG after linking with " + token + " - thanks";
+    CHECK(mag::write_report_request(s.logs / "report-requested", 1800000000, "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d", said, error));
+    Decision d = decide(s);
+    CHECK(d.trigger == Trigger::Manual && d.user_comment == said);
+    Json report;
+    CHECK(parse_json(build_report(s, d, d.request_id), report, 8u << 20));
+    const Json *comment = report.get("session") ? report.get("session")->get("user_comment") : nullptr;
+    CHECK(comment && comment->text == "Stutter at ~/MAG after linking with mgd_[redacted] - thanks");
+    CHECK(report.get("user_comment") == nullptr);  // never a top-level field
+    // An automatic report never carries one, even when a comment was typed earlier and not sent.
+    Decision automatic;
+    automatic.trigger = Trigger::Crash;
+    automatic.user_comment = said;
+    CHECK(parse_json(build_report(s, automatic, new_report_id()), report, 8u << 20));
+    CHECK(report.get("session")->get("user_comment") == nullptr);
+    // A crash in the session the player reported keeps the player's words with the crash.
+    s.engine_exit = 139;
+    d = decide(s);
+    CHECK(d.trigger == Trigger::Crash && d.manual && d.user_comment == said);
+    // The longest comment (1000 four-byte scalar values) fits the session's 12 KiB whole.
+    CHECK(mag::write_report_request(s.logs / "report-requested", 1800000000, "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d", many, error));
+    s.engine_exit = 0;
+    d = decide(s);
+    std::string body = build_report(s, d, d.request_id);
+    CHECK(parse_json(body, report, 8u << 20));
+    const Json *session = report.get("session");
+    CHECK(session && to_json(*session).size() <= session_max_bytes);
+    comment = session ? session->get("user_comment") : nullptr;
+    CHECK(comment && mag::report_comment_length(comment->text) == 1000 && comment->text.size() == 4000);
+    CHECK(session && !session->get("user_comment_truncated"));
+    std::ofstream(root / "long-comment.json", std::ios::binary) << body;
+    // Redaction can lengthen a comment (a 12-character token becomes "mgd_[redacted]"): the report
+    // still carries at most 1000 scalar values, which is the portal's limit.
+    std::string tokens;
+    while (mag::report_comment_length(tokens) + 13 <= 1000) tokens += "mgd_abcdefgh ";
+    CHECK(mag::write_report_request(s.logs / "report-requested", 1800000000, "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d", tokens, error));
+    d = decide(s);
+    CHECK(parse_json(build_report(s, d, d.request_id), report, 8u << 20));
+    comment = report.get("session")->get("user_comment");
+    CHECK(comment && mag::report_comment_length(comment->text) <= 1000 && comment->text.find("abcdefgh") == std::string::npos);
+
+    // NUL never reaches the portal (its database refuses it, and the 500 would repeat): not from
+    // the system description, a log (the GPU line, a halt line), the launch error, a summary or the player.
+    CHECK(quote(std::string("a\0b", 3)) == "\"ab\"");
+    Session nul = launch(root / "nul");
+    nul.system["cpu"] = std::string("Synthetic\0CPU", 13);
+    nul.launch_error = std::string("stopped\0here", 12);
+    write(nul.logs / "engine.log", std::string("[RSX vulkan] using device 0: GPU\0X\n", 36));
+    write(nul.logs / "session-engine.json", "{\"schema_version\": 1, \"role\": \"eng\\u0000ine\", \"frames\": {\"count\": 1}}\n");
+    Decision crash_with_comment;
+    crash_with_comment.trigger = Trigger::Crash;
+    crash_with_comment.manual = true;
+    crash_with_comment.user_comment = std::string("it\0froze", 9);
+    crash_with_comment.reasons = {std::string("[hle] UNRESOLVED NID\0 halting", 29)};
+    body = build_report(nul, crash_with_comment, new_report_id());
+    CHECK(body.find('\0') == std::string::npos && body.find("\\u0000") == std::string::npos);
+    CHECK(parse_json(body, report, 8u << 20));
+    CHECK(report.get("client")->get("cpu")->text == "SyntheticCPU" && report.get("client")->get("gpu")->text == "GPUX");
+    CHECK(report.get("metrics")->get("engine")->get("role")->text == "engine");
+    CHECK(report.get("session")->get("user_comment")->text == "itfroze");
+}
+
 int main(int argc, char **argv) {
     if (argc == 3 && std::string(argv[1]) == "selftest") {
         const fs::path root = argv[2];
@@ -306,6 +423,7 @@ int main(int argc, char **argv) {
         decisions(root);
         finishing(root);
         sending(root);
+        comments(root);
         CHECK(gpu_from_log("a\n[RSX vulkan] using device 1: Some GPU (x)\r\nb") == "Some GPU (x)");
         CHECK(!system_info().empty());
         if (failures) { std::fprintf(stderr, "%d failures\n", failures); return 1; }
@@ -315,6 +433,10 @@ int main(int argc, char **argv) {
     if (argc == 3 && std::string(argv[1]) == "build") {
         Session s = launch(argv[2]);
         s.launcher_exit = 90; s.engine_exit = 139;
+        // The player also pressed Send report, with a comment that names a home folder and the token.
+        std::string error;
+        mag::write_report_request(s.logs / "report-requested", 1800000000, "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d",
+                                  "Froze in " + home + "/MAG\nafter " + token, error);
         const Finished f = finish_session(s);
         if (f.report_id.empty()) { std::fprintf(stderr, "%s\n", f.line.c_str()); return 1; }
         std::printf("%s\n", (s.queue / (f.report_id + ".json")).string().c_str());

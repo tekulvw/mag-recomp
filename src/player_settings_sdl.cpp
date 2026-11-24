@@ -27,6 +27,7 @@ constexpr int Glyph = 8, Line = 11;
 constexpr int Margin = MAG_SETTINGS_MARGIN, Content = SettingsPanel::width - 2 * MAG_SETTINGS_MARGIN;
 constexpr int ControlWidth = MAG_SETTINGS_CONTROL_WIDTH, ControlHeight = 20, RowHeight = 30;
 constexpr int ListHeight = 200, BindingRow = 24;
+constexpr int NoteLines = 3;  // the Send report comment box shows its last three lines
 
 struct Color { Uint8 r, g, b; };
 // The macOS light palette: window, group fill, separators, text, secondary text, accent, error.
@@ -203,7 +204,7 @@ SettingsPanel::Layout SettingsPanel::layout() const {
     const int control_x = inner + inner_width - ControlWidth;
     // A group of rows: a title and a hint on the left, the control on the right, separators between.
     struct RowSpec { const char* title; std::string hint; std::string name; Kind kind; std::string label; bool enabled; };
-    auto group = [&](const std::vector<RowSpec>& rows, bool advanced_part) {
+    auto group = [&](const std::vector<RowSpec>& rows, bool advanced_part, const std::function<void()>& tail = {}) {
         const int top = y;
         y += 8;
         for (size_t i = 0; i < rows.size(); ++i) {
@@ -232,6 +233,7 @@ SettingsPanel::Layout SettingsPanel::layout() const {
                 y += ControlHeight + 4;
             }
         }
+        if (tail) tail();
         y += 8;
         out.groups.push_back({Margin, top, Content, y - top});
     };
@@ -257,7 +259,17 @@ SettingsPanel::Layout SettingsPanel::layout() const {
         group({{MAG_SETTINGS_SEND_REPORTS, MAG_SETTINGS_SEND_REPORTS_HINT, "check:reports", Kind::Check, MAG_SETTINGS_SEND_REPORTS_ON, true},
                {MAG_SETTINGS_SEND_REPORT_NOW, !report_status_.empty() ? report_status_ : blocker ? blocker : MAG_SETTINGS_SEND_REPORT_HINT,
                 "button:report", Kind::Button, MAG_SETTINGS_SEND_REPORT_NOW, !blocker}},
-              false);
+              false, [&] {
+                  // The comment Send report carries: a title and its counter, then the box, enabled with the button.
+                  out.lines.push_back({inner, y + 2, inner_width, 1});
+                  y += 7;
+                  const std::string counter = report_comment_counter(report_comment_);
+                  out.labels.push_back({inner, y, MAG_SETTINGS_REPORT_COMMENT, blocker ? 1 : 0, false, labels / Glyph});
+                  out.labels.push_back({inner + inner_width - int(counter.size()) * Glyph, y, counter, 1, false, int(counter.size()) + 1});
+                  y += Glyph + 4;
+                  item("note:report", Kind::Note, {inner, y, inner_width, NoteLines * Line + 8}, report_comment_, !blocker);
+                  y += NoteLines * Line + 8;
+              });
         y += 10;
     } else if (debug_page_) {
         // One row per mag_settings_debug_items entry: switches act at once, actions run.
@@ -406,6 +418,7 @@ bool SettingsPanel::focus(const std::string& name) {
 }
 std::string SettingsPanel::account_status() const { return account_status_; }
 std::string SettingsPanel::report_status() const { return report_status_; }
+std::string SettingsPanel::report_comment() const { return report_comment_; }
 
 // ---- Reports: Send report asks the supervisor for a report when MAG closes ----
 const char* SettingsPanel::report_blocker() const {
@@ -414,8 +427,9 @@ const char* SettingsPanel::report_blocker() const {
 void SettingsPanel::request_report_now() {
     if (report_blocker()) return;
     std::string error, id;
-    if (!request_report(id, error)) { report_status_ = MAG_SETTINGS_REPORT_FAILED; return; }
+    if (!request_report(id, report_comment_, error)) { report_status_ = MAG_SETTINGS_REPORT_FAILED; return; }  // the text stays
     report_status_ = report_requested_status(id);
+    report_comment_.clear();  // sent with this request; the box is ready for the next one
 }
 
 void SettingsPanel::ensure_visible(const Layout& l) {
@@ -734,7 +748,7 @@ void SettingsPanel::activate(const Item& item, uint64_t now_ms, int x) {
             }
         }
         break;
-    case Kind::Text: break;
+    case Kind::Text: case Kind::Note: break;
     }
 }
 
@@ -888,6 +902,11 @@ SettingsPanel::State SettingsPanel::handle(const SDL_Event& event, uint64_t now_
     const Item* current = find(l, focus_);
     switch (event.type) {
     case SDL_TEXTINPUT:
+        if (current && current->kind == Kind::Note) {
+            // Any UTF-8, up to the limit in code points (clip_report_comment drops the rest).
+            report_comment_ = clip_report_comment(report_comment_ + event.text.text);
+            break;
+        }
         if (current && current->kind == Kind::Text) {
             std::string* value = field(current->name);
             const bool port = current->name == "text:tcp" || current->name == "text:udp";
@@ -923,6 +942,10 @@ SettingsPanel::State SettingsPanel::handle(const SDL_Event& event, uint64_t now_
             ensure_visible(layout());
             break;
         }
+        if ((key == SDL_SCANCODE_RETURN || key == SDL_SCANCODE_KP_ENTER) && current && current->kind == Kind::Note) {
+            report_comment_ = clip_report_comment(report_comment_ + "\n");  // a new line in the comment
+            break;
+        }
         if (key == SDL_SCANCODE_RETURN || key == SDL_SCANCODE_KP_ENTER) {
             // Enter on a text field is the default button: Play MAG in setup, otherwise Apply.
             if (!current || current->kind == Kind::Text) {
@@ -942,14 +965,17 @@ SettingsPanel::State SettingsPanel::handle(const SDL_Event& event, uint64_t now_
             break;
         }
         if (key == SDL_SCANCODE_BACKSPACE || key == SDL_SCANCODE_DELETE) {
-            if (current->kind == Kind::Text) {
+            if (current->kind == Kind::Note) {  // the last whole code point
+                while (!report_comment_.empty() && ((unsigned char)report_comment_.back() & 0xC0) == 0x80) report_comment_.pop_back();
+                if (!report_comment_.empty()) report_comment_.pop_back();
+            } else if (current->kind == Kind::Text) {
                 std::string* value = field(current->name);
                 if (!value->empty()) value->pop_back();
                 changed();
             } else if (current->kind == Kind::Slot) clear_binding(size_t(current->row), current->slot);
             break;
         }
-        if (key == SDL_SCANCODE_SPACE && current->kind != Kind::Text) activate(*current, now_ms);
+        if (key == SDL_SCANCODE_SPACE && current->kind != Kind::Text && current->kind != Kind::Note) activate(*current, now_ms);
         break;
     }
     case SDL_MOUSEBUTTONDOWN:
@@ -1032,6 +1058,32 @@ void SettingsPanel::draw(SDL_Renderer* r, SDL_Texture* font) const {
             const std::string shown = value.size() > room ? value.substr(value.size() - room) : value;
             if (value.empty() && !focus) text(r, font, b.x + 5, b.y + 6, placeholder, Disabled);
             else text(r, font, b.x + 5, b.y + 6, shown + (focus ? "_" : ""), Ink);
+            break;
+        }
+        case Kind::Note: {
+            fill(r, b, item.enabled ? GroupFill : Window);
+            outline(r, b, focus ? Accent : Border);
+            const size_t columns = size_t(std::max(1, b.w / Glyph - 1));
+            if (item.text.empty() && !focus) {
+                text(r, font, b.x + 5, b.y + 5, MAG_SETTINGS_REPORT_COMMENT_HINT, Disabled, columns);
+                break;
+            }
+            // Its own lines, each wrapped; the last NoteLines of them, with the caret when focused.
+            std::vector<std::string> lines;
+            size_t start = 0;
+            const std::string value = item.text + (focus ? "_" : "");
+            for (;;) {
+                const size_t end = value.find('\n', start);
+                const std::string paragraph = value.substr(start, end == std::string::npos ? std::string::npos : end - start);
+                const auto wrapped = wrap(paragraph, columns);
+                if (wrapped.empty()) lines.push_back("");
+                lines.insert(lines.end(), wrapped.begin(), wrapped.end());
+                if (end == std::string::npos) break;
+                start = end + 1;
+            }
+            const size_t first = lines.size() > size_t(NoteLines) ? lines.size() - size_t(NoteLines) : 0;
+            for (size_t i = first; i < lines.size(); ++i)
+                text(r, font, b.x + 5, b.y + 5 + int(i - first) * Line, lines[i], item.enabled ? Ink : Disabled, columns);
             break;
         }
         case Kind::Choice:

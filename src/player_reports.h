@@ -51,10 +51,13 @@ inline constexpr size_t logs_max_compressed = 2u << 20;
 inline constexpr size_t log_tail_bytes = 4u << 20;
 inline constexpr size_t logs_max_count = 8;
 // The portal's limits on the other parts of the body.
-inline constexpr size_t client_max_bytes = 16u << 10, session_max_bytes = 4u << 10, metrics_max_bytes = 64u << 10;
+inline constexpr size_t client_max_bytes = 16u << 10, session_max_bytes = 12u << 10, metrics_max_bytes = 64u << 10;
 // Sending: attempts per report before it is dropped, the first retry delay (doubled each time),
 // the longest delay, and the delay after a 429 without Retry-After.
 inline constexpr int send_max_attempts = 8;
+// A report the portal answers 500 (server_error) for this many times is dropped: it is the report,
+// not the portal, so retrying it would never end.
+inline constexpr int server_error_max = 3;
 inline constexpr long long retry_first_seconds = 60, retry_max_seconds = 6 * 3600, rate_limited_seconds = 3600;
 // A sender that holds the queue lock longer than this is presumed gone.
 inline constexpr long long lock_stale_seconds = 600;
@@ -72,7 +75,9 @@ struct Json {
 // At most `limit` bytes and 32 levels deep. False for anything malformed.
 bool parse_json(const std::string &text, Json &out, size_t limit = 1u << 20);
 std::string to_json(const Json &value);
-std::string quote(const std::string &value);  // a JSON string; invalid UTF-8 becomes U+FFFD
+// A JSON string. Invalid UTF-8 becomes U+FFFD, and NUL is dropped: the portal's database refuses
+// it, so no string in a report (from the system, a log, a summary or the player) may carry one.
+std::string quote(const std::string &value);
 
 // ---- Redaction ----
 struct Redaction {
@@ -115,6 +120,7 @@ struct Decision {
     std::vector<std::string> reasons;  // why, for the report and the log
     bool manual = false;               // the player pressed Send report
     std::string request_id;            // the report id that Send report showed the player, when valid
+    std::string user_comment;          // what the player typed with Send report (only with `manual`)
 };
 // The trigger for this session from its exits, logs, summaries and request marker, before the
 // setting and the daily limits. Crash and halt come before a launch error, which comes before
@@ -138,12 +144,16 @@ std::string build_report(const Session &, const Decision &, const std::string &r
 // The report id a Send report marker holds ({"requested_at":...,"report_id":"<uuid>"}), when it
 // holds a valid lowercase UUID; otherwise empty.
 std::string requested_report_id(const fs::path &marker);
+// The comment a Send report marker holds, clipped (player_report_request.h); empty without one.
+std::string requested_comment(const fs::path &marker);
+// The longest prefix of well-formed UTF-8 `text` that fits in `bytes`, cut between code points.
+std::string utf8_prefix(const std::string &text, size_t bytes);
 // Read the tail of a log (at most `limit` bytes, starting at a line), redacted.
 std::string log_tail(const fs::path &path, size_t limit, const Redaction &);
 std::string new_report_id();  // a random UUID version 4
 
 // ---- The queue ----
-struct Queued { std::string report_id, trigger; int attempts = 0; long long next_attempt = 0; uintmax_t bytes = 0; };
+struct Queued { std::string report_id, trigger; int attempts = 0; long long next_attempt = 0; uintmax_t bytes = 0; int server_errors = 0; };
 std::vector<Queued> queued(const fs::path &queue);  // oldest first
 bool enqueue(const fs::path &queue, const std::string &report_id, Trigger, const std::string &body, std::string &error);
 bool queue_has_work(const fs::path &queue);

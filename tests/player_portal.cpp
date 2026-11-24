@@ -388,10 +388,11 @@ static void refill(const fs::path &scratch) {
     auto fetch = [&]() {
         LaunchTicket t;
         if (refusing) { t.state = LaunchTicket::State::Failed; t.status = Status::Busy; t.message = "The account portal is busy."; return t; }
+        const long long at = now;  // issued now: the lifetime counts from here, whatever the clock does next
         const std::string bytes = "MAGT-ticket-" + std::to_string(++issued);
         std::string why;
         CHECK(write_private_file(file, bytes, why));
-        t.state = LaunchTicket::State::Ready; t.file = file; t.expires_at = now + 60;
+        t.state = LaunchTicket::State::Ready; t.file = file; t.expires_at = at + 60;
         return t;
     };
     auto report = [&](const std::string &line) { std::lock_guard<std::mutex> g(lock); said.push_back(line); };
@@ -411,23 +412,31 @@ static void refill(const fs::path &scratch) {
             seen.push_back(got);
         }
         CHECK(refill.fetches() >= 4 && refill.fetches() <= 5);  // the fifth may already be under way
+        // Never move the fake clock while a fetch is in flight: wait until the refill has taken
+        // in every ticket it fetched and one is waiting in the file.
+        auto settle = [&] {
+            for (int waited = 0; waited < kWait; waited += 5) {
+                std::error_code code;
+                if (int(refill.fetches()) == issued && fs::exists(file, code)) return true;
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            }
+            return false;
+        };
         // A reconnect long after the lifetime (the server dropped the players, then recovered):
         // the waiting ticket was replaced before it expired, so what the game gets is still valid.
-        CHECK(present_within(file, kWait));  // a fresh ticket waits in the file
+        CHECK(settle());  // a fresh ticket waits in the file
         const int before = issued;
         now += 55;  // within renew_before_seconds of the waiting ticket's expiry
-        for (int waited = 0; issued == before && waited < kWait; waited += 5) std::this_thread::sleep_for(std::chrono::milliseconds(5));
-        // renewed ahead of expiry, without a sign-in asking (once; a poll racing the clock may
-        // renew the ticket it just fetched again, never more)
-        if (!(issued >= before + 1 && issued <= before + 2)) std::fprintf(stderr, "renewals: %d\n", issued - before);
-        CHECK(issued >= before + 1 && issued <= before + 2);
-        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        for (int waited = 0; int(refill.fetches()) == before && waited < kWait; waited += 5)
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        CHECK(settle());
+        CHECK(issued == before + 1);  // renewed once ahead of expiry, without a sign-in asking
         now += 30;                     // past the old ticket's lifetime, inside the new one's
         // What the game gets now is the renewal (or a later ticket), never the expired one.
         CHECK(take_within(file, got, kWait) && got.rfind("MAGT-ticket-", 0) == 0 &&
               std::stoi(got.substr(12)) >= before + 1);
         // The portal is down and the waiting ticket expires: it is removed, never presented.
-        CHECK(present_within(file, kWait));
+        CHECK(settle());
         refusing = 1;
         now += 120;
         bool gone = false;
@@ -541,6 +550,29 @@ static void refill(const fs::path &scratch) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(5));
         }
         CHECK(take_sign_in_notice(file, text) && text.find("Link your account again in MAG Settings") != std::string::npos);
+    }
+    {   // unlinked mid-session, then the last ticket expires: the note still says to link again
+        std::error_code ignored; fs::remove(file, ignored); fs::remove(policy.notice_file, ignored);
+        std::atomic<int> asked{0};
+        auto revoked = [&]() {  // the first fetch is refused (the link is forgotten), later ones find no link
+            LaunchTicket t;
+            if (asked++ == 0) { t.state = LaunchTicket::State::Failed; t.status = Status::Unlinked; t.message = "No longer linked."; }
+            else t.state = LaunchTicket::State::NotLinked;
+            return t;
+        };
+        {
+            TicketRefill refill(file, now + 3, revoked, {}, policy, [&] { return now.load(); });
+            for (int waited = 0; !fs::exists(policy.notice_file, ignored) && waited < kWait; waited += 5)
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            now += 10;  // past the last ticket's lifetime, with no way to replace it
+            for (int waited = 0; asked < 3 && waited < kWait; waited += 5) {
+                now += 2;  // past each retry delay
+                std::this_thread::sleep_for(std::chrono::milliseconds(20));
+            }
+        }
+        std::string text;
+        CHECK(take_sign_in_notice(file, text) && text.find("Link your account again in MAG Settings") != std::string::npos);
+        CHECK(text.find("expired") == std::string::npos);
     }
     {   // a short-lived ticket is renewed once, half-way, not refetched on every poll
         std::error_code ignored; fs::remove(file, ignored);

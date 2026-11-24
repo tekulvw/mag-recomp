@@ -75,6 +75,7 @@ public:
     const std::string& hint() const { return hint_; }
     std::string account_status() const;
     std::string report_status() const;  // after Send report: requested, or why it failed
+    std::string report_comment() const; // the comment box ("note:report"), sent with Send report
     bool pending() const { return pending_; }        // a display change waits for Keep or Revert
     bool asking() const { return question_ != Question::None; }
     std::string question() const { return question_title_; }
@@ -84,7 +85,7 @@ public:
     int scroll_limit() const;
 
 private:
-    enum class Kind { Segment, Text, Choice, Button, Link, Slot, Clear, Slider, Check };
+    enum class Kind { Segment, Text, Choice, Button, Link, Slot, Clear, Slider, Check, Note };
     enum class Question { None, Replace, Reset, Recover };
     struct Item {
         std::string name;
@@ -183,7 +184,7 @@ private:
         bool fresh = false;
     };
     std::shared_ptr<Mailbox> mailbox_;
-    std::string account_status_, account_button_, report_status_;
+    std::string account_status_, account_button_, report_status_, report_comment_;
 };
 
 // Bringing the settings window to the front with the keyboard, as the Windows window does with
