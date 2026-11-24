@@ -13,6 +13,8 @@ all of those are byte-identical: an unchanged generated lift source, runtime fil
   object.
 - Only our configuration file is read (``CCACHE_CONFIGPATH``); inherited ``CCACHE_*`` variables
   are removed from the build environment.
+- ccache refuses clang-cl's ``/clang:`` options, which every Windows compilation has; ccache passes
+  them through unhashed and the compiler identity covers them instead (passthrough_options).
 
 The objects live in the per-user build cache (build_cache.py), never in the MAG or build folder.
 """
