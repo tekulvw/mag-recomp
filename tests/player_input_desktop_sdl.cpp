@@ -120,7 +120,9 @@ void run() {
     pump();
     owned = 0;
     key(SDL_SCANCODE_ESCAPE, true);
-    require(pump(), "Escape quits when the adapter does not own the keyboard");
+    require(!pump(), "Escape does not quit the focused game window when the adapter does not own the keyboard");
+    key(SDL_SCANCODE_ESCAPE, false);
+    pump();
     owned = 1;
     key(SDL_SCANCODE_ESCAPE, true, false, SDL_GetWindowID(window) + 100);
     require(pump(), "Escape on another window is passed on");

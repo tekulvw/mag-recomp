@@ -8,7 +8,7 @@
  *   the saved output size) and then the backend (it releases the cursor before the window goes);
  * - the per-pump call runs the keyboard's pump, then the backend with the keyboard's dialog flag;
  * - the per-message call lets the backend observe the message first. It only ever withholds a
- *   press of Escape that the window would treat as quit while the adapter owns the keyboard, and
+ *   press of Escape that the window would treat as quit (unless a dialog owns the keyboard), and
  *   the messages that would put the window in its menu mode (a lone Alt released, Alt with a
  *   character key; player_input_desktop_win32.h); everything else goes on to the keyboard's
  *   dialog and the window, as before. Before that, F10 opens the settings window (player_settings_session.h) and
