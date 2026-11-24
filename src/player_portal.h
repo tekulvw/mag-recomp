@@ -138,6 +138,7 @@ struct LaunchTicket {
     std::string player_name;     // Ready: the name the ticket signs in with
     std::string message;         // Failed (and a NotLinked link to another portal): for the player
     Status status = Status::Ok;
+    long long expires_at = 0;    // Ready: when the ticket expires (seconds since the epoch)
 };
 // Fetch a fresh ticket for `server` into `ticket_file` when a portal applies and this computer is
 // linked to it. An unlinked device token is forgotten; `relink` says how to link again
@@ -145,6 +146,56 @@ struct LaunchTicket {
 LaunchTicket prepare_launch_ticket(Transport &transport, const std::filesystem::path &link_file,
                                    const std::filesystem::path &ticket_file, const std::string &portal,
                                    const std::string &server, const std::string &relink);
+
+// ---- Keeping a single-use ticket file filled (the runtime's PS3RECOMP_NP_TICKET_REFILL=1) ----
+// With that switch the game's ticket request takes the ticket file (renames, reads and deletes it),
+// and the next sign-in, a reconnect or a return to the lobby, waits for another. A TicketRefill
+// keeps the file filled from its own thread: a fresh ticket as soon as the file is taken, and a
+// replacement before the waiting one expires. A waiting ticket that expires with no replacement is
+// removed, so the game never presents an expired or already used ticket. Failed fetches are
+// retried; the device token stays wherever `fetch` keeps it.
+struct RefillPolicy {
+    long long renew_before_seconds = 300;  // replace a waiting ticket this long before it expires
+                                           // (at most half its lifetime, so short tickets are not refetched in a loop)
+    int poll_milliseconds = 100;
+    int retry_seconds = 5;
+    // While the account's sign-in is refused or has expired, the note for the player is kept here
+    // (sign_in_notice), and removed again once a ticket arrives; empty: not kept.
+    std::filesystem::path notice_file;
+};
+// What the player is told after the game exits when a sign-in during the session was refused or
+// expired and never recovered: "Your MAG sign-in expired (reason). Restart MAG to sign in again.",
+// "... was refused (reason) ...", and for an unlinked computer, to link again in MAG Settings.
+std::string sign_in_notice(Status status, const std::string &reason);
+// Where a refill for this ticket file keeps that note (beside the ticket).
+std::filesystem::path sign_in_notice_path(const std::filesystem::path &ticket_file);
+// The note the session left, if any; it is removed, so each is shown once. Supervisors call this
+// after the game exits, and once before a launch to drop a note from an earlier one.
+bool take_sign_in_notice(const std::filesystem::path &ticket_file, std::string &text);
+class TicketRefill {
+public:
+    using Fetch = std::function<LaunchTicket()>;              // writes a fresh ticket into the file
+    using Report = std::function<void(const std::string &)>;  // a line for the log; never the token
+    using Clock = std::function<long long()>;                 // seconds since the epoch
+    TicketRefill(std::filesystem::path file, long long expires_at, Fetch fetch, Report report = {},
+                 RefillPolicy policy = {}, Clock clock = {});
+    ~TicketRefill();  // stops the thread and waits for it
+    TicketRefill(const TicketRefill &) = delete;
+    TicketRefill &operator=(const TicketRefill &) = delete;
+    unsigned fetches() const;  // tickets fetched since it started
+private:
+    struct State;
+    std::unique_ptr<State> state_;
+};
+// The refill for a launch phase: every ticket comes from prepare_launch_ticket (same link, portal
+// and server) over a new transport from `make_transport` (make_platform_transport in the
+// supervisors). `expires_at` is the ticket already in the file.
+using TransportFactory = std::function<std::unique_ptr<Transport>()>;
+std::unique_ptr<TicketRefill> start_ticket_refill(TransportFactory make_transport,
+                                                  const std::filesystem::path &link_file, const std::filesystem::path &ticket_file,
+                                                  const std::string &portal, const std::string &server,
+                                                  const std::string &relink, long long expires_at,
+                                                  TicketRefill::Report report = {});
 
 // ---- A link without the device-code page (--link-token) ----
 // A device token minted on the portal (a staff-made service account) and installed on a test
