@@ -71,6 +71,18 @@ static void prompts() {
     }
     // The command screen is watched on the Select button: its token stands for Select.
     require(mag_game_controls_prompt_action("CommandScreen") == 0x0a7fd35e, "[CommandScreen] is Select");
+    // Every placeholder the game's text uses names a catalog action.
+    require(mag_game_controls_prompt_action("Respawn") == 0x163aab24, "[Respawn] is Start");
+    require(mag_game_controls_prompt_action("ScopeUp") == 0xa5bc1361 && mag_game_controls_prompt_action("ScopeDown") == 0x8c2adba2,
+            "scope zoom is the D-pad's up and down");
+    require(mag_game_controls_prompt_action("AimHold") == 0xc07aa75a && mag_game_controls_prompt_action("ScopeHold") == 0xc07aa75a,
+            "[AimHold] and [ScopeHold] are Aim");
+    require(mag_game_controls_prompt_action("GoProne") == 0x541512ed && mag_game_controls_prompt_action("ChangeStance") == 0x541512ed,
+            "[GoProne] and [ChangeStance] are Crouch / prone");
+    for (const char* name : {"Jump", "Sprint", "MoveForward", "Fire", "Action", "ContAction", "SwapNextPri", "SwapNextSec",
+                             "OS_Enter", "OS_Cancel", "Bleedout", "VSeatNext", "VSmoke", "TCM_VoiceChat", "TCM_Frago",
+                             "TCM_Abilities", "CommandScreen", "Respawn", "AimHold", "ScopeHold", "GoProne", "ChangeStance"})
+        require(mag_game_controls_prompt_action(name) != 0, "a placeholder in the game's text names no action");
     require(!mag_game_controls_action(0xc6dcd89f), "the retired command screen is still an action");
     require(mag_game_controls_retired_actions().size() == 1 && mag_game_controls_retired_actions()[0] == 0xc6dcd89f,
             "the command screen is listed as retired");
