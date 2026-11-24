@@ -1145,7 +1145,40 @@ The ring is the last 16 KB of the runtime's HLE window (`VM_HLE_INJECT_BASE`, 16
 the runtime owns and never gives the game, above the window's fixed SDK uses at its bottom. The
 prompts commit it at VM begin; without it they stay off and say so.
 
+### 12.5 Picture prompts in menus
+
+Some menu prompts are pictures, not text: the movie places a face-button icon next to a plain label
+(the Square beside DELETE on character management and beside REWARDS on the deploy screen, the
+Triangle beside WATCH VIDEO). No placeholder reaches the movie for these, so 12.1 to 12.4 cannot
+change them. Observed from the outside (texture decodes and guest memory around them, in the front
+end and Training), these icons are four 24x24 textures, one per face button, each a single-level
+linear DXT5 image with a 96-byte pitch, the same bytes on every screen that uses them.
+
+While the prompts are for keyboard and mouse (12.2) and the SDK keyboard pad serves the menu buttons
+(`mag_input_capture_keyboard_pad_muted()` is false: the front end and in-match menus, 8.2), the
+renderer draws our own key cap in place of each of those icons:
+
+- Recognition: the runtime's draw engine asks the prompts about every guest 2D texture it decodes
+  (`rsx_draw_engine_set_texture_override`, an SDK hook that is inert when unset). A texture is a
+  game icon when its format byte is `0xA8` (linear DXT5), it is 24x24 with one level and pitch 96,
+  and the SHA-256 of its 576 bytes is one of four identities in `mag_game_controls_icons.cpp` (Cross,
+  Circle, Square, Triangle). Every other texture is declined and never asked about again.
+- The picture: a rounded key outline with the label of the keyboard pad's key for that button
+  (`mag_game_controls_pad_layout_key`: X, C, Z, V), named as in 12.3, drawn white on clear with the
+  5x7 font of `player_prompt_keycap.cpp` (our own), box-filtered, stored with its rows bottom-up as
+  the game's icons are, and DXT5-encoded into the same 576-byte layout.
+- Switching: once per host frame the prompts re-read the device, the keyboard pad state and the
+  labels. When the pictures to show change, they start a new override generation, and the renderer
+  decodes the four icons again (their guest bytes, or our pictures) the next time each is drawn.
+  Guest memory is never written; controller players and on-foot play keep the game's icons.
+
+Not covered: the shoulder and stick prompts (L1, R1, L2, R2, R3), which these menus draw as text in
+a box or as a plain ring; in the Training pause menu the adapter attaches on foot ("a menu holds
+look"), so the keyboard pad is muted there and its EXIT GAME (Square) and Kill Self (R3) keep the
+game's icons, matching that no key presses them there today; the D3D12 renderer (parked), which
+does not decode through the draw engine.
+
 Lifetime: the prompts are built with `MAG_GAME_CONTROLS` and start with it at VM begin
 (`mag_game_controls_prompts_runtime.cpp`, its own extension callbacks). `MAG_GAME_CONTROLS=0` or
-`MAG_GAME_PROMPTS=0` keeps them off; the seams then do nothing. Prompt events are handled on
+`MAG_GAME_PROMPTS=0` keeps them off (text and pictures); the seams then do nothing and no texture override is set. Prompt events are handled on
 whichever thread asks for text, before the adapter's thread-ownership check.
