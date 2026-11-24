@@ -393,6 +393,15 @@ else()
     endif()
 endif()
 
+# Friends and presence in the engine (docs/player-social.md): the runtime's NP social provider,
+# fed from the portal. Installed at start only for a linked account (MAG_SOCIAL_SPOOL from the
+# Linux and Windows supervisors, the account link on macOS); MAG_SOCIAL=0 leaves it out.
+if(MAG_IMAGE STREQUAL "mage_g")
+    target_sources(${PROJECT_NAME} PRIVATE src/mag_social_bridge.cpp src/player_social.cpp)
+    set_property(SOURCE src/main.cpp TARGET_DIRECTORY ${PROJECT_NAME}
+        APPEND PROPERTY COMPILE_DEFINITIONS MAG_SOCIAL_BRIDGE=1)
+endif()
+
 # The lifted SPU sources use bare #include "spu_context.h". Scope that include
 # directory (and their flags) to those TUs alone: adding it to the whole target
 # changes the compile command of every lifted PPU TU, and those are large enough

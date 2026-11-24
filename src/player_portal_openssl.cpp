@@ -151,6 +151,10 @@ bool parse_reply(const std::string &raw, Response &out) {
 class OpenSslTransport final : public Transport {
 public:
     Response post(const std::string &url_text, const std::string &body, const Headers &headers) override {
+        return send("POST", url_text, body, headers);
+    }
+    Response send(const std::string &method, const std::string &url_text, const std::string &body,
+                  const Headers &headers) override {
         Response response;
         Url url;
         if (!split_url(url_text, url)) { response.error = "the portal address is not a valid URL"; return response; }
@@ -178,16 +182,19 @@ public:
                 SSL_CTX_free(context); close(fd); return response;
             }
         }
-        std::string request = "POST " + url.path + " HTTP/1.1\r\nHost: " + url.host +
+        const bool content = !body.empty() || (method != "GET" && method != "DELETE");
+        std::string request = method + " " + url.path + " HTTP/1.1\r\nHost: " + url.host +
                               (url.port == (url.scheme == "https" ? 443 : 80) ? std::string() : ":" + std::to_string(url.port)) +
-                              "\r\nUser-Agent: MAG-launcher\r\nAccept: application/json\r\nContent-Type: application/json\r\n"
-                              "Content-Length: " + std::to_string(body.size()) + "\r\nConnection: close\r\n";
+                              "\r\nUser-Agent: MAG-launcher\r\nAccept: application/json\r\n" +
+                              (content ? "Content-Type: application/json\r\nContent-Length: " + std::to_string(body.size()) + "\r\n"
+                                       : std::string()) +
+                              "Connection: close\r\n";
         for (const auto &[name, value] : headers) request += name + ": " + value + "\r\n";
         request += "\r\n" + body;
         bool sent = true;
         for (size_t done = 0; sent && done < request.size();) {
             const int chunk = int(std::min<size_t>(request.size() - done, 1 << 16));
-            const long n = ssl ? SSL_write(ssl, request.data() + done, chunk) : send(fd, request.data() + done, size_t(chunk), MSG_NOSIGNAL);
+            const long n = ssl ? SSL_write(ssl, request.data() + done, chunk) : ::send(fd, request.data() + done, size_t(chunk), MSG_NOSIGNAL);
             if (n < 0 && !ssl && errno == EINTR) continue;
             if (n <= 0) sent = false; else done += size_t(n);
         }

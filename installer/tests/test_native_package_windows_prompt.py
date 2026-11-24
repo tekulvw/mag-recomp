@@ -65,9 +65,9 @@ class WindowsSetupTests(unittest.TestCase):
         # Account commands exit before any game file is checked or a launch folder is made.
         self.assertLess(source.index('if (account) {'), source.index('check(launcher, MAG_LAUNCHER_SHA256)'))
         launcher = source.index('portal_phase(settings, server, ticket, 1, logs, prompt);\n    join(log, logs, L"launcher.log");')
-        engine = source.index('portal_phase(settings, NULL, ticket, 0, logs, prompt);\n    join(log, logs, L"engine.log");')
+        engine = source.index('if (portal_phase(settings, NULL, ticket, 0, logs, prompt) == MAG_PORTAL_READY) {')
         self.assertLess(launcher, engine)
-        phase = source[source.index('static void portal_phase('):source.index('int WINAPI wWinMain(')]
+        phase = source[source.index('static int portal_phase('):source.index('int WINAPI wWinMain(')]
         self.assertIn('SetEnvironmentVariableW(L"MAG_PLAYER_PORTAL_TICKET", NULL);', phase)  # never a stale ticket
         self.assertIn('if (launcher && name[0]) set_env(L"MAG_PLAYER_SET_NAME", name);', phase)
         self.assertIn('if (prompt) MessageBoxW', source[source.index('static void notice('):])  # --no-prompt: logged only
@@ -93,6 +93,21 @@ class WindowsSetupTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
 
 
+    def test_friends_run_beside_the_engine_only(self):
+        """Friends and presence (docs/player-social.md): started only when the engine's ticket is
+        ready, stopped when the engine exits, with the caller's MAG_SOCIAL read before MAG_
+        variables are cleared; the token stays in this process (MAG_SOCIAL_SPOOL names a folder)."""
+        source = windows._SUPERVISOR
+        main = source[source.index('int WINAPI wWinMain('):]
+        self.assertLess(main.index('GetEnvironmentVariableW(L"MAG_SOCIAL", social, 8);'), main.index('clear_inherited();'))
+        start = main.index('mag_social_start(settings, NULL, spool, friends_log, social[0] && !wcscmp(social, L"0"));')
+        self.assertLess(main.index('if (portal_phase(settings, NULL, ticket, 0, logs, prompt) == MAG_PORTAL_READY) {'), start)
+        self.assertLess(start, main.index('DWORD code = run(job, engine, engine_elf, logs, log);'))
+        self.assertEqual(main.count('mag_social_start('), 1)
+        portal = (ROOT / 'src/player_portal_win32.cpp').read_text(encoding='utf-8')
+        self.assertIn('SetEnvironmentVariableW(L"MAG_SOCIAL_SPOOL", spool_dir);', portal)
+        self.assertNotIn('MAG_SOCIAL_TOKEN', portal)
+
     def test_session_ends_with_a_report_decision_on_every_path(self):
         """Performance and error reports (src/player_reports_win32.h): begun once the launch folder
         exists, ended on every way out, with the caller's MAG_REPORTS read before MAG_ variables are cleared."""
@@ -103,7 +118,7 @@ class WindowsSetupTests(unittest.TestCase):
         self.assertLess(main.index('set_env(L"MAG_SESSION_DIR", logs);'), main.index('mag_reports_begin(self, g_root, logs, settings'))
         self.assertIn('mag_reports_end(text);', source[source.index('static void fail('):source.index('static void join(')])
         self.assertIn('mag_reports_player_stop(); fail(message, NULL);', main)
-        self.assertIn('DWORD code = run(job, engine, engine_elf, logs, log);\n    mag_reports_engine_exit(code);\n    mag_reports_end(NULL);', main)
+        self.assertIn('DWORD code = run(job, engine, engine_elf, logs, log);\n    mag_social_stop();\n    mag_reports_engine_exit(code);\n    mag_reports_end(NULL);', main)
         self.assertEqual(main.count('mag_reports_launcher_exit(result);'), 2)
         # The detached sender: before any game file is checked or a launch folder is made.
         self.assertLess(main.index('return mag_reports_send(g_root, send_logs, settings);'), main.index('check(launcher, MAG_LAUNCHER_SHA256)'))

@@ -214,7 +214,7 @@ static void notice(const wchar_t *logs, const wchar_t *message, int prompt, UINT
 }
 /* Before each phase: a fresh ticket from the linked account (src/player_portal_win32.cpp), or the
  * name sign-in when there is none. The launcher phase also takes the account's player name. */
-static void portal_phase(const wchar_t *settings, const wchar_t *server, const wchar_t *ticket, int launcher, const wchar_t *logs, int prompt) {
+static int portal_phase(const wchar_t *settings, const wchar_t *server, const wchar_t *ticket, int launcher, const wchar_t *logs, int prompt) {
     wchar_t name[32], message[1024];
     int state = mag_portal_phase(settings, server, ticket, launcher, name, 32, message, 1024);
     SetEnvironmentVariableW(L"MAG_PLAYER_PORTAL_TICKET", NULL);
@@ -227,6 +227,7 @@ static void portal_phase(const wchar_t *settings, const wchar_t *server, const w
     }
     if (state == MAG_PORTAL_STOP) fail(message, NULL);
     if (message[0]) notice(logs, message, prompt, state == MAG_PORTAL_READY ? MB_ICONINFORMATION : MB_ICONWARNING);
+    return state;
 }
 
 /* A command's result for automation: on standard output (standard error when it failed) when the
@@ -249,6 +250,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR arguments, int
     wchar_t skip[8] = L""; GetEnvironmentVariableW(L"MAG_SKIP_SETUP", skip, 8);
     /* MAG_REPORTS=0 from the caller: no performance and error reports (test automation). */
     wchar_t reports[8] = L""; GetEnvironmentVariableW(L"MAG_REPORTS", reports, 8);
+    /* MAG_SOCIAL=0 from the caller: no friends or presence (docs/player-social.md). */
+    wchar_t social[8] = L""; GetEnvironmentVariableW(L"MAG_SOCIAL", social, 8);
     const wchar_t *send_logs = NULL;  /* --send-reports <launch log folder>: the detached report sender */
     const wchar_t *server = NULL, *player = NULL, *portal_url = NULL;
     int account = 0;  /* --link 1, --unlink 2, --link-token 3: manage the account link, then exit */
@@ -448,9 +451,16 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR arguments, int
     for (size_t i = 0; i < sizeof cleared / sizeof cleared[0]; i++) SetEnvironmentVariableW(cleared[i], NULL);
     set_env(L"PS3_BOOT_PATH", L"/dev_bdvd/PS3_GAME/USRDIR/bin/mage_g.self");
     /* The engine signs in again (MAS, statistics) with its own fresh ticket. */
-    portal_phase(settings, NULL, ticket, 0, logs, prompt);
+    /* Friends and presence while the engine runs: this supervisor holds the device token and runs
+     * the portal worker; the game exchanges lines with it through a folder next to the ticket. */
+    if (portal_phase(settings, NULL, ticket, 0, logs, prompt) == MAG_PORTAL_READY) {
+        wchar_t spool[MAX_PATH], friends_log[MAX_PATH];
+        join(spool, player_root, L"social"); join(friends_log, logs, L"friends.log");
+        mag_social_start(settings, NULL, spool, friends_log, social[0] && !wcscmp(social, L"0"));
+    }
     join(log, logs, L"engine.log");
     DWORD code = run(job, engine, engine_elf, logs, log);
+    mag_social_stop();
     mag_reports_engine_exit(code);
     mag_reports_end(NULL);
     if (mag_portal_take_notice(ticket, sign_in, 1024)) notice(logs, sign_in, prompt, MB_ICONWARNING);
@@ -475,6 +485,7 @@ def _c_hex(value):
 # Portable sources the supervisor compiles with it: the account link (HTTPS through WinHTTP) and
 # the settings rules, from the workspace's own source.
 SUPERVISOR_SOURCES = ('player_portal.h', 'player_portal.cpp', 'player_portal_winhttp.cpp', 'player_portal_win32.h',
+                      'player_social.h', 'player_social.cpp',
                       'player_portal_win32.cpp', 'player_settings_portable.h', 'player_settings_file.cpp', 'player_settings_text.h', 'player_sign_in.h',
                       'player_reports.h', 'player_reports.cpp', 'player_reports_win32.h', 'player_reports_win32.cpp',
                       'player_gzip.h', 'player_gzip.cpp', 'player_sign_in_refusal.h', 'player_report_request.h', 'player_report_request.cpp')
