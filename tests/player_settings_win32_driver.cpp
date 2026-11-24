@@ -226,8 +226,12 @@ static void in_game(const fs::path& folder) {
         type(window, IdServer, L"play.magtest.online ");
         CHECK(enabled(window, IdReportNow));
         click(window, IdReportNow);
-        CHECK(contains(window, IdReportStatus, "A report will be sent when MAG closes."));
-        CHECK(read(marker).rfind("{\"requested_at\":", 0) == 0);
+        const std::string request = read(marker);
+        CHECK(request.rfind("{\"requested_at\":", 0) == 0);
+        const size_t id_at = request.find("\"report_id\":\"");
+        CHECK(id_at != std::string::npos);
+        if (id_at != std::string::npos)
+            CHECK(contains(window, IdReportStatus, ("Report " + request.substr(id_at + 13, 8) + " will be sent when MAG closes.").c_str()));
         CHECK(portal::forget_link(folder / "portal-link.json", link_error));
         _putenv_s("MAG_REPORT_REQUEST", "");
         type(window, IdServer, L"example.org");

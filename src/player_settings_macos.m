@@ -252,7 +252,9 @@ static NSStackView *row(NSString *title,NSString *hint,NSView *control) {
 }
 - (void)sendReport:(id)sender {
     if(MAGReportRequestBlocker([self linked]))return;
-    _reportRequested=MAGReportRequestWrite(NULL)?@MAG_SETTINGS_REPORT_REQUESTED:@MAG_SETTINGS_REPORT_FAILED;
+    NSString *identifier=nil;
+    _reportRequested=MAGReportRequestWrite(&identifier,NULL)
+        ?[NSString stringWithFormat:@MAG_SETTINGS_REPORT_REQUESTED,[identifier substringToIndex:8].UTF8String]:@MAG_SETTINGS_REPORT_FAILED;
     [self refreshReport];[self fit];
 }
 - (void)setAccountLinker:(id<MAGAccountLinking>)linker {_linker=linker;[self refreshAccount];[self refreshReport];[self fit];}

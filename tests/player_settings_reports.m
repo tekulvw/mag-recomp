@@ -66,9 +66,15 @@ int main(int argc, char **argv) { @autoreleasepool {
     [reports performClick:nil];
     assert(send.enabled);
     [send performClick:nil];
-    assert([status.stringValue isEqual:@"A report will be sent when MAG closes."]);
     NSString *request = [NSString stringWithContentsOfFile:marker encoding:NSUTF8StringEncoding error:nil];
-    assert([request hasPrefix:@"{\"requested_at\":"] && [request hasSuffix:@"}\n"]);
+    assert([request hasPrefix:@"{\"requested_at\":"] && [request hasSuffix:@"\"}\n"]);
+    // The status shows the first 8 characters of the id the marker carries.
+    NSRange at = [request rangeOfString:@"\"report_id\":\""];
+    assert(at.location != NSNotFound);
+    NSString *identifier = [request substringWithRange:NSMakeRange(NSMaxRange(at), 36)];
+    assert([identifier isEqual:identifier.lowercaseString] && [identifier characterAtIndex:14] == '4');
+    NSString *expected = [NSString stringWithFormat:@"Report %@ will be sent when MAG closes.", [identifier substringToIndex:8]];
+    assert([status.stringValue isEqual:expected]);
     struct stat st;
     assert(!stat(marker.fileSystemRepresentation, &st) && (st.st_mode & 0777) == 0600);
     assert(!controller.window.visible);

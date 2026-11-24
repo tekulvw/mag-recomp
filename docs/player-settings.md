@@ -125,7 +125,7 @@ MAG can send a performance and error report after a session. A report covers fra
 
 - **MAG Settings → General → Reports → Send performance and error reports** is **on by default**. Turn it off and MAG creates no automatic reports and drops any it has not sent yet.
   - The setting is `send_reports` in the settings file. A missing field means on, so existing files keep working. The file holds `"send_reports": false` only when the setting is off.
-- **Send report** (in the same group) asks for a report of the current session. The report is sent when MAG closes. It works even with automatic reports off, because the player asked.
+- **Send report** (in the same group) asks for a report of the current session. The report is sent when MAG closes. The confirmation, "Report 1a2b3c4d will be sent when MAG closes.", shows the first 8 characters of the report's id, so staff can find it on the portal. It works even with automatic reports off, because the player asked.
   - It needs a linked account. Without one the button is disabled and says so.
 - Reports go only to the **account portal your account is linked to** (magtest.online for `play.magtest.online`). They are sent under that account and kept privately on the portal's server for 30 days. The server stores no IP addresses.
 - An unlinked MAG sends nothing.
@@ -182,10 +182,10 @@ When a session ends, the supervisor writes the report to a small queue in the MA
 | --- | --- |
 | 200 or 201 | The report was received; it is removed from the queue. |
 | 429 | Retried after the reply's `Retry-After` (an hour without it), with the same `report_id`. |
-| 5xx, or no connection | Retried with backoff from 1 minute up to 6 hours, with the same `report_id`, and dropped after 8 attempts. |
+| 5xx (including 503 while the portal has reports off), or no connection | Retried with backoff from 1 minute up to 6 hours, with the same `report_id`, and dropped after 8 attempts or 7 days. |
 | 400, 401, 403, 409 or 413 | Dropped. |
 
-The next launch retries what is left. A launch with queued reports starts the sender at once. The sender writes one line to the launch's `supervisor.log`, such as `reports: sent 1, kept 0, dropped 0`.
+A report still queued 7 days after it was made is dropped unsent. The next launch retries what is left. A launch with queued reports starts the sender at once. The sender writes one line to the launch's `supervisor.log`, such as `reports: sent 1, kept 0, dropped 0`.
 
 ### Where the measurements come from
 
@@ -193,7 +193,7 @@ The engine's frame clock calls the session monitor (`src/mag_session_monitor.h`)
 
 A background thread writes `session-<role>.json` in the folder named by `MAG_SESSION_DIR`. The supervisors set that variable to the launch's log folder. The thread writes the file every 10 s and again at exit, including when the window is closed. A crash leaves the latest periodic summary, with `"state": "running"`. The audio counters come from the runtime's `ps3emu/audio_host_stats.h` when the pinned runtime has it; until then the summary says `"audio": {"available": false}`.
 
-The settings window's **Send report** writes `report-requested` in the launch folder, at the path the supervisor passes as `MAG_REPORT_REQUEST`.
+The settings window's **Send report** writes `report-requested` in the launch folder, at the path the supervisor passes as `MAG_REPORT_REQUEST`. The file holds `{"requested_at":<unix seconds>,"report_id":"<uuid>"}`. The supervisor sends the report under that id, the one the window showed.
 
 ### For automation and tests
 

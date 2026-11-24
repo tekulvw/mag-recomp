@@ -388,9 +388,9 @@ const char* SettingsPanel::report_blocker() const {
 }
 void SettingsPanel::request_report_now() {
     if (report_blocker()) return;
-    std::string error;
-    if (!request_report(error)) { report_status_ = MAG_SETTINGS_REPORT_FAILED; return; }
-    report_status_ = MAG_SETTINGS_REPORT_REQUESTED;
+    std::string error, id;
+    if (!request_report(id, error)) { report_status_ = MAG_SETTINGS_REPORT_FAILED; return; }
+    report_status_ = report_requested_status(id);
 }
 
 void SettingsPanel::ensure_visible(const Layout& l) {
