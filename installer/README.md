@@ -175,8 +175,12 @@ its cache folder (above), and reuses:
   and the commands, the Python that runs them, the recipe's tools and profiles (with the pinned
   ps3recomp revisions), the game executables and every other file those steps read are unchanged.
   The installer records what the steps read while they run, and keeps nothing if they read or
-  start anything it cannot account for. Their records name the build folder, so a build in another
-  location generates again;
+  start anything it cannot account for: they may start only the build's Python and read-only git
+  checks of the pinned ps3recomp checkouts and of whether the build folder is in a Git repository,
+  whose answers (what each checkout's pinned commits and tags resolve to, and where the build
+  folder lies) are part of the key (see
+  [What generation may run](docs/design.md#what-generation-may-run-generated-sources-cache)).
+  Their records name the build folder, so a build in another location generates again;
 - **compiled objects:** through a pinned ccache (downloaded and checked like the other tools), per
   source file, when the compiler, its options, and the file with everything it includes are
   unchanged. This includes the large generated sources whenever they come out byte-identical,

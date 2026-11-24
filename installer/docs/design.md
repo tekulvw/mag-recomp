@@ -48,3 +48,35 @@ A lightweight Tkinter wizard now consumes the shared pipeline through a backgrou
 CLI output defaults to readable text on a terminal and JSON when redirected, with explicit overrides. The pure ux module supplies presentation/default paths without importing Tk. Preflight is read-only and groups known storage by filesystem; it cannot promise sufficient space for unspecified future build recipes. Successful transactions remove recognized owned work unless keep_work is requested and retain logs/journal; cleanup failures cannot relabel committed success. Periodic stage activity indicates elapsed work without claiming measured progress.
 
 Later builds on the same computer reuse earlier work through a per-user build cache in the installer's cache folder (`build_cache.py`): managed dependency prefixes, generated sources and compiled objects (a pinned, hash-verified ccache). Every entry is keyed by everything that determines its result (recipe and commands, pinned source, tool and SDK identities, compiler identity and target, and the content of what generation read, which is observed through a Python audit hook while it runs), files are content-addressed and verified on restore, and the cache is bounded with least-recently-used eviction. It holds content derived from the player's game files, so it never leaves the player's machine: it is not part of a MAG folder, a release, an installer or the source bundle, and nothing uploads it. The wizard and CLI can clear it, and `MAG_BUILD_CACHE=0` builds without it.
+
+### What generation may run (generated-sources cache)
+
+Generation (the prepare, inventory, lift, splice, SPU, firmware and program steps) is kept for a
+later build only when everything it ran is accounted for (`lift_cache.py`):
+
+- **Python:** the build's own interpreter, started with the audit hook in place (never with `-I`,
+  `-E` or `-S`, which would drop it). Its reads, listings and program starts are recorded too.
+- **git, read-only questions about a pinned ps3recomp checkout** (`git -C <checkout>`, or a folder
+  in it): `rev-parse` of `HEAD`, of a commit pinned for that checkout, or of a tag pinned for it
+  (`refs/tags/<tag>`), optionally peeled with `^{commit}` or `^{tree}` and with `--verify` or
+  `--quiet`; `status --porcelain --untracked-files=no`; and `show <pinned commit>:<path>`. A
+  checkout's pinned commits and tags are its own and its fixed lifters' (`splice_after`) in
+  `profiles/framework.json`.
+- **git, the output-location check** (`git -C <folder in the workspace>`): `rev-parse
+  --show-toplevel` and `rev-parse --is-inside-git-dir`, which ask whether the workspace lies in a
+  Git repository.
+
+Anything else (another program, a shell command, git in another folder, a git command that writes
+or asks about other revisions, or an event the hook could not record) keeps nothing, and the next
+build generates again. The answers to the allowed questions are part of the key: the pins
+themselves (`profiles/` is hashed whole), and what the installer gets when it asks git, before
+generation runs, what each checkout's `HEAD`, pinned commits and pinned tags resolve to and where
+the workspace lies. A pinned commit names fixed content, so `show` and `rev-parse` of it follow
+from the pin; a moved pin, a missing or moved tag, or another `HEAD` gives another key. The
+checkouts are fresh clones the installer checks out at their pins in the same build, so `status`
+reports them clean.
+
+Python on Windows reports a started program to audit hooks as the single command line it will run,
+not as the argument list (POSIX reports the list). The recorded command line is split back into
+arguments with the rules Windows programs use to read theirs (the reverse of
+`subprocess.list2cmdline`), so the same checks apply on every platform.
