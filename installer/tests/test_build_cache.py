@@ -244,6 +244,36 @@ class CompileCacheTests(unittest.TestCase):
             self.assertEqual(Path(env['CCACHE_CONFIGPATH']).read_text(), f'max_size = {6 * 1024}MiB\n')
             self.assertEqual(Path(env['CCACHE_DIR']), Path(temp) / 'build-cache/objects')
 
+    @unittest.skipIf(os.name == 'nt', 'POSIX shell stand-in for ninja')
+    def test_clang_options_ccache_refuses_are_ignored_by_it_and_enter_the_identity(self):
+        with tempfile.TemporaryDirectory() as temp:
+            temp = Path(temp)
+            def ninja(records):
+                script = temp / 'ninja'
+                script.write_text('#!/bin/sh\ncat ' + str(temp / 'compdb.json') + '\n'); script.chmod(0o755)
+                (temp / 'compdb.json').write_text(json.dumps(records))
+                return compile_cache.passthrough_options(script, temp, {'PATH': '/usr/bin:/bin'})
+            def entry(name, *options, target='MagRecomp'):
+                return {'directory': str(temp), 'file': f'../src/{name}', 'output': f'CMakeFiles/{target}.dir/src/{name}.obj',
+                        'command': ' '.join(['clang-cl.exe', '/nologo', *options, '/c', f'../src/{name}'])}
+            base = ninja([entry('a.c', '-clang:-std=gnu11', '/clang:-march=x86-64-v3'), entry('b.cpp', '/clang:-march=x86-64-v3')])
+            self.assertEqual(base['options'], ['-clang:-std=gnu11', '/clang:-march=x86-64-v3'])
+            # Another source with the same options: the same identity.
+            more = ninja([entry('a.c', '-clang:-std=gnu11', '/clang:-march=x86-64-v3'), entry('c.c', '-clang:-std=gnu11', '/clang:-march=x86-64-v3'),
+                          entry('b.cpp', '/clang:-march=x86-64-v3')])
+            self.assertEqual(more['placement'], base['placement'])
+            for changed in ([entry('a.c', '-clang:-std=gnu17', '/clang:-march=x86-64-v3'), entry('b.cpp', '/clang:-march=x86-64-v3')],
+                            [entry('a.c', '-clang:-std=gnu11', '/clang:-march=x86-64-v4'), entry('b.cpp', '/clang:-march=x86-64-v3')],
+                            [entry('a.c', '-clang:-std=gnu11', '/clang:-march=x86-64-v3'), entry('b.cpp')]):
+                self.assertNotEqual(ninja(changed)['placement'], base['placement'])
+            self.assertEqual(ninja([entry('a.c', '/O2')]), {'options': [], 'placement': ninja([])['placement']})
+            config = {'build_cache': {'root': str(temp / 'build-cache'), 'ccache': '/t/ccache', 'base_dir': '/b'}}
+            plain = compile_cache.environment(config, 'a' * 64, temp / 'stats.log')
+            folded = compile_cache.environment(config, 'a' * 64, temp / 'stats.log', base)
+            self.assertNotIn('CCACHE_IGNOREOPTIONS', plain)
+            self.assertEqual(folded['CCACHE_IGNOREOPTIONS'], '-clang:-std=gnu11 /clang:-march=x86-64-v3')
+            self.assertNotEqual(folded['CCACHE_COMPILERCHECK'], plain['CCACHE_COMPILERCHECK'])
+
     def test_compiler_identity_follows_the_real_compiler_file_and_version(self):
         with tempfile.TemporaryDirectory() as temp:
             compiler = Path(temp) / 'clang'

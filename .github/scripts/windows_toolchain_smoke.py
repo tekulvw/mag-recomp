@@ -65,6 +65,8 @@ def main():
     wrapper = work / 'runtime-project'; wrapper.mkdir(exist_ok=True)
     (wrapper / 'CMakeLists.txt').write_text(
         'cmake_minimum_required(VERSION 3.20)\nproject(runtime_smoke C CXX)\n'
+        # The x86-64 level first, as the MAG build applies it: its options must pass the compile cache.
+        f'include("{posix(ROOT / "cmake/MagX86Level.cmake")}")\nmag_x86_level_apply()\n'
         f'add_subdirectory("{posix(sdk)}" sdk EXCLUDE_FROM_ALL)\n'
         f'include("{posix(ROOT / "cmake/MagWin32Posix.cmake")}")\n'
         f'mag_win32_posix_runtime("{posix(sdk)}")\n')

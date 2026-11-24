@@ -467,12 +467,15 @@ def install(config_path, output, resume=False, token=None, events=None, retry_lo
                     run_stage(stage)
                     continue
                 stats = logs / ('ccache-' + stage['id'] + '.log')
+                building = stage['id'].startswith('build-') and '--build' in stage['argv']
+                build_dir = Path(stage['argv'][stage['argv'].index('--build') + 1]) if building else None
+                # clang-cl's /clang: options, configured by now, enter the compiler identity.
+                passthrough = compile_cache.passthrough_options(config['ninja'], build_dir, env) if building else None
                 started = time.monotonic()
-                run_stage(stage, {**env, **compile_cache.environment(config, compiler, stats)})
-                if stage['id'].startswith('build-') and '--build' in stage['argv']:
-                    summary = compile_cache.summarize(stage['id'], Path(stage['argv'][stage['argv'].index('--build') + 1]),
-                                                      stats, config['ninja'], env, compile_cache.timings_path(config),
-                                                      time.monotonic() - started)
+                run_stage(stage, {**env, **compile_cache.environment(config, compiler, stats, passthrough)})
+                if building:
+                    summary = compile_cache.summarize(stage['id'], build_dir, stats, config['ninja'], env,
+                                                      compile_cache.timings_path(config), time.monotonic() - started)
                     events({**summary, 'message': compile_cache.message(summary)})
             binaries = _validate_receipts(workspace, config['sdks']['runtime']['revision'], token)
             token.check()

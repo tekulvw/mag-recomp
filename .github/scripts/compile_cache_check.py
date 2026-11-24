@@ -26,7 +26,12 @@ from mag_installer import compile_cache  # noqa: E402
 SOURCES = {
     'CMakeLists.txt': 'cmake_minimum_required(VERSION 3.20)\nproject(cache_check C CXX)\n'
                       'add_library(cache_check STATIC a.c b.cpp nested/c.c)\n'
-                      'target_include_directories(cache_check PRIVATE include)\n',
+                      'target_include_directories(cache_check PRIVATE include)\n'
+                      'set_target_properties(cache_check PROPERTIES C_STANDARD 11 C_EXTENSIONS ON)\n'
+                      # clang-cl options ccache cannot parse, as cmake/MagX86Level.cmake adds them.
+                      'if(CMAKE_C_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")\n'
+                      '  target_compile_options(cache_check PRIVATE /clang:-ffp-contract=off)\n'
+                      'endif()\n',
     'include/shared.h': '#define SHARED_VALUE 41\nstatic inline int shared_add(int x) { return x + SHARED_VALUE; }\n',
     'a.c': '#include "shared.h"\nconst char *a_file = __FILE__;\nint a(int x) { return shared_add(x); }\n',
     'b.cpp': '#include "shared.h"\n#include <string>\n#include <vector>\n'
@@ -55,11 +60,11 @@ def build(cmake, ninja, ccache, compilers, env, identity, folder, cache_root, la
     out = folder / 'build'
     config = {'build_cache': {'root': str(cache_root), 'ccache': str(ccache), 'base_dir': str(folder)}}
     stats = folder / 'ccache-stats.log'
-    stage_env = {**env, **compile_cache.environment(config, identity, stats)}
     launcher = [f'-DCMAKE_{language}_COMPILER_LAUNCHER={Path(ccache).as_posix()}' for language in ('C', 'CXX')]
     subprocess.run([str(cmake), '-S', str(source), '-B', str(out), '-G', 'Ninja', '-DCMAKE_BUILD_TYPE=Release',
                     '-DCMAKE_MAKE_PROGRAM=' + Path(ninja).as_posix(), *compilers, *launcher],
-                   env=stage_env, check=True, stdout=subprocess.DEVNULL)
+                   env=env, check=True, stdout=subprocess.DEVNULL)
+    stage_env = {**env, **compile_cache.environment(config, identity, stats, compile_cache.passthrough_options(ninja, out, env))}
     subprocess.run([str(cmake), '--build', str(out)], env=stage_env, check=True)
     results, hits, misses = compile_cache.read_stats(stats)
     print(f'{label}: {hits} hits, {misses} misses: {json.dumps(results)}', flush=True)
@@ -94,7 +99,7 @@ def diagnose(ccache, env, folder, stats):
     subprocess.run([str(ccache), '--show-stats', '-v'], env=env)
     ninja = shutil.which('ninja', path=env.get('PATH') or env.get('Path'))
     commands = subprocess.run([ninja or 'ninja', '-C', str(folder), '-t', 'commands'], env=env, capture_output=True, text=True)
-    compile = next((line for line in commands.stdout.splitlines() if 'ccache' in line and ' -c ' in line), None)
+    compile = next((line for line in commands.stdout.splitlines() if 'ccache' in line), None)
     print('compile command:', (compile or commands.stderr)[:1500], flush=True)
     if compile:
         log = folder.with_name(folder.name + '-ccache-debug.log')
@@ -112,8 +117,12 @@ def rebuild_hits(cmake, ccache, env, identity, cache_root, base_dir, configure, 
     counts = []
     for folder in folders:
         stats = folder.with_name(folder.name + '-ccache.log')
-        stage_env = {**env, **compile_cache.environment(config, identity, stats)}
-        subprocess.run([str(a) for a in configure(folder)] + launcher, env=stage_env, check=True)
+        subprocess.run([str(a) for a in configure(folder)] + launcher, env=env, check=True)
+        # As the installer does: clang-cl's /clang: options enter the identity once configured.
+        ninja = shutil.which('ninja', path=env.get('PATH') or env.get('Path'))
+        passthrough = compile_cache.passthrough_options(ninja, folder, env)
+        print(f'{folder.name}: /clang: options {passthrough["options"]}', flush=True)
+        stage_env = {**env, **compile_cache.environment(config, identity, stats, passthrough)}
         subprocess.run([str(cmake), '--build', str(folder), *map(str, build_args)], env=stage_env, check=True)
         counts.append(compile_cache.read_stats(stats)[1:])
         print(f'{folder.name}: {counts[-1][0]} hits, {counts[-1][1]} misses', flush=True)
