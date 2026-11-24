@@ -325,7 +325,8 @@ int main(int argc,char** argv) {
 # Portable sources the supervisor compiles with it (HTTPS through OpenSSL's libssl).
 SUPERVISOR_SOURCES = ('player_portal.h', 'player_portal.cpp', 'player_portal_openssl.cpp', 'player_settings_portable.h',
                       'player_settings_file.cpp', 'player_settings_text.h', 'player_sign_in.h',
-                      'player_reports.h', 'player_reports.cpp', 'player_gzip.h', 'player_gzip.cpp')
+                      'player_reports.h', 'player_reports.cpp', 'player_gzip.h', 'player_gzip.cpp',
+                      'player_report_request.h', 'player_report_request.cpp')
 
 
 def _copy_dependencies(binaries, destination, token, dynamic_libraries=()):

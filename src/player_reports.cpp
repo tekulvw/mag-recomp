@@ -1,6 +1,7 @@
 // Performance and error reports (src/player_reports.h).
 #include "player_reports.h"
 #include "player_gzip.h"
+#include "player_report_request.h"
 #include <algorithm>
 #include <cctype>
 #include <cerrno>
@@ -541,7 +542,10 @@ Decision decide(const Session &s) {
     Decision d;
     std::error_code code;
     d.manual = fs::is_regular_file(fs::symlink_status(s.logs / "report-requested", code));
-    if (d.manual) d.request_id = requested_report_id(s.logs / "report-requested");
+    if (d.manual) {
+        d.request_id = requested_report_id(s.logs / "report-requested");
+        d.user_comment = requested_comment(s.logs / "report-requested");
+    }
     const std::string halt = halt_line(s.logs);
     auto exit_reason = [&](const char *phase, long long exit) {
         return std::string(phase) + " exited with code " + std::to_string(exit);
@@ -578,13 +582,27 @@ bool valid_id(const std::string &id);
 
 std::string requested_report_id(const fs::path &marker) {
     Json request;
-    if (!parse_json(read_file(marker, 4096), request) || request.kind != Json::Kind::Object) return {};
+    if (!parse_json(read_file(marker, 64u << 10), request) || request.kind != Json::Kind::Object) return {};
     const Json *id = request.get("report_id");
     if (!id || id->kind != Json::Kind::String || !valid_id(id->text)) return {};
     for (char c : id->text)
         if (c >= 'A' && c <= 'F') return {};
     return id->text;
 }
+std::string requested_comment(const fs::path &marker) {
+    Json request;
+    if (!parse_json(read_file(marker, 64u << 10), request) || request.kind != Json::Kind::Object) return {};
+    const Json *comment = request.get("comment");
+    return comment && comment->kind == Json::Kind::String ? clip_report_comment(comment->text) : std::string();
+}
+
+std::string utf8_prefix(const std::string &text, size_t bytes) {
+    if (text.size() <= bytes) return text;
+    size_t end = bytes;
+    while (end > 0 && ((unsigned char)text[end] & 0xC0) == 0x80) --end;  // back to a sequence's start
+    return text.substr(0, end);
+}
+
 std::string new_report_id() {
     std::random_device device;
     std::seed_seq seed{device(), device(), device(), device(),
@@ -701,6 +719,16 @@ std::string build_report(const Session &s, const Decision &d, const std::string 
     for (size_t i = 0; i < d.reasons.size() && i < 8; ++i) reasons += (i ? "," : "") + quote(clip(redact(d.reasons[i], r), 300));
     session += ",\"reasons\":[" + reasons + "]";
     if (!s.launch_error.empty() && !s.player_stop) session += ",\"launch_error\":" + quote(clip(redact(s.launch_error, r), 1000));
+    // The player's own words, only in a report the player asked for: redacted like the logs, and
+    // cut between code points so the session stays within its limit.
+    if (d.manual && !d.user_comment.empty()) {
+        const std::string comment = clip_report_comment(redact(d.user_comment, r));
+        const std::string key = ",\"user_comment\":", cut = ",\"user_comment_truncated\":true";
+        const size_t room = session_max_bytes > session.size() + key.size() + cut.size() + 1 ? session_max_bytes - session.size() - key.size() - cut.size() - 1 : 0;
+        std::string kept = comment;
+        while (!kept.empty() && quote(kept).size() > room) kept = utf8_prefix(kept, kept.size() - std::max<size_t>(1, (quote(kept).size() - room) / 2));
+        if (!kept.empty()) session += key + quote(kept) + (kept.size() < comment.size() ? cut : std::string());
+    }
     session += "}";
     if (session.size() > session_max_bytes) session = "{\"launch\":" + quote(log_name(s.logs.filename().string())) + "}";
     // metrics: the session summaries as they are, slimmed when too large

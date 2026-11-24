@@ -6,6 +6,7 @@
 #include "player_reports.h"
 #include "player_settings_text.h"
 #include "player_gzip.h"
+#include "player_report_request.h"
 #include <cstdio>
 #include <cstdlib>
 #include <deque>
@@ -298,6 +299,71 @@ static void sending(const fs::path &root) {
     CHECK(sent.dropped == 1 && sent.sent == 1 && t.requests.size() == 1 && queued(s.queue).empty());
 }
 
+// Send report's comment: the marker round trip, clipping, redaction and the payload field.
+static void comments(const fs::path &root) {
+    // Clipping: well-formed UTF-8 only, no control characters but newlines and tabs, CR LF to LF,
+    // at most the limit in code points, cut between code points.
+    CHECK(mag::clip_report_comment("a\r\nb\rc\x01\x7f\td\xff\xc3") == "a\nb\nc\td");
+    CHECK(mag::clip_report_comment("\xc2\x85x") == "x");  // a C1 control
+    const std::string e_acute = "\xc3\xa9", emoji = "\xf0\x9f\x98\x80";
+    std::string many;
+    for (int i = 0; i < 1200; ++i) many += emoji;
+    const std::string clipped = mag::clip_report_comment(many);
+    CHECK(mag::report_comment_length(clipped) == MAG_SETTINGS_REPORT_COMMENT_LIMIT && clipped.size() == 4u * MAG_SETTINGS_REPORT_COMMENT_LIMIT);
+    CHECK(mag::report_comment_length(e_acute + "x" + emoji) == 3);
+    CHECK(mag::report_comment_counter(e_acute + "x") == "2/1000");
+    CHECK(utf8_prefix(e_acute + emoji, 4) == e_acute);  // never half a code point
+    CHECK(utf8_prefix("abc", 9) == "abc");
+
+    // The marker round trip, with quotes, backslashes and newlines.
+    const fs::path marker = root / "comment-marker";
+    const std::string text = "It froze \"twice\" in C:\\games\nthen " + e_acute;
+    std::string error;
+    CHECK(mag::write_report_request(marker, 1800000000, "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d", text, error));
+    CHECK(requested_report_id(marker) == "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d");
+    CHECK(requested_comment(marker) == text);
+    CHECK(mag::write_report_request(marker, 1800000000, "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d", "", error));
+    CHECK(requested_comment(marker).empty());  // an empty comment is allowed
+    write(marker, "{\"requested_at\":1,\"report_id\":\"0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d\"}\n");  // before comments
+    CHECK(requested_comment(marker).empty() && !requested_report_id(marker).empty());
+
+    // In the report: redacted like the logs, only when the player asked.
+    Session s = launch(root / "comment");
+    s.launcher_exit = 90; s.engine_exit = 0;
+    fs::remove(s.logs / "session-engine.json");
+    const std::string said = "Stutter at " + home + "/MAG after linking with " + token + " - thanks";
+    CHECK(mag::write_report_request(s.logs / "report-requested", 1800000000, "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d", said, error));
+    Decision d = decide(s);
+    CHECK(d.trigger == Trigger::Manual && d.user_comment == said);
+    Json report;
+    CHECK(parse_json(build_report(s, d, d.request_id), report, 8u << 20));
+    const Json *comment = report.get("session") ? report.get("session")->get("user_comment") : nullptr;
+    CHECK(comment && comment->text == "Stutter at ~/MAG after linking with mgd_[redacted] - thanks");
+    CHECK(report.get("user_comment") == nullptr);  // never a top-level field
+    // An automatic report never carries one, even when a comment was typed earlier and not sent.
+    Decision automatic;
+    automatic.trigger = Trigger::Crash;
+    automatic.user_comment = said;
+    CHECK(parse_json(build_report(s, automatic, new_report_id()), report, 8u << 20));
+    CHECK(report.get("session")->get("user_comment") == nullptr);
+    // A crash in the session the player reported keeps the player's words with the crash.
+    s.engine_exit = 139;
+    d = decide(s);
+    CHECK(d.trigger == Trigger::Crash && d.manual && d.user_comment == said);
+    // The longest comment (1000 four-byte code points) is cut to keep the session within 4 KiB.
+    CHECK(mag::write_report_request(s.logs / "report-requested", 1800000000, "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d", many, error));
+    s.engine_exit = 0;
+    d = decide(s);
+    const std::string body = build_report(s, d, d.request_id);
+    CHECK(parse_json(body, report, 8u << 20));
+    const Json *session = report.get("session");
+    CHECK(session && to_json(*session).size() <= session_max_bytes);
+    comment = session ? session->get("user_comment") : nullptr;
+    CHECK(comment && comment->text.size() > 3000 && comment->text.size() % 4 == 0);  // whole code points
+    CHECK(session && session->get("user_comment_truncated") && session->get("user_comment_truncated")->boolean);
+    std::ofstream(root / "long-comment.json", std::ios::binary) << body;
+}
+
 int main(int argc, char **argv) {
     if (argc == 3 && std::string(argv[1]) == "selftest") {
         const fs::path root = argv[2];
@@ -306,6 +372,7 @@ int main(int argc, char **argv) {
         decisions(root);
         finishing(root);
         sending(root);
+        comments(root);
         CHECK(gpu_from_log("a\n[RSX vulkan] using device 1: Some GPU (x)\r\nb") == "Some GPU (x)");
         CHECK(!system_info().empty());
         if (failures) { std::fprintf(stderr, "%d failures\n", failures); return 1; }
@@ -315,6 +382,10 @@ int main(int argc, char **argv) {
     if (argc == 3 && std::string(argv[1]) == "build") {
         Session s = launch(argv[2]);
         s.launcher_exit = 90; s.engine_exit = 139;
+        // The player also pressed Send report, with a comment that names a home folder and the token.
+        std::string error;
+        mag::write_report_request(s.logs / "report-requested", 1800000000, "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d",
+                                  "Froze in " + home + "/MAG\nafter " + token, error);
         const Finished f = finish_session(s);
         if (f.report_id.empty()) { std::fprintf(stderr, "%s\n", f.line.c_str()); return 1; }
         std::printf("%s\n", (s.queue / (f.report_id + ".json")).string().c_str());

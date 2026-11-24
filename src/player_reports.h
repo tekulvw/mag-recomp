@@ -115,6 +115,7 @@ struct Decision {
     std::vector<std::string> reasons;  // why, for the report and the log
     bool manual = false;               // the player pressed Send report
     std::string request_id;            // the report id that Send report showed the player, when valid
+    std::string user_comment;          // what the player typed with Send report (only with `manual`)
 };
 // The trigger for this session from its exits, logs, summaries and request marker, before the
 // setting and the daily limits. Crash and halt come before a launch error, which comes before
@@ -138,6 +139,10 @@ std::string build_report(const Session &, const Decision &, const std::string &r
 // The report id a Send report marker holds ({"requested_at":...,"report_id":"<uuid>"}), when it
 // holds a valid lowercase UUID; otherwise empty.
 std::string requested_report_id(const fs::path &marker);
+// The comment a Send report marker holds, clipped (player_report_request.h); empty without one.
+std::string requested_comment(const fs::path &marker);
+// The longest prefix of well-formed UTF-8 `text` that fits in `bytes`, cut between code points.
+std::string utf8_prefix(const std::string &text, size_t bytes);
 // Read the tail of a log (at most `limit` bytes, starting at a line), redacted.
 std::string log_tail(const fs::path &path, size_t limit, const Redaction &);
 std::string new_report_id();  // a random UUID version 4
