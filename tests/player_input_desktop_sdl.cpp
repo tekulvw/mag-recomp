@@ -89,16 +89,24 @@ void run() {
     pump();
     if (SDL_GetKeyboardFocus() != window) throw std::runtime_error("skip: this SDL dummy driver gives no keyboard focus");
 
-    // Not requested: no filter, nothing reaches the engine, Escape still quits.
-    owned = 1;
+    // Not requested (the front end and lobby, before a local player exists): nothing reaches the
+    // engine, but Escape still does not end the game on the focused game window.
+    owned = 0;
     key(SDL_SCANCODE_W, true);
     key(SDL_SCANCODE_ESCAPE, true);
-    require(pump(), "without capture Escape still quits");
-    require(!filter_installed() && events.empty() && capture.focused && !capture.mouse, "an unrequested backend is inert");
+    require(!pump(), "Escape does not quit the focused game window before capture is requested");
+    require(filter_installed(), "the game window has the Escape filter from the start");
+    require(events.empty() && capture.focused && !capture.mouse, "an unrequested backend observes nothing");
+    key(SDL_SCANCODE_ESCAPE, false);
+    key(SDL_SCANCODE_ESCAPE, true, false, SDL_GetWindowID(window) + 100);
+    require(pump(), "before capture, Escape on another window is passed on");
+    key(SDL_SCANCODE_ESCAPE, false);
+    pump();
+    owned = 1;
 
     mag_input_desktop_set_enabled(1);
     pump();
-    require(filter_installed(), "capture installs the event filter");
+    require(filter_installed(), "capture keeps the event filter");
     require(capture.focused && capture.mouse && SDL_GetRelativeMouseMode(), "the focused window is captured in relative mode");
     require(mag_input_desktop_raw_mouse_available(), "raw motion is offered");
 
@@ -120,7 +128,9 @@ void run() {
     pump();
     owned = 0;
     key(SDL_SCANCODE_ESCAPE, true);
-    require(pump(), "Escape quits when the adapter does not own the keyboard");
+    require(!pump(), "Escape does not quit the focused game window when the adapter does not own the keyboard");
+    key(SDL_SCANCODE_ESCAPE, false);
+    pump();
     owned = 1;
     key(SDL_SCANCODE_ESCAPE, true, false, SDL_GetWindowID(window) + 100);
     require(pump(), "Escape on another window is passed on");
@@ -224,13 +234,18 @@ void run() {
 
     mag_input_desktop_set_enabled(0);
     pump();
-    require(!filter_installed() && !SDL_GetRelativeMouseMode(), "uninstall removes the filter and relative mode");
+    require(filter_installed() && !SDL_GetRelativeMouseMode(), "uninstall keeps the Escape filter and leaves relative mode");
     require(saw(mag::InputSource::Mouse, 1, false) && saw(mag::InputSource::Mouse, 3, false), "uninstall releases held buttons");
     require(capture.focused && !capture.mouse, "the engine's window fields are handed back");
+    events.clear();
     key(SDL_SCANCODE_ESCAPE, true);
-    require(pump(), "Escape quits again once capture is off");
+    require(!pump(), "Escape still does not quit once capture is off");
+    require(events.empty(), "once capture is off nothing reaches the engine");
+    key(SDL_SCANCODE_ESCAPE, false);
+    pump();
 
     mag_input_desktop_sdl_pump(nullptr, 1);  // the window goes away
+    require(!filter_installed(), "the filter goes with the window");
     SDL_DestroyWindow(window);
     SDL_Quit();
 }

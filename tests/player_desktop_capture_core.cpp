@@ -262,16 +262,19 @@ void recapture() {
 }
 
 void quit_key_rule() {
-    DesktopQuitKeyContext held{true, true, true, true, true, false};
-    require(desktop_capture_withholds_quit_key(held), "Escape is withheld while the adapter owns the focused game window");
+    // A press of Escape on the focused game window never reaches the SDK's quit, whether or not the
+    // adapter owns the keyboard or requests capture: in the front end and lobby it would end the game.
+    DesktopQuitKeyContext held;
+    held.quit_key_down = true;
+    held.on_game_window = true;
+    held.game_window_focused = true;
+    require(desktop_capture_withholds_quit_key(held), "Escape is withheld on the focused game window without the adapter");
     auto check = [&](bool DesktopQuitKeyContext::*field, bool value, const char* message) {
         auto context = held;
         context.*field = value;
         require(!desktop_capture_withholds_quit_key(context), message);
     };
     check(&DesktopQuitKeyContext::quit_key_down, false, "only the quit key press is withheld");
-    check(&DesktopQuitKeyContext::keyboard_owned, false, "the SDK keeps Escape while it owns the keyboard");
-    check(&DesktopQuitKeyContext::capture_requested, false, "the SDK keeps Escape without desktop capture");
     check(&DesktopQuitKeyContext::on_game_window, false, "Escape on another window is not withheld");
     check(&DesktopQuitKeyContext::game_window_focused, false, "Escape is not withheld without game focus");
     check(&DesktopQuitKeyContext::dialog_active, true, "a dialog always receives Escape");
