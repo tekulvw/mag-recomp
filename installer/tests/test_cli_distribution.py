@@ -125,4 +125,13 @@ class CliDistributionTests(unittest.TestCase):
             with self.assertRaises(InstallerError): bundle(source, root / 'bad-link.zip')
 
 
+    def test_every_installer_module_ships(self):
+        # The frozen installer is built from the shipped files: a module left out of them
+        # imports fine from source but fails in the installer players run (0.8.1: build_jobs).
+        from mag_installer.distribution import SHIPPABLE_FILES
+        modules = {path.relative_to(ROOT).as_posix() for path in (ROOT / 'mag_installer').glob('*.py')}
+        manifest = json.loads((ROOT / 'distribution-manifest.json').read_text())
+        self.assertEqual(modules - set(SHIPPABLE_FILES), set())
+        self.assertEqual(modules - set(manifest['includes']), set())
+
 if __name__ == '__main__': unittest.main()
