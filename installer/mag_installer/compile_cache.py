@@ -227,8 +227,8 @@ def compile_outputs(ninja, build_dir, env):
 def summarize(stage, build_dir, stats_log, ninja, env, timings_path, wall_seconds):
     """The hit rate of one compile stage and an estimate of the time the hits saved.
 
-    The estimate is, for each object taken from the cache, the time its last compilation took
-    (remembered from earlier builds in timings_path) minus the time the hit took."""
+    The estimate is, for each object taken from the cache, the time its source's last compilation
+    took (remembered from earlier builds in timings_path) minus the time the hit took."""
     results, hits, misses = read_stats(stats_log)
     durations = read_ninja_log(build_dir)
     outputs = compile_outputs(ninja, build_dir, env)
@@ -237,9 +237,11 @@ def summarize(stage, build_dir, stats_log, ninja, env, timings_path, wall_second
         if not isinstance(remembered, dict): remembered = {}
     except (OSError, ValueError):
         remembered = {}
-    known = remembered.setdefault(stage, {})
+    # By source as ccache names it (relative to the build directory, the same in both builds), so a
+    # file the launcher compiled and the engine reuses is estimated too.
+    known = remembered.setdefault('sources', {})
     if not isinstance(known, dict):
-        known = remembered[stage] = {}
+        known = remembered['sources'] = {}
     saved_ms = 0
     unknown = 0
     for source, result in results.items():
@@ -251,10 +253,10 @@ def summarize(stage, build_dir, stats_log, ninja, env, timings_path, wall_second
             unknown += result == 'hit'
             continue
         if result == 'miss':
-            known[output] = durations[output]
+            known[source] = durations[output]
         elif result == 'hit':
-            if output in known:
-                saved_ms += max(0, known[output] - durations[output])
+            if source in known:
+                saved_ms += max(0, known[source] - durations[output])
             else:
                 unknown += 1
     try:
