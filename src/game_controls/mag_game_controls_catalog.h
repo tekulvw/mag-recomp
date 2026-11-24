@@ -19,6 +19,9 @@ struct MagGameControlsAction {
     bool optional = false;
     unsigned revision = 0;  // Catalog revision that added it (upgrade adds its defaults once).
     const char* group = nullptr;  // Settings group; null: by kind.
+    // Menu buttons (Confirm, Back): only menus read them, from the keyboard pad, so the adapter never
+    // takes them over (docs/native-controls.md, 2.3 and 7.3); their keys still name prompts.
+    bool menu_prompt = false;
 };
 
 constexpr unsigned MagGameControlsCatalogRevision = 4;

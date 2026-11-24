@@ -218,9 +218,18 @@ handler watches bleedout (on the Cross button) and vseatnext (Triangle) in every
 prompt screens watch os_enter (Cross) and os_cancel (Circle) on their own UI handlers, as gameplay
 routes before the first spawn and as menus on the map after a death. Both are now menus served by
 the keyboard pad (8.2): before the first spawn the player is in the pre-spawn movement state (2.2).
-X confirms everywhere, matching the keyboard pad's Cross key. Back is Backspace on foot: the
-pad's Circle key, C, is Crouch there. vsmoke and the tactical menu tokens were not seen; their
-defaults are unconfirmed.
+X confirms everywhere, matching the keyboard pad's Cross key. vsmoke and the tactical menu tokens
+were not seen; their defaults are unconfirmed.
+
+**Confirm and Back are menu buttons** (`menu_prompt` in the catalog). Every screen that reads them is
+a menu, and menus read them from the keyboard pad (X and C, 8.2), so the adapter never takes them
+over (7.3 step 3). Their bindings still name the keys in prompts. On foot the only handlers that
+watch them are closed menus that stay routed. The pause menu's controller element, for example,
+watches Start (which opens the menu) together with Confirm, Back and the D-pad. When the adapter
+pressed Confirm there from X on foot, the closed menu acted on it: Escape then opened the pause menu
+with the player card already open, and Kill Self did nothing until C closed the card. With the
+adapter off, the same X (the pad's Cross, a jump) leaves the card closed. Backspace, the default
+for Back, therefore does nothing on foot.
 
 **Vehicles** are not yet observed. The census saw no separate vehicle handler, and the local
 player's handler stays enabled in every movement state seen, so vehicles likely run on foot with
@@ -610,6 +619,7 @@ Returns false (the game recognizes the control itself) unless every step below a
    handler.
    - System action: the current handler must still be in the system routes, otherwise cancel
      ("native system route changed") and return false.
+   - Confirm and Back (menu buttons, 2.3): return false, on every handler and in every context.
    - Other actions: gameplay must be eligible; the channel contract must still be current (7.4),
      otherwise revoke gameplay and mouse eligibility and return false; on the owner's handler the
      token (after aliases) must equal the action; on another handler it must be a gameplay route,
@@ -950,7 +960,8 @@ stable for three handler updates). While a menu holds look on foot the pad is li
 menu, so the menu's face buttons, shoulders and stick clicks work from the pad's keys (Z Square
 for EXIT GAME, X Cross, C Circle, V Triangle, Q/E, F/G). The adapter then takes over no
 gameplay or situational action on any handler other than the player's own (7.3 step 3): the menu's
-controls read the pad. The player's handler keeps its keys, and the channels the menu consumes reach
+controls read the pad. Confirm and Back are never taken over at all (2.3): a closed menu that stays
+routed on foot must not see X or Backspace. The player's handler keeps its keys, and the channels the menu consumes reach
 it blocked, as a controller's would. System buttons (Escape, Tab, the arrows) stay with the adapter
 on every route. When look comes back (stably, as above) the pad is muted again at the next poll;
 the gate below makes any key still held from the menu wait for a release. The pad's readers (macOS window pad, SDL keyboard pad, Win32 keyboard
@@ -1165,8 +1176,8 @@ Each placeholder is resolved on its own, from the live profile, every time a mov
    them (the front end and in-match menus) read that pad (section 8.2). A movie often fetches a
    menu's text while the player is still on foot (the pause menu's footer arrives with the HUD), so
    the context at request time cannot choose; the on-foot Confirm and Back bindings of section 2.3
-   are not shown. With the revision 3 defaults on-foot Confirm is X as well, so confirm prompts are
-   right everywhere; on-foot Back stays Backspace (C is Crouch on foot). The deploy screens, before
+   are not shown. The adapter never takes Confirm and Back over (2.3), so the pad's X and C are the
+   keys that act on them wherever they are shown. The deploy screens, before
    the first spawn as after a death, are menus (8.2), so the C a Back prompt shows goes back there.
 2. Any other catalog action: its first keyboard or mouse binding among its on-foot bindings, in
    profile order (`mag_controls_action_bindings`).

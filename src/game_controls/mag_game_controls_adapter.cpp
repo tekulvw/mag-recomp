@@ -932,6 +932,10 @@ struct MagGameControlsAdapter::State {
                 return false;
             }
         } else {
+            // Confirm and Back are menu buttons (2.3). Menus read them from the keyboard pad (8.2); on
+            // foot the only handlers watching them are closed menus that stay routed (the pause menu's),
+            // which must not see them: X on foot opened the player card in the hidden pause menu.
+            if (catalog && catalog->menu_prompt) return false;
             if (!gameplay_eligible) return false;
             if (!contract_current()) {
                 gameplay_eligible = mouse_eligible = false;
