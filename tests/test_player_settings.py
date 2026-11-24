@@ -9,7 +9,6 @@ import unittest
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
-@unittest.skipUnless(platform.system() == 'Darwin', 'native macOS settings')
 def debug_object(folder):
     """src/player_settings_debug.cpp compiled for linking with the macOS panel."""
     target = pathlib.Path(folder) / 'debug.o'
@@ -18,6 +17,7 @@ def debug_object(folder):
     return target
 
 
+@unittest.skipUnless(platform.system() == 'Darwin', 'native macOS settings')
 class PlayerSettingsTests(unittest.TestCase):
     def test_debug_page_switch_and_logs_folder(self):
         """The C interface the macOS panel's Debug page uses (src/player_settings_debug.h), headless."""
