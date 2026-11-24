@@ -54,6 +54,8 @@ LANGUAGES = {'macos-arm64': ('C', 'CXX', 'OBJC', 'OBJCXX'), 'linux-x86_64': ('C'
 def ccache_tool(root, host, cache=None, token=None, events=None):
     """The pinned, hash-verified ccache executable inside the managed tools root."""
     from .managed_tools import materialize
+    from .safety import Cancellation
+    token = token or Cancellation(); events = events or (lambda event: None)
     spec = CCACHE_LOCKS[host]
     location = materialize(spec, Path(root) / 'artifacts', Path(cache) if cache else Path(root) / 'cache', token, events)
     executable = location / spec['executable']
