@@ -1,10 +1,9 @@
 #pragma once
-/* Picture prompts in menus (docs/native-controls.md, section 12.5). Some menu prompts are pictures a
- * movie places next to a plain label (the face-button icons beside "DELETE", "REWARDS", "EXIT
- * GAME"...), so no text reaches them. While the player uses keyboard and mouse and the SDK keyboard
- * pad serves the menus, the renderer decodes our own key cap, labelled with the pad's key for that
- * button, in place of the game's icon texture. Guest memory is never written; controller players
- * and on-foot play keep the game's pictures. */
+/* Picture prompts (docs/native-controls.md, section 12.5). Some prompts are pictures a movie places
+ * next to a plain label (the face-button icons beside "DELETE", "REWARDS", a tutorial hint...), so no
+ * text reaches them. While the player uses keyboard and mouse, the renderer decodes our own key cap,
+ * labelled with the key that presses that button now (section 12.6), in place of the game's icon
+ * texture. Guest memory is never written; controller players keep the game's pictures. */
 #include "mag_game_controls_catalog.h"
 #include <cstdint>
 #include <functional>
@@ -32,8 +31,8 @@ std::optional<MagPadButton> mag_game_prompts_icon_button(const MagPromptTexture&
 
 struct MagPromptIconSources {
     std::function<bool()> keyboard;             // prompts are for keyboard and mouse (section 12.2)
-    std::function<bool()> keyboard_pad_live;    // the SDK keyboard pad serves menu buttons
-    std::function<std::string(MagPadButton)> label;  // the label of the pad's key for a button
+    // The key that presses a button now (mag_game_prompts_button_key); empty keeps the game's icon.
+    std::function<std::string(MagPadButton)> label;
 };
 
 class MagGamePromptIcons {

@@ -1145,7 +1145,7 @@ The ring is the last 16 KB of the runtime's HLE window (`VM_HLE_INJECT_BASE`, 16
 the runtime owns and never gives the game, above the window's fixed SDK uses at its bottom. The
 prompts commit it at VM begin; without it they stay off and say so.
 
-### 12.5 Picture prompts in menus
+### 12.5 Picture prompts
 
 Some menu prompts are pictures, not text: the movie places a face-button icon next to a plain label
 (the Square beside DELETE on character management and beside REWARDS on the deploy screen, the
@@ -1154,29 +1154,51 @@ change them. Observed from the outside (texture decodes and guest memory around 
 end and Training), these icons are four 24x24 textures, one per face button, each a single-level
 linear DXT5 image with a 96-byte pitch, the same bytes on every screen that uses them.
 
-While the prompts are for keyboard and mouse (12.2) and the SDK keyboard pad serves the menu buttons
-(`mag_input_capture_keyboard_pad_muted()` is false: the front end and in-match menus, 8.2), the
-renderer draws our own key cap in place of each of those icons:
+While the prompts are for keyboard and mouse (12.2), the renderer draws our own key cap in place of
+each of those icons, labelled with the key that presses that button now (12.6):
 
 - Recognition: the runtime's draw engine asks the prompts about every guest 2D texture it decodes
   (`rsx_draw_engine_set_texture_override`, an SDK hook that is inert when unset). A texture is a
   game icon when its format byte is `0xA8` (linear DXT5), it is 24x24 with one level and pitch 96,
   and the SHA-256 of its 576 bytes is one of four identities in `mag_game_controls_icons.cpp` (Cross,
   Circle, Square, Triangle). Every other texture is declined and never asked about again.
-- The picture: a rounded key outline with the label of the keyboard pad's key for that button
-  (`mag_game_controls_pad_layout_key`: X, C, Z, V), named as in 12.3, drawn white on clear with the
+- The picture: a rounded key outline with the label of 12.6 for that button (in a menu the keyboard
+  pad's X, C, Z, V; on foot the keys bound to Jump, Interact, Reload, Crouch), named as in 12.3,
+  drawn white on clear with the
   5x7 font of `player_prompt_keycap.cpp` (our own), box-filtered, stored with its rows bottom-up as
   the game's icons are, and DXT5-encoded into the same 576-byte layout.
-- Switching: once per host frame the prompts re-read the device, the keyboard pad state and the
-  labels. When the pictures to show change, they start a new override generation, and the renderer
-  decodes the four icons again (their guest bytes, or our pictures) the next time each is drawn.
-  Guest memory is never written; controller players and on-foot play keep the game's icons.
+- Switching: once per host frame the prompts re-read the device and the labels (which follow the
+  keyboard pad state and the profile). When the pictures to show change, they start a new override
+  generation, and the renderer decodes the four icons again (their guest bytes, or our pictures) the
+  next time each is drawn. Guest memory is never written; controller players keep the game's icons,
+  and a button with no key keeps its icon.
 
-Not covered: the shoulder and stick prompts (L1, R1, L2, R2, R3), which these menus draw as text in
-a box or as a plain ring; in the Training pause menu the adapter attaches on foot ("a menu holds
-look"), so the keyboard pad is muted there and its EXIT GAME (Square) and Kill Self (R3) keep the
-game's icons, matching that no key presses them there today; the D3D12 renderer (parked), which
-does not decode through the draw engine.
+In the Training pause menu the adapter attaches on foot ("a menu holds look"), so its pictures and
+tab boxes show the on-foot keys of rule 2 of 12.6; whether those keys act on that menu has not been
+checked in game. Not covered: the D3D12 renderer (parked), which does not decode through the draw
+engine.
+
+### 12.6 Shoulder and stick prompts, and the key for a button
+
+The shoulder and stick prompts (L1, R1, L2, R2, L3, R3) are not pictures: a movie asks for localized
+text whose whole content is the button's name ("L1"), and draws it in a small box (the pause menu's
+tab switches, for example). The text seam of 12.1 sees that text; a text that is exactly one of those
+six names is replaced, without parentheses, by the key that presses the button now.
+
+The key for a button (`mag_game_prompts_button_key`), for the face-button pictures of 12.5 as well:
+
+1. While the SDK keyboard pad serves menu buttons (not muted, 8.2): the pad's key for the button
+   (`mag_game_controls_pad_layout_key`: Q, E, R, T, F, G for L1, R1, L2, R2, L3, R3).
+2. Otherwise (on foot): the action the game's own controller layout puts on that button (the
+   catalog's controller defaults, 2.3: L1 aim, R1 fire, L2 cycle equipment, R2 cycle weapons, L3
+   sprint, R3 melee, Cross jump, Circle interact, Square reload, Triangle crouch), and its first
+   keyboard or mouse binding in the live profile, named as in 12.3.
+3. No such key: the game's text or icon stays.
+
+A box holds about five characters: a longer name keeps its first four (`RSHIFT` becomes `RSHI`).
+
+Some of these texts are fetched when a movie is built (the pause menu's with the HUD), so they show
+the key of the context at that moment, the same limit as 12.2.
 
 Lifetime: the prompts are built with `MAG_GAME_CONTROLS` and start with it at VM begin
 (`mag_game_controls_prompts_runtime.cpp`, its own extension callbacks). `MAG_GAME_CONTROLS=0` or

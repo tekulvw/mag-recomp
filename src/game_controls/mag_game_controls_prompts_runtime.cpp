@@ -72,9 +72,12 @@ void start_icons() {
     if (!icons) {
         MagPromptIconSources sources;
         sources.keyboard = keyboard_prompts;
-        sources.keyboard_pad_live = [] { return !mag_input_capture_keyboard_pad_muted(); };
         sources.label = [](MagPadButton button) {
-            return mag::mag_prompt_label({mag::InputSource::Keyboard, mag_game_controls_pad_layout_key(button)});
+            MagGamePromptSources keys;
+            keys.keyboard_pad_live = [] { return !mag_input_capture_keyboard_pad_muted(); };
+            keys.bindings = mag::mag_controls_action_bindings;
+            keys.label = mag::mag_prompt_label;
+            return mag_game_prompts_button_key(button, keys);
         };
         icons = new MagGamePromptIcons(std::move(sources));
     }
@@ -106,6 +109,7 @@ void start(const char*) {
     sources.policy = mag::mag_controls_current_policy;
     sources.bindings = mag::mag_controls_action_bindings;
     sources.label = mag::mag_prompt_label;
+    sources.keyboard_pad_live = [] { return !mag_input_capture_keyboard_pad_muted(); };
     if (const char* trace = std::getenv("MAG_GAME_CONTROLS_TRACE"); trace && !std::strcmp(trace, "1"))
         sources.trace = [](const std::string& line) { std::fprintf(stderr, "[game-prompts] %s\n", line.c_str()); };
     prompts = std::make_unique<MagGamePrompts>(MagGameControlsMemory{nullptr, read, write}, base, std::move(sources));

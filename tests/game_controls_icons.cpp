@@ -41,16 +41,15 @@ void identity() {
 void pictures() {
     const auto cross = fake_icon("A");
     const std::vector<MagPromptIconIdentity> table = {{mag::sha256_hex(cross.data(), cross.size()), MagPadButton::Cross}};
-    bool keyboard = true, pad_live = true;
+    bool keyboard = true;
     std::string label = "X";
     MagPromptIconSources sources;
     sources.keyboard = [&] { return keyboard; };
-    sources.keyboard_pad_live = [&] { return pad_live; };
     sources.label = [&](MagPadButton b) { require(b == MagPadButton::Cross, "labels asked for listed buttons only"); return label; };
     MagGamePromptIcons icons(sources, table);
     const uint8_t* replacement = reinterpret_cast<const uint8_t*>(1);
     require(icons.answer(texture_of(cross), &replacement) && !replacement, "before the first refresh: interested, no picture");
-    require(icons.refresh() && icons.showing_keys(), "keyboard in a menu shows key caps");
+    require(icons.refresh() && icons.showing_keys(), "keyboard and mouse shows key caps");
     require(!icons.refresh(), "nothing changed, nothing to redo");
     require(icons.answer(texture_of(cross), &replacement) && replacement, "the icon gets a picture");
     // The picture is the key cap for the label, stored bottom-up as the game stores its icons.
@@ -67,12 +66,13 @@ void pictures() {
     require(replacement && replacement != before, "with the new key");
     require(before[0] == expected[0] && std::vector<uint8_t>(before, before + 576) == expected, "the old picture stays valid");
 
-    pad_live = false;
-    require(icons.refresh() && !icons.showing_keys(), "on foot the game's icons come back");
+    label = "";
+    require(icons.refresh() && icons.showing_keys(), "no key for the button now");
+    require(icons.answer(texture_of(cross), &replacement) && !replacement, "keeps the game's icon");
+    label = "X"; keyboard = false;
+    require(icons.refresh() && !icons.showing_keys(), "a controller player gets the game's icons back");
     require(icons.answer(texture_of(cross), &replacement) && !replacement, "interested, no picture");
-    pad_live = true; keyboard = false;
-    require(!icons.refresh(), "controller in a menu: still the game's icons");
-    keyboard = true; label = "X";
+    keyboard = true;
     require(icons.refresh(), "keyboard again");
     icons.answer(texture_of(cross), &replacement);
     require(replacement == before, "an earlier picture is reused");

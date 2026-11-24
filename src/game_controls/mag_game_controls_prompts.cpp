@@ -47,7 +47,63 @@ std::string mag_game_prompts_label(std::string_view name, const MagGamePromptSou
     return {};
 }
 
+std::optional<MagPadButton> mag_game_prompts_button_text(std::string_view text) {
+    if (text.size() != 2 || (text[0] != 'L' && text[0] != 'R') || text[1] < '1' || text[1] > '3') return std::nullopt;
+    constexpr MagPadButton left[] = {MagPadButton::L1, MagPadButton::L2, MagPadButton::L3};
+    constexpr MagPadButton right[] = {MagPadButton::R1, MagPadButton::R2, MagPadButton::R3};
+    return (text[0] == 'L' ? left : right)[text[1] - '1'];
+}
+
+namespace {
+// SDL GameController numbers of the pad buttons (the controller codes of section 8.1; triggers are
+// codes 32 and 33).
+uint32_t controller_code(MagPadButton button) {
+    switch (button) {
+    case MagPadButton::Cross: return 0; case MagPadButton::Circle: return 1;
+    case MagPadButton::Square: return 2; case MagPadButton::Triangle: return 3;
+    case MagPadButton::Select: return 4; case MagPadButton::Start: return 6;
+    case MagPadButton::L3: return 7; case MagPadButton::R3: return 8;
+    case MagPadButton::L1: return 9; case MagPadButton::R1: return 10;
+    case MagPadButton::Up: return 11; case MagPadButton::Down: return 12;
+    case MagPadButton::Left: return 13; case MagPadButton::Right: return 14;
+    case MagPadButton::L2: return 32; case MagPadButton::R2: return 33;
+    }
+    return UINT32_MAX;
+}
+}  // namespace
+
+std::string mag_game_prompts_compact(std::string label) {
+    if (label.size() > 5) label.resize(4);
+    return label;
+}
+
+std::string mag_game_prompts_button_key(MagPadButton button, const MagGamePromptSources& sources) {
+    if (!sources.label) return {};
+    if (sources.keyboard_pad_live && sources.keyboard_pad_live())
+        return sources.label({InputSource::Keyboard, mag_game_controls_pad_layout_key(button)});
+    if (!sources.bindings) return {};
+    // The game's own controller layout (the catalog defaults) says which action the button is.
+    static const ControlsProfile layout = mag_game_controls_default_profile();
+    const uint32_t code = controller_code(button);
+    for (const auto& b : layout.bindings) {
+        if (b.control.source != InputSource::Controller || b.control.code != code || !(b.contexts & uint32_t(InputContext::OnFoot)))
+            continue;
+        for (const auto& bound : sources.bindings(b.action, InputContext::OnFoot)) {
+            if (bound.control.source == InputSource::Controller) continue;
+            if (auto label = sources.label(bound.control); !label.empty()) return label;
+        }
+    }
+    return {};
+}
+
 std::optional<std::string> mag_game_prompts_rewrite(std::string_view text, const MagGamePromptSources& sources) {
+    // A whole text that is a shoulder or stick button's name ("L1"): the movie draws it in a small
+    // box as that button's prompt (section 12.6).
+    if (const auto button = mag_game_prompts_button_text(text)) {
+        std::string label = mag_game_prompts_compact(mag_game_prompts_button_key(*button, sources));
+        if (label.empty() || label == text) return std::nullopt;
+        return label;
+    }
     std::string result;
     bool changed = false;
     size_t done = 0;
@@ -119,7 +175,7 @@ struct MagGamePrompts::State {
         const uint32_t pointer = be32(head.data() + 8);
         const auto original_text = read_string(pointer);
         if (!original_text) return fail("text unreadable");
-        if (original_text->find('[') == std::string::npos) return;
+        if (original_text->find('[') == std::string::npos && !mag_game_prompts_button_text(*original_text)) return;
         const auto next = keyboard ? mag_game_prompts_rewrite(*original_text, sources) : std::nullopt;
         if (sources.trace && traced < 400) {
             ++traced;

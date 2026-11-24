@@ -46,10 +46,11 @@ MagGamePromptIcons::MagGamePromptIcons(MagPromptIconSources sources, std::vector
     : sources_(std::move(sources)), identities_(std::move(identities)) {}
 
 bool MagGamePromptIcons::refresh() {
-    const bool keys = sources_.keyboard && sources_.keyboard() && sources_.keyboard_pad_live && sources_.keyboard_pad_live();
+    const bool keys = sources_.keyboard && sources_.keyboard();
     std::map<MagPadButton, std::string> labels;
     if (keys && sources_.label)
-        for (const auto& identity : identities_) labels[identity.button] = sources_.label(identity.button);
+        for (const auto& identity : identities_)
+            if (auto label = sources_.label(identity.button); !label.empty()) labels[identity.button] = std::move(label);
     std::lock_guard guard(lock_);
     if (keys == keys_ && labels == labels_) return false;
     keys_ = keys;
