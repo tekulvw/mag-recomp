@@ -4,8 +4,8 @@
   "upstream": "https://github.com/sp00nznet/ps3recomp",
   "ps3recomp": {
     "runtime": {
-      "tag": "mag-recomp/runtime-2026.11.24-texoverride",
-      "commit": "e0cdf4421c4790aeb63c4f0e56e299c67953506b",
+      "tag": "mag-recomp/runtime-2026.11.23-sdlpad",
+      "commit": "84675fa414f4203a600a7f9ae08d288008e5343f",
       "path": "local/ps3recomp-runtime"
     },
     "lifter-spu": {
@@ -35,13 +35,13 @@
     }
   },
   "allowed_runtime_revisions": [
-    "e0cdf4421c4790aeb63c4f0e56e299c67953506b"
+    "84675fa414f4203a600a7f9ae08d288008e5343f"
   ],
   "strict_runtime_revisions": [
-    "e0cdf4421c4790aeb63c4f0e56e299c67953506b"
+    "84675fa414f4203a600a7f9ae08d288008e5343f"
   ],
   "strict_hle_runtime_revisions": [
-    "e0cdf4421c4790aeb63c4f0e56e299c67953506b"
+    "84675fa414f4203a600a7f9ae08d288008e5343f"
   ],
   "first_nonblack_capture_revisions": [],
   "allowed_lifter_revisions": [
