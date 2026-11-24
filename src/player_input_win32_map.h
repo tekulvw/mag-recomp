@@ -45,7 +45,7 @@ typedef struct {
 } MagWin32MouseEdge;
 unsigned mag_win32_raw_mouse_edges(uint16_t button_flags, MagWin32MouseEdge out[10]);
 
-/* Relative look motion of one Raw Input mouse report: dx right-positive, dy up-positive. Returns 0
+/* Relative look motion of one Raw Input mouse report: dx right-positive, dy down-positive. Returns 0
  * (no motion) for absolute-position devices (tablets, remote desktop, some virtual machines) and
  * for reports without movement. */
 int mag_win32_raw_mouse_motion(uint16_t flags, int32_t last_x, int32_t last_y, double* dx, double* dy);

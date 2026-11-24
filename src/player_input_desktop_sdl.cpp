@@ -12,7 +12,7 @@
 // so the core only ever runs on the window thread.
 //
 // Mapping. SDL scancodes 4..231 are USB HID keyboard usages. Mouse buttons: left 0, right 1,
-// middle 2, X1 3, X2 4. Relative motion uses SDL relative mouse mode; dy is reported up-positive.
+// middle 2, X1 3, X2 4. Relative motion uses SDL relative mouse mode; dy is reported down-positive.
 // Touch-synthesized mouse events are ignored. SDL presents one logical mouse (device 1 here).
 #include "player_input_desktop.h"
 #include "player_input_desktop_sdl.h"
@@ -279,7 +279,7 @@ void deliver(Backend& b, const Observed& item) {
     case SDL_MOUSEMOTION: {
         const bool foreign = e.motion.which == SDL_TOUCH_MOUSEID || e.motion.windowID != id;
         const bool accepted = !foreign && !item.warp &&
-                              b.core.mouse_motion(double(e.motion.xrel), -double(e.motion.yrel), item.stamp);
+                              b.core.mouse_motion(double(e.motion.xrel), double(e.motion.yrel), item.stamp);
         // The centring warp is never look input; SDL's zero-length motion (leaving relative mode)
         // is no motion at all.
         if (!item.warp && (e.motion.xrel || e.motion.yrel)) {

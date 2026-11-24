@@ -17,7 +17,7 @@
 // USB HID usages (player_input_win32_map.c); auto-repeat is filtered by tracking each key's
 // physical state. Mouse buttons map left 0, right 1, middle 2, X1 3, X2 4 on one logical mouse
 // (physical buttons; the system's swap setting does not apply). Look motion is the raw relative
-// delta, reported up-positive; absolute-position devices do not drive look. Relative mode hides
+// delta, reported down-positive; absolute-position devices do not drive look. Relative mode hides
 // the cursor and confines it to the client area; it is re-applied after a click in the window,
 // when focus returns and when the confinement was lost (the window moved or something else
 // changed it), and released when focus goes.

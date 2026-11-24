@@ -772,7 +772,7 @@ and requests capture and no dialog owns the keyboard, which the pump would treat
 controls bind Escape to Start). Closing the window still quits; Escape quits again as soon as any
 of those conditions ends. SDL scancodes 4..231 are the HID usages; mouse buttons map left 0,
 right 1, middle 2, X1 3, X2 4 on one logical mouse; touch-synthesized mouse events are ignored;
-motion is SDL relative mode, reported up-positive. While the mouse is locked the backend also
+motion is SDL relative mode, reported down-positive (moving the mouse down is positive). While the mouse is locked the backend also
 holds an explicit window grab (`SDL_SetWindowGrab`), so the pointer stays confined to the game
 window even where relative mode alone does not lock it; it acquires in the order leave relative
 mode, grab, centre the pointer, enter relative mode. Each pump checks the lock: when relative mode
@@ -834,7 +834,7 @@ media keys and the GUI keys are not captured. Raw Input repeats held keys, so th
 each key's physical state and reports only changes; the activation snapshot (`GetAsyncKeyState`
 through each scan code's virtual key, plus the Num Lock keypad keys) also restarts that tracking.
 Mouse buttons are physical (left 0, right 1, middle 2, X1 3, X2 4, one logical mouse); motion is
-the raw relative delta, reported up-positive, and absolute-position devices (tablets, remote
+the raw relative delta, reported down-positive as Raw Input gives it, and absolute-position devices (tablets, remote
 desktop) do not drive look. Ready requires the game window to be the foreground and active window
 and not minimized. Relative mode hides the cursor and confines it to the client area; it is
 re-applied after a click in the window, when focus returns and when the confinement no longer

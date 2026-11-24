@@ -141,7 +141,7 @@ void run() {
     require(saw(mag::InputSource::Mouse, 1, true) && saw(mag::InputSource::Mouse, 3, true), "SDL buttons map to right 1 and X1 3");
     require(!saw(mag::InputSource::Mouse, 0, true), "touch-synthesized clicks are ignored");
     require(events.back().device == 1, "SDL's logical mouse is one device");
-    require(motion_x == 5 && motion_y == -3, "relative motion is reported up-positive");
+    require(motion_x == 5 && motion_y == 3, "relative motion is reported down-positive, as SDL gives it");
 
     mag_input_desktop_set_mouse_enabled(0);
     pump();
@@ -166,7 +166,7 @@ void run() {
     require(motion_x == before_x && motion_y == before_y, "the re-lock's centring warp became look input");
     motion(2, -1);
     pump();
-    require(motion_x == before_x + 2 && motion_y == before_y + 1, "real motion still reaches the controls after a re-lock");
+    require(motion_x == before_x + 2 && motion_y == before_y - 1, "real motion still reaches the controls after a re-lock");
     unsetenv("MAG_GAME_CONTROLS_TRACE");
 
     // A driver without a global pointer (the dummy driver here, Wayland in play) reports a window

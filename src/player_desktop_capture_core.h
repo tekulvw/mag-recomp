@@ -62,7 +62,7 @@ class DesktopCaptureSink {
 public:
     virtual ~DesktopCaptureSink() = default;
     virtual void push_event(const PhysicalInputEvent& event) = 0;
-    // dx right-positive, dy up-positive.
+    // dx right-positive, dy down-positive (screen directions; mag_controls_mouse_look turns them into angles).
     virtual void push_relative_mouse(double dx, double dy) = 0;
     virtual void set_window_capture(bool focused, bool mouse_captured) = 0;
     virtual void release_source(InputSource source) = 0;
@@ -97,7 +97,7 @@ public:
     // A mouse-button edge: index 0 left, 1 right, 2 middle, 3 and 4 the side buttons.
     void mouse_button(uint32_t index, uint64_t device, bool down, uint64_t time_ns,
                       DesktopCaptureGate::Stamp stamp);
-    // Relative motion: dx right-positive, dy up-positive. Returns whether it reached the engine.
+    // Relative motion: dx right-positive, dy down-positive. Returns whether it reached the engine.
     bool mouse_motion(double dx, double dy, DesktopCaptureGate::Stamp stamp);
     // The motion epoch a stamp carries, and the current one, for diagnostics.
     static uint32_t motion_epoch(DesktopCaptureGate::Stamp stamp) { return uint32_t(stamp.state >> 33); }
