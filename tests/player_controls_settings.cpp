@@ -33,6 +33,8 @@ int main(int argc,char**argv) {
     }
     assert(mag_controls_settings_control_name({InputSource::Controller,4})=="Select / Back");
     assert(mag_controls_settings_control_name({InputSource::Controller,6})=="Start / Menu");
+    assert(mag_controls_settings_control_name({InputSource::Mouse,MouseWheelUp})=="Wheel up");
+    assert(mag_controls_settings_control_name({InputSource::Mouse,MouseWheelDown})=="Wheel down");
     mag_controls_settings_unregister();assert(!mag_controls_settings_available());
     reg.actions.push_back({3,"Start",17,7,"Native menu / command buttons"});
     reg.defaults.catalog_revision=1;

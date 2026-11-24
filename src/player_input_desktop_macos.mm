@@ -5,7 +5,10 @@
 #include "player_settings_runtime.h"
 #include "player_controls.h"
 #include "player_desktop_capture.h"
+#include <algorithm>
 #include <atomic>
+#include <cstdlib>
+#include <memory>
 #include <chrono>
 #include <set>
 using namespace mag;
@@ -29,6 +32,7 @@ void mainQueue(void (^block)(void)) {if(NSThread.isMainThread)block();else dispa
 - (void)rebuild;
 - (void)button:(PhysicalControl)control down:(BOOL)down epoch:(uint64_t)epoch time:(uint64_t)time;
 - (void)mouseButton:(uint32_t)code device:(uintptr_t)device down:(BOOL)down epoch:(uint64_t)epoch time:(uint64_t)time;
+- (void)wheel:(int)steps device:(uintptr_t)device time:(uint64_t)time;
 @end
 @implementation MAGRawDesktopInput {
     std::set<PhysicalControl> held;
@@ -62,6 +66,14 @@ void mainQueue(void (^block)(void)) {if(NSThread.isMainThread)block();else dispa
 #else
     if(auto edge=mouseHeld.update(code,device,down))[self button:{InputSource::Mouse,code} down:*edge epoch:epoch time:time];
 #endif
+}
+// Whole wheel steps, up positive: each a press and an immediate release, never held.
+- (void)wheel:(int)steps device:(uintptr_t)device time:(uint64_t)time {
+    const uint32_t code=steps>0?MouseWheelUp:MouseWheelDown;
+    for(int i=0;i<std::min(std::abs(steps),8);++i) {
+        mag_controls_push_event({{InputSource::Mouse,code},true,time+2*uint64_t(i),uint64_t(device)});
+        mag_controls_push_event({{InputSource::Mouse,code},false,time+2*uint64_t(i)+1,uint64_t(device)});
+    }
 }
 - (void)restoreCallbacks {
     ++self.epoch;gate.invalidate();gate.publish(false,false);self.ready=NO;
@@ -111,6 +123,25 @@ void mainQueue(void (^block)(void)) {if(NSThread.isMainThread)block();else dispa
         };
         input.mouseMovedHandler=handler;
         [self.restorers addObject:[^{if(input.mouseMovedHandler==handler)input.mouseMovedHandler=prior;} copy]];
+        // The wheel: GameController reports each scroll's vertical delta, up positive; whole steps
+        // become wheel presses (docs/native-controls.md, 8.1), the rest waits for the next scroll.
+        if(GCDeviceCursor* scroll=input.scroll) {
+            GCControllerDirectionPadValueChangedHandler priorScroll=scroll.valueChangedHandler;
+            const uintptr_t device=(uintptr_t)(__bridge void*)scroll;
+            auto rest=std::make_shared<double>(0);
+            GCControllerDirectionPadValueChangedHandler scrolled=^(GCControllerDirectionPad* pad,float x,float y) {
+                const uint64_t time=now();MAGRawDesktopInput* receipt=weakSelf;
+                const auto stamp=receipt?receipt->gate.stamp():DesktopCaptureGate::Stamp{};
+                if(priorScroll)priorScroll(pad,x,y);
+                mainQueue(^{MAGRawDesktopInput* owner=weakSelf;[owner refresh];
+                    if(!owner || !owner.installed || !owner.ready || owner.epoch!=epoch || !owner->gate.accepts(stamp))return;
+                    if((y>0 && *rest<0) || (y<0 && *rest>0))*rest=0;
+                    *rest+=y;const int steps=int(*rest);*rest-=steps;
+                    [owner wheel:steps device:device time:time];});
+            };
+            scroll.valueChangedHandler=scrolled;
+            [self.restorers addObject:[^{if(scroll.valueChangedHandler==scrolled)scroll.valueChangedHandler=priorScroll;} copy]];
+        }
         NSArray* buttons=@[input.leftButton,input.rightButton?:NSNull.null,input.middleButton?:NSNull.null];
         NSMutableArray* all=[buttons mutableCopy];if(input.auxiliaryButtons)[all addObjectsFromArray:input.auxiliaryButtons];
         for(NSUInteger index=0;index<all.count;++index) {
