@@ -120,6 +120,10 @@ ControlsProfile mag_game_controls_default_profile() {
     for (auto [code, id] : {std::pair{6u, Start}, {4u, Select}, {11u, DpadUp}, {12u, DpadDown},
                             {13u, DpadLeft}, {14u, DpadRight}})
         profile.bindings.push_back({{InputSource::Controller, code}, id, SystemContexts});
+    // Revision 4: the mouse wheel zooms a scope (scopeup and scopedown, on D-pad up and down), on
+    // foot only, beside the arrows.
+    profile.bindings.push_back({{InputSource::Mouse, MouseWheelUp}, DpadUp, OnFoot});
+    profile.bindings.push_back({{InputSource::Mouse, MouseWheelDown}, DpadDown, OnFoot});
     // Situational actions (keyboard only; a controller presses them natively): X confirms on-screen
     // prompts as it does in menus (the SDK keyboard pad's Cross), Backspace goes back (C, the pad's
     // Circle, is Crouch on foot), Return bleeds out, 1 2 3 for the tactical menu, V and B in vehicles.
@@ -211,17 +215,36 @@ void upgrade_from_revision_2(ControlsProfile& profile) {
         profile.bindings.push_back(binding);
     }
 }
+
+// Revision 4: wheel up and down on foot for D-pad up and down (scope zoom), each only where the
+// player uses that wheel step for nothing on foot and the D-pad direction has room for a second
+// keyboard or mouse control there.
+void add_scope_wheel(ControlsProfile& profile) {
+    for (auto [code, action] : {std::pair{MouseWheelUp, DpadUp}, {MouseWheelDown, DpadDown}}) {
+        const PhysicalControl wheel{InputSource::Mouse, code};
+        const auto keys = std::count_if(profile.bindings.begin(), profile.bindings.end(), [&](const auto& b) {
+            return b.action == action && b.control.source != InputSource::Controller && (b.contexts & OnFoot);
+        });
+        if (keys >= 2 || uses_on_foot(profile, wheel)) continue;
+        profile.bindings.push_back({wheel, action, OnFoot});
+    }
+}
+void upgrade_before_revision_2(ControlsProfile& profile);
 }  // namespace
 
 void mag_game_controls_upgrade_profile(ControlsProfile& profile) {
-    if (profile.catalog_revision > MagGameControlsCatalogRevision)
+    const unsigned from = profile.catalog_revision;
+    if (from > MagGameControlsCatalogRevision)
         throw std::invalid_argument("Controls catalog is newer than this build");
-    if (profile.catalog_revision == MagGameControlsCatalogRevision) return;
-    if (profile.catalog_revision == 2) {
-        upgrade_from_revision_2(profile);
-        profile.catalog_revision = MagGameControlsCatalogRevision;
-        return;
-    }
+    if (from == MagGameControlsCatalogRevision) return;
+    if (from == 2) upgrade_from_revision_2(profile);
+    else if (from < 2) upgrade_before_revision_2(profile);
+    add_scope_wheel(profile);
+    profile.catalog_revision = MagGameControlsCatalogRevision;
+}
+
+namespace {
+void upgrade_before_revision_2(ControlsProfile& profile) {
     // Before revision 2 no retired action existed; drop any stray one defensively.
     std::erase_if(profile.bindings, [](const auto& b) { return !mag_game_controls_action(b.action); });
     for (auto binding : mag_game_controls_default_profile().bindings) {
@@ -236,5 +259,5 @@ void mag_game_controls_upgrade_profile(ControlsProfile& profile) {
         if (mag_game_controls_action(binding.action)->system_channel < 0 && binding.contexts != OnFoot) continue;
         if (!present && binding.contexts) profile.bindings.push_back(binding);
     }
-    profile.catalog_revision = MagGameControlsCatalogRevision;
 }
+}  // namespace

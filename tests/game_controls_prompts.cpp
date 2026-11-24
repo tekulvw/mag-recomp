@@ -79,6 +79,9 @@ void labels() {
     require(mag_prompt_fallback_label({InputSource::Keyboard, 39}) == "0", "digit 0");
     require(mag_prompt_fallback_label({InputSource::Keyboard, 44}) == "SPACE", "space");
     require(mag_prompt_fallback_label({InputSource::Keyboard, 40}) == "ENTER", "return");
+    require(mag_prompt_fallback_label({InputSource::Mouse, MouseWheelUp}) == "WHEEL UP" &&
+                mag_prompt_fallback_label({InputSource::Mouse, MouseWheelDown}) == "WHEEL DN",
+            "the wheel's steps");
     require(mag_prompt_fallback_label({InputSource::Keyboard, 225}) == "SHIFT", "left shift");
     require(mag_prompt_fallback_label({InputSource::Keyboard, 62}) == "F5", "function key");
     require(mag_prompt_fallback_label({InputSource::Keyboard, 92}) == "NUM4", "keypad");

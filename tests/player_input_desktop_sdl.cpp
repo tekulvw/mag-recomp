@@ -24,6 +24,7 @@ void require(bool value, const char* message) {
 }  // namespace
 
 namespace mag {
+uint32_t sdl_desktop_mouse_index(uint8_t sdl_button);  // the backend's button numbering
 void mag_controls_push_event(const PhysicalInputEvent& event) { events.push_back(event); }
 void mag_controls_push_relative_mouse(double dx, double dy) { motion_x += dx, motion_y += dy; }
 void mag_controls_set_window_capture(bool focused, bool mouse_captured) { capture = {focused, mouse_captured}; }
@@ -70,6 +71,24 @@ void motion(int dx, int dy, Uint32 id = 0) {
     event.motion.xrel = dx;
     event.motion.yrel = dy;
     SDL_PushEvent(&event);
+}
+void wheel(int y, bool flipped = false, Uint32 which = 0, Uint32 id = 0) {
+    SDL_Event event{};
+    event.type = SDL_MOUSEWHEEL;
+    event.wheel.windowID = id ? id : SDL_GetWindowID(window);
+    event.wheel.which = which;
+    event.wheel.y = y;
+#if SDL_VERSION_ATLEAST(2, 0, 18)
+    event.wheel.preciseY = float(y);
+#endif
+    event.wheel.direction = flipped ? SDL_MOUSEWHEEL_FLIPPED : SDL_MOUSEWHEEL_NORMAL;
+    SDL_PushEvent(&event);
+}
+size_t count(mag::InputSource source, uint32_t code, bool down) {
+    size_t n = 0;
+    for (const auto& event : events)
+        if (event.control.source == source && event.control.code == code && event.down == down) ++n;
+    return n;
 }
 bool saw(mag::InputSource source, uint32_t code, bool down) {
     for (const auto& event : events)
@@ -152,6 +171,18 @@ void run() {
     require(!saw(mag::InputSource::Mouse, 0, true), "touch-synthesized clicks are ignored");
     require(events.back().device == 1, "SDL's logical mouse is one device");
     require(motion_x == 5 && motion_y == 3, "relative motion is reported down-positive, as SDL gives it");
+    events.clear();
+    wheel(2);
+    wheel(-1, true);  // natural scrolling reports the wheel turned the other way
+    wheel(1, false, SDL_TOUCH_MOUSEID);
+    wheel(1, false, 0, SDL_GetWindowID(window) + 100);
+    pump();
+    require(count(mag::InputSource::Mouse, mag::MouseWheelUp, true) == 3 &&
+                count(mag::InputSource::Mouse, mag::MouseWheelUp, false) == 3,
+            "two wheel-up steps and a flipped down report are three wheel-up steps, each released");
+    require(!saw(mag::InputSource::Mouse, mag::MouseWheelDown, true), "touch and other windows' wheels are ignored");
+    require(mag::sdl_desktop_mouse_index(9) == 10 && mag::sdl_desktop_mouse_index(8) == 7,
+            "extra buttons skip the wheel's codes");
 
     mag_input_desktop_set_mouse_enabled(0);
     pump();

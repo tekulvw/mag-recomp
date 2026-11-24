@@ -105,6 +105,18 @@ unsigned mag_win32_raw_mouse_edges(uint16_t button_flags, MagWin32MouseEdge out[
     return count;
 }
 
+int mag_win32_raw_mouse_wheel(uint16_t button_flags, uint16_t button_data, int32_t* remainder)
+{
+    if (!(button_flags & MAG_WIN32_MOUSE_WHEEL)) return 0;
+    /* A turn the other way drops what was left of a step in the first direction. */
+    const int32_t delta = (int16_t)button_data;
+    if ((delta > 0 && *remainder < 0) || (delta < 0 && *remainder > 0)) *remainder = 0;
+    *remainder += delta;
+    const int steps = (int)(*remainder / 120);
+    *remainder -= steps * 120;
+    return steps;
+}
+
 int mag_win32_raw_mouse_motion(uint16_t flags, int32_t last_x, int32_t last_y, double* dx, double* dy)
 {
     if ((flags & MAG_WIN32_MOUSE_MOVE_ABSOLUTE) || (last_x == 0 && last_y == 0)) return 0;
