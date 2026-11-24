@@ -1094,8 +1094,8 @@ void situational_actions() {
     mag_controls_push_event({{InputSource::Keyboard, 40}, false, time_ns()});
     h.idle_tick();
 
-    // A HUD prompt's own handler (a gameplay route) watching Confirm on Jump's channel: X confirms,
-    // as it does in menus; Space (Jump) does not.
+    // A UI handler (a gameplay route) watching Confirm on Jump's channel on foot: neither Space (Jump)
+    // nor X presses it. Confirm is a menu button, read from the keyboard pad in menus.
     uint32_t record = 0;
     const uint32_t route = route_handler(h.m, record);
     h.m.put32(record, Confirm);
@@ -1117,8 +1117,7 @@ void situational_actions() {
     h.enter_handler();
     h.fire(Hook::HandlerExit);
     h.enter_handler(route);
-    require(h.recognize_record(record, route) && mag_guest_tuple_value(h.tuple_at(record)) == 1.0f,
-            "X did not confirm the prompt");
+    require(!h.recognize_record(record, route) && h.tuple_at(record) == before, "X pressed Confirm on foot");
     h.fire(Hook::HandlerExit);
     h.end_poll();
     h.enter_actor();
@@ -1195,62 +1194,47 @@ void situational_actions() {
 }
 
 std::vector<std::string> census_lines;
-// A list in a closed menu (the pause menu's squad list) stays a gameplay route and watches Confirm.
-// X on foot confirms it through the adapter; the list then goes unrecognized until the menu opens and
-// holds look, when the adapter leaves the list to the game (8.2). The game must find the record at
-// rest, not holding the adapter's press, or its own recognition finishes the tap (the player card
-// opened with the menu). Any record the adapter lets go is given back the same way.
-void stale_confirm_given_back() {
+// The closed pause menu stays routed on foot: its controller element watches Start (which opens it),
+// Confirm and Back. X on foot pressed its Confirm, so the menu opened with the player card already
+// open, and Kill Self did nothing until the card was closed. Confirm and Back are menu buttons: the
+// adapter never takes them over, on foot or in a menu that holds look; menus read X and C from the
+// keyboard pad. Escape still presses that element's Start.
+void closed_menu_never_sees_confirm() {
     Harness h;
     uint32_t record = 0;
-    const uint32_t list = route_handler(h.m, record);
+    const uint32_t menu = route_handler(h.m, record);
     h.m.put32(record, Confirm);
+    const uint32_t back = watch(h.m, menu, 1, 0x75453127, 7);  // os_cancel
+    const uint32_t start = watch(h.m, menu, 2, 0x2E8DE676, 12);  // the menu's Start
     require(h.idle_tick() == Attached, "first tick did not attach on foot");
+    const auto confirm_before = h.tuple_at(record), back_before = h.tuple_at(back);
     mag_controls_push_event({{InputSource::Keyboard, 27}, true, time_ns()});  // X.
+    mag_controls_push_event({{InputSource::Keyboard, 42}, true, time_ns()});  // Backspace.
     h.begin_tick();
-    h.enter_handler(list);
-    require(h.recognize_record(record, list) && mag_guest_tuple_value(h.tuple_at(record)) == 1.0f,
-            "X did not confirm the list");
+    h.enter_handler(menu);
+    require(!h.recognize_record(record, menu) && h.tuple_at(record) == confirm_before,
+            "X on foot pressed a closed menu's Confirm");
+    require(!h.recognize_record(back, menu) && h.tuple_at(back) == back_before,
+            "Backspace on foot pressed a closed menu's Back");
     h.fire(Hook::HandlerExit);
     h.enter_handler();
     h.end_poll();
     h.enter_actor();
     h.end_tick();
-    const auto pressed = h.tuple_at(record);
     mag_controls_push_event({{InputSource::Keyboard, 27}, false, time_ns()});
-    constexpr uint32_t Look = 0xFu << 20;
-    auto update = [&](uint32_t consumed) {  // ticks in which the list is not updated
-        h.m.put32(Pad + 0x80, consumed);
-        h.begin_tick();
-        h.enter_handler();
-        h.fire(Hook::HandlerExit);
-        h.end_poll();
-        h.end_tick();
-    };
-    update(0);
-    update(Look);
-    update(Look);
-    update(Look);
-    require(h.status() == std::string("on-foot input attached; a menu holds look"), "the menu hold was not taken");
-    require(h.tuple_at(record) == pressed, "the list's record changed while it was not updated");
+    mag_controls_push_event({{InputSource::Keyboard, 42}, false, time_ns()});
+    h.idle_tick();
+    mag_controls_push_event({{InputSource::Keyboard, 41}, true, time_ns()});  // Escape.
     h.begin_tick();
-    h.m.put32(Pad + 0x80, Look);
-    h.enter_handler(list);
-    require(!h.recognize_record(record, list), "the adapter took over the open menu's list");
-    require(h.tuple_at(record) == mag_guest_neutral_tuple(), "the list kept the adapter's press for the game to finish");
+    h.enter_handler(menu);
+    require(h.recognize_record(start, menu) && mag_guest_tuple_value(h.tuple_at(start)) == 1.0f,
+            "Escape did not press the menu's Start");
     h.fire(Hook::HandlerExit);
+    h.enter_handler();
     h.end_poll();
+    h.enter_actor();
     h.end_tick();
-
-    // A tuple the game wrote itself is never touched: the game now presses the list natively.
-    MagGuestTuple native = mag_guest_tuple(1.0f, 0.1f, 2, 0x0002);
-    for (size_t i = 0; i < native.size(); ++i) h.m.bytes[record + 0x0C + uint32_t(i)] = native[i];
-    h.begin_tick();
-    h.enter_handler(list);
-    require(!h.recognize_record(record, list) && h.tuple_at(record) == native, "the adapter overwrote the game's own press");
-    h.fire(Hook::HandlerExit);
-    h.end_poll();
-    h.end_tick();
+    mag_controls_push_event({{InputSource::Keyboard, 41}, false, time_ns()});
 }
 
 void census_line(const char* line) { census_lines.push_back(line); }
@@ -1374,7 +1358,7 @@ int main(int argc, char** argv) {
         {"mouse", mouse_look},       {"assist", aim_assist},     {"lifecycle", lifecycle},
         {"threads", threads_and_errors}, {"snapshot", update_snapshot}, {"menu", menu_holds_look},
         {"withdrawn", withdrawn_frame},
-        {"menu-pad", menu_keyboard_pad}, {"menu-look-pad", menu_holding_look_gets_the_pad}, {"situational", situational_actions}, {"stale-confirm", stale_confirm_given_back}, {"census", census},
+        {"menu-pad", menu_keyboard_pad}, {"menu-look-pad", menu_holding_look_gets_the_pad}, {"situational", situational_actions}, {"closed-menu-confirm", closed_menu_never_sees_confirm}, {"census", census},
         {"prompt-queries", prompt_queries}};
     try {
         if (argc != 2 || !scenarios.count(argv[1])) throw std::runtime_error("usage: game_controls_adapter <scenario>");
