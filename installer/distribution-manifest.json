@@ -42,7 +42,8 @@
     "mag_installer/native_package_linux.py",
     "mag_installer/build_cache.py",
     "mag_installer/compile_cache.py",
-    "mag_installer/lift_cache.py"
+    "mag_installer/lift_cache.py",
+    "mag_installer/build_jobs.py"
   ],
   "excludes": [
     "original game and firmware files",
