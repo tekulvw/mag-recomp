@@ -188,7 +188,9 @@ NSString *MAGReportRequestBlocker(BOOL linked) {
     return linked ? nil : @MAG_SETTINGS_REPORT_NEEDS_LINK;
 }
 
-BOOL MAGReportRequestWrite(NSError **error) {
+BOOL MAGReportRequestWrite(NSString **reportId, NSError **error) {
+    NSString *identifier = NSUUID.UUID.UUIDString.lowercaseString;  // version 4
+    if (reportId) *reportId = identifier;
     const char *path = getenv("MAG_REPORT_REQUEST");
     if (!path || !*path) { invalid(error, @MAG_SETTINGS_REPORT_UNAVAILABLE); return NO; }
     struct stat st;
@@ -196,8 +198,8 @@ BOOL MAGReportRequestWrite(NSError **error) {
     int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW | O_CLOEXEC, 0600);
     if (fd < 0) { invalid(error, @MAG_SETTINGS_REPORT_FAILED); return NO; }
     fchmod(fd, 0600);
-    char line[64];
-    int n = snprintf(line, sizeof line, "{\"requested_at\":%lld}\n", (long long)time(NULL));
+    char line[128];
+    int n = snprintf(line, sizeof line, "{\"requested_at\":%lld,\"report_id\":\"%s\"}\n", (long long)time(NULL), identifier.UTF8String);
     BOOL ok = n > 0 && write(fd, line, (size_t)n) == n;
     if (close(fd)) ok = NO;
     if (!ok) invalid(error, @MAG_SETTINGS_REPORT_FAILED);

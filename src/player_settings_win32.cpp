@@ -14,6 +14,7 @@
 #endif
 #include "player_report_request.h"
 #include "player_settings_account.h"
+#include "player_settings_debug.h"
 #include "player_settings_text.h"
 #include "player_settings_window.h"
 #include "player_input_win32_map.h"
@@ -30,6 +31,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <memory>
 #include <string>
 #include <vector>
@@ -44,6 +46,9 @@ enum : int {
     IdDisplay, IdOutput, IdRendering, IdAntiAliasing, IdSendReports, IdReportNow,
     IdKeyboardMouse = 200, IdController, IdMode, IdScope, IdSensitivity, IdInvert, IdReset, IdRows, IdHint,
     IdError = 300, IdRevert, IdKeep, IdCancel, IdApply, IdPlay, IdStatus, IdAccountStatus, IdReportStatus,
+    IdDebugPage = 120, IdDebugNote,
+    IdDebugItem = 400,  // + its index in mag_settings_debug_items; its hint is IdDebugHint + index
+    IdDebugHint = 450,
     IdBinding = 1000,  // + row * 4 + slot * 2, and + 1 for its clear button
 };
 constexpr UINT_PTR CaptureTimer = 1, ConfirmTimer = 2;
@@ -167,15 +172,19 @@ struct Window {
     UINT dpi = 96;
     HFONT body = nullptr, small = nullptr, heading = nullptr, large = nullptr;
     HBRUSH group_brush = nullptr, face_brush = nullptr;
-    bool controls_page = false, controller = false, advanced = false;
+    bool controls_page = false, debug_page = false, controller = false, advanced = false;
     // General.
-    HWND segment[2]{}, heading_connection = nullptr, heading_graphics = nullptr, server = nullptr, name = nullptr;
+    HWND segment[3]{}, heading_connection = nullptr, heading_graphics = nullptr, server = nullptr, name = nullptr;
     HWND account_button = nullptr, account_status = nullptr, advanced_link = nullptr;
     HWND tcp = nullptr, udp = nullptr, tcp_label = nullptr, udp_label = nullptr, connection_note = nullptr, graphics_note = nullptr;
     HWND display = nullptr, output = nullptr, rendering = nullptr, anti_aliasing = nullptr;
     HWND heading_reports = nullptr, send_reports = nullptr, report_button = nullptr, report_status = nullptr;
     std::string report_requested;  // after Send report: requested, or why it failed
     std::vector<Row> connection_rows, graphics_rows, reports_rows;
+    // Debug: one row per mag_settings_debug_items entry.
+    HWND heading_debug = nullptr, debug_note = nullptr;
+    std::vector<Row> debug_rows;
+    std::vector<HWND> debug;
     std::vector<HWND> general;  // everything on General, for showing the page
     // Controls.
     HWND device[2]{}, mode_label = nullptr, mode = nullptr, scope_label = nullptr, scope = nullptr, assist = nullptr;
@@ -337,8 +346,8 @@ void refresh_report() {
 }
 void request_report_now() {
     if (report_request_blocker(s->account->linked_name(account_portal()).has_value())) return;
-    std::string error;
-    s->report_requested = request_report(error) ? MAG_SETTINGS_REPORT_REQUESTED : MAG_SETTINGS_REPORT_FAILED;
+    std::string error, id;
+    s->report_requested = request_report(id, error) ? report_requested_status(id) : std::string(MAG_SETTINGS_REPORT_FAILED);
     refresh_report();
     layout();
 }
@@ -347,7 +356,7 @@ void request_report_now() {
 void changed() {
     if (s->pending) return;
     read_general();
-    const bool dirty = s->controls_page ? s->form->controls_dirty : settings_form_general_dirty(*s->form);
+    const bool dirty = s->debug_page ? false : s->controls_page ? s->form->controls_dirty : settings_form_general_dirty(*s->form);
     EnableWindow(s->apply, dirty);
     EnableWindow(s->output, !s->form->borderless);
     set_text(s->status, dirty ? MAG_SETTINGS_STATUS_DIRTY : MAG_SETTINGS_STATUS_CLEAN);
@@ -398,15 +407,31 @@ void layout_group(int& y, const std::vector<Row>& list, bool advanced_part) {
 void layout() {
     if (!s || !s->hwnd || !s->status) return;
     const int left = MAG_SETTINGS_MARGIN, width = MAG_SETTINGS_WIDTH - 2 * MAG_SETTINGS_MARGIN, spacing = 9;
-    const bool general = !s->controls_page;
+    const bool general = !s->controls_page && !s->debug_page;
     int y = 22;
     s->groups.clear();
-    show(s->segment[0], s->form->controls);
-    show(s->segment[1], s->form->controls);
-    if (s->form->controls) {
-        place(s->segment[0], left, y, width / 2, 26);
-        place(s->segment[1], left + width / 2, y, width - width / 2, 26);
+    // General, Controls (when the build has the catalog) and Debug, side by side.
+    {
+        std::vector<HWND> shown_segments = {s->segment[0]};
+        if (s->form->controls) shown_segments.push_back(s->segment[1]);
+        shown_segments.push_back(s->segment[2]);
+        show(s->segment[1], s->form->controls);
+        const int n = int(shown_segments.size());
+        for (int i = 0; i < n; ++i) {
+            show(shown_segments[size_t(i)], true);
+            place(shown_segments[size_t(i)], left + width * i / n, y, width * (i + 1) / n - width * i / n, 26);
+        }
         y += 26 + spacing;
+    }
+    for (HWND h : s->debug) show(h, s->debug_page);
+    if (s->debug_page) {
+        place(s->heading_debug, left, y, width, 20);
+        y += 20 + spacing;
+        layout_group(y, s->debug_rows, false);
+        y += spacing;
+        const int note = text_height(s->debug_note, width);
+        place(s->debug_note, left, y, width, note);
+        y += note + spacing;
     }
     for (HWND h : s->general) show(h, general);
     for (HWND h : {s->tcp, s->udp, s->tcp_label, s->udp_label}) show(h, general && s->advanced);
@@ -430,7 +455,7 @@ void layout() {
         layout_group(y, s->reports_rows, false);
         y += spacing;
     }
-    const bool controls = !general;
+    const bool controls = s->controls_page;
     for (HWND h : {s->device[0], s->device[1], s->mode_label, s->mode, s->assist, s->column[0], s->column[1], s->column[2], s->rows,
                    s->hint, s->reset, s->controls_note})
         show(h, controls);
@@ -813,12 +838,49 @@ void reset_device() {
     changed();
 }
 
-void show_page(bool controls) {
+// ---- Debug page: diagnostic switches and actions (player_settings_debug.h); they act at once ----
+void refresh_debug() {
+    for (int i = 0; i < MAG_SETTINGS_DEBUG_ITEMS; ++i) {
+        const MagSettingsDebugItem& item = mag_settings_debug_items[i];
+        HWND control = GetDlgItem(s->hwnd, IdDebugItem + i);
+        if (item.kind == MAG_SETTINGS_DEBUG_SWITCH)
+            SendMessageW(control, BM_SETCHECK, debug_switch(item.id, s->path) ? BST_CHECKED : BST_UNCHECKED, 0);
+        else if (!std::strcmp(item.id, "open_logs")) {
+            const bool available = !logs_folder().empty();
+            EnableWindow(control, available);
+            set_text(GetDlgItem(s->hwnd, IdDebugHint + i), available ? item.hint : MAG_SETTINGS_DEBUG_NO_LOGS);
+        }
+    }
+}
+void debug_clicked(int index) {
+    if (index < 0 || index >= MAG_SETTINGS_DEBUG_ITEMS) return;
+    const MagSettingsDebugItem& item = mag_settings_debug_items[index];
+    std::string error;
+    if (item.kind == MAG_SETTINGS_DEBUG_SWITCH) {
+        const bool on = SendMessageW(GetDlgItem(s->hwnd, IdDebugItem + index), BM_GETCHECK, 0, 0) == BST_CHECKED;
+        if (!set_debug_switch(item.id, s->path, on, error)) show_error(error);
+        else set_text(s->status, on ? MAG_SETTINGS_DEBUG_SWITCH_ON : MAG_SETTINGS_DEBUG_SWITCH_OFF);
+    } else if (!std::strcmp(item.id, "open_logs")) {
+        const std::filesystem::path folder = logs_folder();
+        if (folder.empty()) return;
+        std::error_code ignored;
+        std::filesystem::create_directories(folder, ignored);
+        if (settings_window_open_page) settings_window_open_page(narrow(folder.wstring()));
+        else ShellExecuteW(s->hwnd, L"open", folder.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+    }
+    refresh_debug();
+    layout();
+}
+
+// 0 General, 1 Controls, 2 Debug.
+void show_page(int page) {
     end_capture(nullptr);
+    const bool controls = page == 1;
     s->controls_page = controls;
-    SendMessageW(s->segment[0], BM_SETCHECK, controls ? BST_UNCHECKED : BST_CHECKED, 0);
-    SendMessageW(s->segment[1], BM_SETCHECK, controls ? BST_CHECKED : BST_UNCHECKED, 0);
+    s->debug_page = page == 2;
+    for (int i = 0; i < 3; ++i) SendMessageW(s->segment[i], BM_SETCHECK, i == page ? BST_CHECKED : BST_UNCHECKED, 0);
     set_text(s->apply, controls ? MAG_SETTINGS_APPLY_CONTROLS : MAG_SETTINGS_APPLY);
+    if (s->debug_page) refresh_debug();
     show(s->error, false);
     if (controls) fill_controls();
     changed();
@@ -881,7 +943,7 @@ bool fits(HWND window, const PortableSettings& settings) {
 }
 
 void set_editing_enabled(bool enabled) {
-    for (HWND h : {s->segment[0], s->segment[1], s->server, s->name, s->tcp, s->udp, s->display, s->output, s->advanced_link,
+    for (HWND h : {s->segment[0], s->segment[1], s->segment[2], s->server, s->name, s->tcp, s->udp, s->display, s->output, s->advanced_link,
                    s->account_button, s->send_reports, s->report_button, s->cancel, s->play})
         EnableWindow(h, enabled);
     EnableWindow(s->apply, false);
@@ -947,7 +1009,7 @@ void revert_display() {
 }
 
 void apply() {
-    if (s->pending) return;
+    if (s->pending || s->debug_page) return;
     std::string error;
     if (s->controls_page) {
         end_capture(nullptr);
@@ -1000,7 +1062,7 @@ void play() {
     if (!settings_form_general_draft(*s->form, draft, error) || !settings_form_play_ready(draft, error)) { show_error(error); return; }
     if (s->form->controls_dirty && !settings_form_apply_controls(*s->form, error)) { show_error(error); return; }
     if (settings_form_general_dirty(*s->form)) {
-        if (s->controls_page) show_page(false);
+        if (s->controls_page || s->debug_page) show_page(0);
         apply();
         if (s->pending || settings_form_general_dirty(*s->form)) return;  // confirm the display first, then Play again
     }
@@ -1074,6 +1136,10 @@ void account_finished(bool linked, const std::string& message) {
 
 // ---- Window procedures ----
 void command(int id, int code) {
+    if (id >= IdDebugItem && id < IdDebugItem + MAG_SETTINGS_DEBUG_ITEMS) {
+        debug_clicked(id - IdDebugItem);
+        return;
+    }
     if (id >= IdBinding) {
         const size_t row = size_t(id - IdBinding) / 4;
         const unsigned slot = unsigned((id - IdBinding) % 4) / 2;
@@ -1092,8 +1158,9 @@ void command(int id, int code) {
     case IdPlay: play(); return;
     case IdKeep: keep_display(); return;
     case IdRevert: revert_display(); return;
-    case IdGeneral: show_page(false); return;
-    case IdControls: show_page(true); return;
+    case IdGeneral: show_page(0); return;
+    case IdControls: show_page(1); return;
+    case IdDebugPage: show_page(2); return;
     case IdAccount: account_clicked(); return;
     case IdAdvanced:
         s->advanced = !s->advanced;
@@ -1290,6 +1357,7 @@ void build() {
     const DWORD segment = BS_AUTORADIOBUTTON | BS_PUSHLIKE;
     w.segment[0] = button(MAG_SETTINGS_PAGE_GENERAL, IdGeneral, segment | WS_GROUP);
     w.segment[1] = button(MAG_SETTINGS_PAGE_CONTROLS, IdControls, segment);
+    w.segment[2] = button(MAG_SETTINGS_PAGE_DEBUG, IdDebugPage, segment);
     // General: Connection.
     w.heading_connection = label(MAG_SETTINGS_HEADING_CONNECTION, s->heading);
     heading_text.push_back(w.heading_connection);
@@ -1364,6 +1432,18 @@ void build() {
     w.hint = small_label(MAG_CONTROLS_HINT, IdHint);
     w.reset = button(MAG_CONTROLS_RESET_KBM, IdReset);
     w.controls_note = small_label(MAG_CONTROLS_NOTE);
+    // Debug.
+    w.heading_debug = label(MAG_SETTINGS_HEADING_DEBUG, s->heading);
+    heading_text.push_back(w.heading_debug);
+    for (int i = 0; i < MAG_SETTINGS_DEBUG_ITEMS; ++i) {
+        const MagSettingsDebugItem& item = mag_settings_debug_items[i];
+        HWND control = button(item.control, IdDebugItem + i, item.kind == MAG_SETTINGS_DEBUG_SWITCH ? BS_AUTOCHECKBOX : BS_PUSHBUTTON);
+        Row r{label(item.title), small_label(item.hint, IdDebugHint + i), control};
+        w.debug_rows.push_back(r);
+        w.debug.insert(w.debug.end(), {r.title, r.hint, control});
+    }
+    w.debug_note = small_label(MAG_SETTINGS_DEBUG_NOTE, IdDebugNote);
+    w.debug.insert(w.debug.end(), {w.heading_debug, w.debug_note});
     if (w.form->controls) set_text(w.hint, first_hint());
     // Shared.
     w.error = label("", nullptr, nullptr, IdError);
@@ -1424,7 +1504,7 @@ SettingsWindowResult settings_window_run(SettingsForm& form, const std::filesyst
     window.dpi = dpi_of(window.hwnd);
     make_fonts();
     build();
-    show_page(false);
+    show_page(0);
     if (!options.notice.empty()) show_error(options.notice);
     changed();
     layout();

@@ -13,6 +13,7 @@
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <condition_variable>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -63,6 +64,11 @@ public:
     std::string label(const std::string& name) const;  // a button's or binding's text, a field's value
     SDL_Rect rect(const std::string& name) const;
     bool controls_page() const { return controls_page_; }
+    bool debug_page() const { return debug_page_; }
+    // Tests: waits (up to `timeout_ms` of wall time) until the account link's worker has finished,
+    // then takes its result as tick() would. False on timeout. The worker sleeps through the
+    // portal's poll interval on its own thread, so a fixed number of short ticks cannot be relied on.
+    bool wait_for_account_link(uint64_t timeout_ms);
     bool controller() const { return controller_; }
     const std::string& error() const { return error_; }
     const std::string& status() const { return status_; }
@@ -119,7 +125,7 @@ private:
     void set_choice(const std::string& name, int value);
     void activate(const Item& item, uint64_t now_ms, int x = -1);
     void changed();
-    void show_page(bool controls);
+    void show_page(int page);  // 0 General, 1 Controls, 2 Debug
     void set_device(bool controller);
     void refresh_rows();
     void ensure_visible(const Layout&);
@@ -152,7 +158,7 @@ private:
     std::unique_ptr<SettingsAccount> account_;
     State state_ = State::Open;
     bool saved_anything_ = false;  // in game: Apply saved something, so closing reports Saved
-    bool controls_page_ = false, controller_ = false, advanced_ = false, dirty_ = false;
+    bool controls_page_ = false, debug_page_ = false, controller_ = false, advanced_ = false, dirty_ = false;
     int scope_ = 0, scroll_ = 0;
     std::string focus_;
     std::string error_, status_, hint_, open_choice_;
@@ -171,6 +177,7 @@ private:
     // Account progress from the link's worker thread.
     struct Mailbox {
         std::mutex lock;
+        std::condition_variable signal;  // set when the worker writes progress or finishes
         bool finished = false, linked = false;
         std::string progress, message;
         bool fresh = false;

@@ -541,6 +541,7 @@ Decision decide(const Session &s) {
     Decision d;
     std::error_code code;
     d.manual = fs::is_regular_file(fs::symlink_status(s.logs / "report-requested", code));
+    if (d.manual) d.request_id = requested_report_id(s.logs / "report-requested");
     const std::string halt = halt_line(s.logs);
     auto exit_reason = [&](const char *phase, long long exit) {
         return std::string(phase) + " exited with code " + std::to_string(exit);
@@ -571,6 +572,19 @@ Decision decide(const Session &s) {
 }
 
 // ---- Building the report ----
+namespace {
+bool valid_id(const std::string &id);
+}
+
+std::string requested_report_id(const fs::path &marker) {
+    Json request;
+    if (!parse_json(read_file(marker, 4096), request) || request.kind != Json::Kind::Object) return {};
+    const Json *id = request.get("report_id");
+    if (!id || id->kind != Json::Kind::String || !valid_id(id->text)) return {};
+    for (char c : id->text)
+        if (c >= 'A' && c <= 'F') return {};
+    return id->text;
+}
 std::string new_report_id() {
     std::random_device device;
     std::seed_seq seed{device(), device(), device(), device(),
@@ -660,8 +674,10 @@ std::string build_report(const Session &s, const Decision &d, const std::string 
     std::string gpu = gpu_from_log(engine_log);
     engine_log.clear();
     std::string client = "{\"version\":" + quote(clip(s.version.empty() ? "unknown" : s.version, 60)) + ",\"platform\":" + quote(s.platform);
+    // Counts go as numbers (cpu_threads, memory_mb); everything else as text.
+    auto whole = [](const std::string &v) { return !v.empty() && v.size() <= 15 && v.find_first_not_of("0123456789") == std::string::npos; };
     for (const auto &[key, value] : s.system)
-        if (key != "gpu") client += "," + quote(key) + ":" + quote(clip(redact(value, r), 200));
+        if (key != "gpu") client += "," + quote(key) + ":" + (whole(value) ? value : quote(clip(redact(value, r), 200)));
     if (gpu.empty() && s.system.count("gpu")) gpu = s.system.at("gpu");
     if (!gpu.empty()) client += ",\"gpu\":" + quote(redact(gpu, r));
     if (!s.backend.empty()) client += ",\"renderer\":" + quote(s.backend);
@@ -669,6 +685,11 @@ std::string build_report(const Session &s, const Decision &d, const std::string 
     client += ",\"render\":{\"display_mode\":" + quote(clip(settings.display_mode, 32)) + ",\"output\":" +
               quote(std::to_string(settings.width) + "x" + std::to_string(settings.height)) +
               ",\"render_scale\":" + std::to_string(settings.render_scale) + ",\"anti_aliasing\":" + quote(clip(settings.anti_aliasing, 32)) + "}";
+    // Whether the controls census was recording: the Debug page's switch, a file next to the
+    // settings (MAG_CONTROLS_TRACE_FILE in player_settings_text.h; docs/native-controls.md, Census).
+    std::error_code no_trace;
+    client += std::string(",\"controls_trace\":") +
+              (!s.settings.empty() && fs::exists(s.settings.parent_path() / "controls-trace", no_trace) ? "true" : "false");
     client += ",\"build\":{\"launcher\":" + receipt(s.receipts / "launcher.json") + ",\"engine\":" + receipt(s.receipts / "engine.json") + "}}";
     if (client.size() > client_max_bytes) client = "{\"version\":" + quote(clip(s.version, 60)) + ",\"platform\":" + quote(s.platform) + "}";
     // session
@@ -923,7 +944,8 @@ Finished finish_session(const Session &s) {
     chosen.trigger = trigger;
     Session session = s;
     session.redaction.secrets.push_back(link.device_token);
-    const std::string id = new_report_id();
+    // The id Send report showed the player, so staff can match the report; otherwise a new one.
+    const std::string id = d.manual && !d.request_id.empty() ? d.request_id : new_report_id();
     const std::string body = build_report(session, chosen, id);
     if (!enqueue(s.queue, id, trigger, body, error)) { f.line = "reports: could not queue a report: " + error; return f; }
     note_created(s.queue, kind, now);
@@ -945,7 +967,12 @@ Sent send_queued(portal::Transport &transport, const fs::path &queue, const fs::
     portal::load_link(portal::link_path(settings_file), link, linked, error);
     const auto started = std::chrono::steady_clock::now();
     for (auto &[item, created] : scan(queue)) {
-        (void)created;
+        if (created / 1000 < now - queue_max_age_seconds) {  // too old to be useful
+            remove_report(queue, item.report_id);
+            ++result.dropped;
+            last = "expired";
+            continue;
+        }
         if (settings.usable && !settings.send_reports && item.trigger != "manual") {
             remove_report(queue, item.report_id);
             ++result.dropped;

@@ -367,6 +367,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR arguments, int
     set_env_utf8(L"MAG_ENGINE_KEY_SHA256", key);
     set_env(L"MAG_PLAYER_SETTINGS_PATH", settings);
     set_env(L"MAG_PLAYER_OVERLAY_ROOT", player_root);
+    set_env(L"MAG_PLAYER_LOGS_ROOT", logs_root);  /* MAG Settings' Debug page: Open logs folder */
     set_env(L"MAG_PLAYER_SETUP", L"1");
     /* The session summary (src/mag_session_monitor.h) and the settings window's Send report
      * request go to this launch's log folder; the report is decided when the session ends. */

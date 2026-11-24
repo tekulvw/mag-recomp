@@ -7,9 +7,9 @@
 // message). This backend therefore runs only on the window thread: the per-pump call applies
 // requests and readiness, and the per-message call observes the messages the pump reads. It never
 // consumes a message the SDK or the on-screen keyboard needs; the one exception is a press of
-// Escape on the focused game window while the adapter owns the keyboard and requests capture and
-// no dialog owns the keyboard: the window would treat it as quit, and the controls bind it to
-// Start.
+// Escape on the focused game window while no dialog owns the keyboard, whether or not capture is
+// on: the window would end the game on it, and players press it to go back or pause (in a match
+// the controls bind it to Start). Closing the window still ends the game.
 //
 // Input. While capture is requested the window registers for Raw Input from keyboards and mice
 // (no other flags: legacy key and mouse messages still flow, and input arrives only while this
@@ -17,7 +17,7 @@
 // USB HID usages (player_input_win32_map.c); auto-repeat is filtered by tracking each key's
 // physical state. Mouse buttons map left 0, right 1, middle 2, X1 3, X2 4 on one logical mouse
 // (physical buttons; the system's swap setting does not apply). Look motion is the raw relative
-// delta, reported up-positive; absolute-position devices do not drive look. Relative mode hides
+// delta, reported down-positive; absolute-position devices do not drive look. Relative mode hides
 // the cursor and confines it to the client area; it is re-applied after a click in the window,
 // when focus returns and when the confinement was lost (the window moved or something else
 // changed it), and released when focus goes.
@@ -369,8 +369,6 @@ int message(Backend& b, const MSG* msg, bool dialog) {
         if (msg->wParam != VK_ESCAPE) return 0;
         DesktopQuitKeyContext context;
         context.quit_key_down = true;
-        context.keyboard_owned = mag_input_capture_keyboard_owned() != 0;
-        context.capture_requested = b.core.enabled_requested();
         context.on_game_window = true;
         context.game_window_focused = b.platform.window_focused();
         context.dialog_active = dialog;

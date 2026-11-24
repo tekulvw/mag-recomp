@@ -62,7 +62,7 @@ class DesktopCaptureSink {
 public:
     virtual ~DesktopCaptureSink() = default;
     virtual void push_event(const PhysicalInputEvent& event) = 0;
-    // dx right-positive, dy up-positive.
+    // dx right-positive, dy down-positive (screen directions; mag_controls_mouse_look turns them into angles).
     virtual void push_relative_mouse(double dx, double dy) = 0;
     virtual void set_window_capture(bool focused, bool mouse_captured) = 0;
     virtual void release_source(InputSource source) = 0;
@@ -97,7 +97,7 @@ public:
     // A mouse-button edge: index 0 left, 1 right, 2 middle, 3 and 4 the side buttons.
     void mouse_button(uint32_t index, uint64_t device, bool down, uint64_t time_ns,
                       DesktopCaptureGate::Stamp stamp);
-    // Relative motion: dx right-positive, dy up-positive. Returns whether it reached the engine.
+    // Relative motion: dx right-positive, dy down-positive. Returns whether it reached the engine.
     bool mouse_motion(double dx, double dy, DesktopCaptureGate::Stamp stamp);
     // The motion epoch a stamp carries, and the current one, for diagnostics.
     static uint32_t motion_epoch(DesktopCaptureGate::Stamp stamp) { return uint32_t(stamp.state >> 33); }
@@ -142,21 +142,19 @@ private:
     std::set<Button> buttons_;
 };
 
-// Whether the backend withholds the host's quit key (Escape) from the SDK's window pump. The
-// controls bind Escape to Start, so while the adapter owns the keyboard and captures the focused
-// game window Escape must not end the game. A dialog that owns the keyboard (the on-screen
-// keyboard) always receives it.
+// Whether the backend withholds the host's quit key (Escape) from the SDK's window pump. The SDK's
+// window ends the game on an Escape press, with no question asked. Players press Escape to go back
+// or pause, in the front end and lobby as well as in a match (where the controls bind it to Start),
+// so it never ends the game on the focused game window: closing the window (its close button,
+// Alt+F4) still does. A dialog that owns the keyboard (the on-screen keyboard) always receives it.
 struct DesktopQuitKeyContext {
     bool quit_key_down = false;        // the event is a press (or repeat) of the quit key
-    bool keyboard_owned = false;       // the adapter owns keyboard interpretation
-    bool capture_requested = false;    // the adapter requests desktop capture
     bool on_game_window = false;       // the event targets the game window
     bool game_window_focused = false;  // the game window has keyboard focus
     bool dialog_active = false;        // a native dialog owns the keyboard
 };
 constexpr bool desktop_capture_withholds_quit_key(const DesktopQuitKeyContext& c) {
-    return c.quit_key_down && c.keyboard_owned && c.capture_requested && c.on_game_window &&
-           c.game_window_focused && !c.dialog_active;
+    return c.quit_key_down && c.on_game_window && c.game_window_focused && !c.dialog_active;
 }
 
 // One log line for a change of capture state, or nullptr when nothing a player would notice

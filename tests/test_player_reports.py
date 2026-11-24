@@ -99,6 +99,7 @@ class PlayerReportsTests(unittest.TestCase):
             self.assertEqual(report['trigger'], 'crash')
             self.assertEqual(report['session']['engine_exit'], 139)
             self.assertEqual(report['client']['render']['output'], '1280x720')
+            self.assertEqual(report['client']['cpu_threads'], 8)  # counts are numbers
             self.assertEqual(report['metrics']['engine']['role'], 'engine')
             self.assertEqual(set(logs), {'engine.log', 'launcher.log', 'supervisor.log'})
             everything = body.decode() + ''.join(logs.values())

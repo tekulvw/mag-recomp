@@ -70,6 +70,12 @@ supported only for these exact (id, vtable) pairs:
 | 18 | `0x01A6DB48` | Prone |
 | 23 | `0x01A6BDF8` | Sprint |
 
+The **pre-spawn state** is id 0 with vtable `0x01A6CE38`: the local player has it from joining a
+match until the first spawn, through the pre-battle lobby and the first deploy screen (census
+traces on macOS and Windows). A traced hosted Sabotage on macOS (about 11 minutes, four deaths and
+respawns) never showed it after the first spawn; downed, deploy and respawn screens use other
+states. The adapter treats the pre-spawn state as a menu (8.2).
+
 **Input handler** (base layout shared by every handler): `+0` vtable; watched-control list head at
 `+4` (nodes described below); `+0x38` u32 priority; `+0x3C` u32 slot; `+0x40` u8 enabled; `+0x44`
 u32 fixed channel mask; `+0x48` u32 mapped channel mask. The base handler vtable is `0x01A57350`.
@@ -210,8 +216,9 @@ for the channel contract, 7.4) and recognized by their own token wherever the ga
 A census of a hosted match (`MAG_GAME_CONTROLS_TRACE`, section 4) placed them: the local player's
 handler watches bleedout (on the Cross button) and vseatnext (Triangle) in every state; deploy and
 prompt screens watch os_enter (Cross) and os_cancel (Circle) on their own UI handlers, as gameplay
-routes before the first spawn and as menus (served by the keyboard pad, 8.2) on the map after a
-death. X confirms in both, matching the keyboard pad's Cross key. Back is Backspace on foot: the
+routes before the first spawn and as menus on the map after a death. Both are now menus served by
+the keyboard pad (8.2): before the first spawn the player is in the pre-spawn movement state (2.2).
+X confirms everywhere, matching the keyboard pad's Cross key. Back is Backspace on foot: the
 pad's Circle key, C, is Crouch there. vsmoke and the tactical menu tokens were not seen; their
 defaults are unconfirmed.
 
@@ -305,7 +312,7 @@ the session; events from every other thread are ignored entirely.
 **Census.** With `MAG_GAME_CONTROLS_TRACE=1`, or when a file named `controls-trace` exists next to the
 controls preferences (the packaged players pass no `MAG_` variables to the engine; on macOS that is
 `~/Library/Application Support/MAG/controls-trace`, on Windows `%APPDATA%\MAG\controls-trace`, on
-Linux `$XDG_CONFIG_HOME/MAG/controls-trace` or `~/.config/MAG/controls-trace`), the runtime prints, once per distinct description, each
+Linux `$XDG_CONFIG_HOME/MAG/controls-trace` or `~/.config/MAG/controls-trace`; MAG Settings' Debug page, **Record controls trace**, makes and removes it), the runtime prints, once per distinct description, each
 handler the game updates: its role (the local player's handler, a gameplay route, another system
 route or other), the attached context, whether it is enabled, the local player's movement state id
 and vtable, and every watched token with its channel (`[game-controls] census ...`). It reads guest
@@ -542,7 +549,8 @@ since last seen, reset system and host caches, clear receipts and cancel the mou
    - when an owner was already known and is not the same owner: cancel ("local input owner
      changed"), adopt the new owner, stop;
    - adopt the owner; keep the gameplay routes (or none); gameplay is eligible when gameplay routes
-     exist, the contract was built and the owner's handler is enabled;
+     exist, the contract was built, the owner's handler is enabled and the owner is not in the
+     pre-spawn movement state (2.2);
    - clear the channel map, gameplay and system receipts, mouse eligibility;
    - map each contract channel whose token is a look token or a catalog action (after aliases)
      that is not situational to that action; two different actions on one channel cancel ("ambiguous native action channel");
@@ -765,14 +773,15 @@ takes its keyboard-pad sample; compile definitions on `libs/input/pad_sdl_keyboa
 sample and the keyboard-pad state, and `player_input_sdl_keyboard.c` takes their place: the sample
 first runs the capture backend with the same window and dialog flag, then the SDK's own sample; the
 state is neutral (window flag kept) while the adapter mutes the keyboard pad (8.2), as the macOS window
-pad is. While capture is requested an SDL event filter (chained after any filter already set)
-observes keyboard, mouse and window events and queues them for the pump; it passes every event
-on except one: a press of Escape on the focused game window while the adapter owns the keyboard
-and requests capture and no dialog owns the keyboard, which the pump would treat as quit (the
-controls bind Escape to Start). Closing the window still quits; Escape quits again as soon as any
-of those conditions ends. SDL scancodes 4..231 are the HID usages; mouse buttons map left 0,
+pad is. An SDL event filter (chained after any filter already set) is installed when the game
+window attaches and stays until it goes. It passes every event on except one: a press of Escape on
+the focused game window while no dialog owns the keyboard, which the pump would treat as quit (in a
+match the controls bind Escape to Start). So Escape never ends the game, in the front end and lobby
+as in a match, as on Windows; closing the window still quits. While capture is requested the filter
+also observes keyboard, mouse and window events and queues them for the pump; otherwise it queues
+nothing, and what it queued is dropped when capture stops. SDL scancodes 4..231 are the HID usages; mouse buttons map left 0,
 right 1, middle 2, X1 3, X2 4 on one logical mouse; touch-synthesized mouse events are ignored;
-motion is SDL relative mode, reported up-positive. While the mouse is locked the backend also
+motion is SDL relative mode, reported down-positive (moving the mouse down is positive). While the mouse is locked the backend also
 holds an explicit window grab (`SDL_SetWindowGrab`), so the pointer stays confined to the game
 window even where relative mode alone does not lock it; it acquires in the order leave relative
 mode, grab, centre the pointer, enter relative mode. Each pump checks the lock: when relative mode
@@ -820,10 +829,11 @@ CMake refuses to configure without it.
 While capture is requested the window registers for Raw Input from keyboards and mice, with no
 flags (legacy key and mouse messages still flow, and input arrives only while the application is
 in the foreground); the registration is removed when capture stops or the window changes. The
-backend reads `WM_INPUT` for the game window and never consumes it. It withholds a key press of
-Escape on the focused game window while the adapter owns the keyboard and requests capture and no
-dialog owns the keyboard, which the window procedure would treat as quit (the Linux rule; closing
-the window still quits). While capture is installed it also withholds the messages that would put
+backend reads `WM_INPUT` for the game window and never consumes it. It withholds every key press of
+Escape on the focused game window while no dialog owns the keyboard, with or without capture (in
+the front end and lobby too), because the window procedure would end the game on it without asking.
+Players press Escape to go back or pause, and lost their session to it. Closing the window (its
+close button, Alt+F4) still quits. While capture is installed it also withholds the messages that would put
 the window in its menu mode: the release of a lone Alt or of F10 (`WM_SYSKEYUP`) and Alt with a
 character key (`WM_SYSCHAR`, a menu mnemonic or Alt+Space). The game window has no menu, and the
 modal menu loop would stop the pump, and the game with it, until another key or a click. Alt+F4 is
@@ -834,7 +844,7 @@ media keys and the GUI keys are not captured. Raw Input repeats held keys, so th
 each key's physical state and reports only changes; the activation snapshot (`GetAsyncKeyState`
 through each scan code's virtual key, plus the Num Lock keypad keys) also restarts that tracking.
 Mouse buttons are physical (left 0, right 1, middle 2, X1 3, X2 4, one logical mouse); motion is
-the raw relative delta, reported up-positive, and absolute-position devices (tablets, remote
+the raw relative delta, reported down-positive as Raw Input gives it, and absolute-position devices (tablets, remote
 desktop) do not drive look. Ready requires the game window to be the foreground and active window
 and not minimized. Relative mode hides the cursor and confines it to the client area; it is
 re-applied after a click in the window, when focus returns and when the confinement no longer
@@ -879,9 +889,11 @@ backends withhold from the window while it is owned (8.1).
 The **legacy keyboard pad** (the SDK's fixed key-to-button layout: X Cross, C Circle, Z Square,
 V Triangle, Return Start, Space Select, arrows the D-pad, W/A/S/D and I/J/K/L the sticks, Q/E, R/T
 and F/G the shoulders, triggers and stick buttons) is muted only while the keyboard is owned *and*
-this poll would attach on foot: the owner is enabled, gameplay routes are available (5.4) and the
-channel contract builds (7.4). Otherwise, in an in-match menu that has a local player (the pause
-menu, the death and spawn-selection screens, any UI that blocks gameplay), the adapter attaches as
+this poll would attach on foot: the owner is enabled and not in the pre-spawn movement state (2.2),
+gameplay routes are available (5.4) and the channel contract builds (7.4). Otherwise, in an
+in-match menu that has a local player (the pre-battle lobby and the first deploy screen before the
+first spawn, the pause menu, the death and spawn-selection screens, any UI that blocks gameplay),
+the adapter attaches as
 Menu and routes the system buttons alone (Escape, Tab and the arrows), so the pad stays live
 (`mag_input_capture_set_keyboard_pad_live`) and the menu's other buttons work from the keyboard as
 they do in the front end. The pad's readers (macOS window pad, SDL keyboard pad, Win32 keyboard
@@ -1097,8 +1109,8 @@ Each placeholder is resolved on its own, from the live profile, every time a mov
    menu's text while the player is still on foot (the pause menu's footer arrives with the HUD), so
    the context at request time cannot choose; the on-foot Confirm and Back bindings of section 2.3
    are not shown. With the revision 3 defaults on-foot Confirm is X as well, so confirm prompts are
-   right everywhere; on-foot Back stays Backspace (C is Crouch on foot), so a Back prompt on the
-   deploy screen before the first spawn shows C while Backspace goes back there.
+   right everywhere; on-foot Back stays Backspace (C is Crouch on foot). The deploy screens, before
+   the first spawn as after a death, are menus (8.2), so the C a Back prompt shows goes back there.
 2. Any other catalog action: its first keyboard or mouse binding among its on-foot bindings, in
    profile order (`mag_controls_action_bindings`).
 3. Anything else (no catalog action, only controller bindings) stays a placeholder, so the movie

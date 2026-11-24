@@ -11,6 +11,7 @@
  *   General:  Connection  { Game server, Player name, Account, > Advanced: TCP port, UDP port }
  *             note, Graphics { Display mode, Output resolution, Rendering resolution, Anti-aliasing }, note,
  *             Reports { [x] Send performance and error reports, Send report }
+ *   Debug:    Diagnostics { one row per mag_settings_debug_items entry }, note
  *   Controls: [Keyboard & Mouse | Controller], Input mode + Bindings, aim assist, mouse row,
  *             Action / Primary / Secondary rows, hint, Reset, note
  *   error line, display confirmation (15 s), separator, footer: status, Cancel, Apply, Play MAG */
@@ -26,6 +27,7 @@
 /* Pages. */
 #define MAG_SETTINGS_PAGE_GENERAL "General"
 #define MAG_SETTINGS_PAGE_CONTROLS "Controls"
+#define MAG_SETTINGS_PAGE_DEBUG "Debug"
 
 /* General: Connection. */
 #define MAG_SETTINGS_HEADING_CONNECTION "Connection"
@@ -82,7 +84,8 @@
 #define MAG_SETTINGS_SEND_REPORTS_ON "On"  /* the checkbox's own label */
 #define MAG_SETTINGS_SEND_REPORT_NOW "Send report"
 #define MAG_SETTINGS_SEND_REPORT_HINT "Send one now, for a problem you just saw"
-#define MAG_SETTINGS_REPORT_REQUESTED "A report will be sent when MAG closes."
+/* After Send report: the first 8 characters of the report id, which staff match on the portal. */
+#define MAG_SETTINGS_REPORT_REQUESTED "Report %s will be sent when MAG closes."
 #define MAG_SETTINGS_REPORT_NEEDS_LINK "Link an account to send reports"
 #define MAG_SETTINGS_REPORT_UNAVAILABLE "Reports are sent only when MAG starts from its app"
 #define MAG_SETTINGS_REPORT_FAILED "The report request could not be saved."
@@ -131,6 +134,31 @@ static const char *const mag_settings_anti_aliasing_values[MAG_SETTINGS_ANTI_ALI
 #define MAG_SETTINGS_NAME_NEEDED "Enter a player name to play on a server. It is the name you sign in with."
 #define MAG_SETTINGS_RECOVERY_PLAY "Review these defaults and click Apply to replace the damaged settings file."
 #define MAG_SETTINGS_DAMAGED "The settings file is damaged. Review these defaults and Apply to replace it."
+
+/* Debug page: diagnostic switches and actions for bug reports. Each entry is one row (a title, a
+ * hint, and a checkbox or a button on the right); a new switch or action is one more entry here
+ * and one more case in player_settings_debug.cpp, and every host's window lists it. Switches act
+ * at once (they are files the game reads at launch, not settings drafts), so Apply and Cancel do
+ * not concern them. */
+#define MAG_SETTINGS_HEADING_DEBUG "Diagnostics"
+#define MAG_SETTINGS_DEBUG_NOTE "These help with bug reports. Switches take effect at the next launch."
+#define MAG_SETTINGS_DEBUG_SWITCH_ON "On · takes effect at the next launch"
+#define MAG_SETTINGS_DEBUG_SWITCH_OFF "Off · takes effect at the next launch"
+#define MAG_SETTINGS_DEBUG_NO_LOGS "Start MAG from its own launcher to open its logs"
+/* The file the controls census looks for next to the settings (docs/native-controls.md, Census). */
+#define MAG_CONTROLS_TRACE_FILE "controls-trace"
+typedef enum { MAG_SETTINGS_DEBUG_SWITCH, MAG_SETTINGS_DEBUG_ACTION } MagSettingsDebugKind;
+typedef struct {
+    const char *id;       /* player_settings_debug.cpp's name for it */
+    MagSettingsDebugKind kind;
+    const char *title, *hint, *control;  /* the row's title and hint; the checkbox's or button's text */
+} MagSettingsDebugItem;
+#define MAG_SETTINGS_DEBUG_ITEMS 2
+static const MagSettingsDebugItem mag_settings_debug_items[MAG_SETTINGS_DEBUG_ITEMS] = {
+    {"controls_trace", MAG_SETTINGS_DEBUG_SWITCH, "Controls trace",
+     "Records how inputs reach the game, for bug reports. Takes effect at the next launch.", "Record controls trace"},
+    {"open_logs", MAG_SETTINGS_DEBUG_ACTION, "Logs", "This installation's launch logs, to attach to a report", "Open logs folder"},
+};
 
 /* Controls page (docs/player-controls-settings.md). */
 #define MAG_CONTROLS_DEVICE_KBM "Keyboard & Mouse"

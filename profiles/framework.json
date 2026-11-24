@@ -4,8 +4,8 @@
   "upstream": "https://github.com/sp00nznet/ps3recomp",
   "ps3recomp": {
     "runtime": {
-      "tag": "mag-recomp/runtime-2026.11.23-gameupdate",
-      "commit": "45a853919908252dd2ad87b2a25645b298f9c8fc",
+      "tag": "mag-recomp/runtime-2026.11.23-audiostats",
+      "commit": "4f63f8063679d73122d0df89e05859ad45ec0760",
       "path": "local/ps3recomp-runtime"
     },
     "lifter-spu": {
@@ -35,13 +35,13 @@
     }
   },
   "allowed_runtime_revisions": [
-    "45a853919908252dd2ad87b2a25645b298f9c8fc"
+    "4f63f8063679d73122d0df89e05859ad45ec0760"
   ],
   "strict_runtime_revisions": [
-    "45a853919908252dd2ad87b2a25645b298f9c8fc"
+    "4f63f8063679d73122d0df89e05859ad45ec0760"
   ],
   "strict_hle_runtime_revisions": [
-    "45a853919908252dd2ad87b2a25645b298f9c8fc"
+    "4f63f8063679d73122d0df89e05859ad45ec0760"
   ],
   "first_nonblack_capture_revisions": [],
   "allowed_lifter_revisions": [

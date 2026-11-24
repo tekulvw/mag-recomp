@@ -43,6 +43,8 @@ inline constexpr int daily_error_reports = 6, daily_performance_reports = 2, dai
 // The queue: at most this many reports and bytes; the oldest go first.
 inline constexpr size_t queue_max_reports = 5;
 inline constexpr uintmax_t queue_max_bytes = 8u << 20;
+// A queued report older than this is dropped unsent (the portal answers 503 while reports are off).
+inline constexpr long long queue_max_age_seconds = 7 * 86400;
 // Logs: the compressed total of one report's logs (the portal accepts 3 MiB), the uncompressed
 // tail read from each log, and the most logs one report carries (the portal accepts 8).
 inline constexpr size_t logs_max_compressed = 2u << 20;
@@ -112,6 +114,7 @@ struct Decision {
     Trigger trigger = Trigger::None;
     std::vector<std::string> reasons;  // why, for the report and the log
     bool manual = false;               // the player pressed Send report
+    std::string request_id;            // the report id that Send report showed the player, when valid
 };
 // The trigger for this session from its exits, logs, summaries and request marker, before the
 // setting and the daily limits. Crash and halt come before a launch error, which comes before
@@ -132,6 +135,9 @@ Finished finish_session(const Session &);
 
 // The report body (the portal's schema_version 1) for a session and trigger. Exposed for tests.
 std::string build_report(const Session &, const Decision &, const std::string &report_id);
+// The report id a Send report marker holds ({"requested_at":...,"report_id":"<uuid>"}), when it
+// holds a valid lowercase UUID; otherwise empty.
+std::string requested_report_id(const fs::path &marker);
 // Read the tail of a log (at most `limit` bytes, starting at a line), redacted.
 std::string log_tail(const fs::path &path, size_t limit, const Redaction &);
 std::string new_report_id();  // a random UUID version 4
@@ -148,7 +154,7 @@ struct Sent {
 };
 // Post what is due, oldest first, with the device token of `link_file` to the portal it came
 // from. Kept: 5xx, 429 (after Retry-After) and network failures, with backoff; dropped: 400,
-// 401, 403, 409, 413, or too many attempts. Automatic reports queued before the player turned
+// 401, 403, 409, 413, too many attempts, or older than queue_max_age_seconds. Automatic reports queued before the player turned
 // reports off are dropped unsent. Only one sender runs at a time (a lock file in the queue).
 Sent send_queued(portal::Transport &, const fs::path &queue, const fs::path &settings, std::time_t now = 0);
 

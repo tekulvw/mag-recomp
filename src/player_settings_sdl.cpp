@@ -4,10 +4,12 @@
 // font (libs/misc/osk_font8x8.h), as its on-screen keyboard dialog does; the window scales the
 // panel by a whole number so the glyphs stay sharp.
 #include "player_settings_sdl_panel.h"
+#include "player_settings_debug.h"
 #include "player_settings_text.h"
 #include "player_settings_window.h"
 #include "libs/misc/osk_font8x8.h"
 #include <algorithm>
+#include <chrono>
 #include <cerrno>
 #include <cstdio>
 #include <cstdlib>
@@ -175,7 +177,7 @@ void SettingsPanel::set_choice(const std::string& name, int value) {
 // ---- Layout: top to bottom, as the macOS stack views place it ----
 SettingsPanel::Layout SettingsPanel::layout() const {
     Layout out;
-    const bool general = !controls_page_, locked = pending_;
+    const bool general = !controls_page_ && !debug_page_, locked = pending_;
     int y = 14;
     auto item = [&](std::string name, Kind kind, SDL_Rect rect, std::string label, bool enabled = true, bool selected = false) {
         out.items.push_back({std::move(name), kind, rect, std::move(label), enabled && !locked, selected});
@@ -184,9 +186,17 @@ SettingsPanel::Layout SettingsPanel::layout() const {
         out.labels.push_back({x, at, s, tone, bold, width / Glyph});
         return text_height(s, width);
     };
-    if (form_.controls) {
-        item("segment:general", Kind::Segment, {Margin, y, Content / 2, 22}, MAG_SETTINGS_PAGE_GENERAL, true, general);
-        item("segment:controls", Kind::Segment, {Margin + Content / 2, y, Content - Content / 2, 22}, MAG_SETTINGS_PAGE_CONTROLS, true, !general);
+    {  // General, Controls (when the build has the catalog) and Debug, side by side
+        std::vector<std::pair<const char*, const char*>> pages = {{"segment:general", MAG_SETTINGS_PAGE_GENERAL}};
+        if (form_.controls) pages.push_back({"segment:controls", MAG_SETTINGS_PAGE_CONTROLS});
+        pages.push_back({"segment:debug", MAG_SETTINGS_PAGE_DEBUG});
+        const int n = int(pages.size());
+        for (int i = 0; i < n; ++i) {
+            const std::string name = pages[size_t(i)].first;
+            const bool selected = name == "segment:general" ? general : name == "segment:controls" ? controls_page_ : debug_page_;
+            item(name, Kind::Segment, {Margin + Content * i / n, y, Content * (i + 1) / n - Content * i / n, 22}, pages[size_t(i)].second,
+                 true, selected);
+        }
         y += 22 + 10;
     }
     const int inner = Margin + 12, inner_width = Content - 24, labels = inner_width - ControlWidth - 16;
@@ -249,6 +259,21 @@ SettingsPanel::Layout SettingsPanel::layout() const {
                 "button:report", Kind::Button, MAG_SETTINGS_SEND_REPORT_NOW, !blocker}},
               false);
         y += 10;
+    } else if (debug_page_) {
+        // One row per mag_settings_debug_items entry: switches act at once, actions run.
+        y += words(Margin, y, MAG_SETTINGS_HEADING_DEBUG, 0, Content, true) + 8;
+        std::vector<RowSpec> rows;
+        const bool logs = !logs_folder().empty();
+        for (const auto& entry : mag_settings_debug_items) {
+            const bool action = entry.kind == MAG_SETTINGS_DEBUG_ACTION;
+            const bool open_logs = !std::strcmp(entry.id, "open_logs");
+            rows.push_back({entry.title, open_logs && !logs ? MAG_SETTINGS_DEBUG_NO_LOGS : entry.hint,
+                            std::string(action ? "button:debug:" : "check:debug:") + entry.id, action ? Kind::Button : Kind::Check,
+                            entry.control, !open_logs || logs});
+        }
+        group(rows, false);
+        y += 6;
+        y += words(Margin, y, MAG_SETTINGS_DEBUG_NOTE, 1, Content) + 10;
     } else {
         item("segment:kbm", Kind::Segment, {Margin, y, Content / 2, 22}, MAG_CONTROLS_DEVICE_KBM, true, !controller_);
         item("segment:controller", Kind::Segment, {Margin + Content / 2, y, Content - Content / 2, 22}, MAG_CONTROLS_DEVICE_CONTROLLER, true, controller_);
@@ -388,9 +413,9 @@ const char* SettingsPanel::report_blocker() const {
 }
 void SettingsPanel::request_report_now() {
     if (report_blocker()) return;
-    std::string error;
-    if (!request_report(error)) { report_status_ = MAG_SETTINGS_REPORT_FAILED; return; }
-    report_status_ = MAG_SETTINGS_REPORT_REQUESTED;
+    std::string error, id;
+    if (!request_report(id, error)) { report_status_ = MAG_SETTINGS_REPORT_FAILED; return; }
+    report_status_ = report_requested_status(id);
 }
 
 void SettingsPanel::ensure_visible(const Layout& l) {
@@ -405,7 +430,7 @@ void SettingsPanel::ensure_visible(const Layout& l) {
 std::string SettingsPanel::account_portal() const { return account_->portal(form_.server, form_.saved.portal_url); }
 
 void SettingsPanel::changed() {
-    dirty_ = controls_page_ ? form_.controls_dirty : settings_form_general_dirty(form_);
+    dirty_ = debug_page_ ? false : controls_page_ ? form_.controls_dirty : settings_form_general_dirty(form_);
     status_ = dirty_ ? MAG_SETTINGS_STATUS_DIRTY : MAG_SETTINGS_STATUS_CLEAN;
     if (!account_->linking()) {
         const AccountRow row = account_->row(account_portal());
@@ -421,13 +446,14 @@ void SettingsPanel::refresh_rows() {
     scroll_ = std::clamp(scroll_, 0, scroll_limit());
 }
 
-void SettingsPanel::show_page(bool controls) {
+void SettingsPanel::show_page(int page) {
     end_capture(nullptr);
-    controls_page_ = controls;
+    controls_page_ = page == 1;
+    debug_page_ = page == 2;
     error_.clear();
     scroll_ = 0;
     refresh_rows();
-    focus_ = controls ? "segment:controls" : "segment:general";
+    focus_ = page == 1 ? "segment:controls" : page == 2 ? "segment:debug" : "segment:general";
     changed();
 }
 void SettingsPanel::set_device(bool controller) {
@@ -450,7 +476,7 @@ bool SettingsPanel::save_general(const PortableSettings& draft) {
 }
 
 void SettingsPanel::apply(uint64_t now_ms) {
-    if (pending_) return;
+    if (pending_ || debug_page_) return;
     std::string error;
     if (controls_page_) {
         end_capture(nullptr);
@@ -500,7 +526,7 @@ void SettingsPanel::play(uint64_t now_ms) {
     if (!settings_form_general_draft(form_, draft, error) || !settings_form_play_ready(draft, error)) { show_error(error); return; }
     if (form_.controls_dirty && !settings_form_apply_controls(form_, error)) { show_error(error); return; }
     if (settings_form_general_dirty(form_)) {
-        if (controls_page_) show_page(false);
+        if (controls_page_ || debug_page_) show_page(0);
         apply(now_ms);
         if (pending_ || settings_form_general_dirty(form_)) return;  // confirm the display first, then Play again
     }
@@ -543,12 +569,14 @@ void SettingsPanel::account_clicked() {
             std::lock_guard<std::mutex> lock(mailbox->lock);
             mailbox->progress = message;
             mailbox->fresh = true;
+            mailbox->signal.notify_all();
         },
         [mailbox](bool linked, const std::string& message) {
             std::lock_guard<std::mutex> lock(mailbox->lock);
             mailbox->finished = true;
             mailbox->linked = linked;
             mailbox->message = message;
+            mailbox->signal.notify_all();
         });
 }
 
@@ -657,7 +685,8 @@ void SettingsPanel::activate(const Item& item, uint64_t now_ms, int x) {
     const std::string& n = item.name;
     switch (item.kind) {
     case Kind::Segment:
-        if (n == "segment:general" || n == "segment:controls") show_page(n == "segment:controls");
+        if (n == "segment:general" || n == "segment:controls" || n == "segment:debug")
+            show_page(n == "segment:controls" ? 1 : n == "segment:debug" ? 2 : 0);
         else set_device(n == "segment:controller");
         break;
     case Kind::Choice:
@@ -670,6 +699,15 @@ void SettingsPanel::activate(const Item& item, uint64_t now_ms, int x) {
     case Kind::Slot: begin_capture(size_t(item.row), item.slot, now_ms); break;
     case Kind::Clear: clear_binding(size_t(item.row), item.slot); break;
     case Kind::Check:
+        if (n.rfind("check:debug:", 0) == 0) {
+            // A switch acts at once: it is a file the game reads at launch, not a settings draft.
+            const std::string id = n.substr(std::strlen("check:debug:"));
+            const bool on = !debug_switch(id, settings_);
+            std::string error;
+            if (!set_debug_switch(id, settings_, on, error)) show_error(error);
+            else { error_.clear(); status_ = on ? MAG_SETTINGS_DEBUG_SWITCH_ON : MAG_SETTINGS_DEBUG_SWITCH_OFF; }
+            break;
+        }
         if (n == "check:reports") form_.send_reports = !form_.send_reports;
         else settings_form_set_invert_y(form_, !form_.profile.mouse.invert_y);
         changed();
@@ -687,9 +725,27 @@ void SettingsPanel::activate(const Item& item, uint64_t now_ms, int x) {
         else if (n == "button:account") account_clicked();
         else if (n == "button:reset") reset_device();
         else if (n == "button:report") request_report_now();
+        else if (n == "button:debug:open_logs") {
+            const std::filesystem::path folder = logs_folder();
+            std::error_code ignored;
+            if (!folder.empty()) {
+                std::filesystem::create_directories(folder, ignored);
+                if (open_page) open_page(folder.string());
+            }
+        }
         break;
     case Kind::Text: break;
     }
+}
+
+bool SettingsPanel::wait_for_account_link(uint64_t timeout_ms) {
+    const auto mailbox = mailbox_;
+    {
+        std::unique_lock<std::mutex> lock(mailbox->lock);
+        if (!mailbox->signal.wait_for(lock, std::chrono::milliseconds(timeout_ms), [&] { return mailbox->finished; })) return false;
+    }
+    tick(now_);
+    return true;
 }
 
 SettingsPanel::State SettingsPanel::tick(uint64_t now_ms) {
@@ -836,7 +892,14 @@ SettingsPanel::State SettingsPanel::handle(const SDL_Event& event, uint64_t now_
         const SDL_Scancode key = event.key.keysym.scancode;
         const bool shift = event.key.keysym.mod & KMOD_SHIFT, control = event.key.keysym.mod & KMOD_CTRL;
         if (key == SDL_SCANCODE_ESCAPE) { cancel(); break; }
-        if (key == SDL_SCANCODE_TAB && control && form_.controls && !pending_) { show_page(!controls_page_); break; }
+        if (key == SDL_SCANCODE_TAB && control && !pending_) {
+            // General, Controls (when there are controls), Debug, around.
+            const int page = controls_page_ ? 1 : debug_page_ ? 2 : 0;
+            int next = (page + (shift ? 2 : 1)) % 3;
+            if (next == 1 && !form_.controls) next = shift ? 0 : 2;
+            show_page(next);
+            break;
+        }
         if (key == SDL_SCANCODE_TAB || (key == SDL_SCANCODE_DOWN && (!current || current->kind != Kind::Slider)) ||
             (key == SDL_SCANCODE_UP && (!current || current->kind != Kind::Slider))) {
             if (order.empty()) break;
@@ -993,7 +1056,9 @@ void SettingsPanel::draw(SDL_Renderer* r, SDL_Texture* font) const {
         case Kind::Check:
             fill(r, {b.x, b.y + 3, 10, 10}, GroupFill);
             outline(r, {b.x, b.y + 3, 10, 10}, focus ? Accent : Secondary);
-            if (item.name == "check:reports" ? form_.send_reports : form_.profile.mouse.invert_y) fill(r, {b.x + 3, b.y + 6, 4, 4}, Accent);
+            if (item.name.rfind("check:debug:", 0) == 0 ? debug_switch(item.name.substr(12), settings_)
+                : item.name == "check:reports" ? form_.send_reports : form_.profile.mouse.invert_y)
+                fill(r, {b.x + 3, b.y + 6, 4, 4}, Accent);
             text(r, font, b.x + 16, b.y + 4, item.text, ink);
             break;
         case Kind::Button:

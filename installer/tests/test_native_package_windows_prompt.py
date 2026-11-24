@@ -48,6 +48,10 @@ class WindowsSetupTests(unittest.TestCase):
         # The supervisor's own name prompt is gone: one window for every choice.
         self.assertNotIn('ask_player_name', windows._SUPERVISOR)
 
+    def test_logs_folder_for_the_debug_page(self):
+        # MAG Settings' Debug page opens this MAG folder's logs, which the supervisor names.
+        self.assertIn('set_env(L"MAG_PLAYER_LOGS_ROOT", logs_root);', self.main())
+
     def test_supervisor_links_the_window_libraries(self):
         import inspect
         compile_source = inspect.getsource(windows._compile)

@@ -4,6 +4,7 @@
 //        player_reports build <empty scratch folder>   (prints the queued report's path)
 //        player_reports send <queue> <settings file>    (the platform transport; prints the line)
 #include "player_reports.h"
+#include "player_settings_text.h"
 #include "player_gzip.h"
 #include <cstdio>
 #include <cstdlib>
@@ -158,7 +159,14 @@ static void decisions(const fs::path &root) {
     CHECK(decide(s).trigger == Trigger::None);
     write(s.logs / "report-requested", "{\"requested_at\":1}\n");
     d = decide(s);
-    CHECK(d.trigger == Trigger::Manual && d.manual);
+    CHECK(d.trigger == Trigger::Manual && d.manual && d.request_id.empty());
+    // The id Send report showed the player; anything but a lowercase UUID is ignored.
+    write(s.logs / "report-requested", "{\"requested_at\":1,\"report_id\":\"0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d\"}\n");
+    CHECK(decide(s).request_id == "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d");
+    for (const char *bad : {"0A1B2C3D-4E5F-4A6B-8C7D-9E0F1A2B3C4D", "not-a-uuid", ""}) {
+        write(s.logs / "report-requested", std::string("{\"requested_at\":1,\"report_id\":\"") + bad + "\"}\n");
+        CHECK(decide(s).request_id.empty());
+    }
 }
 
 static void finishing(const fs::path &root) {
@@ -175,7 +183,17 @@ static void finishing(const fs::path &root) {
     CHECK(report.members.size() == 7);
     CHECK(report.get("trigger") && report.get("trigger")->text == "slow_frames");
     CHECK(report.get("client")->get("gpu")->text == "Synthetic GPU 9000");
+    CHECK(report.get("client")->get("cpu_threads")->kind == Json::Kind::Number);  // counts are numbers
+    CHECK(report.get("client")->get("os")->kind == Json::Kind::String);
     CHECK(report.get("client")->get("build")->get("launcher")->get("build_path") == nullptr);
+    // The Debug page's controls trace: off, then on once its file sits next to the settings.
+    CHECK(report.get("client")->get("controls_trace") && report.get("client")->get("controls_trace")->kind == Json::Kind::Bool &&
+          !report.get("client")->get("controls_trace")->boolean);
+    std::ofstream(s.settings.parent_path() / MAG_CONTROLS_TRACE_FILE).close();
+    Json traced;
+    CHECK(parse_json(build_report(s, decide(s), new_report_id()), traced, 8u << 20));
+    CHECK(traced.get("client")->get("controls_trace")->boolean);
+    fs::remove(s.settings.parent_path() / MAG_CONTROLS_TRACE_FILE);
     CHECK(body.find(token) == std::string::npos && body.find("synthetic-player") == std::string::npos);
     CHECK(body.find("portal-link") == std::string::npos);
     for (char c : f.report_id) CHECK(!(c >= 'A' && c <= 'F'));
@@ -189,9 +207,11 @@ static void finishing(const fs::path &root) {
     off.launcher_exit = 90; off.engine_exit = 139;
     f = finish_session(off);
     CHECK(f.trigger == Trigger::None && f.line.find("off") != std::string::npos && queued(off.queue).empty());
-    write(off.logs / "report-requested", "{}\n");
+    write(off.logs / "report-requested", "{\"requested_at\":1,\"report_id\":\"0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d\"}\n");
     f = finish_session(off);
     CHECK(f.trigger == Trigger::Manual && queued(off.queue).size() == 1);
+    CHECK(f.report_id == "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d");  // the id the player was shown
+    CHECK(f.line.find("0a1b2c3d") != std::string::npos);
 
     // Not linked: no report at all.
     Session unlinked = launch(root / "unlinked");
@@ -207,7 +227,9 @@ static void finishing(const fs::path &root) {
     for (size_t i = 0; i < (6u << 20); ++i) { x ^= x << 13; x ^= x >> 7; x ^= x << 17; noise += char('!' + x % 90); if (i % 100 == 99) noise += '\n'; }
     write(big.logs / "engine.log", noise);
     write(big.logs / "launcher.log", noise);
-    Decision crash{Trigger::Crash, {"the engine exited with code 139"}, false};
+    Decision crash;
+    crash.trigger = Trigger::Crash;
+    crash.reasons = {"the engine exited with code 139"};
     const std::string large = build_report(big, crash, new_report_id());
     Json parsed;
     CHECK(parse_json(large, parsed, 8u << 20));
@@ -258,6 +280,13 @@ static void sending(const fs::path &root) {
     CHECK(sent.line.find("another sender") != std::string::npos && queued(s.queue).size() == 1);
     sent = send_queued(t, s.queue, s.settings, now + lock_stale_seconds + 1);  // a stale lock is taken over
     CHECK(sent.line.find("another sender") == std::string::npos);
+    // A report queued more than queue_max_age_seconds ago is dropped unsent.
+    fs::remove(s.queue / "send.lock");
+    for (auto &e : queued(s.queue)) { fs::remove(s.queue / (e.report_id + ".json")); fs::remove(s.queue / (e.report_id + ".state")); }
+    CHECK(enqueue(s.queue, id(), Trigger::Crash, "{}", error));
+    t.requests.clear();
+    sent = send_queued(t, s.queue, s.settings, std::time(nullptr) + queue_max_age_seconds + 60);
+    CHECK(sent.dropped == 1 && t.requests.empty() && queued(s.queue).empty());
     // Reports turned off since: automatic ones are dropped unsent, the player's own request is not.
     fs::remove(s.queue / "send.lock");
     for (auto &e : queued(s.queue)) { fs::remove(s.queue / (e.report_id + ".json")); fs::remove(s.queue / (e.report_id + ".state")); }
