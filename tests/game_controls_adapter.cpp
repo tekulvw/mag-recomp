@@ -1262,12 +1262,93 @@ void withdrawn_frame() {
     require(capture_on, "desktop capture was dropped");
 }
 
+// 7.7: a keyboard or mouse press of a digital gameplay button also shows on its pad channel's
+// value in the input manager while the player is on foot, as a pressed button would, and the
+// value is put back when the tick ends or the adapter lets go. Movement, system buttons, menus and
+// Controller mode write nothing.
+void raw_channel_values() {
+    constexpr uint32_t Values = InputManager + 0x7E0;
+    const auto value = [](Harness& h, uint32_t channel) { return h.m.getf(Values + 4 * channel); };
+    Harness h;
+    require(h.idle_tick() == Attached, "first tick did not attach on foot");
+    mag_controls_push_event({{InputSource::Keyboard, 225}, true, time_ns()});  // Left Shift: Sprint (channel 11).
+    mag_controls_push_event({{InputSource::Keyboard, 26}, true, time_ns()});   // W: Move forward (channel 4).
+    mag_controls_push_event({{InputSource::Keyboard, 41}, true, time_ns()});   // Escape: Start (channel 12).
+    h.begin_tick();
+    h.enter_handler();
+    require(value(h, 11) == 1.0f, "Left Shift did not press Sprint's channel value");
+    require(value(h, 4) == 0.0f, "a movement key wrote its stick channel");
+    require(value(h, 12) == 0.0f, "a system button wrote its channel");
+    require(value(h, 10) == 0.0f, "an unpressed button's channel changed");
+    require(h.recognize(Sprint) && mag_guest_tuple_value(h.tuple(Sprint)) == 1.0f, "Sprint not recognized");
+    h.end_poll();
+    h.enter_actor();
+    require(value(h, 11) == 1.0f, "the channel value was gone before the actor update");
+    h.end_tick();
+    require(value(h, 11) == 0.0f, "the end of the tick did not put the channel value back");
+
+    // A cancel within the tick puts it back at once.
+    h.begin_tick();
+    h.enter_handler();
+    require(value(h, 11) == 1.0f, "a held key did not press its channel again");
+    h.cpu.gpr[3] = Handler;
+    h.fire(Hook::HandlerRefresh);
+    h.fire(Hook::HandlerRefreshed);
+    require(value(h, 11) == 0.0f, "cancel kept the channel value pressed");
+    h.fire(Hook::HandlerExit);
+    h.fire(Hook::PollExit);
+    h.enter_actor();
+    h.end_tick();
+
+    // A value the game wrote meanwhile is left alone. (After a cancel a held key needs a new press.)
+    mag_controls_push_event({{InputSource::Keyboard, 225}, false, time_ns()});
+    h.idle_tick();
+    mag_controls_push_event({{InputSource::Keyboard, 225}, true, time_ns()});
+    h.begin_tick();
+    h.enter_handler();
+    require(value(h, 11) == 1.0f, "a fresh press did not press the channel");
+    h.m.putf(Values + 4 * 11, 0.25f);
+    h.end_poll();
+    h.enter_actor();
+    h.end_tick();
+    require(value(h, 11) == 0.25f, "a channel value the game changed was overwritten on release");
+    h.m.putf(Values + 4 * 11, 0.0f);
+
+    // In a menu the keyboard pad serves the buttons: nothing is written.
+    h.m.put32(Pause + 0x9C0, 1);
+    require(h.idle_tick() == "native menu buttons attached", "a paused game attached on foot");
+    h.begin_tick();
+    h.enter_handler();
+    require(value(h, 11) == 0.0f, "a menu wrote a channel value");
+    h.fire(Hook::HandlerExit);
+    h.fire(Hook::PollExit);
+    h.end_tick();
+    h.m.put32(Pause + 0x9C0, 0);
+    mag_controls_push_event({{InputSource::Keyboard, 225}, false, time_ns()});
+    mag_controls_push_event({{InputSource::Keyboard, 26}, false, time_ns()});
+    mag_controls_push_event({{InputSource::Keyboard, 41}, false, time_ns()});
+    h.idle_tick();
+
+    // Controller mode writes nothing.
+    auto controller = mag_game_controls_default_profile();
+    controller.mode = InputMode::Controller;
+    h.adapter->request_profile(controller);
+    h.idle_tick();
+    mag_controls_push_event({{InputSource::Keyboard, 225}, true, time_ns()});
+    h.begin_tick();
+    h.enter_handler();
+    require(value(h, 11) == 0.0f, "Controller mode wrote a channel value");
+    h.end_poll();
+    h.enter_actor();
+    h.end_tick();
+}
+
 int main(int argc, char** argv) {
     const std::map<std::string, void (*)()> scenarios = {
         {"owner", owner_resolution}, {"lists", malformed_lists}, {"routes", routes}, {"tick", full_tick},
         {"route", route_recognition},
         {"mouse", mouse_look},       {"assist", aim_assist},     {"lifecycle", lifecycle},
-        {"threads", threads_and_errors}, {"snapshot", update_snapshot}, {"menu", menu_holds_look},
+        {"threads", threads_and_errors}, {"raw-channels", raw_channel_values}, {"snapshot", update_snapshot}, {"menu", menu_holds_look},
         {"withdrawn", withdrawn_frame},
         {"menu-pad", menu_keyboard_pad}, {"situational", situational_actions}, {"census", census},
         {"prompt-queries", prompt_queries}};
