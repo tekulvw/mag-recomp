@@ -39,7 +39,8 @@ class NativeRecipeTests(unittest.TestCase):
             self.assertEqual(config['source_tree'], str((root / 'source').resolve()))
             self.assertEqual(config['sdks']['lifter-ppu']['path'], str((root / 'lifter-ppu').resolve()))
             self.assertEqual(config['jobs'], 2)
-            for key, value in [('commands', []), ('jobs', 5), ('native_graphics', True), ('cmake_args', ['-DMAG_IMAGE=evil'])]:
+            self.assertEqual(self.load(root, dict(data, jobs=64))['jobs'], 64)
+            for key, value in [('commands', []), ('jobs', 0), ('jobs', 65), ('jobs', True), ('jobs', '8'), ('native_graphics', True), ('cmake_args', ['-DMAG_IMAGE=evil'])]:
                 with self.subTest(key=key), self.assertRaises(InstallerError): self.load(root, dict(data, **{key: value}))
             data['sdks'].pop('runtime')
             with self.assertRaises(InstallerError): self.load(root, data)

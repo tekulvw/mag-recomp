@@ -22,7 +22,9 @@ Windows, SmartScreen may say "Windows protected your PC" (More info → Run anyw
 Prepare the input folder as described in the [installer README](../README.md), start the installer
 (on Windows a console window opens beside the wizard and carries the CLI output), choose the input
 folder and an installation location, and click **Build MAG**. Expect a long build: the engine's
-lifted sources are large and two compile jobs run by default. Roughly 40 GB of free space is
+lifted sources are large. **Compile jobs** sets how many compiles run at once; its default follows
+the computer's memory and CPUs (see [Compile jobs](../README.md#compile-jobs)), and the build log
+names the count used, so include it when you report build times. Roughly 40 GB of free space is
 needed, plus several GB for Visual Studio Build Tools on Windows if they are not installed yet.
 
 The result is a self-contained `MAG` folder in that location: `MAG/MAG.app` on macOS,

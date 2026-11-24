@@ -131,9 +131,10 @@ def load_config(path):
         fields = {'cmake_dir', 'dll', 'license'}
         _object(raw['sdl2'], fields, set(), 'sdl2')
         result['sdl2'] = {key: _path(raw['sdl2'][key], path.parent, f'sdl2.{key}', directory=key == 'cmake_dir', dependency=True) for key in fields}
+    from .build_jobs import MIN_JOBS, MAX_JOBS
     jobs = raw.get('jobs', 2)
-    if type(jobs) is not int or not 1 <= jobs <= 4:
-        raise InstallerError('jobs must be an integer from 1 to 4')
+    if type(jobs) is not int or not MIN_JOBS <= jobs <= MAX_JOBS:
+        raise InstallerError(f'jobs must be an integer from {MIN_JOBS} to {MAX_JOBS}')
     result['jobs'] = jobs
     if type(raw.get('native_graphics', False)) is not bool or raw.get('native_graphics', False):
         raise InstallerError('native_graphics must be false')

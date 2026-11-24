@@ -204,11 +204,37 @@ class PlayerBuildController(WizardController):
         from . import build_cache
         return build_cache.clear(cache)
 
-    def start(self, source, parent, cache, retry=False):
+    def jobs_choice(self, cache):
+        """What the Compile jobs field shows: the remembered choice, else this computer's default."""
+        from . import build_jobs
+        cpus, memory = build_jobs.logical_cpus(), build_jobs.total_memory()
+        default = build_jobs.recommended(cpus, memory)
+        remembered = build_jobs.remembered(cache)
+        return {'value': default if remembered is None else remembered, 'default': default, 'remembered': remembered,
+                'minimum': build_jobs.MIN_JOBS, 'maximum': build_jobs.MAX_JOBS, 'cpus': cpus, 'memory': memory}
+
+    def jobs_hint(self, choice):
+        from . import build_jobs
+        computer = (f'{choice["cpus"]} logical CPUs, {choice["memory"] / build_jobs.GIB:.0f} GiB memory'
+                    if choice['cpus'] and choice['memory'] else 'its CPUs and memory could not be read')
+        return (f'How many compiles run at once ({choice["minimum"]}–{choice["maximum"]}). Default for this computer: '
+                f'{choice["default"]} ({computer}). More jobs build faster; allow about '
+                f'{build_jobs.JOB_MEMORY // build_jobs.GIB} GiB of memory for each. Your choice is remembered for later builds.')
+
+    def jobs_request(self, text, default):
+        """The field's text as a build's jobs argument: the default means 'auto' (follow this computer)."""
+        from . import build_jobs
+        jobs = build_jobs.parse(text)
+        return build_jobs.AUTO if jobs == default else jobs
+
+    def start(self, source, parent, cache, retry=False, jobs=None):
         if self.blocked:
             raise InstallerError(self.blocked)
         if self.busy:
             raise InstallerError('A build is already running')
+        if jobs is not None and str(jobs).strip().lower() != 'auto':
+            from .build_jobs import parse
+            jobs = parse(jobs)  # a clear error before anything starts
         from .player_build import build_folder
         output = ux.destination(parent).absolute()
         if (output.exists() or output.is_symlink()) and not retry and not self.legacy_install(parent):
@@ -224,7 +250,8 @@ class PlayerBuildController(WizardController):
                     from . import player_build
                     build = player_build.install
                 self.token.check()
-                result = build(self.root, Path(source).expanduser(), output, Path(cache).expanduser(), token=self.token, events=self.events.put, **({'retry': True} if retry else {}))
+                result = build(self.root, Path(source).expanduser(), output, Path(cache).expanduser(), token=self.token, events=self.events.put,
+                               **({'retry': True} if retry else {}), **({'jobs': jobs} if jobs is not None else {}))
                 self.events.put({'event':'_complete','output':str(result or output)})
             except Cancelled as exc:
                 self.events.put({'event':'_cancelled','message':str(exc)})
@@ -250,9 +277,9 @@ def launch(root: Path, synthetic: bool = False) -> int:
     else:
         controller = PlayerBuildController(root)
     window.title('MAG Installer' + (' — Synthetic demonstration' if synthetic else ''))
-    window.geometry('820x650');window.minsize(680,550)
+    window.geometry('820x700');window.minsize(680,600)
     frame=ttk.Frame(window,padding=24);frame.pack(fill='both',expand=True)
-    frame.columnconfigure(1,weight=1);frame.rowconfigure(8,weight=1)
+    frame.columnconfigure(1,weight=1);frame.rowconfigure(9,weight=1)
     ttk.Label(frame,text='Installer demonstration' if synthetic else 'Build MAG',font=('TkDefaultFont',22,'bold')).grid(row=0,column=0,columnspan=3,sticky='w',pady=(0,12))
     intro=('SYNTHETIC ONLY. Uses sample text; no game is built or playable.' if synthetic else 'Choose your game files and installation location. Build MAG handles the required tools and build steps automatically.')
     ttk.Label(frame,text=intro,wraplength=760).grid(row=1,column=0,columnspan=3,sticky='w',pady=(0,12))
@@ -268,12 +295,23 @@ def launch(root: Path, synthetic: bool = False) -> int:
         entry=ttk.Entry(frame,textvariable=variable);entry.grid(row=row,column=1,sticky='ew',pady=6)
         button=ttk.Button(frame,text='Browse…',command=lambda v=variable:browse(v));button.grid(row=row,column=2,padx=(8,0))
         controls.extend((entry,button))
-    destination_label=ttk.Label(frame,wraplength=760);destination_label.grid(row=5,column=0,columnspan=3,sticky='w',pady=8)
+    jobs=jobs_choice=None
+    if not synthetic:
+        # Build option: how many compile jobs run at once (build_jobs.py), remembered between builds.
+        jobs_choice=controller.jobs_choice(ux.default_cache())
+        jobs=tk.StringVar(value=str(jobs_choice['value']))
+        ttk.Label(frame,text='Compile jobs').grid(row=5,column=0,sticky='nw',padx=(0,12),pady=6)
+        jobs_row=ttk.Frame(frame);jobs_row.grid(row=5,column=1,columnspan=2,sticky='ew',pady=6);jobs_row.columnconfigure(1,weight=1)
+        spin=ttk.Spinbox(jobs_row,from_=jobs_choice['minimum'],to=jobs_choice['maximum'],increment=1,width=5,textvariable=jobs)
+        spin.grid(row=0,column=0,sticky='nw')
+        ttk.Label(jobs_row,text=controller.jobs_hint(jobs_choice),wraplength=600).grid(row=0,column=1,sticky='w',padx=(12,0))
+        controls.append(spin)
+    destination_label=ttk.Label(frame,wraplength=760);destination_label.grid(row=6,column=0,columnspan=3,sticky='w',pady=8)
     status=tk.StringVar(value=controller.blocked or 'Ready when you are.')
-    ttk.Label(frame,textvariable=status,wraplength=760).grid(row=6,column=0,columnspan=3,sticky='w',pady=8)
-    progress=ttk.Progressbar(frame,mode='indeterminate');progress.grid(row=7,column=0,columnspan=3,sticky='ew',pady=(0,10))
-    details=tk.Text(frame,height=9,wrap='word',state='disabled');details.grid(row=8,column=0,columnspan=3,sticky='nsew')
-    actions=ttk.Frame(frame);actions.grid(row=9,column=0,columnspan=3,sticky='ew',pady=(16,0))
+    ttk.Label(frame,textvariable=status,wraplength=760).grid(row=7,column=0,columnspan=3,sticky='w',pady=8)
+    progress=ttk.Progressbar(frame,mode='indeterminate');progress.grid(row=8,column=0,columnspan=3,sticky='ew',pady=(0,10))
+    details=tk.Text(frame,height=9,wrap='word',state='disabled');details.grid(row=9,column=0,columnspan=3,sticky='nsew')
+    actions=ttk.Frame(frame);actions.grid(row=10,column=0,columnspan=3,sticky='ew',pady=(16,0))
     closing=False
     def append(text):
         details.configure(state='normal');details.insert('end',text+'\n');details.see('end');details.configure(state='disabled')
@@ -285,7 +323,8 @@ def launch(root: Path, synthetic: bool = False) -> int:
                 if resume and not messagebox.askyesno('Retry demonstration?', 'Interrupted demonstration work exists. Reverify input and replay its stages?',parent=window):return
                 controller.start(Path(source.get()).expanduser(),Path(parent.get()).expanduser(),ux.default_cache(),install=True,resume=resume)
             else:
-                controller.start(Path(source.get()).expanduser(),Path(parent.get()).expanduser(),ux.default_cache(),retry=controller.has_journal(Path(parent.get()).expanduser()))
+                controller.start(Path(source.get()).expanduser(),Path(parent.get()).expanduser(),ux.default_cache(),retry=controller.has_journal(Path(parent.get()).expanduser()),
+                                 jobs=controller.jobs_request(jobs.get(),jobs_choice['default']))
             progress.start(12);refresh()
         except (InstallerError,OSError) as exc:status.set(str(exc))
     def folder(path):
