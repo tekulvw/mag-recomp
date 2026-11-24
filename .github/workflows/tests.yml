@@ -10,36 +10,29 @@ concurrency:
   group: tests-${{ github.head_ref || github.run_id }}
   cancel-in-progress: true
 jobs:
-  # `python` is a required check, so this workflow always runs; the Rust input
-  # matrix skips itself when only docs or Markdown changed.
+  # Which jobs this pull request's changes reach (tools/ci_changes.py holds the filter map; pushes,
+  # release PRs and unreadable diffs run everything). A skipped job counts as passed for a required
+  # check, so `python` stays required and skips itself only for documentation-only changes. On a
+  # hosted runner: it is seconds of git diff and should not wait for the self-hosted queue.
   changes:
-    runs-on: mag-recomp
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
     outputs:
-      code: ${{ steps.diff.outputs.code }}
+      python: ${{ steps.diff.outputs.python }}
+      rust_input: ${{ steps.diff.outputs.rust_input }}
+      windows_native: ${{ steps.diff.outputs.windows_native }}
       macos_settings: ${{ steps.diff.outputs.macos_settings }}
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          # The pull request merge commit and its base parent.
+          fetch-depth: 2
+          persist-credentials: false
       - id: diff
-        env:
-          BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
-        run: |
-          if files=$(git diff --name-only "$BASE" HEAD 2>/dev/null) && [ -n "$files" ] && ! printf '%s\n' "$files" | grep -qvE '^docs/|\.md$'; then
-            echo code=false >> "$GITHUB_OUTPUT"
-          else
-            echo code=true >> "$GITHUB_OUTPUT"
-          fi
-          # The macOS settings panel's sources and fixtures (settings-macos below). Unknown changes
-          # (no diff) count as touching them.
-          if [ -z "$files" ] || printf '%s\n' "$files" | grep -qE '^src/player_(settings|controls|portal|report|input_desktop_macos|input_macos)|^tests/(test_)?player_(settings|controls|reports)|^cmake/MagPlayerSettings|^tools/player_settings_preview|^\.github/workflows/tests\.yml$'; then
-            echo macos_settings=true >> "$GITHUB_OUTPUT"
-          else
-            echo macos_settings=false >> "$GITHUB_OUTPUT"
-          fi
+        run: python3 tools/ci_changes.py --base HEAD^1 --head HEAD
   rust:
     needs: changes
-    if: needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.rust_input == 'true'
     name: Rust input (${{ matrix.os }})
     strategy:
       fail-fast: false
@@ -68,7 +61,7 @@ jobs:
     # The opt-in native Edge geometry job's synthetic tests on the other two hosts; the python
     # jobs run them on Linux and macOS with the rest of the suite.
     needs: changes
-    if: needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.windows_native == 'true'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -86,7 +79,7 @@ jobs:
     # The Win32 settings window, driven with synthetic messages; the python jobs run its SDL2 panel
     # and form tests on Linux and macOS.
     needs: changes
-    if: needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.windows_native == 'true'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -121,6 +114,10 @@ jobs:
   python:
     # Required check. Runs on the self-hosted Linux runners so pull requests are gated without
     # hosted minutes; tests that need macOS skip themselves here and run in python-macos below.
+    # Skipped (reported as passed) only when `changes` says a pull request is documentation-only.
+    # If `changes` fails, its outputs are empty and this runs rather than passing unchecked.
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.python != 'false' }}
     runs-on: mag-recomp
     env:
       MAG_TEST_SDK: ${{ github.workspace }}/local/ps3recomp-runtime

@@ -1,6 +1,9 @@
 name: Rust rendering frontend
 
 # Docs-only changes don't affect the frontend build; skip them (CI capacity is limited).
+# Pull requests run these jobs only when the `changes` job finds a rendering input among their
+# changes (the `render` list in tools/ci_changes.py: the rendering crates, shaders, the render
+# C/C++ boundary, their tools and tests, and this file). Pushes and manual runs build everything.
 on:
   push:
     branches: [main]
@@ -25,8 +28,24 @@ env:
   MAG_RENDER_CANDIDATE_SDK: 5c896e85c6849405ca3a1c5feaa362d482d1b487
 
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      render: ${{ steps.diff.outputs.render }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The pull request merge commit and its base parent.
+          fetch-depth: 2
+          persist-credentials: false
+      - id: diff
+        run: python3 tools/ci_changes.py --base HEAD^1 --head HEAD
+
   native:
     name: Rust rendering (${{ matrix.os }})
+    needs: changes
+    if: needs.changes.outputs.render == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -219,6 +238,8 @@ jobs:
 
   frontend-native:
     name: Frontend native (${{ matrix.os }}, ${{ matrix.backend }})
+    needs: changes
+    if: needs.changes.outputs.render == 'true'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     strategy:
@@ -314,6 +335,8 @@ jobs:
 
   owned-program-targets:
     name: Owned program compiler (${{ matrix.os }})
+    needs: changes
+    if: needs.changes.outputs.render == 'true'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
@@ -406,12 +429,14 @@ jobs:
     name: Vulkan SDK provider and bridge (CPU only)
     # Explicit candidate-SDK override for this integration, never a normal
     # framework pin or a release job. No fork-supplied SDK ref is consumed.
+    needs: changes
     if: >-
-      (github.event_name == 'pull_request' &&
-       github.head_ref == 'codex/render-frontend-integration' &&
-       github.event.pull_request.head.repo.full_name == github.repository) ||
-      (github.event_name == 'workflow_dispatch' &&
-       github.ref == 'refs/heads/codex/render-frontend-integration')
+      needs.changes.outputs.render == 'true' &&
+      ((github.event_name == 'pull_request' &&
+        github.head_ref == 'codex/render-frontend-integration' &&
+        github.event.pull_request.head.repo.full_name == github.repository) ||
+       (github.event_name == 'workflow_dispatch' &&
+        github.ref == 'refs/heads/codex/render-frontend-integration'))
     runs-on: mag-recomp
     timeout-minutes: 15
     steps:

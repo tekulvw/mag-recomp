@@ -442,5 +442,7 @@ export MAG_TEST_SDK="$PWD/local/ps3recomp-runtime" SPU_BATCH_TEST_SDK="$PWD/loca
 ```
 
 The tests are synthetic and need no game files; CI runs the same commands on every push and pull
-request. Tests that compile against the SDK use the checkouts named by the two variables and skip
+request. A pull request runs each job only when its changes reach that job's inputs, and only the
+public-tree and title checks for documentation alone; `tools/ci_changes.py` holds the map, and pushes
+to main run everything. Tests that compile against the SDK use the checkouts named by the two variables and skip
 without them.
