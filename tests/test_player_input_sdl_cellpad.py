@@ -24,7 +24,9 @@ def sdl_flags():
     tool = ['sdl2-config', '--cflags', '--libs'] if shutil.which('sdl2-config') else ['pkg-config', '--cflags', '--libs', 'sdl2']
     if not shutil.which(tool[0]):
         return None
-    return shlex.split(subprocess.run(tool, check=True, capture_output=True, text=True).stdout)
+    found = subprocess.run(tool, capture_output=True, text=True)
+    # pkg-config without SDL2's .pc file (hosted macOS runners) means no SDL2 development files.
+    return shlex.split(found.stdout) if found.returncode == 0 else None
 
 
 class SdlCellPadSeamTests(unittest.TestCase):
