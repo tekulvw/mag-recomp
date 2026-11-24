@@ -122,7 +122,9 @@ static void open_browser(const std::string& url) {
   execlp("xdg-open","xdg-open",url.c_str(),(char*)nullptr);_exit(127);}_exit(0);}
  while(waitpid(pid,nullptr,0)<0&&errno==EINTR){}
 }
-static const char* relink="Run ./MAG --link to link it again.";
+static const char* relink="Link it again in MAG Settings (Account), or run ./MAG --link.";
+// Keeps the phase's single-use ticket file filled while the game runs (player_portal.h).
+static std::unique_ptr<mag::portal::TicketRefill> ticket_refill;
 // MAG --link: an account link through the portal's device-code page; the token is stored owner-only.
 static int link_account(const fs::path& link_file,const std::string& portal,const fs::path& settings) {
  if(portal.empty())fail("No account portal applies to this server. Linking works with play.magtest.online, or with portal_url in "+settings.string()+".");
@@ -197,7 +199,7 @@ static std::string ibus_address(){
 }
 static void portal_ticket(std::map<std::string,std::string>& env,const fs::path& link_file,const fs::path& ticket,
                           const mag::PortableSettings& settings,bool launcher) {
- env.erase("MAG_PLAYER_PORTAL_TICKET");
+ env.erase("MAG_PLAYER_PORTAL_TICKET");env.erase("PS3RECOMP_NP_TICKET_REFILL");ticket_refill.reset();
  const std::string portal=mag::portal::portal_for(settings.server_address,settings.portal_url);
  if(portal.empty()||settings.server_address.empty())return;
  if(!settings.ticket_file.empty()){if(launcher)std::cerr<<"MAG account: the ticket_file setting is used instead of the account link.\n";return;}
@@ -206,6 +208,11 @@ static void portal_ticket(std::map<std::string,std::string>& env,const fs::path&
  using State=mag::portal::LaunchTicket::State;
  if(result.state==State::Ready){
   env["MAG_PLAYER_PORTAL_TICKET"]=result.file.string();
+  // Each sign-in (a reconnect, a return to the lobby) takes a fresh ticket from the file, which
+  // this supervisor keeps filled; the device token never enters the game process.
+  env["PS3RECOMP_NP_TICKET_REFILL"]="1";
+  ticket_refill=mag::portal::start_ticket_refill(mag::portal::make_platform_transport,link_file,ticket,portal,settings.server_address,
+                                                 relink,result.expires_at,[](const std::string& line){std::cerr<<"MAG account: "<<line<<"\n";});
   if(launcher&&result.player_name!=settings.player_name){
    env["MAG_PLAYER_SET_NAME"]=result.player_name;
    std::cerr<<"MAG account: you play as "<<result.player_name<<", the name on your linked account"
@@ -436,7 +443,7 @@ def package(config, workspace, destination, token=None, events=None):
         compiler = config.get('linux_toolchain', {}).get('cxx', 'c++')
         _run_tool([compiler, '-std=c++20', '-O2', '-I' + str(scratch), str(source),
                    *[str(scratch / name) for name in SUPERVISOR_SOURCES if name.endswith('.cpp')],
-                   '-o', str(destination / 'MAG'), '-lssl', '-lcrypto', '-Wl,-rpath,$ORIGIN/lib'], token)
+                   '-o', str(destination / 'MAG'), '-pthread', '-lssl', '-lcrypto', '-Wl,-rpath,$ORIGIN/lib'], token)
         _ordinary(destination / 'MAG').chmod(0o755)
         libraries = destination / 'lib'; libraries.mkdir()
         runtime['libraries'] = _copy_dependencies(

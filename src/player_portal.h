@@ -138,6 +138,7 @@ struct LaunchTicket {
     std::string player_name;     // Ready: the name the ticket signs in with
     std::string message;         // Failed (and a NotLinked link to another portal): for the player
     Status status = Status::Ok;
+    long long expires_at = 0;    // Ready: when the ticket expires (seconds since the epoch)
 };
 // Fetch a fresh ticket for `server` into `ticket_file` when a portal applies and this computer is
 // linked to it. An unlinked device token is forgotten; `relink` says how to link again
@@ -145,6 +146,44 @@ struct LaunchTicket {
 LaunchTicket prepare_launch_ticket(Transport &transport, const std::filesystem::path &link_file,
                                    const std::filesystem::path &ticket_file, const std::string &portal,
                                    const std::string &server, const std::string &relink);
+
+// ---- Keeping a single-use ticket file filled (the runtime's PS3RECOMP_NP_TICKET_REFILL=1) ----
+// With that switch the game's ticket request takes the ticket file (renames, reads and deletes it),
+// and the next sign-in, a reconnect or a return to the lobby, waits for another. A TicketRefill
+// keeps the file filled from its own thread: a fresh ticket as soon as the file is taken, and a
+// replacement before the waiting one expires. A waiting ticket that expires with no replacement is
+// removed, so the game never presents an expired or already used ticket. Failed fetches are
+// retried; the device token stays wherever `fetch` keeps it.
+struct RefillPolicy {
+    long long renew_before_seconds = 300;  // replace a waiting ticket this long before it expires
+                                           // (at most half its lifetime, so short tickets are not refetched in a loop)
+    int poll_milliseconds = 100;
+    int retry_seconds = 5;
+};
+class TicketRefill {
+public:
+    using Fetch = std::function<LaunchTicket()>;              // writes a fresh ticket into the file
+    using Report = std::function<void(const std::string &)>;  // a line for the log; never the token
+    using Clock = std::function<long long()>;                 // seconds since the epoch
+    TicketRefill(std::filesystem::path file, long long expires_at, Fetch fetch, Report report = {},
+                 RefillPolicy policy = {}, Clock clock = {});
+    ~TicketRefill();  // stops the thread and waits for it
+    TicketRefill(const TicketRefill &) = delete;
+    TicketRefill &operator=(const TicketRefill &) = delete;
+    unsigned fetches() const;  // tickets fetched since it started
+private:
+    struct State;
+    std::unique_ptr<State> state_;
+};
+// The refill for a launch phase: every ticket comes from prepare_launch_ticket (same link, portal
+// and server) over a new transport from `make_transport` (make_platform_transport in the
+// supervisors). `expires_at` is the ticket already in the file.
+using TransportFactory = std::function<std::unique_ptr<Transport>()>;
+std::unique_ptr<TicketRefill> start_ticket_refill(TransportFactory make_transport,
+                                                  const std::filesystem::path &link_file, const std::filesystem::path &ticket_file,
+                                                  const std::string &portal, const std::string &server,
+                                                  const std::string &relink, long long expires_at,
+                                                  TicketRefill::Report report = {});
 
 // ---- A link without the device-code page (--link-token) ----
 // A device token minted on the portal (a staff-made service account) and installed on a test

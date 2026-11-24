@@ -9,7 +9,13 @@
 #include <cstring>
 #include <fstream>
 #include <sstream>
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
+#include <ctime>
+#include <mutex>
 #include <system_error>
+#include <thread>
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #ifndef NOMINMAX
@@ -449,7 +455,13 @@ Outcome fetch_ticket(Transport &transport, const std::string &portal, const std:
                 return fail(Status::BadResponse, "The account portal at " + portal + " sent a ticket for " + printable(t.audience, 64) +
                                                      ", not " + printable(audience, 64) + ".");
             std::string problem;
-            if (t.account_id > 0 && check_ticket(t, problem)) { out = std::move(t); return {}; }
+            if (t.account_id > 0 && check_ticket(t, problem)) {
+                // A ticket that is already over would only be refused by the game server.
+                if (t.expires_at <= static_cast<long long>(std::time(nullptr)))
+                    return fail(Status::Expired, "The account portal at " + portal + " sent a sign-in ticket that has already "
+                                                 "expired. Check that this computer's date and time are right, then start MAG again.");
+                out = std::move(t); return {};
+            }
             return fail(Status::BadResponse, problem);
         }
         return fail(Status::BadResponse, "The account portal at " + portal + " sent an unexpected ticket reply.");
@@ -592,7 +604,111 @@ LaunchTicket prepare_launch_ticket(Transport &transport, const fs::path &link_fi
     result.state = LaunchTicket::State::Ready;
     result.file = ticket_file;
     result.player_name = ticket.player_name;
+    result.expires_at = ticket.expires_at;
     return result;
+}
+
+// ---- Keeping a single-use ticket file filled ----
+
+struct TicketRefill::State {
+    fs::path file;
+    long long expires_at;
+    long long renew_at = 0;  // when the waiting ticket is replaced
+    Fetch fetch;
+    Report report;
+    RefillPolicy policy;
+    Clock clock;
+    std::mutex mutex;
+    std::condition_variable wake;
+    bool stopping = false;
+    std::atomic<unsigned> fetched{0};
+    std::string last_said;
+    std::thread worker;
+
+    void say(const std::string &line) {
+        if (line == last_said) return;  // once per distinct problem, not every retry
+        last_said = line;
+        if (report) report(line);
+    }
+    void track(long long expires, long long now) {
+        expires_at = expires;
+        const long long lifetime = expires > now ? expires - now : 0;
+        renew_at = expires > 0 ? expires - std::min(policy.renew_before_seconds, lifetime / 2) : 0;
+    }
+    void run() {
+        long long retry_at = 0;
+        track(expires_at, clock());
+        std::unique_lock<std::mutex> lock(mutex);
+        while (!stopping) {
+            wake.wait_for(lock, std::chrono::milliseconds(policy.poll_milliseconds), [this] { return stopping; });
+            if (stopping) break;
+            lock.unlock();
+            const long long now = clock();
+            std::error_code code;
+            bool present = fs::exists(fs::symlink_status(file, code));
+            if (present && expires_at > 0 && now >= expires_at) {
+                // Expired while waiting and not replaced in time: never let the game present it.
+                fs::remove(file, code);
+                present = false;
+                say("The waiting sign-in ticket expired before a fresh one arrived; it was removed.");
+            }
+            const bool renew = present && renew_at > 0 && now >= renew_at;
+            if ((!present || renew) && now >= retry_at) {
+                LaunchTicket ticket = fetch();
+                if (ticket.state == LaunchTicket::State::Ready) {
+                    track(ticket.expires_at, now);
+                    retry_at = 0;
+                    ++fetched;
+                    say(present ? "Replaced the waiting sign-in ticket before it expired."
+                                : "A fresh sign-in ticket is ready for the next sign-in.");
+                } else {
+                    retry_at = now + policy.retry_seconds;
+                    say("Cannot fetch a fresh sign-in ticket: " +
+                        (ticket.message.empty() ? std::string("this computer is no longer linked to a portal account.") : ticket.message));
+                }
+            }
+            lock.lock();
+        }
+    }
+};
+
+TicketRefill::TicketRefill(fs::path file, long long expires_at, Fetch fetch, Report report, RefillPolicy policy, Clock clock)
+    : state_(new State) {
+    state_->file = std::move(file);
+    state_->expires_at = expires_at;
+    state_->fetch = std::move(fetch);
+    state_->report = std::move(report);
+    state_->policy = policy;
+    state_->clock = clock ? std::move(clock) : Clock([] { return static_cast<long long>(std::time(nullptr)); });
+    state_->worker = std::thread([s = state_.get()] { s->run(); });
+}
+
+TicketRefill::~TicketRefill() {
+    {
+        std::lock_guard<std::mutex> lock(state_->mutex);
+        state_->stopping = true;
+    }
+    state_->wake.notify_all();
+    if (state_->worker.joinable()) state_->worker.join();
+}
+
+unsigned TicketRefill::fetches() const { return state_->fetched; }
+
+std::unique_ptr<TicketRefill> start_ticket_refill(TransportFactory make_transport, const fs::path &link_file,
+                                                  const fs::path &ticket_file, const std::string &portal,
+                                                  const std::string &server, const std::string &relink, long long expires_at,
+                                                  TicketRefill::Report report) {
+    auto fetch = [make_transport, link_file, ticket_file, portal, server, relink]() {
+        auto transport = make_transport ? make_transport() : nullptr;
+        if (!transport) {
+            LaunchTicket none;
+            none.state = LaunchTicket::State::Failed; none.status = Status::Unreachable;
+            none.message = "This build has no HTTPS transport for the account portal.";
+            return none;
+        }
+        return prepare_launch_ticket(*transport, link_file, ticket_file, portal, server, relink);
+    };
+    return std::unique_ptr<TicketRefill>(new TicketRefill(ticket_file, expires_at, fetch, std::move(report)));
 }
 
 // ---- A link without the device-code page ----

@@ -347,7 +347,7 @@ int main(void) {
                 if self.path=='/api/v1/ticket':
                     if state['revoked'] or self.headers.get('Authorization')!='Bearer '+TOKEN:return self.reply(401,{'error':'invalid_token'})
                     if body!={'audience':'example.org'}:return self.reply(400,{'error':'unknown_audience'})
-                    return self.reply(200,dict(ticket=base64.b64encode(ticket).decode(),expires_at=1800000600,account_id=42,
+                    return self.reply(200,dict(ticket=base64.b64encode(ticket).decode(),expires_at=4102444800,account_id=42,
                                                player_name='Rook_7',audience='example.org'))
                 self.reply(404,{'error':'not_found'})
         server=http.server.ThreadingHTTPServer(('127.0.0.1',0),Portal);port=server.server_address[1]
@@ -409,6 +409,91 @@ int main(void) {
             run=mag();self.assertEqual(run.returncode,23,run.stderr);self.assertNotIn('MAG account',run.stderr)
             run=mag('--link');self.assertEqual(run.returncode,1);self.assertIn('No account portal',run.stderr)
 
+    # A launcher and engine stand-in that signs in three times per phase as the runtime does with
+    # PS3RECOMP_NP_TICKET_REFILL=1: take the ticket file (rename aside, read, delete), waiting for the
+    # supervisor to put a fresh one back. Between the first and second sign-in it waits past the
+    # fixture tickets' lifetime: a reconnect after the server dropped the players.
+    REFILL_RECORDER=r"""
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+#include <unistd.h>
+static int sign_in(const char* path,FILE* out){
+ char claimed[4096];snprintf(claimed,sizeof claimed,"%s.claimed",path);
+ for(int i=0;i<1500;i++){
+  if(rename(path,claimed)==0){FILE* in=fopen(claimed,"rb");int c;if(!in)return 1;
+   fprintf(out,"%ld ",(long)time(NULL));while((c=fgetc(in))!=EOF)fprintf(out,"%02x",c);fputs("\n",out);fclose(in);remove(claimed);return 0;}
+  usleep(10000);}
+ return 1;
+}
+int main(void){
+ const char* request=getenv("MAG_HANDOFF_REQUEST");const char* ticket=getenv("MAG_PLAYER_PORTAL_TICKET");const char* refill=getenv("PS3RECOMP_NP_TICKET_REFILL");
+ FILE* out=fopen(request?"launcher.signins":"engine.signins","w");if(!out)return 40;
+ if(!ticket||!refill||strcmp(refill,"1"))return 41;
+ if(sign_in(ticket,out))return 42;
+ sleep(4);
+ if(sign_in(ticket,out)||sign_in(ticket,out))return 43;
+ fclose(out);
+ if(request){FILE* f=fopen(request,"wx");if(!f)return 46;
+  fprintf(f,"{\"version\":1,\"token\":\"%s\",\"guest_path\":\"/dev_bdvd/PS3_GAME/USRDIR/bin/mage_g.self\",\"kind\":\"mage_g\"}\n",getenv("MAG_HANDOFF_TOKEN"));fclose(f);return 90;}
+ return 23;
+}
+"""
+
+    @unittest.skipUnless(sys.platform=='linux','requires Linux ELF loader and OpenSSL development headers')
+    def test_native_supervisor_hands_each_sign_in_a_fresh_ticket(self):
+        """A reconnect never presents a used or expired ticket: the supervisor keeps the file filled."""
+        import base64, http.server, threading, time
+        TOKEN='mgd_'+'Refill0123456789-_abcdefghijklmnopqrstuvwx'
+        issued={}  # ticket bytes (hex) -> (issued at, expires at)
+        lock=threading.Lock()
+        class Portal(http.server.BaseHTTPRequestHandler):
+            def log_message(self,*args): pass
+            def reply(self,status,value):
+                body=json.dumps(value).encode();self.send_response(status)
+                self.send_header('Content-Type','application/json');self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body)
+            def do_POST(self):
+                self.rfile.read(int(self.headers['Content-Length']))
+                if self.path!='/api/v1/ticket' or self.headers.get('Authorization')!='Bearer '+TOKEN:return self.reply(401,{'error':'invalid_token'})
+                with lock:
+                    serial=len(issued)+1;now=int(time.time())
+                    ticket=(b'MAGT\x01\x01'+bytes(8)+(100).to_bytes(8,'big')+(42).to_bytes(4,'big')+serial.to_bytes(16,'big')+
+                            b'\x0bexample.org\x06Rook_7'+b's'*64)
+                    issued[ticket.hex()]=(now,now+3)  # a 3 s lifetime
+                self.reply(200,dict(ticket=base64.b64encode(ticket).decode(),expires_at=now+3,account_id=42,player_name='Rook_7',audience='example.org'))
+        server=http.server.ThreadingHTTPServer(('127.0.0.1',0),Portal);port=server.server_address[1]
+        threading.Thread(target=server.serve_forever,daemon=True).start()
+        self.addCleanup(server.server_close)
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            install=self.install_fixture(root,self.REFILL_RECORDER)
+            config=root/'config/MAG';config.mkdir(parents=True,mode=0o700)
+            (config/'settings.json').write_text(json.dumps({'server_address':'example.org','player_name':'Rook_7',
+                                                            'portal_url':f'http://127.0.0.1:{port}'}))
+            link=config/'portal-link.json'
+            link.write_text(json.dumps({'schema_version':1,'portal':f'http://127.0.0.1:{port}','device_token':TOKEN,'player_name':'Rook_7'}))
+            link.chmod(0o600)
+            env={k:v for k,v in os.environ.items() if k not in ('DISPLAY','WAYLAND_DISPLAY')}
+            env['XDG_CONFIG_HOME']=str(root/'config')
+            run=subprocess.run([str(install/'MAG/MAG')],env=env,capture_output=True,text=True,timeout=120)
+            self.assertEqual(run.returncode,23,run.stdout+run.stderr)
+            logs=max((install/'logs').glob('launch-*'),key=lambda p:p.stat().st_mtime)
+            used=[]
+            for phase in ('launcher.signins','engine.signins'):
+                for line in (logs/phase).read_text().splitlines():
+                    at,hexed=line.split();used.append((int(at),hexed))
+            self.assertEqual(len(used),6)
+            # Six sign-ins, six different tickets, each from the portal and inside its lifetime,
+            # including the ones after the 4 s pause that outlived every earlier ticket.
+            self.assertEqual(len({h for _,h in used}),6)
+            for at,hexed in used:
+                self.assertIn(hexed,issued)
+                start,end=issued[hexed]
+                self.assertTrue(start<=at<end,(at,start,end))
+            self.assertNotIn(TOKEN,run.stdout+run.stderr)
+            self.assertFalse((install/'home/player/portal-ticket.bin.claimed').exists())
+
     @unittest.skipUnless(sys.platform=='linux','requires Linux ELF loader and OpenSSL development headers')
     def test_native_supervisor_imports_a_service_account_token(self):
         """--link-token: a staff-minted token from standard input, checked against a ticket-enforcing test server's portal."""
@@ -430,7 +515,7 @@ int main(void) {
                 if state['revoked'] or self.headers.get('Authorization')!='Bearer '+TOKEN:return self.reply(401,{'error':'invalid_token'})
                 audience=body.get('audience','play.example.net')  # no body: the portal's default audience
                 if audience not in state['audiences']:return self.reply(400,{'error':'unknown_audience'})
-                return self.reply(200,dict(ticket=base64.b64encode(ticket_bytes(audience,'Svc_Bot')).decode(),expires_at=1800000600,
+                return self.reply(200,dict(ticket=base64.b64encode(ticket_bytes(audience,'Svc_Bot')).decode(),expires_at=4102444800,
                                            account_id=7,player_name='Svc_Bot',audience=audience))
         server=http.server.ThreadingHTTPServer(('127.0.0.1',0),Portal);port=server.server_address[1]
         threading.Thread(target=server.serve_forever,daemon=True).start()

@@ -131,7 +131,9 @@ class WindowsSetupTests(unittest.TestCase):
         self.assertIn('import_device_token(*transport, portal, settings.server_address, token, link_path(path), link)', body)
         self.assertIn('int mag_portal_link_token(', (root / 'player_portal_win32.h').read_text(encoding='utf-8'))
         # Each phase asks for a ticket for the configured server.
-        self.assertIn('settings.server_address, "Run MAG.exe --link to link it again.");', portal)
+        self.assertIn('"Link it again in MAG Settings (Account), or run MAG.exe --link."', portal)
+        self.assertIn('settings.server_address, relink);', portal)
+        self.assertIn('start_ticket_refill(make_platform_transport', portal)
 
     @unittest.skipUnless(shutil.which('x86_64-w64-mingw32-g++') and shutil.which('x86_64-w64-mingw32-gcc'), 'MinGW-w64 cross compiler')
     def test_supervisor_and_portal_sources_compile(self):

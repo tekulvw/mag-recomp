@@ -102,7 +102,7 @@ class FakePortal:
                 if portal.revoked or self.headers.get('Authorization')!='Bearer '+TOKEN:return self.reply(401,{'error':'invalid_token'})
                 audience=body.get('audience','play.example.net')
                 if audience not in portal.audiences:return self.reply(400,{'error':'unknown_audience'})
-                return self.reply(200,dict(ticket=base64.b64encode(ticket_bytes(audience,portal.name)).decode(),expires_at=1800000600,
+                return self.reply(200,dict(ticket=base64.b64encode(ticket_bytes(audience,portal.name)).decode(),expires_at=4102444800,
                                            account_id=7,player_name=portal.name,audience=portal.reply_audience or audience))
         self.server=http.server.ThreadingHTTPServer(('127.0.0.1',0),Handler)
         threading.Thread(target=self.server.serve_forever,daemon=True).start()
@@ -195,7 +195,7 @@ class PortalTicketTests(unittest.TestCase):
             destination=Path(tmp)/'run'/'portal-ticket.bin';destination.parent.mkdir()
             result=network_profile.fetch_portal_ticket(self.portal_block(tmp,portal),destination)
             self.assertEqual(result,{'file':str(destination),'player_name':'Svc_Bot','audience':'test.example.org',
-                                     'expires_at':1800000600,'account_id':7})
+                                     'expires_at':4102444800,'account_id':7})
             self.assertEqual(destination.read_bytes(),ticket_bytes('test.example.org','Svc_Bot'))
             if os.name=='posix':self.assertEqual(destination.stat().st_mode&0o777,0o600)
             self.assertEqual(portal.requests,[('/api/v1/ticket','Bearer '+TOKEN,'application/json',{'audience':'test.example.org'})])

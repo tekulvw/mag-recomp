@@ -218,8 +218,11 @@ static void portal_phase(const wchar_t *settings, const wchar_t *server, const w
     wchar_t name[32], message[1024];
     int state = mag_portal_phase(settings, server, ticket, launcher, name, 32, message, 1024);
     SetEnvironmentVariableW(L"MAG_PLAYER_PORTAL_TICKET", NULL);
+    SetEnvironmentVariableW(L"PS3RECOMP_NP_TICKET_REFILL", NULL);
     if (state == MAG_PORTAL_READY) {
         set_env(L"MAG_PLAYER_PORTAL_TICKET", ticket);
+        /* Each sign-in takes a fresh ticket; the portal code keeps the file filled. */
+        set_env(L"PS3RECOMP_NP_TICKET_REFILL", L"1");
         if (launcher && name[0]) set_env(L"MAG_PLAYER_SET_NAME", name);
     }
     if (state == MAG_PORTAL_STOP) fail(message, NULL);

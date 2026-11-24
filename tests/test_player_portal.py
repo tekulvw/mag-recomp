@@ -24,7 +24,7 @@ class PortalCoreTests(unittest.TestCase):
             # C++17: the packaged supervisors compile this core too.
             build = subprocess.run([COMPILER, '-std=c++17', '-Wall', '-Wextra', '-Werror', '-I' + str(ROOT / 'src'),
                                     str(ROOT / 'tests/player_portal.cpp'), str(ROOT / 'src/player_portal.cpp'),
-                                    '-o', str(binary)], capture_output=True, text=True, timeout=120)
+                                    '-pthread', '-o', str(binary)], capture_output=True, text=True, timeout=300)
             self.assertEqual(build.returncode, 0, build.stderr)
             scratch = pathlib.Path(tmp) / 'scratch'; scratch.mkdir()
             result = subprocess.run([str(binary), str(scratch)], capture_output=True, text=True, timeout=30)
