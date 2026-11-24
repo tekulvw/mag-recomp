@@ -412,32 +412,57 @@ int main(void) {
     # A launcher and engine stand-in that signs in three times per phase as the runtime does with
     # PS3RECOMP_NP_TICKET_REFILL=1: take the ticket file (rename aside, read, delete), waiting for the
     # supervisor to put a fresh one back. Between the first and second sign-in it waits past the
-    # fixture tickets' lifetime: a reconnect after the server dropped the players.
+    # fixture tickets' lifetime: a reconnect after the server dropped the players. Time is the test's
+    # fake clock (CLOCK_FILE): the game records each sign-in by it and, for the wait, asks the test to
+    # move it on (PAUSE_FILE) rather than sleeping.
     REFILL_RECORDER=r"""
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
 #include <unistd.h>
+static long long now(void){
+ long long t=-1;FILE* f=fopen(CLOCK_FILE,"r");if(f){if(fscanf(f,"%lld",&t)!=1)t=-1;fclose(f);}
+ if(t<0)abort();return t;
+}
 static int sign_in(const char* path,FILE* out){
  char claimed[4096];snprintf(claimed,sizeof claimed,"%s.claimed",path);
  for(int i=0;i<6000;i++){  /* up to 60 s: a safety limit for loaded machines */
-  if(rename(path,claimed)==0){FILE* in=fopen(claimed,"rb");int c;if(!in)return 1;
-   fprintf(out,"%ld ",(long)time(NULL));while((c=fgetc(in))!=EOF)fprintf(out,"%02x",c);fputs("\n",out);fclose(in);remove(claimed);return 0;}
+  if(rename(path,claimed)==0){long long at=now();FILE* in=fopen(claimed,"rb");int c;if(!in)return 1;
+   fprintf(out,"%lld ",at);while((c=fgetc(in))!=EOF)fprintf(out,"%02x",c);fputs("\n",out);fclose(in);remove(claimed);return 0;}
   usleep(10000);}
  return 1;
+}
+static int wait_seconds(long long seconds){  /* until the fake clock has moved on this far */
+ const long long until=now()+seconds;FILE* f=fopen(PAUSE_FILE ".new","w");if(!f)return 1;
+ fprintf(f,"%lld\n",until);fclose(f);if(rename(PAUSE_FILE ".new",PAUSE_FILE))return 1;
+ for(int i=0;i<12000&&now()<until;i++)usleep(10000);  /* up to 120 s */
+ remove(PAUSE_FILE);return now()<until;
 }
 int main(void){
  const char* request=getenv("MAG_HANDOFF_REQUEST");const char* ticket=getenv("MAG_PLAYER_PORTAL_TICKET");const char* refill=getenv("PS3RECOMP_NP_TICKET_REFILL");
  FILE* out=fopen(request?"launcher.signins":"engine.signins","w");if(!out)return 40;
  if(!ticket||!refill||strcmp(refill,"1"))return 41;
  if(sign_in(ticket,out))return 42;
- sleep(4);
+ if(wait_seconds(4))return 44;
  if(sign_in(ticket,out)||sign_in(ticket,out))return 43;
  fclose(out);
  if(request){FILE* f=fopen(request,"wx");if(!f)return 46;
   fprintf(f,"{\"version\":1,\"token\":\"%s\",\"guest_path\":\"/dev_bdvd/PS3_GAME/USRDIR/bin/mage_g.self\",\"kind\":\"mage_g\"}\n",getenv("MAG_HANDOFF_TOKEN"));fclose(f);return 90;}
  return 23;
+}
+"""
+    # The supervisor's clock for the same test (LD_PRELOAD): time() reads the fake clock, so its
+    # renewal and expiry decisions follow the clock the portal stub issues tickets by.
+    FAKE_TIME=r"""
+#include <fcntl.h>
+#include <stdlib.h>
+#include <time.h>
+#include <unistd.h>
+time_t time(time_t* out){
+ char text[32];int fd=open(CLOCK_FILE,O_RDONLY|O_CLOEXEC);ssize_t n=fd<0?-1:read(fd,text,sizeof text-1);
+ if(fd>=0)close(fd);
+ if(n<=0)abort();  /* never fall back to the real clock unnoticed */
+ text[n]=0;time_t t=(time_t)strtoll(text,NULL,10);if(out)*out=t;return t;
 }
 """
 
@@ -448,6 +473,10 @@ int main(void){
         TOKEN='mgd_'+'Refill0123456789-_abcdefghijklmnopqrstuvwx'
         issued={}  # ticket bytes (hex) -> (issued at, expires at)
         lock=threading.Lock();state={'revoke_after':None}
+        # One fake clock, in whole seconds, for the portal stub, the supervisor (LD_PRELOAD) and the
+        # game: it moves only while the game waits, so a slow machine cannot age a ticket. A day
+        # behind the real clock, so a supervisor that missed it would find every ticket expired.
+        clock={'now':int(time.time())-86400}
         class Portal(http.server.BaseHTTPRequestHandler):
             def log_message(self,*args): pass
             def reply(self,status,value):
@@ -458,7 +487,7 @@ int main(void){
                 if self.path!='/api/v1/ticket' or self.headers.get('Authorization')!='Bearer '+TOKEN:return self.reply(401,{'error':'invalid_token'})
                 if state['revoke_after'] is not None and len(issued)>=state['revoke_after']:return self.reply(401,{'error':'invalid_token'})
                 with lock:
-                    serial=len(issued)+1;now=int(time.time())
+                    serial=len(issued)+1;now=clock['now']
                     ticket=(b'MAGT\x01\x01'+bytes(8)+(100).to_bytes(8,'big')+(42).to_bytes(4,'big')+serial.to_bytes(16,'big')+
                             b'\x0bexample.org\x06Rook_7'+b's'*64)
                     issued[ticket.hex()]=(now,now+3)  # a 3 s lifetime
@@ -468,7 +497,40 @@ int main(void){
         self.addCleanup(server.server_close)
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp)
-            install=self.install_fixture(root,self.REFILL_RECORDER)
+            clock_file,pause_file=root/'clock',root/'pause'
+            def set_clock(value):
+                clock['now']=value;new=root/'clock.new';new.write_text(f'{value}\n');os.replace(new,clock_file)
+            set_clock(clock['now'])
+            paths=f'#define CLOCK_FILE {json.dumps(str(clock_file))}\n#define PAUSE_FILE {json.dumps(str(pause_file))}\n'
+            install=self.install_fixture(root,paths+self.REFILL_RECORDER)
+            (root/'fake_time.c').write_text(paths+self.FAKE_TIME)
+            subprocess.run(['cc','-shared','-fPIC',str(root/'fake_time.c'),'-o',str(root/'fake_time.so')],check=True,timeout=30)
+            waiting=install/'home/player/portal-ticket.bin'
+            def waiting_expiry():
+                try: hexed=waiting.read_bytes().hex()
+                except OSError: return None  # taken, or not refilled yet
+                with lock: return issued.get(hexed,(None,None))[1]
+            # While the game waits, move the clock on a second at a time, but never onto the expiry
+            # of the ticket waiting in the file: the supervisor must replace it first, however long
+            # a loaded machine takes (up to 60 s; longer is reported). Once the portal refuses the
+            # account no ticket comes, and the clock moves freely.
+            problems=[];stop=threading.Event()
+            def drive():
+                while not stop.is_set():
+                    try: until=int(pause_file.read_text())
+                    except (OSError,ValueError): stop.wait(0.01);continue
+                    if clock['now']>=until: stop.wait(0.01);continue
+                    if state['revoke_after'] is None:
+                        deadline=time.monotonic()+60
+                        while not stop.is_set():
+                            expires=waiting_expiry()
+                            if expires is not None and expires>clock['now']+1: break
+                            if time.monotonic()>deadline:
+                                problems.append(f'no fresh ticket was waiting before {clock["now"]+1} (waiting one expires at {expires})');break
+                            stop.wait(0.01)
+                    set_clock(clock['now']+1)
+            driver=threading.Thread(target=drive,daemon=True);driver.start()
+            self.addCleanup(lambda:(stop.set(),driver.join()))
             config=root/'config/MAG';config.mkdir(parents=True,mode=0o700)
             (config/'settings.json').write_text(json.dumps({'server_address':'example.org','player_name':'Rook_7',
                                                             'portal_url':f'http://127.0.0.1:{port}'}))
@@ -476,7 +538,7 @@ int main(void){
             link.write_text(json.dumps({'schema_version':1,'portal':f'http://127.0.0.1:{port}','device_token':TOKEN,'player_name':'Rook_7'}))
             link.chmod(0o600)
             env={k:v for k,v in os.environ.items() if k not in ('DISPLAY','WAYLAND_DISPLAY')}
-            env['XDG_CONFIG_HOME']=str(root/'config')
+            env['XDG_CONFIG_HOME']=str(root/'config');env['LD_PRELOAD']=str(root/'fake_time.so')
             run=subprocess.run([str(install/'MAG/MAG')],env=env,capture_output=True,text=True,timeout=300)
             self.assertEqual(run.returncode,23,run.stdout+run.stderr)
             logs=max((install/'logs').glob('launch-*'),key=lambda p:p.stat().st_mtime)
@@ -485,6 +547,7 @@ int main(void){
                 for line in (logs/phase).read_text().splitlines():
                     at,hexed=line.split();used.append((int(at),hexed))
             self.assertEqual(len(used),6)
+            self.assertEqual(problems,[])
             # Six sign-ins, six different tickets, each from the portal and inside its lifetime,
             # including the ones after the 4 s pause that outlived every earlier ticket.
             self.assertEqual(len({h for _,h in used}),6)

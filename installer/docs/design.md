@@ -10,6 +10,37 @@ The shared core treats input as read-only; rejects symlinks, traversal, drive pa
 
 Output uses a sibling staging directory and exclusive lock. POSIX locking keeps a stable lock inode and descriptor with nonblocking kernel `flock` ownership throughout the transaction; it never unlinks/recreates a lock based on PID metadata. Windows uses a native OS-held byte-range lock on a stable file; legacy and unknown formats fail closed. Native Windows execution remains unverified. Interrupted downloads restart from zero without trusting partial content. Interrupted pipelines retain a state journal and logs; explicit resume checks profile digest, input identity, host, destination, and lock ownership. Recovery revalidates inputs and reruns stages into a fresh work directory, so completed stages are not trusted blindly. Existing final output is never overwritten. Atomic directory rename publishes only a completed local result. Lock release, close and cleanup-notice failures cannot turn a committed result into failure, or replace an existing precommit exception; reporting is secondary to the transaction outcome. Installer distribution packaging uses an explicit allowlist independent of build outputs and input paths.
 
+### Player build lock
+
+Building MAG, a Retry build and the move from the earlier layout hold a lock on `.MAG.player-lock`
+beside the MAG folder (`.<name>.player-lock` for another folder name), so that only one installer
+works on an installation location at a time. The specification:
+
+- Ownership is the operating system's lock on that open file (`flock` on macOS and Linux, a
+  byte-range lock on its first byte on Windows), taken without waiting and held for the whole build.
+  The operating system drops it when its owner closes the file or exits, however the process ends:
+  finished, failed, cancelled, crashed or killed.
+- A second installer that cannot take the lock stops before changing anything, with "Another
+  installer holds this output". This is the protection against two builds at once.
+- A lock file whose lock can be taken belongs to an installer that has exited. Build MAG and Retry
+  build take it over without asking for a resume, so a lock file never has to be deleted by hand.
+  An empty file is taken over too (its creator stopped between creating and recording it). Content
+  this installer does not recognise stays fail-closed for inspection, as before.
+- The file records the owner's process id and the time it took the lock (UTC), for people
+  reading it. They are never used to decide whether the owner is alive: a process id can be reused
+  by an unrelated process, and comparing process start times needs per-platform process APIs and
+  clock agreement. The operating system's lock has neither weakness.
+- When a build ends, successfully or not, the installer releases the lock and removes the file. On
+  macOS and Linux it removes the file while it still holds the lock; an installer that opened the
+  old file meanwhile checks, once it gets the lock, that the path still names the file it locked,
+  and otherwise starts over (a few attempts). Windows cannot delete a file the process has open, so
+  the installer closes it first and then removes it; if another installer opened it in between,
+  Windows refuses the deletion and that installer owns the file. Failing to remove the file is never
+  a build failure: the next installer takes it over.
+
+The transaction pipeline below (`.<output>.mag-lock`) and the native build lock keep their stable
+lock files and explicit resume.
+
 The synthetic demonstration (`install --synthetic`) exercises this transaction core and creates a clearly labelled text artifact; it is not a MAG build. Building MAG is the separate player route (`player_build.py`), which runs the BUILDING.md recipe from the embedded source kit with pinned managed tools.
 
 A lightweight Tkinter wizard now consumes the shared pipeline through a background worker and main-thread event queue. No arguments opens the wizard; explicit CLI commands stay accessible without Tk. The wizard selects source and an existing parent, shows blocked-host and exact-input information, reports known storage lower bounds with unknown build scratch clearly identified, and offers safe cancellation/retry and output/log access. Existing output is protected and never treated as verified merely because it exists. Synthetic mode remains explicitly labelled.
