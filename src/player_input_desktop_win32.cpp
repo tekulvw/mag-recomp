@@ -59,7 +59,7 @@ static_assert(RI_MOUSE_LEFT_BUTTON_DOWN == MAG_WIN32_MOUSE_LEFT_DOWN && RI_MOUSE
               RI_MOUSE_MIDDLE_BUTTON_DOWN == MAG_WIN32_MOUSE_MIDDLE_DOWN &&
               RI_MOUSE_MIDDLE_BUTTON_UP == MAG_WIN32_MOUSE_MIDDLE_UP && RI_MOUSE_BUTTON_4_DOWN == MAG_WIN32_MOUSE_X1_DOWN &&
               RI_MOUSE_BUTTON_4_UP == MAG_WIN32_MOUSE_X1_UP && RI_MOUSE_BUTTON_5_DOWN == MAG_WIN32_MOUSE_X2_DOWN &&
-              RI_MOUSE_BUTTON_5_UP == MAG_WIN32_MOUSE_X2_UP);
+              RI_MOUSE_BUTTON_5_UP == MAG_WIN32_MOUSE_X2_UP && RI_MOUSE_WHEEL == MAG_WIN32_MOUSE_WHEEL);
 
 namespace {
 using namespace mag;
@@ -107,6 +107,7 @@ public:
     HWND window = nullptr;
     bool dialog = false, registered = false;
     MagWin32KeyState keys{};  // physical key state, to tell presses from auto-repeat
+    int32_t wheel_rest = 0;   // part of a wheel step turned so far (fine-grained wheels)
 
     bool window_attached() override { return window && IsWindow(window); }
     bool window_focused() override {
@@ -273,6 +274,8 @@ void raw_input(Backend& b, HRAWINPUT handle) {
         for (unsigned i = 0; i < count; ++i)
             if (mag_win32_raw_input_admitted(focused, edges[i].down))
                 b.core.mouse_button(edges[i].index, kMouseDevice, edges[i].down != 0, time, stamp);
+        const int steps = mag_win32_raw_mouse_wheel(mouse.usButtonFlags, mouse.usButtonData, &b.platform.wheel_rest);
+        if (steps && mag_win32_raw_input_admitted(focused, 1)) b.core.mouse_wheel(steps, kMouseDevice, time, stamp);
         double dx = 0, dy = 0;
         auto& trace = motion_trace();
         ++trace.reports;

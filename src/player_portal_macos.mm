@@ -3,6 +3,7 @@
 #import "player_portal_macos.h"
 #include "player_portal.h"
 #include <atomic>
+#include <cstdio>
 #include <memory>
 
 // Redirects are refused: a reply must come from the portal itself, so the device token in the
@@ -156,7 +157,15 @@ NSString *MAGPortalLaunchTicket(NSString *settingsPath, NSString *ownedFolder, N
     using State = mag::portal::LaunchTicket::State;
     if (!result.message.empty()) *message = string(result.message);
     *failed = result.state == State::Failed;
+    static std::unique_ptr<mag::portal::TicketRefill> refill;
+    refill.reset();
     if (result.state != State::Ready) return nil;
+    // Each later sign-in of this phase (a reconnect, a return to the lobby) takes a fresh ticket
+    // from the file (PS3RECOMP_NP_TICKET_REFILL), which this refill keeps filled.
+    refill = mag::portal::start_ticket_refill(mag::portal::make_platform_transport, mag::portal::link_path(settingsPath.fileSystemRepresentation),
+                                              ticket, portal, server.UTF8String,
+                                              "Link it again in MAG Settings (MAG > Settings…, Account).", result.expires_at,
+                                              [](const std::string &line) { std::fprintf(stderr, "[mag account] %s\n", line.c_str()); });
     *playerName = string(result.player_name);
     return [NSString stringWithUTF8String:result.file.c_str()];
 }

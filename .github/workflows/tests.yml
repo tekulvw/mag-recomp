@@ -16,6 +16,7 @@ jobs:
     runs-on: mag-recomp
     outputs:
       code: ${{ steps.diff.outputs.code }}
+      macos_settings: ${{ steps.diff.outputs.macos_settings }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -28,6 +29,13 @@ jobs:
             echo code=false >> "$GITHUB_OUTPUT"
           else
             echo code=true >> "$GITHUB_OUTPUT"
+          fi
+          # The macOS settings panel's sources and fixtures (settings-macos below). Unknown changes
+          # (no diff) count as touching them.
+          if [ -z "$files" ] || printf '%s\n' "$files" | grep -qE '^src/player_(settings|controls|portal|report|input_desktop_macos|input_macos)|^tests/(test_)?player_(settings|controls|reports)|^cmake/MagPlayerSettings|^tools/player_settings_preview|^\.github/workflows/tests\.yml$'; then
+            echo macos_settings=true >> "$GITHUB_OUTPUT"
+          else
+            echo macos_settings=false >> "$GITHUB_OUTPUT"
           fi
   rust:
     needs: changes
@@ -90,6 +98,26 @@ jobs:
         run: rustup toolchain install 1.99.0 --profile minimal
       - name: Settings window tests
         run: python -m unittest tests.test_player_settings_window -v
+  settings-macos:
+    # The macOS settings panel's fixtures (AppKit panel, controls pane, Debug page, reports rows,
+    # runtime glue) on pull requests that touch them. python-macos runs the whole suite only on
+    # pushes to main, and a missing link input once reached main that way (#261). Not a required check.
+    needs: changes
+    if: github.event_name == 'pull_request' && needs.changes.outputs.macos_settings == 'true'
+    runs-on: macos-latest
+    env:
+      MAG_TEST_SDK: ${{ github.workspace }}/local/ps3recomp-runtime
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Pinned ps3recomp runtime
+        run: python tools/fetch_ps3recomp.py --role runtime
+      - name: Pinned Rust toolchain
+        run: rustup toolchain install 1.99.0 --profile minimal
+      - name: macOS settings tests
+        run: python -m unittest tests.test_player_settings tests.test_player_controls_settings tests.test_player_settings_window tests.test_player_reports -v
   python:
     # Required check. Runs on the self-hosted Linux runners so pull requests are gated without
     # hosted minutes; tests that need macOS skip themselves here and run in python-macos below.

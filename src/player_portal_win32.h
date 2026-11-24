@@ -21,12 +21,18 @@ int mag_portal_link_token(const wchar_t *settings_file, const wchar_t *server_ch
 int mag_portal_unlink(const wchar_t *settings_file, wchar_t *message, int capacity);
 
 enum { MAG_PORTAL_NONE = 0, MAG_PORTAL_READY = 1, MAG_PORTAL_FALL_BACK = 2, MAG_PORTAL_STOP = 3 };
-/* Before a phase: fetch a fresh ticket into `ticket_file` when linked. READY: the ticket is there;
+/* Before a phase: fetch a fresh ticket into `ticket_file` when linked. READY: the ticket is there,
+ * and a background refill keeps the file filled with a fresh one for every later sign-in of the
+ * phase (the game runs with PS3RECOMP_NP_TICKET_REFILL=1);
  * in the launcher phase `name` is set to the account's player name when it differs from the
  * settings (empty otherwise). FALL_BACK: sign in by name this time; STOP: the launch must stop.
  * `message`, when not empty, is for the player. */
 int mag_portal_phase(const wchar_t *settings_file, const wchar_t *server_choice, const wchar_t *ticket_file, int launcher,
                      wchar_t *name, int name_capacity, wchar_t *message, int message_capacity);
+/* After the game exits (and once before a launch, to drop an earlier note): stop the refill and
+ * take the note it left when a sign-in was refused or expired and never recovered. 1: `message`
+ * holds it ("Your MAG sign-in expired ... Restart MAG to sign in again."); 0: nothing to say. */
+int mag_portal_take_notice(const wchar_t *ticket_file, wchar_t *message, int capacity);
 
 #ifdef __cplusplus
 }
