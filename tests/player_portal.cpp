@@ -519,12 +519,12 @@ static void refill(const fs::path &scratch) {
             TicketRefill refill(file, now + 3600, fetch, {}, policy, [&] { return now.load(); });
             mag::mark_refused_sign_in(file, "UI_Error");
             const std::string expected = "Your MAG sign-in was refused by the game server. Restart MAG to sign in again.\n";
-            for (int waited = 0; read(policy.notice_file) != expected && waited < 2000; waited += 5)
+            for (int waited = 0; read(policy.notice_file) != expected && waited < kWait; waited += 5)
                 std::this_thread::sleep_for(std::chrono::milliseconds(5));
             CHECK(read(policy.notice_file) == expected);
             CHECK(!fs::exists(mag::refused_sign_in_marker(file), ignored));
             // A later successful refill keeps the refusal: the session still ended on it.
-            std::string got; CHECK(take_within(file, got, 2000));
+            std::string got; CHECK(take_within(file, got, kWait));
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
             CHECK(read(policy.notice_file) == expected);
         }
@@ -537,7 +537,7 @@ static void refill(const fs::path &scratch) {
         {
             TicketRefill refill(file, now + 3600, unlinked, {}, policy, [&] { return now.load(); });
             mag::mark_refused_sign_in(file, "UI_Error");
-            for (int waited = 0; !fs::exists(policy.notice_file, ignored) && waited < 2000; waited += 5)
+            for (int waited = 0; !fs::exists(policy.notice_file, ignored) && waited < kWait; waited += 5)
                 std::this_thread::sleep_for(std::chrono::milliseconds(5));
         }
         CHECK(take_sign_in_notice(file, text) && text.find("Link your account again in MAG Settings") != std::string::npos);
