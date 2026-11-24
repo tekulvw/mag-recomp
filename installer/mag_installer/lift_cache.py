@@ -219,7 +219,7 @@ def _allowed_outside(path, config, prefixes=()):
         return normalized.startswith(_norm(windows) + os.sep) or Path(path).name.lower() == 'nul' or path.startswith('\\\\.\\')
     system = ('/dev/', '/etc/', '/usr/lib/', '/usr/share/', '/proc/', '/sys/')
     if sys.platform == 'darwin':
-        system += ('/System/', '/private/etc/', '/private/var/db/timezone/')
+        system += ('/System/', '/private/etc/')
     return normalized.startswith(tuple(_norm(prefix) for prefix in system))
 
 

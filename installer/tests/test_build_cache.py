@@ -80,8 +80,8 @@ class EntryTests(unittest.TestCase):
 
     def test_json_and_forward_slash_spellings_of_the_build_folder_are_replaced(self):
         old = self.temp / 'old'
-        windows = 'C:\\Users\\Player\\MAG-build'
-        tree(old, {'provenance.json': json.dumps({'command': [windows + '\\python.exe', 'C:/Users/Player/MAG-build/ws']})})
+        windows = 'C:\\Games\\Player\\MAG-build'
+        tree(old, {'provenance.json': json.dumps({'command': [windows + '\\python.exe', 'C:/Games/Player/MAG-build/ws']})})
         key = build_cache.digest({'json': 1})
         self.cache.store('lift', key, old, ['provenance.json'], {}, 1, replacements={'build': windows})
         new = self.temp / 'new'

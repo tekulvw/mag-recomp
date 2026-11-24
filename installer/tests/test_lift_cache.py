@@ -78,7 +78,7 @@ class GenerationCacheTests(unittest.TestCase):
         stages = [{'id': 'lift-synthetic', 'argv': [sys.executable, str(workspace / 'tools/generate.py'), str(workspace),
                                                     str(workspace / 'generated/synthetic'), str(self.counter)]}]
         env = {key: value for key, value in os.environ.items() if key in ('PATH', 'SYSTEMROOT', 'SystemRoot', 'TEMP', 'TMP')}
-        env.update(PYTHONNOUSERSITE='1', PYTHONPYCACHEPREFIX=str(build / 'build-work/home/pycache'), **(env_extra or {}))
+        env.update(PYTHONNOUSERSITE='1', PYTHONPYCACHEPREFIX=str(build / 'build-work' / 'home' / 'pycache'), **(env_extra or {}))
         token = Cancellation()
         def run_stage(stage, stage_env=None):
             run_command(stage['argv'], workspace, logs / (stage['id'] + '.log'), token, stage_env or env, None, stage['id'])
