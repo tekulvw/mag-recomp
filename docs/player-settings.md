@@ -283,8 +283,9 @@ To preview only the native panel from the source root, compile and run:
 
 ```sh
 mkdir -p build/settings-preview
+xcrun clang++ -std=c++20 -Isrc -c src/player_settings_debug.cpp -o build/settings-preview/player_settings_debug.o
 xcrun clang -fobjc-arc -Isrc tools/player_settings_preview.m \
-  src/player_settings_store.m src/player_settings_macos.m \
+  src/player_settings_store.m src/player_settings_macos.m build/settings-preview/player_settings_debug.o -lc++ \
   -framework AppKit -framework QuartzCore -o build/settings-preview/MAGSettingsPreview
 build/settings-preview/MAGSettingsPreview
 ```
