@@ -889,6 +889,23 @@ a window of the game's process is in the foreground (SDL's own rule for its wind
 cellPad because the game window is a native one); `SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS=1` lifts
 that. The settings window's Controller captures read controllers the same way.
 
+An attached controller must never take keyboard and mouse away. In automatic input mode both drive
+player 1 at once: the keyboard and mouse through Raw Input on the game window (above), the
+controller through cellPad, merged as everywhere else, while prompts follow whichever device was
+used last. On Windows SDL watches for controllers through a hidden message window. SDL creates
+that window on the thread that starts its controller support, a guest thread here that never reads
+window messages. SDL's Raw Input controller driver registers the window for controller reports
+from the background. While such a window goes unread, Windows stops delivering the game window's
+keyboard and mouse Raw Input. A plugged-in DualSense then left the keyboard and mouse dead
+in-game while the controller still worked. The game therefore runs SDL's controller watching on
+SDL's own thread, which reads that window's messages (`SDL_JOYSTICK_THREAD=1`, a Windows default
+in `src/mag_runtime_defaults.h`). This keeps SDL's Raw Input controller driver, and with it the
+separate Xbox triggers. An explicit `SDL_JOYSTICK_THREAD=0` restores the old behaviour.
+`SDL_JOYSTICK_RAWINPUT=0` also restores the keyboard and mouse, by turning that driver off.
+Linux and macOS are not affected. On Linux SDL owns the game window and reads its events, and
+keyboard and mouse come from SDL's keyboard state. On macOS they come from the GameController
+framework's keyboard and mouse handlers, which SDL's controller support does not replace.
+
 With `-DPS3RECOMP_PAD_USE_SDL2=OFF` cellPad reads controllers through XInput, and compile
 definitions on `libs/input/cellPad.c` route its `XInputGetState` and `GetAsyncKeyState` calls through
 `player_input_win32_pad.c`. Every XInput reading reaches the capture layer: port 0 starts a capture

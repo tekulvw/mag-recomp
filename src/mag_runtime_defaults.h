@@ -177,6 +177,12 @@ inline int mag_apply_runtime_defaults()
              // the one the game and the controls adapter read, ahead of the controller in use
              // (a DualSense plugged in after it, say). Not a performance switch.
              Setting{"PS3RECOMP_PAD_CLAIM_ON_INPUT", "1"},
+             // SDL watches for controllers on its own thread. Otherwise its hidden message window,
+             // which its Raw Input controller driver registers, belongs to the guest thread that
+             // started controller support and never reads its messages. Windows then stops
+             // delivering the game window's keyboard and mouse Raw Input: with a DualSense plugged
+             // in, keyboard and mouse were dead in-game (docs/native-controls.md, 8.1).
+             Setting{"SDL_JOYSTICK_THREAD", "1"},
 #endif
 #if defined(MAG_HAS_NATIVE_EDGEGEOM)
              // Native Edge geometry, wherever it is linked: Linux guest fps +8%, macOS
