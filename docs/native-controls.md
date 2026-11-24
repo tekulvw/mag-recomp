@@ -600,6 +600,19 @@ since last seen, reset system and host caches, clear receipts and cancel the mou
 
 Returns false (the game recognizes the control itself) unless every step below allows replacement.
 
+**Giving a record back.** When a step below returns false after step 2 (no action for the
+channel, gameplay not eligible, the channel contract changed, a menu holding look, a handler the
+action is not routed to, or a withdrawn frame), the adapter first gives control record `n` back.
+It forgets `n`'s recognition entry and any host or system cache for it. If the record's tuple is
+still one the adapter published (same handler, token, binding and tuning, and a tuple the game has
+not rewritten since), the adapter also writes the neutral tuple there. The game's own recognition
+then starts from rest. Without this, a press or hold the adapter began would stay in the record,
+and the game would finish it on its own once the button reads as released. One case did this: a
+list in the closed pause menu stays a gameplay route watching Confirm. X on foot confirmed it, and
+when the menu opened and held look the game completed that tap. The menu then appeared with the
+player card already open, and Kill Self (R3) did nothing until it was closed. A tuple the game
+wrote itself is never touched.
+
 1. Preconditions: a current recognition handler equal to r23, handler depth one, an owner, a valid
    frame. If the owner no longer matches, cancel ("native input routing changed") and return false.
 2. Control record `n` = r29 (not above `0xFFFFFFE3`); r31 and r3 must equal `n+8`. Read token,
@@ -641,8 +654,8 @@ Returns false (the game recognizes the control itself) unless every step below a
    value, blocked = r5 nonzero or the starting block, the configuration and the native contribution.
    The engine may report that the frame is gone: another thread (the window's) began a new capture
    generation since step 1, for example when the mouse lock follows a menu or the window loses
-   focus. That is not an error: forget the entry and return false (the game recognizes the
-   control). Receipts, acceptance and mouse acceptance on a withdrawn frame likewise do nothing.
+   focus. That is not an error: give the record back (above) and return false (the game recognizes
+   the control). Receipts, acceptance and mouse acceptance on a withdrawn frame likewise do nothing.
 10. Publish the result as the tuple (value, elapsed seconds, phase number, event bits) in one
     16-byte write at `n+0x0C` (failure is an error). Set r3 to the event bits, r11 to 0, and make
     `n` the current control.
@@ -950,7 +963,8 @@ stable for three handler updates). While a menu holds look on foot the pad is li
 menu, so the menu's face buttons, shoulders and stick clicks work from the pad's keys (Z Square
 for EXIT GAME, X Cross, C Circle, V Triangle, Q/E, F/G). The adapter then takes over no
 gameplay or situational action on any handler other than the player's own (7.3 step 3): the menu's
-controls read the pad. The player's handler keeps its keys, and the channels the menu consumes reach
+controls read the pad, from rest. A press the adapter left on one of them is given back first
+(7.3), so a Confirm pressed on foot does not act in the menu that opens later. The player's handler keeps its keys, and the channels the menu consumes reach
 it blocked, as a controller's would. System buttons (Escape, Tab, the arrows) stay with the adapter
 on every route. When look comes back (stably, as above) the pad is muted again at the next poll;
 the gate below makes any key still held from the menu wait for a release. The pad's readers (macOS window pad, SDL keyboard pad, Win32 keyboard

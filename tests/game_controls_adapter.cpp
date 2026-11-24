@@ -1195,6 +1195,64 @@ void situational_actions() {
 }
 
 std::vector<std::string> census_lines;
+// A list in a closed menu (the pause menu's squad list) stays a gameplay route and watches Confirm.
+// X on foot confirms it through the adapter; the list then goes unrecognized until the menu opens and
+// holds look, when the adapter leaves the list to the game (8.2). The game must find the record at
+// rest, not holding the adapter's press, or its own recognition finishes the tap (the player card
+// opened with the menu). Any record the adapter lets go is given back the same way.
+void stale_confirm_given_back() {
+    Harness h;
+    uint32_t record = 0;
+    const uint32_t list = route_handler(h.m, record);
+    h.m.put32(record, Confirm);
+    require(h.idle_tick() == Attached, "first tick did not attach on foot");
+    mag_controls_push_event({{InputSource::Keyboard, 27}, true, time_ns()});  // X.
+    h.begin_tick();
+    h.enter_handler(list);
+    require(h.recognize_record(record, list) && mag_guest_tuple_value(h.tuple_at(record)) == 1.0f,
+            "X did not confirm the list");
+    h.fire(Hook::HandlerExit);
+    h.enter_handler();
+    h.end_poll();
+    h.enter_actor();
+    h.end_tick();
+    const auto pressed = h.tuple_at(record);
+    mag_controls_push_event({{InputSource::Keyboard, 27}, false, time_ns()});
+    constexpr uint32_t Look = 0xFu << 20;
+    auto update = [&](uint32_t consumed) {  // ticks in which the list is not updated
+        h.m.put32(Pad + 0x80, consumed);
+        h.begin_tick();
+        h.enter_handler();
+        h.fire(Hook::HandlerExit);
+        h.end_poll();
+        h.end_tick();
+    };
+    update(0);
+    update(Look);
+    update(Look);
+    update(Look);
+    require(h.status() == std::string("on-foot input attached; a menu holds look"), "the menu hold was not taken");
+    require(h.tuple_at(record) == pressed, "the list's record changed while it was not updated");
+    h.begin_tick();
+    h.m.put32(Pad + 0x80, Look);
+    h.enter_handler(list);
+    require(!h.recognize_record(record, list), "the adapter took over the open menu's list");
+    require(h.tuple_at(record) == mag_guest_neutral_tuple(), "the list kept the adapter's press for the game to finish");
+    h.fire(Hook::HandlerExit);
+    h.end_poll();
+    h.end_tick();
+
+    // A tuple the game wrote itself is never touched: the game now presses the list natively.
+    MagGuestTuple native = mag_guest_tuple(1.0f, 0.1f, 2, 0x0002);
+    for (size_t i = 0; i < native.size(); ++i) h.m.bytes[record + 0x0C + uint32_t(i)] = native[i];
+    h.begin_tick();
+    h.enter_handler(list);
+    require(!h.recognize_record(record, list) && h.tuple_at(record) == native, "the adapter overwrote the game's own press");
+    h.fire(Hook::HandlerExit);
+    h.end_poll();
+    h.end_tick();
+}
+
 void census_line(const char* line) { census_lines.push_back(line); }
 
 // The census describes each distinct handler update once, and changes nothing.
@@ -1316,7 +1374,7 @@ int main(int argc, char** argv) {
         {"mouse", mouse_look},       {"assist", aim_assist},     {"lifecycle", lifecycle},
         {"threads", threads_and_errors}, {"snapshot", update_snapshot}, {"menu", menu_holds_look},
         {"withdrawn", withdrawn_frame},
-        {"menu-pad", menu_keyboard_pad}, {"menu-look-pad", menu_holding_look_gets_the_pad}, {"situational", situational_actions}, {"census", census},
+        {"menu-pad", menu_keyboard_pad}, {"menu-look-pad", menu_holding_look_gets_the_pad}, {"situational", situational_actions}, {"stale-confirm", stale_confirm_given_back}, {"census", census},
         {"prompt-queries", prompt_queries}};
     try {
         if (argc != 2 || !scenarios.count(argv[1])) throw std::runtime_error("usage: game_controls_adapter <scenario>");

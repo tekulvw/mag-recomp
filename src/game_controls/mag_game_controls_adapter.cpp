@@ -202,6 +202,7 @@ struct RecognitionEntry {
     MagGuestTuple tuple{};
     uint64_t id{};
     bool start_blocked{};
+    bool published{};  // tuple is one the adapter wrote (not yet the game's own)
 };
 
 // Fields of a tuning record (2.2) the recognizer uses.
@@ -343,6 +344,27 @@ struct MagGameControlsAdapter::State {
     bool write_neutral(uint32_t record) const {
         const auto neutral = mag_guest_neutral_tuple();
         return guest.reads().write_bytes(uint64_t(record) + RecordTuple, neutral.data(), neutral.size());
+    }
+    // 7.3: recognition leaves control record n to the game. A tuple the adapter published there and
+    // the game has not changed since goes back to the neutral tuple first, so the game's own
+    // recognition starts from rest and never completes a press or hold the adapter began (a hidden
+    // menu list must not finish a Confirm when the adapter lets it go). The entry and any cache for
+    // n are forgotten. Always returns false (the game recognizes the control).
+    bool hand_back(uint32_t n, uint32_t handler, uint32_t token, uint32_t binding, uint32_t tuning, const char* why) {
+        const auto it = entries.find(n);
+        if (it != entries.end()) {
+            const RecognitionEntry entry = it->second;
+            entries.erase(it);
+            host_caches.erase(n);
+            system_caches.erase(n);
+            if (entry.published && entry.handler == handler && entry.tuple != mag_guest_neutral_tuple() &&
+                control_unchanged(n, token, binding, tuning, entry.tuple)) {
+                if (!write_neutral(n)) throw std::runtime_error("cannot give back the control tuple");
+                if (look_trace.on)
+                    std::fprintf(stderr, "[game-controls] trace hand-back: handler=%08X token=%08X (%s)\n", handler, token, why);
+            }
+        }
+        return false;
     }
 
     // 6.4: give back every gameplay control the adapter still holds, then forget them all.
@@ -918,7 +940,7 @@ struct MagGameControlsAdapter::State {
         ActionId action = mag_game_controls_action(named) ? named : 0;
         if (!action) {
             const auto mapped = channel_actions.find(*channel);
-            if (mapped == channel_actions.end()) return false;
+            if (mapped == channel_actions.end()) return hand_back(n, handler, *token, *binding, *tuning, "no action");
             action = mapped->second;
         }
 
@@ -932,19 +954,19 @@ struct MagGameControlsAdapter::State {
                 return false;
             }
         } else {
-            if (!gameplay_eligible) return false;
+            if (!gameplay_eligible) return hand_back(n, handler, *token, *binding, *tuning, "gameplay not eligible");
             if (!contract_current()) {
                 gameplay_eligible = mouse_eligible = false;
-                return false;
+                return hand_back(n, handler, *token, *binding, *tuning, "contract changed");
             }
             // While a menu holds look on foot the pad serves every handler but the player's (8.2).
-            if (!gameplay && look_held_by_menu) return false;
+            if (!gameplay && look_held_by_menu) return hand_back(n, handler, *token, *binding, *tuning, "a menu holds look");
             // Situational actions may be watched by any system route (a vehicle's or a menu's own
             // handler); other actions only by the owner or a gameplay route.
             if (gameplay ? mag_game_controls_token_action(*token) != action
                          : !(gameplay_routes && contains(*gameplay_routes, handler)) &&
                                !(optional_action(action) && contains(system_routes, handler)))
-                return false;
+                return hand_back(n, handler, *token, *binding, *tuning, "not routed");
         }
 
         // Step 4.
@@ -977,9 +999,9 @@ struct MagGameControlsAdapter::State {
                                                        native_contribution);
         if (!recognized) {
             // Another thread withdrew the frame (a focus or mouse-capture change began a new capture
-            // generation): the game recognizes this control, and the entry starts afresh next time.
-            entries.erase(n);
-            return false;
+            // generation): the game recognizes this control from rest, and the entry starts afresh
+            // next time.
+            return hand_back(n, handler, *token, *binding, *tuning, "frame withdrawn");
         }
         const auto& result = *recognized;
 
@@ -990,6 +1012,7 @@ struct MagGameControlsAdapter::State {
         if (!r.write_bytes(uint64_t(n) + RecordTuple, tuple.data(), tuple.size()))
             throw std::runtime_error("cannot publish the control tuple");
         entry.tuple = tuple;
+        entry.published = true;
         current_control = n;
 
         // Steps 11 and 12. A system button the game also reads natively is not the adapter's to give
