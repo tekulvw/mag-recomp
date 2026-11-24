@@ -604,7 +604,11 @@ Returns false (the game recognizes the control itself) unless every step below a
    - Other actions: gameplay must be eligible; the channel contract must still be current (7.4),
      otherwise revoke gameplay and mouse eligibility and return false; on the owner's handler the
      token (after aliases) must equal the action; on another handler it must be a gameplay route,
-     or, for a situational action, any system route (a vehicle's or a menu's own handler).
+     or, for a situational action or a raw pad-button token (`mag_game_controls_raw_pad_token`:
+     PadL3/padl3, PadLStickUp/padlstickup and the rest, both spellings the game hashes), any
+     system route. A registered handler that watches the buttons themselves then gets what the
+     player's handler takes on that channel, as a controller's button presses both; menus leave
+     such handlers to the keyboard pad (8.2), since gameplay is not eligible there.
 4. `mouse look` = gameplay, a look token, mouse eligible and the frame's look owner is the mouse.
    Ask the engine for this action's offer (`mag_controls_offer`). `remapped` = the profile remaps
    the controller and the action allows controller remapping. `deny native` = (gameplay or system)
@@ -643,7 +647,8 @@ Returns false (the game recognizes the control itself) unless every step below a
     gameplay receipt and, when not blocked and the value is above zero, accept the action. On a
     gameplay route handler (not the owner's) nothing is recorded: no host cache, no receipt, no
     acceptance; the published tuple is the only effect. A situational action on another handler
-    is recorded as a system cache (6.5), so it is given back when the adapter lets go.
+    or a raw pad button on another system route is recorded as a system cache (6.5), so it is
+    given back when the adapter lets go.
 13. Return true.
 
 `ControlCallback`: when the current control is r29 and the frame is no longer valid, write the

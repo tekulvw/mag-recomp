@@ -937,9 +937,13 @@ struct MagGameControlsAdapter::State {
             }
             // Situational actions may be watched by any system route (a vehicle's or a menu's own
             // handler); other actions only by the owner or a gameplay route.
+            // A raw pad-button token (padl3, ...) is that button wherever it is watched: any system
+            // route gets what the player's handler takes on that channel, as a controller's button
+            // would press both.
             if (gameplay ? mag_game_controls_token_action(*token) != action
                          : !(gameplay_routes && contains(*gameplay_routes, handler)) &&
-                               !(optional_action(action) && contains(system_routes, handler)))
+                               !((optional_action(action) || mag_game_controls_raw_pad_token(*token)) &&
+                                 contains(system_routes, handler)))
                 return false;
         }
 
@@ -998,8 +1002,9 @@ struct MagGameControlsAdapter::State {
         } else if (gameplay) {
             host_caches[n] = {*owner, handler, *token, *binding, *tuning, tuple};
             if (offer) gameplay_receipts[action] = *offer;
-        } else if (optional_action(action)) {
-            // Given back like a system button when the adapter lets go (6.5).
+        } else if (optional_action(action) || !(gameplay_routes && contains(*gameplay_routes, handler))) {
+            // A situational action or a raw pad button on another system route: given back like a
+            // system button when the adapter lets go (6.5).
             system_caches[n] = {handler, *token, *binding, *tuning, tuple};
         }
         if (accept) mag_controls_accept_action(*sample_key, action, *offer);

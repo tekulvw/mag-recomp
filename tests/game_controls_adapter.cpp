@@ -1129,6 +1129,56 @@ void situational_actions() {
     h.end_tick();
 }
 
+// A registered handler other than the player's (not a UI element) watching raw pad-button tokens
+// gets what the player's handler takes on that channel while the player is on foot: Left Shift
+// (Sprint, channel 11) presses its padl3, the right mouse button (Aim, 9) its padl1. Another
+// token there stays native, and menus leave it to the keyboard pad.
+void raw_pad_routes() {
+    Harness h;
+    const uint32_t other = 0x100E0000;
+    handler_base(h.m, other, BaseVtable, true);
+    const uint32_t l3 = watch(h.m, other, 5, 0x852CA1F5 /* padl3 */, 11);
+    const uint32_t l1 = watch(h.m, other, 6, 0x6B22C0D9 /* padl1 */, 9);
+    const uint32_t plain = watch(h.m, other, 7, 0x12345678, 11);
+    h.m.map(Registered + 0x20, 0x10);
+    h.m.put32(Registered + 0x28, other);
+    h.m.link(InputManager + 0x2C, {Registered, Registered + 0x10, Registered + 0x20});
+    require(h.idle_tick() == Attached, "a registered raw-pad handler blocked attachment");
+    mag_controls_push_event({{InputSource::Keyboard, 225}, true, time_ns()});  // Left Shift: Sprint.
+    mag_controls_push_event({{InputSource::Mouse, 1}, true, time_ns()});       // Right button: Aim.
+    h.begin_tick();
+    h.enter_handler();
+    h.fire(Hook::HandlerExit);
+    h.enter_handler(other);
+    require(h.recognize_record(l3, other) && mag_guest_tuple_value(h.tuple_at(l3)) == 1.0f,
+            "Left Shift did not press the raw L3 of another handler");
+    require(h.recognize_record(l1, other) && mag_guest_tuple_value(h.tuple_at(l1)) == 1.0f,
+            "the right mouse button did not press the raw L1 of another handler");
+    const auto before = h.tuple_at(plain);
+    require(!h.recognize_record(plain, other) && h.tuple_at(plain) == before, "a token that is no pad button was taken over");
+    h.cpu.gpr[3] = Handler;
+    h.fire(Hook::HandlerRefresh);  // Cancel: the held raw buttons are given back.
+    h.fire(Hook::HandlerRefreshed);
+    require(h.tuple_at(l3) == mag_guest_neutral_tuple() && h.tuple_at(l1) == mag_guest_neutral_tuple(),
+            "cancel kept the raw buttons held");
+    h.fire(Hook::HandlerExit);
+    h.fire(Hook::PollExit);
+    h.enter_actor();
+    h.end_tick();
+    // In a menu the keyboard pad serves raw buttons; the adapter takes none over.
+    h.m.put32(Pause + 0x9C0, 1);
+    require(h.idle_tick() == "native menu buttons attached", "a paused game attached on foot");
+    h.begin_tick();
+    h.enter_handler(other);
+    require(!h.recognize_record(l3, other), "a menu took over a raw pad button");
+    h.fire(Hook::HandlerExit);
+    h.fire(Hook::PollExit);
+    h.end_tick();
+    require(mag_game_controls_raw_pad_token(0x852CA1F5) && mag_game_controls_raw_pad_token(0xD169AA53) &&
+                mag_game_controls_raw_pad_token(0x9B06F9F3) && !mag_game_controls_raw_pad_token(0xEF8055B7),
+            "raw pad tokens: padl3, PadL3 and padlstickup, but not sprint");
+}
+
 std::vector<std::string> census_lines;
 void census_line(const char* line) { census_lines.push_back(line); }
 
@@ -1251,7 +1301,7 @@ int main(int argc, char** argv) {
         {"mouse", mouse_look},       {"assist", aim_assist},     {"lifecycle", lifecycle},
         {"threads", threads_and_errors}, {"snapshot", update_snapshot}, {"menu", menu_holds_look},
         {"withdrawn", withdrawn_frame},
-        {"menu-pad", menu_keyboard_pad}, {"situational", situational_actions}, {"census", census},
+        {"menu-pad", menu_keyboard_pad}, {"situational", situational_actions}, {"raw-pad", raw_pad_routes}, {"census", census},
         {"prompt-queries", prompt_queries}};
     try {
         if (argc != 2 || !scenarios.count(argv[1])) throw std::runtime_error("usage: game_controls_adapter <scenario>");

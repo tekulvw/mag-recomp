@@ -35,6 +35,9 @@ uint32_t mag_game_controls_name_token(std::string_view name);
 // The catalog action a prompt placeholder names ("Action" in "[Action]"), aliases resolved; 0 when
 // the name is no catalog action.
 mag::ActionId mag_game_controls_prompt_action(std::string_view name);
+// The game's raw pad-button tokens (PadL3, padl3, PadLStickUp, ...: the button itself, whatever it
+// does), in both spellings the game hashes. docs/native-controls.md, 7.3.
+bool mag_game_controls_raw_pad_token(uint32_t token);
 // Bit 0..3 for the four look-axis tokens, 0 for any other token.
 unsigned mag_game_controls_look_bit(uint32_t token);
 inline bool mag_game_controls_look_token(uint32_t token) { return mag_game_controls_look_bit(token) != 0; }

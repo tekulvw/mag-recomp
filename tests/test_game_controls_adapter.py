@@ -89,6 +89,9 @@ class GameControlsAdapterTests(unittest.TestCase):
     def test_situational_actions_are_optional_and_recognized_by_their_own_token(self):
         self.run_scenario('situational')
 
+    def test_raw_pad_buttons_on_other_handlers_follow_the_players_bindings(self):
+        self.run_scenario('raw-pad')
+
     def test_census_reports_each_handler_description_once(self):
         self.run_scenario('census')
 

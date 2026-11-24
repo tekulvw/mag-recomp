@@ -38,6 +38,35 @@ constexpr MagGameControlsAction catalog[] = {
     {SeatNext, "Change seats", false, -1, true, 2, Vehicles},
     {Smoke, "Smoke screen", false, -1, true, 2, Vehicles}};
 constexpr ActionId retired[] = {CommandScreen};
+// CRC-32 of each raw pad-button name, as written and lower-cased (the game watches both).
+constexpr uint32_t raw_pad_tokens[] = {
+    0xa5bc1361, 0xf1f918c7,  // PadUp, padup
+    0x8c2adba2, 0xe3a54d00,  // PadDown, paddown
+    0xeab2acf1, 0x853d3a53,  // PadLeft, padleft
+    0x3d898bbf, 0x053ec6ed,  // PadRight, padright
+    0x8c6e5137, 0x0933d6a2,  // PadSquare, padsquare
+    0x6f500396, 0x10baee17,  // PadTriangle, padtriangle
+    0x3f67cb7f, 0x6b22c0d9,  // PadL1, padl1
+    0xeb26f4a0, 0xbf63ff06,  // PadR1, padr1
+    0xa66e9ac5, 0xf22b9163,  // PadL2, padl2
+    0x722fa51a, 0x266aaebc,  // PadR2, padr2
+    0xd169aa53, 0x852ca1f5,  // PadL3, padl3
+    0x0528958c, 0x516d9e2a,  // PadR3, padr3
+    0x163aab24, 0x2e8de676,  // PadStart, padstart
+    0x0a7fd35e, 0x8f2254cb,  // PadSelect, padselect
+    0xbed5094c, 0x9b06f9f3,  // PadLStickUp, padlstickup
+    0x5162635e, 0x8f8206e6,  // PadLStickDown, padlstickdown
+    0x37fa140d, 0xe91a71b5,  // PadLStickLeft, padlstickleft
+    0x895f7d30, 0x4c3ba6eb,  // PadLStickRight, padlstickright
+    0xd7e42a55, 0xf237daea,  // PadRStickUp, padrstickup
+    0x6805d205, 0xb6e5b7bd,  // PadRStickDown, padrstickdown
+    0x0e9da556, 0xd07dc0ee,  // PadRStickLeft, padrstickleft
+    0x75df92fd, 0xb0bb4926,  // PadRStickRight, padrstickright
+    0x4d579b3e, 0x35117389,  // PadL1Analog, padl1analog
+    0x2466b827, 0x5c205090,  // PadR1Analog, padr1analog
+    0x7cbf81a3, 0x04f96914,  // PadL2Analog, padl2analog
+    0x158ea2ba, 0x6dc84a0d,  // PadR2Analog, padr2analog
+};
 constexpr uint32_t look_tokens[] = {0xc8a3e21d, 0x941734a2, 0x661cb595, 0xc34f3a66};
 // Contexts a binding may use: on foot for gameplay actions; on foot and menu for system buttons.
 constexpr uint32_t OnFoot = uint32_t(InputContext::OnFoot);
@@ -79,6 +108,10 @@ uint32_t mag_game_controls_name_token(std::string_view name) {
 ActionId mag_game_controls_prompt_action(std::string_view name) {
     const ActionId action = mag_game_controls_token_action(mag_game_controls_name_token(name));
     return mag_game_controls_action(action) ? action : 0;
+}
+
+bool mag_game_controls_raw_pad_token(uint32_t token) {
+    return std::find(std::begin(raw_pad_tokens), std::end(raw_pad_tokens), token) != std::end(raw_pad_tokens);
 }
 
 unsigned mag_game_controls_look_bit(uint32_t token) {
