@@ -1173,9 +1173,11 @@ each of those icons, labelled with the key that presses that button now (12.6):
   next time each is drawn. Guest memory is never written; controller players keep the game's icons,
   and a button with no key keeps its icon.
 
-In the Training pause menu the adapter attaches on foot ("a menu holds look"), so its pictures and
-tab boxes show the on-foot keys of rule 2 of 12.6; whether those keys act on that menu has not been
-checked in game. Not covered: the D3D12 renderer (parked), which does not decode through the draw
+Not reached: the Training pause menu's EXIT GAME square and Kill Self stick ring keep the game's
+pictures (they are not among the four textures), and the L1/R1 tab boxes of the training menu and
+the pause menu and the L2/R2 boxes of character creation are text the movies carry themselves, with
+no request to the game that names the button (checked: neither the text seam nor a lab rewrite of
+the image-name answer changes them). Not covered: the D3D12 renderer (parked), which does not decode through the draw
 engine.
 
 ### 12.6 Shoulder and stick prompts, and the key for a button
@@ -1183,7 +1185,9 @@ engine.
 The shoulder and stick prompts (L1, R1, L2, R2, L3, R3) are not pictures: a movie asks for localized
 text whose whole content is the button's name ("L1"), and draws it in a small box (the pause menu's
 tab switches, for example). The text seam of 12.1 sees that text; a text that is exactly one of those
-six names is replaced, without parentheses, by the key that presses the button now.
+six names is replaced, without parentheses, by the key that presses the button now. The game asks
+for these four (L1, R1, L2, R2) when the HUD is built; the tab boxes drawn by the movies themselves
+are not reached (12.5).
 
 The key for a button (`mag_game_prompts_button_key`), for the face-button pictures of 12.5 as well:
 
