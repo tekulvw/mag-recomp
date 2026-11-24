@@ -23,6 +23,7 @@ void SDL_GameControllerUpdate(void){}
 SDL_GameController* SDL_GameControllerOpen(int){return nullptr;}
 void SDL_GameControllerClose(SDL_GameController*){}
 SDL_bool SDL_GameControllerGetAttached(SDL_GameController*){return SDL_FALSE;}
+void SDL_GameControllerSetPlayerIndex(SDL_GameController*,int){}
 Uint8 mag_player_controller_button(SDL_GameController*,SDL_GameControllerButton);
 Sint16 mag_player_controller_axis(SDL_GameController*,SDL_GameControllerAxis);
 }

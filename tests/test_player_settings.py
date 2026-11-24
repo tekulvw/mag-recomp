@@ -131,6 +131,7 @@ void SDL_GameControllerUpdate(void);
 SDL_GameController* SDL_GameControllerOpen(int);
 void SDL_GameControllerClose(SDL_GameController*);
 SDL_bool SDL_GameControllerGetAttached(SDL_GameController*);
+void SDL_GameControllerSetPlayerIndex(SDL_GameController*,int);
 #ifdef __cplusplus
 }
 #endif
