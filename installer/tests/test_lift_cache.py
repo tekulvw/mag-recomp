@@ -93,7 +93,7 @@ class GenerationCacheTests(unittest.TestCase):
         result, events = self.generate(first, workspace)
         self.assertIsNone(result)
         self.assertEqual([e['event'] for e in events if e['event'].startswith('build-cache')],
-                         ['build-cache-miss', 'build-cache-stored'])
+                         ['build-cache-miss', 'build-cache-stored'], events)
         record = BuildCache(self.cache_root).entries()[0]
         # Reads beyond tools/ and profiles/ are part of the entry: the game file, a listing, an absence.
         self.assertIn('local/game/input.bin', record['reads'])
