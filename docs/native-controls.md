@@ -765,13 +765,13 @@ takes its keyboard-pad sample; compile definitions on `libs/input/pad_sdl_keyboa
 sample and the keyboard-pad state, and `player_input_sdl_keyboard.c` takes their place: the sample
 first runs the capture backend with the same window and dialog flag, then the SDK's own sample; the
 state is neutral (window flag kept) while the adapter mutes the keyboard pad (8.2), as the macOS window
-pad is. While capture is requested an SDL event filter (chained after any filter already set)
-observes keyboard, mouse and window events and queues them for the pump; it passes every event
-on except one: a press of Escape on the focused game window while no dialog owns the keyboard,
-which the pump would treat as quit (in a match the controls bind Escape to Start). Closing the
-window still quits. The filter is installed only while capture is requested, so before the first
-match (the front end and lobby) Escape still quits the SDL window; the Win32 backend withholds it
-from the start. SDL scancodes 4..231 are the HID usages; mouse buttons map left 0,
+pad is. An SDL event filter (chained after any filter already set) is installed when the game
+window attaches and stays until it goes. It passes every event on except one: a press of Escape on
+the focused game window while no dialog owns the keyboard, which the pump would treat as quit (in a
+match the controls bind Escape to Start). So Escape never ends the game, in the front end and lobby
+as in a match, as on Windows; closing the window still quits. While capture is requested the filter
+also observes keyboard, mouse and window events and queues them for the pump; otherwise it queues
+nothing, and what it queued is dropped when capture stops. SDL scancodes 4..231 are the HID usages; mouse buttons map left 0,
 right 1, middle 2, X1 3, X2 4 on one logical mouse; touch-synthesized mouse events are ignored;
 motion is SDL relative mode, reported down-positive (moving the mouse down is positive). While the mouse is locked the backend also
 holds an explicit window grab (`SDL_SetWindowGrab`), so the pointer stays confined to the game

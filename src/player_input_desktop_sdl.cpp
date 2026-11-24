@@ -1,14 +1,16 @@
 // Keyboard/mouse desktop capture for the SDL2 game window (Linux), on the portable capture core
-// (player_desktop_capture_core.h). Inert until the controls adapter enables capture.
+// (player_desktop_capture_core.h). Observes nothing until the controls adapter enables capture;
+// from the moment the game window attaches it only keeps Escape from quitting it.
 //
 // Seams. The SDK's window pump polls SDL events and then takes its keyboard-pad sample on the
 // window thread; that sample is redirected (player_input_sdl_keyboard.c) to call
 // mag_input_desktop_sdl_pump first, with the game window and whether a native dialog owns the
-// keyboard. While capture is requested an SDL event filter observes keyboard, mouse and window
-// events as SDL queues them, before the SDK's pump reads them. The filter passes every event on,
-// except one: a press of Escape on the focused game window while no dialog owns the keyboard,
-// because the pump would end the game on it (the controls bind it to Start). Without the filter
-// (capture not yet requested, as in the front end) the SDK still quits on Escape here.
+// keyboard. An SDL event filter sits in front of the SDK's pump for as long as the game window is
+// attached. It passes every event on, except one: a press of Escape on the focused game window
+// while no dialog owns the keyboard, because the pump would end the game on it (players press it to
+// go back or pause; in a match the controls bind it to Start). Closing the window still quits.
+// While capture is requested the filter also observes keyboard, mouse and window events as SDL
+// queues them.
 // The filter queues what it observed; the pump seam hands the queue to the core and refreshes it,
 // so the core only ever runs on the window thread.
 //
@@ -183,6 +185,7 @@ struct Backend {
     std::atomic<SDL_Window*> window{nullptr};
     std::atomic<Uint32> window_id{0};
     std::atomic<bool> dialog{false};
+    std::atomic<bool> observing{false};  // capture requested: the filter queues what it sees
     // Filter state: written on the window thread before SDL_SetEventFilter, which serializes it
     // with filter calls.
     bool filter_installed = false;
@@ -225,10 +228,11 @@ int SDLCALL filter(void* data, SDL_Event* event) {
             context.dialog_active = b.dialog.load(std::memory_order_acquire);
             keep = !desktop_capture_withholds_quit_key(context);
         }
+        const bool observing = b.observing.load(std::memory_order_acquire);
         const bool repeat = (event->type == SDL_KEYDOWN || event->type == SDL_KEYUP) && event->key.repeat;
         const bool warp = event->type == SDL_MOUSEMOTION && b.platform.warping.load(std::memory_order_acquire);
         // Warp motion is queued only to be traced; delivery never passes it to the controls.
-        if (!repeat && (!warp || b.platform.tracing)) {
+        if (observing && !repeat && (!warp || b.platform.tracing)) {
             const auto stamp = b.core.stamp();
             const uint64_t time = steady_ns();
             std::lock_guard lock(b.queue_mutex);
@@ -342,7 +346,15 @@ void pump(Backend& b, SDL_Window* window, bool dialog) {
         b.window.store(window, std::memory_order_release);
         b.window_id.store(window ? SDL_GetWindowID(window) : 0, std::memory_order_release);
     }
-    set_filter(b, window && b.core.enabled_requested());
+    // The filter stays for as long as the window does (Escape); it observes only while capture is
+    // requested, and what it queued before capture stopped is dropped.
+    set_filter(b, window != nullptr);
+    const bool observing = window && b.core.enabled_requested();
+    if (b.observing.exchange(observing, std::memory_order_acq_rel) && !observing) {
+        std::lock_guard lock(b.queue_mutex);
+        b.queue.clear();
+        b.overflow = false;
+    }
     std::vector<Observed> events;
     bool overflow = false;
     {
