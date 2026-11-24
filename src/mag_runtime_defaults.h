@@ -170,6 +170,14 @@ inline int mag_apply_runtime_defaults()
              // medians, best p95 in every round). macOS: not yet measured, so off there.
              Setting{"PS3RECOMP_RSX_VS_CONSTANT_ROWS", "1"},
 #endif
+#if defined(_WIN32)
+             // Controllers (SDL2, PS3RECOMP_PAD_USE_SDL2) take a cellPad port at their first
+             // press, not when they connect. Some Windows devices present an idle XInput pad (a
+             // gaming keypad's XInput interface, a virtual pad); it would otherwise hold port 0,
+             // the one the game and the controls adapter read, ahead of the controller in use
+             // (a DualSense plugged in after it, say). Not a performance switch.
+             Setting{"PS3RECOMP_PAD_CLAIM_ON_INPUT", "1"},
+#endif
 #if defined(MAG_HAS_NATIVE_EDGEGEOM)
              // Native Edge geometry, wherever it is linked: Linux guest fps +8%, macOS
              // +12.4% online and +4.7% Training; refused invocations keep the lifted job.

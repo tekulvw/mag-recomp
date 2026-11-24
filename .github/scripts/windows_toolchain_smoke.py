@@ -65,7 +65,9 @@ def main():
                                '-DCMAKE_C_COMPILER=' + posix(toolchain['clang_cl']),
                                '-DCMAKE_CXX_COMPILER=' + posix(toolchain['clang_cl']),
                                '-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded',
-                               '-DPython3_EXECUTABLE=' + posix(managed['python'])], work)
+                               '-DPython3_EXECUTABLE=' + posix(managed['python']),
+                               # Controllers through the managed SDL2 package, as the player build does.
+                               '-DPS3RECOMP_PAD_USE_SDL2=ON', '-DSDL2_DIR=' + posix(managed['sdl2']['cmake_dir'])], work)
     step('build runtime', [managed['cmake'], '--build', build, '--target', 'ps3recomp_runtime'], work)
 
     scratch = work / 'supervisor'; scratch.mkdir(exist_ok=True)

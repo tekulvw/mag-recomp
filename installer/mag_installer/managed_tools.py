@@ -124,8 +124,9 @@ LOCK = {'python': {'id': 'python',
 # unused bindings the way the frontend's reflection expects; SPIRV-Tools and
 # SPIRV-Headers are glslang 16.6.0's known-good revisions) compiles guest
 # programs, and Vulkan-Headers is header-only; vulkan-1.dll comes from the GPU
-# driver at run time. SDL2 and
-# SPIRV-Cross are not used (XInput/WASAPI and a Win32 window). Movies decode
+# driver at run time. Controllers read through the pinned official prebuilt
+# SDL2 (its DLL is packaged beside the game executables); audio stays WASAPI, the
+# window stays Win32, and SPIRV-Cross is not used. Movies decode
 # through a pinned prebuilt LGPL shared FFmpeg 9.0 (MSVC import libraries and
 # headers; its DLLs are packaged beside the game executables), the same API
 # major the macOS and Linux routes build from source.
@@ -272,6 +273,15 @@ WINDOWS_LOCK['ffmpeg'] = {'id': 'ffmpeg-windows',
 # The libraries the runtime links and the DLLs the packaged game loads (swresample: avcodec's dependency).
 WINDOWS_FFMPEG_LIBRARIES = ('avcodec', 'avformat', 'avutil', 'swscale')
 WINDOWS_FFMPEG_DLLS = ('avcodec-63.dll', 'avformat-63.dll', 'avutil-61.dll', 'swscale-10.dll', 'swresample-7.dll')
+# SDL2 2.32 official MSVC development package (headers, x64 import library and DLL, zlib licence).
+WINDOWS_LOCK['sdl2'] = {'id': 'sdl2-windows',
+                        'url': 'https://github.com/libsdl-org/SDL/releases/download/release-2.32.10/SDL2-devel-2.32.10-VC.zip',
+                        'size': 7172966,
+                        'sha256': 'af347939395a58b365846aaea27391e69f9ec9d4dd650d6ac40802159b418a6e',
+                        'archive': 'zip',
+                        'root': 'SDL2-2.32.10',
+                        'max_expanded_bytes': 268435456,
+                        'max_entries': 1000}
 
 LOCKS = {'macos-arm64': LOCK, 'windows-x86_64': WINDOWS_LOCK, 'linux-x86_64': LINUX_LOCK}
 SUPPORTED_HOSTS = tuple(LOCKS)
@@ -972,7 +982,7 @@ def _bootstrap_windows(root, cache, token, events):
     cache = Path(cache) if cache else root / 'cache'
     home = root / 'home'; home.mkdir(exist_ok=True)
     logs = root / 'logs'; logs.mkdir(exist_ok=True)
-    paths = {}; sites = []; python_root = None; ffmpeg_root = None
+    paths = {}; sites = []; python_root = None; ffmpeg_root = None; sdl2_root = None
     for key, spec in WINDOWS_LOCK.items():
         location = materialize(spec, root / 'artifacts', cache, token, events)
         if key in ('python', 'cmake', 'ninja', 'git'):
@@ -981,6 +991,7 @@ def _bootstrap_windows(root, cache, token, events):
         elif key.startswith('wheel-'): sites.append(location)
         elif key.startswith('source-'): paths[key] = location / spec['root']
         elif key == 'ffmpeg': ffmpeg_root = location / spec['root']
+        elif key == 'sdl2': sdl2_root = location / spec['root']
     _install_wheels(python_root, sites, token, WINDOWS_LOCK['python']['site_packages'])
     env = {**os.environ, 'PATH': os.pathsep.join((str(Path(paths['python']).parent), str(_system32()))),
            'PYTHONNOUSERSITE': '1', 'TEMP': str(home), 'TMP': str(home)}
@@ -1013,9 +1024,14 @@ def _bootstrap_windows(root, cache, token, events):
     missing = [p for p in [ffmpeg['include'], *(ffmpeg[n] for n in WINDOWS_FFMPEG_LIBRARIES),
                            *(str(ffmpeg_root / 'bin' / d) for d in WINDOWS_FFMPEG_DLLS)] if not Path(p).exists()]
     if missing: raise InstallerError('The pinned FFmpeg build is missing: ' + ', '.join(missing))
+    sdl2 = {'cmake_dir': str(sdl2_root / 'cmake'), 'dll': str(sdl2_root / 'lib/x64/SDL2.dll'),
+            'license': str(sdl2_root / 'LICENSE.txt')}
+    missing = [p for p in [*sdl2.values(), str(sdl2_root / 'cmake/sdl2-config.cmake'), str(sdl2_root / 'include/SDL.h'),
+                           str(sdl2_root / 'lib/x64/SDL2.lib')] if not Path(p).exists()]
+    if missing: raise InstallerError('The pinned SDL2 build is missing: ' + ', '.join(missing))
     paths.update(root=root, dependencies_ready=True, cmake_args=['-DCMAKE_PREFIX_PATH=' + prefix.as_posix()],
                  python_site=[str(p) for p in sites], prefix=str(prefix), managed_prefix=str(prefix), logs=str(logs),
-                 ffmpeg=ffmpeg)
+                 ffmpeg=ffmpeg, sdl2=sdl2)
     return {k: str(v) if isinstance(v, Path) else v for k, v in paths.items()}
 
 
