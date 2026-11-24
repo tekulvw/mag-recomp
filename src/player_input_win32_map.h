@@ -19,7 +19,7 @@ enum {
     MAG_WIN32_MOUSE_RIGHT_DOWN = 0x004, MAG_WIN32_MOUSE_RIGHT_UP = 0x008,
     MAG_WIN32_MOUSE_MIDDLE_DOWN = 0x010, MAG_WIN32_MOUSE_MIDDLE_UP = 0x020,
     MAG_WIN32_MOUSE_X1_DOWN = 0x040, MAG_WIN32_MOUSE_X1_UP = 0x080,
-    MAG_WIN32_MOUSE_X2_DOWN = 0x100, MAG_WIN32_MOUSE_X2_UP = 0x200
+    MAG_WIN32_MOUSE_X2_DOWN = 0x100, MAG_WIN32_MOUSE_X2_UP = 0x200, MAG_WIN32_MOUSE_WHEEL = 0x400
 };
 /* XInput gamepad buttons (XINPUT_GAMEPAD.wButtons). The guide bit is reported only by the
  * extended state query; it is mapped when present. */
@@ -44,6 +44,12 @@ typedef struct {
     int down;
 } MagWin32MouseEdge;
 unsigned mag_win32_raw_mouse_edges(uint16_t button_flags, MagWin32MouseEdge out[10]);
+
+/* Whole wheel steps of one Raw Input mouse report, up (away from the user) positive. The report's
+ * wheel delta (a signed 16-bit value in usButtonData, 120 to a notch) adds to `remainder`, which
+ * carries the part of a step a fine-grained wheel has turned so far; reports without the wheel
+ * flag leave it alone and give 0. */
+int mag_win32_raw_mouse_wheel(uint16_t button_flags, uint16_t button_data, int32_t* remainder);
 
 /* Relative look motion of one Raw Input mouse report: dx right-positive, dy down-positive. Returns 0
  * (no motion) for absolute-position devices (tablets, remote desktop, some virtual machines) and

@@ -876,6 +876,17 @@ SettingsPanel::State SettingsPanel::handle(const SDL_Event& event, uint64_t now_
             if (capture_.device == SettingsDevice::Controller && !(capture_.blocked & bit)) accept({InputSource::Controller, code});
             break;
         }
+        case SDL_MOUSEWHEEL: {
+            // A notch of the wheel binds wheel up or down, in the wheel's own direction.
+            if (capture_.device != SettingsDevice::KeyboardMouse) break;
+            float y = float(event.wheel.y);
+#if SDL_VERSION_ATLEAST(2, 0, 18)
+            if (y == 0) y = event.wheel.preciseY;
+#endif
+            if (event.wheel.direction == SDL_MOUSEWHEEL_FLIPPED) y = -y;
+            if (y != 0) accept({InputSource::Mouse, y > 0 ? MouseWheelUp : MouseWheelDown});
+            break;
+        }
         case SDL_WINDOWEVENT:
             if (event.window.event == SDL_WINDOWEVENT_FOCUS_LOST) end_capture(MAG_CONTROLS_CAPTURE_CANCELED);
             break;

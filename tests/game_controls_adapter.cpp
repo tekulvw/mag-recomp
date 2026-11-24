@@ -1092,6 +1092,24 @@ void situational_actions() {
     h.end_tick();
     mag_controls_push_event({{InputSource::Keyboard, 43}, false, time_ns()});
 
+    // Respawn is watched on the Start button (12) and scope zoom on the D-pad (0): Escape and Up
+    // press them, as the controller's Start and D-pad do.
+    const uint32_t respawn = watch(h.m, Handler, 3, 0xE88EB86F, 12), zoom = watch(h.m, Handler, 4, 0xF280DD78, 0);
+    require(h.idle_tick() == Attached, "respawn and scope zoom tokens blocked attachment");
+    mag_controls_push_event({{InputSource::Keyboard, 41}, true, time_ns()});  // Escape.
+    mag_controls_push_event({{InputSource::Keyboard, 82}, true, time_ns()});  // Up.
+    h.begin_tick();
+    h.enter_handler();
+    require(h.recognize_record(respawn, Handler) && mag_guest_tuple_value(h.tuple_at(respawn)) == 1.0f,
+            "Escape did not press respawn");
+    require(h.recognize_record(zoom, Handler) && mag_guest_tuple_value(h.tuple_at(zoom)) == 1.0f,
+            "Up did not press scope zoom");
+    h.end_poll();
+    h.enter_actor();
+    h.end_tick();
+    mag_controls_push_event({{InputSource::Keyboard, 41}, false, time_ns()});
+    mag_controls_push_event({{InputSource::Keyboard, 82}, false, time_ns()});
+
     // Another registered handler (a vehicle's, say) watching Change seats: V presses it while the
     // player is on foot, and the adapter gives it back when it lets go.
     const uint32_t vehicle = 0x100D0000;

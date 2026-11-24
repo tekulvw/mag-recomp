@@ -71,6 +71,18 @@ static void prompts() {
     }
     // The command screen is watched on the Select button: its token stands for Select.
     require(mag_game_controls_prompt_action("CommandScreen") == 0x0a7fd35e, "[CommandScreen] is Select");
+    // Every placeholder the game's text uses names a catalog action.
+    require(mag_game_controls_prompt_action("Respawn") == 0x163aab24, "[Respawn] is Start");
+    require(mag_game_controls_prompt_action("ScopeUp") == 0xa5bc1361 && mag_game_controls_prompt_action("ScopeDown") == 0x8c2adba2,
+            "scope zoom is the D-pad's up and down");
+    require(mag_game_controls_prompt_action("AimHold") == 0xc07aa75a && mag_game_controls_prompt_action("ScopeHold") == 0xc07aa75a,
+            "[AimHold] and [ScopeHold] are Aim");
+    require(mag_game_controls_prompt_action("GoProne") == 0x541512ed && mag_game_controls_prompt_action("ChangeStance") == 0x541512ed,
+            "[GoProne] and [ChangeStance] are Crouch / prone");
+    for (const char* name : {"Jump", "Sprint", "MoveForward", "Fire", "Action", "ContAction", "SwapNextPri", "SwapNextSec",
+                             "OS_Enter", "OS_Cancel", "Bleedout", "VSeatNext", "VSmoke", "TCM_VoiceChat", "TCM_Frago",
+                             "TCM_Abilities", "CommandScreen", "Respawn", "AimHold", "ScopeHold", "GoProne", "ChangeStance"})
+        require(mag_game_controls_prompt_action(name) != 0, "a placeholder in the game's text names no action");
     require(!mag_game_controls_action(0xc6dcd89f), "the retired command screen is still an action");
     require(mag_game_controls_retired_actions().size() == 1 && mag_game_controls_retired_actions()[0] == 0xc6dcd89f,
             "the command screen is listed as retired");
@@ -148,6 +160,53 @@ static void upgrade_from_2() {
         require(!count_of(p, Command) && count_of(p, Select) == 3, "Select took a third key");  // + controller Back
     }
 }
+// Revision 3 to 4: the wheel zooms a scope (D-pad up and down on foot), never taking a wheel step
+// the player uses and never a third key.
+static void upgrade_from_3() {
+    constexpr ActionId DpadUp = 0xa5bc1361, DpadDown = 0x8c2adba2, Fire = 0x58de09cf;
+    const PhysicalControl up{InputSource::Mouse, MouseWheelUp}, down{InputSource::Mouse, MouseWheelDown};
+    const auto revision_3 = [] {
+        auto p = mag_game_controls_default_profile();
+        std::erase_if(p.bindings, [](const auto& b) { return b.control.source == InputSource::Mouse && b.control.code >= 8; });
+        p.catalog_revision = 3;
+        return p;
+    };
+    const auto bound = [](const ControlsProfile& p, PhysicalControl c, ActionId action) {
+        return std::any_of(p.bindings.begin(), p.bindings.end(), [&](const auto& b) {
+            return b.control == c && b.action == action && b.contexts == 1;
+        });
+    };
+    {
+        auto p = revision_3();
+        mag_game_controls_upgrade_profile(p);
+        mag_game_controls_validate_profile(p);
+        require(p.catalog_revision == MagGameControlsCatalogRevision && bound(p, up, DpadUp) && bound(p, down, DpadDown),
+                "revision 3 gains the scope wheel");
+        require(p.bindings.size() == mag_game_controls_default_profile().bindings.size(), "and nothing else");
+    }
+    {   // The player fires with wheel up: it stays; wheel down still zooms out.
+        auto p = revision_3();
+        p.bindings.push_back({up, Fire});
+        mag_game_controls_upgrade_profile(p);
+        mag_game_controls_validate_profile(p);
+        require(bound(p, up, Fire) && !bound(p, up, DpadUp) && bound(p, down, DpadDown), "a wheel step the player uses was taken");
+    }
+    {   // D-pad down already has two keys on foot: no third.
+        auto p = revision_3();
+        p.bindings.push_back({{InputSource::Keyboard, 14}, DpadDown, 1});
+        mag_game_controls_upgrade_profile(p);
+        mag_game_controls_validate_profile(p);
+        require(!bound(p, down, DpadDown) && bound(p, up, DpadUp), "D-pad down took a third key");
+    }
+    {   // An older profile (revision 1) gains the wheel too.
+        auto p = revision_3();
+        std::erase_if(p.bindings, [](const auto& b) { return mag_game_controls_action(b.action)->revision >= 2; });
+        p.catalog_revision = 1;
+        mag_game_controls_upgrade_profile(p);
+        mag_game_controls_validate_profile(p);
+        require(bound(p, up, DpadUp) && bound(p, down, DpadDown), "revision 1 missed the scope wheel");
+    }
+}
 static void upgrade() {
     ControlsProfile old;  // Revision 0: on-foot keys only, Escape and X already used by the player.
     old.bindings.push_back({{InputSource::Keyboard, 41}, 0xa7b30616});
@@ -179,6 +238,7 @@ static void upgrade() {
     ControlsProfile future;
     future.catalog_revision = MagGameControlsCatalogRevision + 1;
     upgrade_from_2();
+    upgrade_from_3();
     bool refused = false;
     try { mag_game_controls_upgrade_profile(future); } catch (const std::invalid_argument&) { refused = true; }
     require(refused, "newer catalog accepted");

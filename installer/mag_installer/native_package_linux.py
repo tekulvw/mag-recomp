@@ -122,7 +122,23 @@ static void open_browser(const std::string& url) {
   execlp("xdg-open","xdg-open",url.c_str(),(char*)nullptr);_exit(127);}_exit(0);}
  while(waitpid(pid,nullptr,0)<0&&errno==EINTR){}
 }
-static const char* relink="Run ./MAG --link to link it again.";
+static const char* relink="Link it again in MAG Settings (Account), or run ./MAG --link.";
+// Keeps the phase's single-use ticket file filled while the game runs (player_portal.h).
+static std::unique_ptr<mag::portal::TicketRefill> ticket_refill;
+// After the game exits: when a sign-in during the session was refused or expired and never
+// recovered, say so (stderr and the launch log, and a desktop dialog where one can open), once.
+static void show_sign_in_notice(const fs::path& ticket,const fs::path& logs,bool interactive) {
+ ticket_refill.reset();
+ std::string text;if(!mag::portal::take_sign_in_notice(ticket,text))return;
+ std::cerr<<"MAG account: "<<text<<"\n";
+ {std::ofstream note(logs/"sign-in-notice.txt");note<<text<<"\n";}
+ if(!interactive)return;
+ pid_t pid=fork();if(pid<0)return;
+ if(!pid){int null=open("/dev/null",O_RDWR);if(null>=0){dup2(null,0);dup2(null,1);dup2(null,2);}
+  execlp("zenity","zenity","--warning","--title=MAG","--no-wrap","--text",text.c_str(),(char*)nullptr);
+  execlp("kdialog","kdialog","--title","MAG","--sorry",text.c_str(),(char*)nullptr);_exit(127);}
+ while(waitpid(pid,nullptr,0)<0&&errno==EINTR){}
+}
 // MAG --link: an account link through the portal's device-code page; the token is stored owner-only.
 static int link_account(const fs::path& link_file,const std::string& portal,const fs::path& settings) {
  if(portal.empty())fail("No account portal applies to this server. Linking works with play.magtest.online, or with portal_url in "+settings.string()+".");
@@ -197,7 +213,7 @@ static std::string ibus_address(){
 }
 static void portal_ticket(std::map<std::string,std::string>& env,const fs::path& link_file,const fs::path& ticket,
                           const mag::PortableSettings& settings,bool launcher) {
- env.erase("MAG_PLAYER_PORTAL_TICKET");
+ env.erase("MAG_PLAYER_PORTAL_TICKET");env.erase("PS3RECOMP_NP_TICKET_REFILL");ticket_refill.reset();
  const std::string portal=mag::portal::portal_for(settings.server_address,settings.portal_url);
  if(portal.empty()||settings.server_address.empty())return;
  if(!settings.ticket_file.empty()){if(launcher)std::cerr<<"MAG account: the ticket_file setting is used instead of the account link.\n";return;}
@@ -206,6 +222,11 @@ static void portal_ticket(std::map<std::string,std::string>& env,const fs::path&
  using State=mag::portal::LaunchTicket::State;
  if(result.state==State::Ready){
   env["MAG_PLAYER_PORTAL_TICKET"]=result.file.string();
+  // Each sign-in (a reconnect, a return to the lobby) takes a fresh ticket from the file, which
+  // this supervisor keeps filled; the device token never enters the game process.
+  env["PS3RECOMP_NP_TICKET_REFILL"]="1";
+  ticket_refill=mag::portal::start_ticket_refill(mag::portal::make_platform_transport,link_file,ticket,portal,settings.server_address,
+                                                 relink,result.expires_at,[](const std::string& line){std::cerr<<"MAG account: "<<line<<"\n";});
   if(launcher&&result.player_name!=settings.player_name){
    env["MAG_PLAYER_SET_NAME"]=result.player_name;
    std::cerr<<"MAG account: you play as "<<result.player_name<<", the name on your linked account"
@@ -290,6 +311,7 @@ int main(int argc,char** argv) {
   if(chosen)std::cerr<<"The settings window could not open; starting with the saved settings.\n";
  }
  auto launch_settings=player_settings(settings,choices,settings_usable);
+ {std::string earlier;mag::portal::take_sign_in_notice(ticket,earlier);}  // an earlier launch's note is done
  portal_ticket(env,link_file,ticket,launch_settings,true);
  int result=run(launcher,le,logs,env,"launcher.log");report.launcher_exit=result;
  // A server needs a player name. When the game reports none, the settings window asks for it (or
@@ -304,6 +326,7 @@ int main(int argc,char** argv) {
    result=run(launcher,le,logs,env,("launcher-"+std::to_string(attempt)+".log").c_str());report.launcher_exit=result;
   }}
  if(result!=90){
+  show_sign_in_notice(ticket,logs,interactive);
   // A launch the player must correct (such as choosing a name) explains itself.
   std::error_code none;auto note=root/"home/player/launch-message.txt";
   if(fs::is_regular_file(fs::symlink_status(note,none))){auto text=read_file(note,4096);fs::remove(note,none);report.player_stop=true;fail(text);}
@@ -316,7 +339,7 @@ int main(int argc,char** argv) {
  // launcher saved, so the settings are read again here.
  {std::map<std::string,std::string> none;portal_ticket(env,link_file,ticket,player_settings(settings,none,settings_usable),false);}
  env["PS3_BOOT_PATH"]="/dev_bdvd/PS3_GAME/USRDIR/bin/mage_g.self";
- report.engine_exit=run(engine,ee,logs,env,"engine.log");end_report();return int(report.engine_exit);
+ report.engine_exit=run(engine,ee,logs,env,"engine.log");show_sign_in_notice(ticket,logs,interactive);end_report();return int(report.engine_exit);
  }catch(const std::exception& e){if(reporting&&report.launch_error.empty())report.launch_error=e.what();end_report();std::string msg="MAG could not start: "+std::string(e.what())+"\n";std::cerr<<msg;if(!root.empty()){int fd=open((root/"launch-error.log").c_str(),O_WRONLY|O_CREAT|O_TRUNC|O_NOFOLLOW,0600);if(fd>=0){write(fd,msg.data(),msg.size());close(fd);}}return 1;}
 }
 '''
@@ -437,7 +460,7 @@ def package(config, workspace, destination, token=None, events=None):
         compiler = config.get('linux_toolchain', {}).get('cxx', 'c++')
         _run_tool([compiler, '-std=c++20', '-O2', '-I' + str(scratch), str(source),
                    *[str(scratch / name) for name in SUPERVISOR_SOURCES if name.endswith('.cpp')],
-                   '-o', str(destination / 'MAG'), '-lssl', '-lcrypto', '-Wl,-rpath,$ORIGIN/lib'], token)
+                   '-o', str(destination / 'MAG'), '-pthread', '-lssl', '-lcrypto', '-Wl,-rpath,$ORIGIN/lib'], token)
         _ordinary(destination / 'MAG').chmod(0o755)
         libraries = destination / 'lib'; libraries.mkdir()
         runtime['libraries'] = _copy_dependencies(

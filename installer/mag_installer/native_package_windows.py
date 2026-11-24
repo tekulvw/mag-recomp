@@ -218,8 +218,11 @@ static void portal_phase(const wchar_t *settings, const wchar_t *server, const w
     wchar_t name[32], message[1024];
     int state = mag_portal_phase(settings, server, ticket, launcher, name, 32, message, 1024);
     SetEnvironmentVariableW(L"MAG_PLAYER_PORTAL_TICKET", NULL);
+    SetEnvironmentVariableW(L"PS3RECOMP_NP_TICKET_REFILL", NULL);
     if (state == MAG_PORTAL_READY) {
         set_env(L"MAG_PLAYER_PORTAL_TICKET", ticket);
+        /* Each sign-in takes a fresh ticket; the portal code keeps the file filled. */
+        set_env(L"PS3RECOMP_NP_TICKET_REFILL", L"1");
         if (launcher && name[0]) set_env(L"MAG_PLAYER_SET_NAME", name);
     }
     if (state == MAG_PORTAL_STOP) fail(message, NULL);
@@ -395,6 +398,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR arguments, int
         if (chosen) notice(logs, L"The settings window could not open; starting with the saved settings.", 0, MB_ICONWARNING);
     }
     wchar_t ticket[MAX_PATH]; join(ticket, player_root, L"portal-ticket.bin");
+    wchar_t sign_in[1024];
+    mag_portal_take_notice(ticket, sign_in, 1024);  /* an earlier launch's note is done */
     portal_phase(settings, server, ticket, 1, logs, prompt);
     join(log, logs, L"launcher.log");
     DWORD result = run(job, launcher, launcher_elf, logs, log);
@@ -417,6 +422,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR arguments, int
     }
     DeleteFileW(marker);
     if (result != 90) {
+        /* A sign-in refused or expired during the session: say so once the game is gone. */
+        if (mag_portal_take_notice(ticket, sign_in, 1024)) notice(logs, sign_in, prompt, MB_ICONWARNING);
         /* A launch the player must correct (such as choosing a name) explains itself. */
         wchar_t note[MAX_PATH]; join(note, player_root, L"launch-message.txt");
         if (GetFileAttributesW(note) != INVALID_FILE_ATTRIBUTES) {
@@ -446,6 +453,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR arguments, int
     DWORD code = run(job, engine, engine_elf, logs, log);
     mag_reports_engine_exit(code);
     mag_reports_end(NULL);
+    if (mag_portal_take_notice(ticket, sign_in, 1024)) notice(logs, sign_in, prompt, MB_ICONWARNING);
     return (int)code;
 }
 '''
