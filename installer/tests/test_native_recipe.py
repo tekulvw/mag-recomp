@@ -54,6 +54,29 @@ class NativeRecipeTests(unittest.TestCase):
             data.pop('ffmpeg')
             with self.assertRaisesRegex(InstallerError, 'ffmpeg'): self.load(root, data)
 
+    def test_build_cache_adds_compiler_launchers_to_both_configures(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); data = self.config(root)
+            (root / 'user-cache').mkdir(); (root / 'ccache').write_text('fixture'); (root / 'ccache').chmod(0o755)
+            config = self.load(root, dict(data, build_cache={'root': 'user-cache', 'ccache': 'ccache', 'base_dir': '.'}))
+            self.assertEqual(config['build_cache'], {'root': str((root / 'user-cache').resolve()),
+                                                     'ccache': str((root / 'ccache').resolve()), 'base_dir': str(root.resolve())})
+            plan = {stage['id']: stage['argv'] for stage in build_plan(config, self.workspace(root))}
+            launcher = '-DCMAKE_CXX_COMPILER_LAUNCHER=' + str((root / 'ccache').resolve())
+            self.assertIn(launcher, plan['configure-launcher'])
+            self.assertIn(launcher, plan['configure-engine'])
+            plain = {stage['id']: stage['argv'] for stage in build_plan(self.load(root, data), root / 'workspace')}
+            self.assertFalse(any('LAUNCHER' in a for a in plain['configure-engine']))
+            # Without ccache (Windows): the build cache for tools and generation only, no launchers.
+            windowsish = self.load(root, dict(data, build_cache={'root': 'user-cache', 'base_dir': '.'}))
+            self.assertNotIn('ccache', windowsish['build_cache'])
+            plan = {stage['id']: stage['argv'] for stage in build_plan(windowsish, root / 'workspace')}
+            self.assertFalse(any('LAUNCHER' in a for a in plan['configure-engine']))
+            for broken in ({'root': 'user-cache', 'ccache': 'ccache'}, {'root': 'missing', 'ccache': 'ccache', 'base_dir': '.'},
+                           {'root': 'user-cache', 'ccache': 'ccache', 'base_dir': '.', 'extra': 1}):
+                with self.subTest(broken=broken), self.assertRaises(InstallerError):
+                    self.load(root, dict(data, build_cache=broken))
+
     def test_framework_pins_require_the_complete_table_inside_the_workspace(self):
         with tempfile.TemporaryDirectory() as tmp:
             workspace = self.workspace(Path(tmp))

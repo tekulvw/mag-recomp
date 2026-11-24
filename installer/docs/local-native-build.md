@@ -79,6 +79,14 @@ the D3D12 backend.
 installer writes `cmake_args` only when `MAG_X86_LEVEL` is set in its own environment (Windows and
 Linux), as a troubleshooting override of the x86-64 code generation level.
 
+`build_cache` (optional) turns on the [build cache](../README.md#build-cache):
+`{"root": "<installer cache>/build-cache", "ccache": "path/to/ccache", "base_dir": "<folder holding --output>"}`.
+`root` must exist; `ccache` (optional; macOS and Linux) is the compiler launcher for every compile step; `base_dir` must be the
+folder that holds the output, so that ccache passes paths below it relative to each build
+directory and builds in different folders share results. Generation is then restored from, or
+stored into, `root`. The player installer writes it unless `MAG_BUILD_CACHE=0` is set in its own
+environment.
+
 The player installer always writes `game_controls` (the pinned Rust `cargo` and `rustc` it
 downloads, [native-controls.md](../../docs/native-controls.md) section 10), unless
 `MAG_GAME_CONTROLS=0` is set in its own environment.

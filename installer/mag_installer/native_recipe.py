@@ -24,8 +24,10 @@ _REQUIRED = {'schema_version', 'source_tree', 'disc_root', 'eboot_elf', 'engine_
 # sdl2: Windows only, the pinned prebuilt's CMake package, DLL and licence (controller input).
 # game_controls: opt-in keyboard and mouse controls (docs/native-controls.md), with the
 # pinned Rust toolchain's cargo and rustc executables (not rustup proxies).
+# build_cache: the per-user build cache folder, ccache's base_dir and (optionally) the pinned ccache (build_cache.py,
+# compile_cache.py and lift_cache.py).
 _OPTIONAL = {'jobs', 'cmake_args', 'native_graphics', 'managed_prefix', 'ffmpeg', 'sdl2', 'msvc', 'host', 'linux_toolchain',
-             'game_controls'}
+             'game_controls', 'build_cache'}
 
 
 def is_windows(config):
@@ -147,6 +149,12 @@ def load_config(path):
     result['cmake_args'] = list(arguments)
     if raw.get('managed_prefix'):
         result['managed_prefix'] = _path(raw['managed_prefix'], path.parent, 'managed_prefix', directory=True)
+    if 'build_cache' in raw:
+        _object(raw['build_cache'], {'root', 'base_dir'}, {'ccache'}, 'build_cache')
+        result['build_cache'] = {'root': _path(raw['build_cache']['root'], path.parent, 'build_cache.root', directory=True),
+                                 'base_dir': _path(raw['build_cache']['base_dir'], path.parent, 'build_cache.base_dir', directory=True)}
+        if 'ccache' in raw['build_cache']:   # the compile cache, where supported (compile_cache.SUPPORTED_HOSTS)
+            result['build_cache']['ccache'] = _path(raw['build_cache']['ccache'], path.parent, 'build_cache.ccache', executable=True)
     if 'game_controls' in raw:
         _object(raw['game_controls'], {'cargo', 'rustc'}, set(), 'game_controls')
         result['game_controls'] = {key: _path(raw['game_controls'][key], path.parent, 'game_controls.' + key, executable=True)
@@ -363,6 +371,8 @@ def build_plan(config, workspace):
     common += ['-DPS3RECOMP_DIR=' + cmake_path(sdk['runtime']), '-DPython3_EXECUTABLE=' + cmake_path(python),
                '-DCMAKE_MAKE_PROGRAM=' + cmake_path(config['ninja']), '-DMAG_FIRMWARE_DIR=' + cmake_path(paths['firmware'])]
     common += config.get('cmake_args', [])
+    from .compile_cache import cmake_arguments
+    common += cmake_arguments(config, cmake_path)
     if config.get('managed_prefix'):
         common.append('-DCMAKE_PREFIX_PATH=' + cmake_path(config['managed_prefix']))
     for name, image, spu, build in [('launcher', 'EBOOT', 'worker-spu', 'build'),

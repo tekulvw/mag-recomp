@@ -50,6 +50,12 @@ def main(argv=None):
     target.add_argument('--output', type=Path, help='Exact new MAG installation folder')
     player.add_argument('--retry', action='store_true', help='Retry a matching failed or cancelled build in the same folder, retaining earlier logs')
     player.add_argument('--cache', type=Path, help='Optional download cache override')
+    reuse = commands.add_parser('build-cache', help='Show, limit or clear the build cache that lets later builds reuse earlier work')
+    presentation(reuse, True)
+    reuse.add_argument('--cache', type=Path, help='Installer cache folder (defaults to your user cache)')
+    action = reuse.add_mutually_exclusive_group()
+    action.add_argument('--clear', action='store_true', help='Delete the build cache (downloads are kept); the next build does all of its work again')
+    action.add_argument('--max-size', help='Limit the build cache, for example 20GiB (the default) or 10GB')
     for name in ('status', 'validate', 'preflight', 'install'):
         command = commands.add_parser(name)
         presentation(command, True)
@@ -119,6 +125,19 @@ def main(argv=None):
                 handlers[signum] = signal.signal(signum, lambda number, frame: token.cancel())
             output = args.output if args.output is not None else destination(args.parent)
             player_build.install(ROOT, args.source, output, args.cache or default_cache(), token=token, events=report, retry=args.retry)
+            return 0
+        if args.command == 'build-cache':
+            from . import build_cache
+            from .ux import default_cache
+            store = build_cache.BuildCache.for_cache(args.cache or default_cache(), token, report)
+            if args.clear:
+                freed = store.clear()
+                report({'event': 'build-cache-cleared', 'freed_bytes': freed, 'path': str(store.root),
+                        'message': f'Build cache cleared ({build_cache.size_text(freed)} freed). Downloads were kept.'})
+            else:
+                if args.max_size:
+                    store.set_max_bytes(build_cache.parse_size(args.max_size))
+                report({'event': 'build-cache-usage', **store.usage()})
             return 0
         if args.command in ('native-preflight', 'native-build'):
             try:

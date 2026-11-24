@@ -53,6 +53,10 @@ folders. Inputs are reverified before tools are installed or downloaded. Complet
 dependencies and verified cached downloads are reused; older logs are retained in `MAG-build/logs/attempts/`.
 A different kit or changed game input requires a new destination.
 
+A later build on the same computer reuses tool builds, generated sources and compiled objects from
+the [build cache](../README.md#build-cache); its log says what was reused. To rule the cache out,
+build once with `MAG_BUILD_CACHE=0` set, or clear it (**Clear build cache…** or `build-cache --clear`).
+
 ## What to report
 
 - Build failures: the stage the wizard names, its log under `MAG-build/build-work/logs/` (or
@@ -60,4 +64,4 @@ A different kit or changed game input requires a new destination.
 - Runtime problems: `launcher.log` and `engine.log` from the launch directory.
 
 Logs come from your own game run: check them before sharing, and never attach game files,
-generated sources or binaries to an issue.
+generated sources, binaries or the build cache to an issue.

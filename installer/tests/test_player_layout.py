@@ -67,6 +67,7 @@ class LayoutFixture:
 
     def patches(self, stack, package=None, native=None, host=None):
         host = host or self.host
+        stack.enter_context(patch('mag_installer.compile_cache.ccache_tool', return_value='/managed/ccache'))
         stack.enter_context(patch.object(player_build, 'readiness', return_value={'ready': True}))
         stack.enter_context(patch.object(player_build, '_manifest', return_value={'host': host, 'kit': {}}))
         stack.enter_context(patch.object(player_build, '_load_kit', return_value={'source_tree': 'source', 'sdks': {}}))

@@ -16,11 +16,14 @@ import sys
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'installer'))
 
-from mag_installer import managed_tools, native_build, native_package_windows  # noqa: E402
+from mag_installer import build_cache, managed_tools, native_build, native_package_windows  # noqa: E402
 from mag_installer.safety import Cancellation  # noqa: E402
+
+SEEN = []
 
 
 def events(event):
+    SEEN.append(event)
     if event.get('event') not in ('stage-activity', 'download'):
         print(json.dumps(event), flush=True)
 
@@ -37,7 +40,12 @@ def main():
     print('readiness:', json.dumps(managed_tools.readiness(ROOT / 'installer')), flush=True)
     toolchain = managed_tools.ensure_windows_build_tools(cache=work / 'cache', token=token, events=events)
     print('toolchain:', json.dumps(toolchain), flush=True)
-    managed = managed_tools.bootstrap(work / 'managed', cache=work / 'cache', token=token, events=events)
+    # The build cache: the dependency prefix built once is restored into a second managed root.
+    store = build_cache.BuildCache(work / 'user-cache/build-cache', token, events)
+    managed_tools.bootstrap(work / 'managed-first', cache=work / 'cache', token=token, events=events, build_cache=store)
+    managed = managed_tools.bootstrap(work / 'managed', cache=work / 'cache', token=token, events=events, build_cache=store)
+    if not any(e.get('event') == 'build-cache-hit' and e.get('kind') == 'tools' for e in SEEN):
+        raise SystemExit('the second managed root did not reuse the cached dependency prefix')
     native_build.check_windows_location(work / 'MAG')
 
     config = {**{k: managed[k] for k in ('python', 'cmake', 'ninja', 'git')}, 'jobs': 2,
@@ -68,6 +76,7 @@ def main():
                                '-DPython3_EXECUTABLE=' + posix(managed['python']),
                                # Controllers through the managed SDL2 package, as the player build does.
                                '-DPS3RECOMP_PAD_USE_SDL2=ON', '-DSDL2_DIR=' + posix(managed['sdl2']['cmake_dir'])], work)
+    # Windows builds do not use the compile cache (installer/mag_installer/compile_cache.py).
     step('build runtime', [managed['cmake'], '--build', build, '--target', 'ps3recomp_runtime'], work)
 
     scratch = work / 'supervisor'; scratch.mkdir(exist_ok=True)

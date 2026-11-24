@@ -57,6 +57,11 @@ def format_event(event: dict) -> str:
                 'migrate-layout': 'Moving the build files out of the MAG folder'}.get(event.get('stage'), str(event.get('stage', 'Working')))
     if name == 'stage-activity':
         return f'{event.get("stage", "Working")} still running ({event.get("elapsed", 0):.0f}s). Log: {event.get("log", "see logs folder")}'
+    if name == 'build-cache-usage':
+        return (f'Build cache: {size_text(event.get("bytes", 0))} of at most {size_text(event.get("max_bytes", 0))} '
+                f'({event.get("tools_entries", 0)} tool builds, {event.get("lift_entries", 0)} generated-source sets, '
+                f'{size_text(event.get("objects_bytes", 0))} of compiled objects), in {event.get("path", "")}. '
+                'It is made from your own game files: keep it private.')
     if name == 'synthetic-complete':
         return 'Synthetic demonstration complete. No MAG application was built.'
     if name == 'local-build-complete':

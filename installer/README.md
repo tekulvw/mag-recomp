@@ -130,10 +130,49 @@ Two optional fallbacks cover longer outages:
 
 - **A pre-filled cache:** `build --cache <folder>` reads `<folder>/<sha256>.blob` files before
   downloading. Copy them from a previous installation's cache: by default `~/Library/Caches/MAG Installer`,
-  `%LOCALAPPDATA%\MAG Installer\Cache` or `~/.cache/mag-installer`.
+  `%LOCALAPPDATA%\MAG Installer\Cache` or `~/.cache/mag-installer`. Copy only the `.blob` files,
+  never its `build-cache` folder (see [Build cache](#build-cache)).
 - **Mirrors:** set `MAG_INSTALLER_MIRRORS` to one or more space-separated HTTPS base URLs. Each is
   tried after GitHub, as `<base>/<sha256>.blob`, which is the same layout as the cache. A plain
-  static copy of a cache folder therefore works as a mirror.
+  static copy of a cache folder's `.blob` files therefore works as a mirror.
+
+### Build cache
+
+Building MAG again on the same computer, for example for a new MAG version, reuses the work of
+earlier builds that would come out the same. The installer keeps that work in `build-cache` inside
+its cache folder (above), and reuses:
+
+- **tool builds:** the libraries it builds from source (SDL2, glslang, SPIRV-Cross and FFmpeg; on
+  Windows the Vulkan headers, SPIRV-Tools and glslang), when their recipe, pinned sources, compiler
+  and target are unchanged;
+- **generated sources:** the output of the prepare, lift and splice steps, when you build in the
+  same installation location again (move the old `MAG` folder aside and delete `MAG-build` first)
+  and the commands, the Python that runs them, the recipe's tools and profiles (with the pinned
+  ps3recomp revisions), the game executables and every other file those steps read are unchanged.
+  The installer records what the steps read while they run, and keeps nothing if they read or
+  start anything it cannot account for. Their records name the build folder, so a build in another
+  location generates again;
+- **compiled objects:** through a pinned ccache (downloaded and checked like the other tools), per
+  source file, when the compiler, its options, and the file with everything it includes are
+  unchanged. This includes the large generated sources whenever they come out byte-identical,
+  wherever MAG is built. macOS and Linux only for now: on Windows every clang-cl compilation
+  carries options ccache cannot cache, so Windows builds compile everything and reuse the tool
+  builds and generated sources.
+
+The build log reports what was reused: the generated sources and tool builds it restored, the
+compile cache's hit rate per compile step with an estimate of the time saved, and a total at the
+end. Reused work gives the same files a full build would: every stored file is checked against its
+SHA-256 when it is restored, and the receipts are made the same way as without the cache.
+
+The cache is limited to 20 GiB; the least recently used tool builds and generated sources go
+first, and compiled objects keep within their share. `python3 -m mag_installer build-cache` (or
+the bundled installer's `build-cache` command) shows what it holds, `build-cache --max-size 10GiB`
+changes the limit, and **Clear build cache…** in the wizard or `build-cache --clear` deletes it
+(downloads are kept); the next build then does all of its work again. To build once without it,
+set `MAG_BUILD_CACHE=0` before starting the installer.
+
+The build cache is made from your own game files. It stays on this computer, in your user cache
+folder: it is never copied into the MAG folder, never sent anywhere, and must not be shared.
 
 Progress, cancellation, *Open output* and *Open logs* are in the wizard. On failure, use **Retry build**
 to keep the same installation location. The installer checks your inputs again, reuses verified
