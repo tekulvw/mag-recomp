@@ -556,8 +556,13 @@ def package(config, workspace, destination, token=None, events=None, environment
             ffmpeg_root = Path(config['ffmpeg']['include']).parent
             for name in WINDOWS_FFMPEG_DLLS:
                 shutil.copyfile(_ordinary(ffmpeg_root / 'bin' / name), bin_dir / name)
-            licenses = resources / 'licenses'; licenses.mkdir()
+            licenses = resources / 'licenses'; licenses.mkdir(exist_ok=True)
             shutil.copyfile(_ordinary(ffmpeg_root / 'LICENSE.txt'), licenses / 'FFmpeg-LICENSE.txt')
+        if config.get('sdl2'):
+            # Controller input: SDL2.dll beside the executables, and its zlib licence.
+            shutil.copyfile(_ordinary(Path(config['sdl2']['dll'])), bin_dir / 'SDL2.dll')
+            licenses = resources / 'licenses'; licenses.mkdir(exist_ok=True)
+            shutil.copyfile(_ordinary(Path(config['sdl2']['license'])), licenses / 'SDL2-LICENSE.txt')
         game_relative = os.path.relpath(game, destination)
         engine_self = manifest['images']['mage_g']['source_sha256']
         runtime = {'schema_version': 2, 'game': Path(game_relative).as_posix(),

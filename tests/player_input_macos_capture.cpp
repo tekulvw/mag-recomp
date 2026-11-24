@@ -14,15 +14,19 @@ void SDL_GameControllerUpdate() {}
 SDL_GameController* SDL_GameControllerOpen(int) {static int controller;return reinterpret_cast<SDL_GameController*>(&controller);}
 void SDL_GameControllerClose(SDL_GameController*) {}
 SDL_bool SDL_GameControllerGetAttached(SDL_GameController*) {return SDL_TRUE;}
+void SDL_GameControllerSetPlayerIndex(SDL_GameController*,int) {}
 Uint8 mag_player_controller_button(SDL_GameController*,SDL_GameControllerButton);
 Sint16 mag_player_controller_axis(SDL_GameController*,SDL_GameControllerAxis);
 void mag_player_controller_update(void);
 SDL_GameController* mag_player_controller_open(int);
+void mag_player_controller_set_player_index(SDL_GameController*,int);
 SDL_bool mag_player_controller_attached(SDL_GameController*);
 }
 static void check(bool value,const char* message) {if(!value)throw std::runtime_error(message);}
 int main() {try {
+    // cellPad opens by device index, then names the port; the capture layer follows the port.
     auto* controller=mag_player_controller_open(0);
+    mag_player_controller_set_player_index(controller,0);
     uint64_t sequence=0;
     for(int owned:{0,1}) for(int blocked:{0,1}) {
         mag_input_capture_set_keyboard_owner(owned);

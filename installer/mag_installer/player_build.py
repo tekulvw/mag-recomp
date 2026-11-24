@@ -520,7 +520,7 @@ def install(root, source, output, cache, token=None, events=None, retry=False):
             status['managed_complete'] = True
             _write_json(journal, status)
             toolchain_fields = ({'msvc': {key: toolchain[key] for key in ('vcvars', 'clang_cl', 'installation', 'version', 'product')},
-                                 **({'ffmpeg': managed['ffmpeg']} if managed.get('ffmpeg') else {})}
+                                 **{key: managed[key] for key in ('ffmpeg', 'sdl2') if managed.get(key)}}
                                 if windows else {'ffmpeg': managed['ffmpeg']})
             config = {'schema_version': 1, 'source_tree': str(source_tree), **inputs,
                       **{key: managed[key] for key in ('python', 'cmake', 'ninja', 'git')}, **toolchain_fields,

@@ -750,7 +750,7 @@ capture as described above. Host support:
 | --- | --- | --- |
 | macOS | `player_input_desktop_macos.mm` (with the player settings module) | AppKit window, GameController keyboard and mice. |
 | Linux and other non-Apple, non-Windows hosts | `player_input_desktop_sdl.cpp` on the portable core | The SDK's SDL2 game window; needs `PS3RECOMP_PAD_SDL_KEYBOARD=ON` (the default). |
-| Windows | `player_input_desktop_win32.cpp` on the portable core | The SDK's Win32 game window (Vulkan or D3D12 backend); needs `PS3RECOMP_NATIVE_OSK_WINDOWS=ON` (the default). Keyboard and mouse beside any XInput controller. |
+| Windows | `player_input_desktop_win32.cpp` on the portable core | The SDK's Win32 game window (Vulkan or D3D12 backend); needs `PS3RECOMP_NATIVE_OSK_WINDOWS=ON` (the default). Keyboard and mouse beside any controller. |
 | A host without a backend (`MAG_GAME_CONTROLS_DESKTOP=none`) | `mag_game_controls_desktop_none.cpp` | Refuses visibly (one line per state change) and leaves the SDK's own keyboard and pad input working. |
 
 The portable core (`player_desktop_capture_core.{h,cpp}`) holds these rules; a backend supplies
@@ -874,12 +874,23 @@ applied, each release or failure, and about once a second what became of the raw
 motion accepted, or dropped as unfocused, capture not installed, not ready, not relative or stale
 (an older motion epoch), the confinement losses found, and the mouse-look requests the adapter made.
 
-Controllers on macOS and Linux reach the capture layer through `player_input_sdl_pad.c`: compile
-definitions on `libs/input/cellPad.c` route its SDL GameController calls through wrappers that
-report every raw reading before the settings panel's input block masks what the SDK sees.
+Controllers on macOS, Linux and (by default) Windows reach the capture layer through
+`player_input_sdl_pad.c`: compile definitions on `libs/input/cellPad.c` route its SDL
+GameController calls through wrappers that report every raw reading before the settings panel's
+input block masks what the SDK sees. cellPad opens a controller by SDL device index and then sets
+its player index to the port it takes (the lowest free one); the wrapper registers the controller
+with the capture layer at that port, since device indices shift when a controller is unplugged.
 
-On Windows cellPad reads controllers through XInput, and compile definitions on
-`libs/input/cellPad.c` route its `XInputGetState` and `GetAsyncKeyState` calls through
+On Windows cellPad reads controllers through SDL2 as well (`PS3RECOMP_PAD_USE_SDL2`, on by default
+in `cmake/MagRuntimeOptions.cmake`), so PlayStation pads (DualSense, DualShock 4) work without a
+wrapper such as Steam Input, beside XInput pads. Its `GetAsyncKeyState` calls still go through
+`player_input_win32_pad.c`, which then builds only its keyboard part. A controller counts only while
+a window of the game's process is in the foreground (SDL's own rule for its windows, applied by
+cellPad because the game window is a native one); `SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS=1` lifts
+that. The settings window's Controller captures read controllers the same way.
+
+With `-DPS3RECOMP_PAD_USE_SDL2=OFF` cellPad reads controllers through XInput, and compile
+definitions on `libs/input/cellPad.c` route its `XInputGetState` and `GetAsyncKeyState` calls through
 `player_input_win32_pad.c`. Every XInput reading reaches the capture layer: port 0 starts a capture
 refresh (cellPad sweeps ports 0 to 3 in order), each port keeps one identity, buttons take the SDL
 GameController numbers (A 0, B 1, X 2, Y 3, Back 4, Guide 5, Start 6, stick buttons 7 and 8,

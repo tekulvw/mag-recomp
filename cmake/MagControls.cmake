@@ -117,7 +117,8 @@ function(mag_enable_game_controls target)
             APPEND PROPERTY COMPILE_DEFINITIONS SDL_GameControllerGetButton=mag_player_controller_button
             SDL_GameControllerGetAxis=mag_player_controller_axis
             SDL_GameControllerUpdate=mag_player_controller_update SDL_GameControllerOpen=mag_player_controller_open
-            SDL_GameControllerClose=mag_player_controller_close SDL_GameControllerGetAttached=mag_player_controller_attached)
+            SDL_GameControllerClose=mag_player_controller_close SDL_GameControllerGetAttached=mag_player_controller_attached
+            SDL_GameControllerSetPlayerIndex=mag_player_controller_set_player_index)
         set_property(SOURCE "${PS3RECOMP_DIR}/libs/input/pad_sdl_keyboard.c" DIRECTORY "${PS3RECOMP_DIR}"
             APPEND PROPERTY COMPILE_DEFINITIONS ps3recomp_pad_sdl_keyboard_sample=mag_sdk_pad_sdl_keyboard_sample
             ps3recomp_pad_sdl_keyboard_state=mag_sdk_pad_sdl_keyboard_state)
@@ -136,17 +137,36 @@ function(mag_enable_game_controls target)
         endif()
         list(APPEND _sources "${_src}/player_desktop_capture_core.cpp" "${_src}/player_input_desktop_win32.cpp"
             "${_src}/player_input_win32_map.c")
-        # The SDK's Win32 seams, renamed on its own sources only: cellPad's XInput readings reach the
-        # capture layer and its keyboard fallback goes quiet while the adapter owns the keyboard
+        # The SDK's Win32 seams, renamed on its own sources only: cellPad's controller readings reach
+        # the capture layer and its keyboard fallback goes quiet while the adapter owns the keyboard
         # (player_input_win32_pad.c); the game window's pump calls shared with the on-screen keyboard
         # pass through player_input_win32_window.c, in the Vulkan and the D3D12 backend alike.
+        # Controllers come through XInput, or through SDL2's GameController API when the runtime
+        # reads them that way (PS3RECOMP_PAD_USE_SDL2, cmake/MagRuntimeOptions.cmake): then the SDL
+        # seam shared with macOS and Linux (player_input_sdl_pad.c) takes them, and
+        # player_input_win32_pad.c keeps only the keyboard fallback.
         set(_sdk_seams "${_src}/player_input_win32_pad.c" "${_src}/player_input_win32_window.c")
+        if(PS3RECOMP_PAD_USE_SDL2)
+            list(APPEND _sdk_seams "${_src}/player_input_sdl_pad.c")
+        endif()
         target_sources(ps3recomp_runtime PRIVATE ${_sdk_seams})
         set_source_files_properties(${_sdk_seams} DIRECTORY "${PS3RECOMP_DIR}"
             PROPERTIES INCLUDE_DIRECTORIES "${PS3RECOMP_DIR}")
-        set_property(SOURCE "${PS3RECOMP_DIR}/libs/input/cellPad.c" DIRECTORY "${PS3RECOMP_DIR}"
-            APPEND PROPERTY COMPILE_DEFINITIONS XInputGetState=mag_player_xinput_get_state
-            GetAsyncKeyState=mag_player_get_async_key_state)
+        if(PS3RECOMP_PAD_USE_SDL2)
+            set_property(SOURCE "${_src}/player_input_win32_pad.c" DIRECTORY "${PS3RECOMP_DIR}"
+                APPEND PROPERTY COMPILE_DEFINITIONS MAG_PAD_SDL2=1)
+            set_property(SOURCE "${PS3RECOMP_DIR}/libs/input/cellPad.c" DIRECTORY "${PS3RECOMP_DIR}"
+                APPEND PROPERTY COMPILE_DEFINITIONS SDL_GameControllerGetButton=mag_player_controller_button
+                SDL_GameControllerGetAxis=mag_player_controller_axis
+                SDL_GameControllerUpdate=mag_player_controller_update SDL_GameControllerOpen=mag_player_controller_open
+                SDL_GameControllerClose=mag_player_controller_close SDL_GameControllerGetAttached=mag_player_controller_attached
+                SDL_GameControllerSetPlayerIndex=mag_player_controller_set_player_index
+                GetAsyncKeyState=mag_player_get_async_key_state)
+        else()
+            set_property(SOURCE "${PS3RECOMP_DIR}/libs/input/cellPad.c" DIRECTORY "${PS3RECOMP_DIR}"
+                APPEND PROPERTY COMPILE_DEFINITIONS XInputGetState=mag_player_xinput_get_state
+                GetAsyncKeyState=mag_player_get_async_key_state)
+        endif()
         foreach(_video rsx_vulkan_backend.c rsx_d3d12_backend.c)
             set_property(SOURCE "${PS3RECOMP_DIR}/libs/video/${_video}" DIRECTORY "${PS3RECOMP_DIR}"
                 APPEND PROPERTY COMPILE_DEFINITIONS osk_native_win32_set_window=mag_player_win32_set_window

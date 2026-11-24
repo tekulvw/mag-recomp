@@ -75,7 +75,9 @@ def main():
     def configure(build):
         print(f'== configure runtime in {build.name}', flush=True)
         return [managed['cmake'], '-S', wrapper, '-B', build, '-G', 'Ninja', '-DCMAKE_BUILD_TYPE=Release',
-                '-DCMAKE_MAKE_PROGRAM=' + posix(managed['ninja']), *compilers, '-DPython3_EXECUTABLE=' + posix(managed['python'])]
+                '-DCMAKE_MAKE_PROGRAM=' + posix(managed['ninja']), *compilers, '-DPython3_EXECUTABLE=' + posix(managed['python']),
+                # Controllers through the managed SDL2 package, as the player build does.
+                '-DPS3RECOMP_PAD_USE_SDL2=ON', '-DSDL2_DIR=' + posix(managed['sdl2']['cmake_dir'])]
     # The runtime builds through the pinned ccache, as Build MAG compiles; a second build folder reuses it.
     ccache = compile_cache.ccache_tool(managed['root'], 'windows-x86_64', cache=work / 'cache', token=token, events=events)
     identity = compile_cache.compiler_identity({'msvc': {'clang_cl': toolchain['clang_cl']}}, env)

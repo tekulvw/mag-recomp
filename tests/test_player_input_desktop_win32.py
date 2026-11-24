@@ -176,6 +176,15 @@ class Win32CrossCompileTests(unittest.TestCase):
             for name in ('player_input_win32_pad.c', 'player_input_win32_window.c', 'player_input_win32_map.c'):
                 subprocess.run([gcc, '-std=c11', *STRICT, *includes, '-c', str(SRC / name),
                                 '-o', str(root / (name + '.o'))], check=True)
+            # With SDL2 controllers (PS3RECOMP_PAD_USE_SDL2) the pad seam keeps only the keyboard fallback,
+            # and leaves the input block to the SDL seam (player_input_sdl_pad.c) it links beside.
+            subprocess.run([gcc, '-std=c11', *STRICT, '-DMAG_PAD_SDL2=1', *includes, '-c', str(SRC / 'player_input_win32_pad.c'),
+                            '-o', str(root / 'sdl_pad.o')], check=True)
+            symbols = subprocess.run([shutil.which('x86_64-w64-mingw32-nm') or 'nm', str(root / 'sdl_pad.o')],
+                                     capture_output=True, text=True, check=True).stdout
+            self.assertIn('mag_player_get_async_key_state', symbols)
+            self.assertNotIn('mag_player_xinput_get_state', symbols)
+            self.assertNotIn('mag_player_input_blocked', symbols)
 
 
 if __name__ == '__main__':
