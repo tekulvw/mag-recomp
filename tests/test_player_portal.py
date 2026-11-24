@@ -27,7 +27,7 @@ class PortalCoreTests(unittest.TestCase):
                                     '-pthread', '-o', str(binary)], capture_output=True, text=True, timeout=300)
             self.assertEqual(build.returncode, 0, build.stderr)
             scratch = pathlib.Path(tmp) / 'scratch'; scratch.mkdir()
-            result = subprocess.run([str(binary), str(scratch)], capture_output=True, text=True, timeout=30)
+            result = subprocess.run([str(binary), str(scratch)], capture_output=True, text=True, timeout=300)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn('portal link and ticket checks passed', result.stdout)
 

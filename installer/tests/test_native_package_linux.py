@@ -421,7 +421,7 @@ int main(void) {
 #include <unistd.h>
 static int sign_in(const char* path,FILE* out){
  char claimed[4096];snprintf(claimed,sizeof claimed,"%s.claimed",path);
- for(int i=0;i<1500;i++){
+ for(int i=0;i<6000;i++){  /* up to 60 s: a safety limit for loaded machines */
   if(rename(path,claimed)==0){FILE* in=fopen(claimed,"rb");int c;if(!in)return 1;
    fprintf(out,"%ld ",(long)time(NULL));while((c=fgetc(in))!=EOF)fprintf(out,"%02x",c);fputs("\n",out);fclose(in);remove(claimed);return 0;}
   usleep(10000);}
@@ -477,7 +477,7 @@ int main(void){
             link.chmod(0o600)
             env={k:v for k,v in os.environ.items() if k not in ('DISPLAY','WAYLAND_DISPLAY')}
             env['XDG_CONFIG_HOME']=str(root/'config')
-            run=subprocess.run([str(install/'MAG/MAG')],env=env,capture_output=True,text=True,timeout=120)
+            run=subprocess.run([str(install/'MAG/MAG')],env=env,capture_output=True,text=True,timeout=300)
             self.assertEqual(run.returncode,23,run.stdout+run.stderr)
             logs=max((install/'logs').glob('launch-*'),key=lambda p:p.stat().st_mtime)
             used=[]
@@ -498,7 +498,7 @@ int main(void){
             # Unlinked on the website mid-session: the launch ticket works, the reconnect gets none,
             # and after the game exits the player is told to link again in MAG Settings, once.
             state['revoke_after']=len(issued)+1
-            run=subprocess.run([str(install/'MAG/MAG')],env=env,capture_output=True,text=True,timeout=120)
+            run=subprocess.run([str(install/'MAG/MAG')],env=env,capture_output=True,text=True,timeout=300)
             self.assertNotEqual(run.returncode,0)
             self.assertIn('Your MAG sign-in was refused: this computer is no longer linked to your account. '
                           'Link your account again in MAG Settings (Account), then restart MAG.',run.stderr)

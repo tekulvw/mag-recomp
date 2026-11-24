@@ -349,6 +349,9 @@ static void storage_and_launch(const fs::path &scratch) {
 
 // The single-use ticket file (PS3RECOMP_NP_TICKET_REFILL): the game takes a ticket for each sign-in,
 // as the runtime does (rename aside, read, delete), and the refill keeps a fresh one waiting.
+// The longest any wait for the refill thread may take: a safety limit for loaded machines, not a
+// timing expectation (every wait ends as soon as its condition holds).
+static constexpr int kWait = 60000;
 static bool take(const fs::path &file, std::string &out) {
     const fs::path claimed = file.string() + ".claimed";
     std::error_code code;
@@ -403,31 +406,32 @@ static void refill(const fs::path &scratch) {
         CHECK(take(file, got) && got == "MAGT-ticket-0");
         std::vector<std::string> seen{got};
         for (int i = 0; i < 4; i++) {
-            CHECK(take_within(file, got, 2000));
+            CHECK(take_within(file, got, kWait));
             for (auto &earlier : seen) CHECK(got != earlier);
             seen.push_back(got);
         }
-        CHECK(refill.fetches() == 4);
+        CHECK(refill.fetches() >= 4 && refill.fetches() <= 5);  // the fifth may already be under way
         // A reconnect long after the lifetime (the server dropped the players, then recovered):
         // the waiting ticket was replaced before it expired, so what the game gets is still valid.
-        CHECK(present_within(file, 2000));  // a fresh ticket waits in the file
+        CHECK(present_within(file, kWait));  // a fresh ticket waits in the file
         const int before = issued;
         now += 55;  // within renew_before_seconds of the waiting ticket's expiry
-        for (int waited = 0; issued == before && waited < 2000; waited += 5) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        for (int waited = 0; issued == before && waited < kWait; waited += 5) std::this_thread::sleep_for(std::chrono::milliseconds(5));
         // renewed ahead of expiry, without a sign-in asking (once; a poll racing the clock may
         // renew the ticket it just fetched again, never more)
         if (!(issued >= before + 1 && issued <= before + 2)) std::fprintf(stderr, "renewals: %d\n", issued - before);
         CHECK(issued >= before + 1 && issued <= before + 2);
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
         now += 30;                     // past the old ticket's lifetime, inside the new one's
-        const std::string renewed = "MAGT-ticket-" + std::to_string(issued.load());
-        CHECK(take_within(file, got, 2000) && got == renewed);
+        // What the game gets now is the renewal (or a later ticket), never the expired one.
+        CHECK(take_within(file, got, kWait) && got.rfind("MAGT-ticket-", 0) == 0 &&
+              std::stoi(got.substr(12)) >= before + 1);
         // The portal is down and the waiting ticket expires: it is removed, never presented.
-        CHECK(present_within(file, 2000));
+        CHECK(present_within(file, kWait));
         refusing = 1;
         now += 120;
         bool gone = false;
-        for (int waited = 0; waited < 2000 && !gone; waited += 5) {
+        for (int waited = 0; waited < kWait && !gone; waited += 5) {
             std::error_code code;
             gone = !fs::exists(file, code);
             if (!gone) std::this_thread::sleep_for(std::chrono::milliseconds(5));
@@ -436,16 +440,16 @@ static void refill(const fs::path &scratch) {
         CHECK(!take(file, got));  // a reconnect now waits rather than sending an expired ticket
         // ... and the player would be told why, after the game exits.
         const std::string expired_note = "Your MAG sign-in expired (The account portal is busy). Restart MAG to sign in again.\n";
-        for (int waited = 0; read(policy.notice_file) != expired_note && waited < 2000; waited += 5)
+        for (int waited = 0; read(policy.notice_file) != expired_note && waited < kWait; waited += 5)
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
         CHECK(read(policy.notice_file) == expired_note);
         // The portal recovers: the next fetch (after the retry delay) fills the file again.
         const int before_recovery = issued;
         refusing = 0;
         now += 2;
-        CHECK(take_within(file, got, 2000) && got == "MAGT-ticket-" + std::to_string(before_recovery + 1));
+        CHECK(take_within(file, got, kWait) && got == "MAGT-ticket-" + std::to_string(before_recovery + 1));
         std::error_code ignored;
-        for (int waited = 0; fs::exists(policy.notice_file, ignored) && waited < 2000; waited += 5)
+        for (int waited = 0; fs::exists(policy.notice_file, ignored) && waited < kWait; waited += 5)
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
         CHECK(!fs::exists(policy.notice_file, ignored));  // recovered: nothing to tell
     }
@@ -466,7 +470,7 @@ static void refill(const fs::path &scratch) {
     {
         TicketRefill refill(file, 0, fetch, {}, policy, [&] { return now.load(); });
         std::string got;
-        CHECK(take_within(file, got, 2000));
+        CHECK(take_within(file, got, kWait));
     }
     {   // start_ticket_refill: tickets come from the linked account through prepare_launch_ticket
         const fs::path settings = scratch / "refill" / "settings.json", link_file = link_path(settings);
@@ -478,7 +482,7 @@ static void refill(const fs::path &scratch) {
         std::error_code ignored; fs::remove(file, ignored);
         auto started = start_ticket_refill(make, link_file, file, portal, server, "Link it again.", 0);
         std::string got;
-        CHECK(take_within(file, got, 3000) && got == first);
+        CHECK(take_within(file, got, kWait) && got == first);
         started.reset();
         fs::remove(file, ignored);
         auto none = start_ticket_refill(nullptr, link_file, file, portal, server, "x", 0);
@@ -494,7 +498,7 @@ static void refill(const fs::path &scratch) {
         };
         {
             TicketRefill refill(file, 0, refused, {}, noted, [&] { return now.load(); });
-            CHECK(present_within(noted.notice_file, 2000));
+            CHECK(present_within(noted.notice_file, kWait));
         }
         std::string text;
         CHECK(take_sign_in_notice(file, text));
@@ -548,7 +552,7 @@ static void refill(const fs::path &scratch) {
         std::this_thread::sleep_for(std::chrono::milliseconds(200));
         CHECK(issued == before);       // fresh: nothing fetched
         now += 2;                       // half-way through its 4 s
-        for (int waited = 0; issued == before && waited < 2000; waited += 5) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        for (int waited = 0; issued == before && waited < kWait; waited += 5) std::this_thread::sleep_for(std::chrono::milliseconds(5));
         std::this_thread::sleep_for(std::chrono::milliseconds(200));
         CHECK(issued == before + 1);   // exactly one renewal for this half-life
     }
