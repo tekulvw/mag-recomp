@@ -254,7 +254,9 @@ cmake --build build-engine --target MagRecomp -j4
 ```
 
 Omit `"${FFMPEG_ARGS[@]}"` to build without movie playback. The generated translation units are
-large, so keep parallelism modest. Each binary gets a `.receipt.json` binding it to its inputs, the
+large, so keep parallelism modest: compiling one of the engine's generated PPU units takes about
+3.5 GB of memory, so allow about 4 GiB per job (the installer's default follows the same rule; see
+[Compile jobs](installer/README.md#compile-jobs)). Each binary gets a `.receipt.json` binding it to its inputs, the
 generated sources and the SDK revision; keep it beside the binary, because the launcher refuses
 mismatches.
 

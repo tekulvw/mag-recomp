@@ -48,7 +48,8 @@ Need help installing? Ask in the [MAG Recomp Discord](https://discord.gg/HBB95hU
    modules are accepted, and the 4.93 steps are verified end to end. Sony only hosts the latest release. The installer shows the same steps when
    the file is missing or refused.
 2. Start the installer, choose that folder and where to install (**Install inside**), then click
-   **Build MAG**.
+   **Build MAG**. **Compile jobs** sets how many compiles run at once; the default suits your
+   computer (see [Compile jobs](#compile-jobs)).
 3. Play from the new `MAG` folder. It is self-contained: the app, the game files it reads (`game/`),
    and, once you play, your saves and trophies (`home/gamedata`) and launch logs (`logs/`). Nothing
    in it refers to anything outside it, so you can move or copy the whole folder elsewhere. Back up
@@ -115,6 +116,29 @@ compiler:
   sudo apt-get update && sudo apt-get install --yes --no-install-recommends clang lld build-essential git pkg-config ca-certificates libssl-dev zlib1g-dev libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxfixes-dev libxss-dev libxkbcommon-dev libwayland-dev libgl1-mesa-dev libasound2-dev libpulse-dev libudev-dev libvulkan-dev libvulkan1 mesa-vulkan-drivers
   ```
 
+### Compile jobs
+
+Compiling the launcher and engine takes most of a build, and runs several compiles at once. The
+**Compile jobs** field in the wizard (or `build --jobs N` from the command line) sets how many: a
+whole number from 1 to 64. More jobs finish sooner on a computer with many CPU cores, but each job
+can need about 3.5 GB of memory for the largest generated sources, so too many make a computer
+with little memory swap heavily, or (on Linux without swap) stop the build.
+
+The default is chosen from the computer's memory and CPUs: one job per 4 GiB of memory after 4 GiB
+kept for the system, at most one per logical CPU, and at least 2, the count every earlier installer
+used. For example, 16 GiB gives 3 jobs, 32 GiB gives 7, and 64 GiB gives 15 (with at least as many
+logical CPUs). The wizard shows the default beside the field, and the build log says how many jobs
+ran and why.
+
+Your choice is remembered for later builds, in `preferences.json` in the installer's cache folder
+(see [Downloads](#downloads); never in the `MAG` folder). `build --jobs N` overrides it and is
+remembered too; `build --jobs auto`, or setting the field back to the default, returns to the
+computer's default. The job count changes nothing else: it is not part of the
+[build cache](#build-cache)'s keys or the retry checks, so another count reuses earlier work and a
+**Retry build** (or `build --retry --jobs N`) may use another count. The libraries the installer
+builds from source (see [Build cache](#build-cache)) keep 2 jobs; they are built once and then
+reused.
+
 ### Downloads
 
 Every downloaded tool is pinned by size and SHA-256, so its source does not matter. If a GitHub
@@ -178,8 +202,9 @@ Progress, cancellation, *Open output* and *Open logs* are in the wizard. On fail
 to keep the same installation location. The installer checks your inputs again, reuses verified
 downloads and completed tool dependencies, and rebuilds unfinished work. Earlier logs remain under
 `MAG-build/logs/attempts/`, and the most recent failed attempt's output is kept beside its logs there (older
-attempts keep only their logs). The `MAG` folder appears only when the build is complete. Changed
-inputs, a different installer kit, and unknown output folders are preserved
+attempts keep only their logs). The `MAG` folder appears only when the build is complete. A retry
+may use another [compile job count](#compile-jobs), for example fewer after running out of memory.
+Changed inputs, a different installer kit, and unknown output folders are preserved
 and require a new destination. From the command line, use `build --retry` with the same paths. See
 [docs/testing.md](docs/testing.md) for what to report.
 

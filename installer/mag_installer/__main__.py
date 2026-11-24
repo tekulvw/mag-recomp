@@ -50,6 +50,9 @@ def main(argv=None):
     target.add_argument('--output', type=Path, help='Exact new MAG installation folder')
     player.add_argument('--retry', action='store_true', help='Retry a matching failed or cancelled build in the same folder, retaining earlier logs')
     player.add_argument('--cache', type=Path, help='Optional download cache override')
+    player.add_argument('--jobs', metavar='N', help='How many compile jobs run at once: a whole number from 1 to 64, or auto for '
+                        'this computer\'s default (set by its memory and CPUs). Remembered for later builds; '
+                        'works with --retry. Without it, the remembered choice or the default is used')
     reuse = commands.add_parser('build-cache', help='Show, limit or clear the build cache that lets later builds reuse earlier work')
     presentation(reuse, True)
     reuse.add_argument('--cache', type=Path, help='Installer cache folder (defaults to your user cache)')
@@ -124,7 +127,8 @@ def main(argv=None):
             for signum in (signal.SIGINT, signal.SIGTERM):
                 handlers[signum] = signal.signal(signum, lambda number, frame: token.cancel())
             output = args.output if args.output is not None else destination(args.parent)
-            player_build.install(ROOT, args.source, output, args.cache or default_cache(), token=token, events=report, retry=args.retry)
+            player_build.install(ROOT, args.source, output, args.cache or default_cache(), token=token, events=report, retry=args.retry,
+                                 jobs=args.jobs)
             return 0
         if args.command == 'build-cache':
             from . import build_cache

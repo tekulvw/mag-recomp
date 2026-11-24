@@ -7,7 +7,7 @@ from unittest.mock import patch
 import io
 from contextlib import redirect_stdout
 
-from mag_installer import player_build
+from mag_installer import build_jobs, player_build
 from mag_installer.model import InstallerError
 
 
@@ -86,7 +86,7 @@ class PlayerBuildTests(unittest.TestCase):
                     steps.append('native')
                     config = json.loads(config_path.read_text())
                     self.assertEqual(config['managed_prefix'], '/managed/prefix')
-                    self.assertEqual(config['jobs'], 2)
+                    self.assertEqual(config['jobs'], build_jobs.recommended())  # nothing chosen yet
                     # The per-user build cache: inside the installer cache, never the build folder.
                     self.assertEqual(config['build_cache'], {'root': str(cache / 'build-cache'), 'base_dir': str(build),
                                                              'ccache': CCACHE})

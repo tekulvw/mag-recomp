@@ -385,10 +385,14 @@ def _publish(output, build, status, name):
     _write_json(build / 'build.json', status)
 
 
-def install(root, source, output, cache, token=None, events=None, retry=False):
+def install(root, source, output, cache, token=None, events=None, retry=False, jobs=None):
+    """jobs: the compile job count the player chose (a number, or 'auto' for this computer's
+    default); None uses the remembered choice or the default (build_jobs.py). Checked first."""
     token = token or Cancellation()
     events = events or (lambda event: None)
     root, source, output, cache = (Path(p).expanduser().absolute() for p in (root, source, output, cache))
+    from . import build_jobs
+    jobs, jobs_source = build_jobs.resolve(cache, jobs)
     build = build_folder(output)
     state = readiness(root)
     if not state['ready']:
@@ -524,7 +528,7 @@ def install(root, source, output, cache, token=None, events=None, retry=False):
                                 if windows else {'ffmpeg': managed['ffmpeg']})
             config = {'schema_version': 1, 'source_tree': str(source_tree), **inputs,
                       **{key: managed[key] for key in ('python', 'cmake', 'ninja', 'git')}, **toolchain_fields,
-                      'jobs': 2, 'native_graphics': False,
+                      'jobs': jobs, 'native_graphics': False,
                       **({'host': host, 'linux_toolchain': {key: toolchain[key] for key in ('cc', 'cxx')}} if linux else {}),
                       'sdks': {role: {'path': str(contained(kit_root, item['path'])), 'revision': item['revision']}
                                for role, item in kit['sdks'].items()}}
@@ -550,6 +554,8 @@ def install(root, source, output, cache, token=None, events=None, retry=False):
                     return
                 counted(event)
             events({'event': 'stage-start', 'stage': 'build', 'logs': str(native_output / 'logs')})
+            events({'event': 'build-jobs', 'jobs': jobs, 'source': jobs_source,
+                    'message': build_jobs.describe(jobs, jobs_source)})
             build_native(config_path, native_output, token=token, events=progress, **({'retry_lock': True} if recovering else {}))
             events({'event': 'stage-start', 'stage': 'package', 'logs': str(native_output / 'logs')})
             # The MAG folder is assembled in the build folder and moved into place when complete.
