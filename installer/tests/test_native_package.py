@@ -186,8 +186,8 @@ int main(int argc,char**argv) {
   FILE *s=fopen(save,"a");if(!s)return 65;fputs("x\n",s);fclose(s);
   s=fopen(save,"r");for(int c;(c=fgetc(s))!=EOF;)saves+=c=='\n';fclose(s);}
  const char *session=getenv("MAG_SESSION_DIR"),*request=getenv("MAG_REPORT_REQUEST");
- fprintf(f,"{\"settings_path\":\"%s\",\"overlay_root\":\"%s\",\"setup\":%s,\"show\":%s,\"skip\":%s,\"movie\":\"%s\",\"gamedata\":\"%s\",\"saves\":%d,\"session_dir\":\"%s\",\"report_request\":\"%s\"}",
-  path,overlay,getenv("MAG_PLAYER_SETUP")?"true":"false",getenv("MAG_PLAYER_SHOW_SETTINGS")?"true":"false",getenv("MAG_SKIP_SETUP")?"true":"false",movie?movie:"",gamedata,saves,
+ fprintf(f,"{\"settings_path\":\"%s\",\"overlay_root\":\"%s\",\"setup\":%s,\"show\":%s,\"skip\":%s,\"logs\":\"%s\",\"movie\":\"%s\",\"gamedata\":\"%s\",\"saves\":%d,\"session_dir\":\"%s\",\"report_request\":\"%s\"}",
+  path,overlay,getenv("MAG_PLAYER_SETUP")?"true":"false",getenv("MAG_PLAYER_SHOW_SETTINGS")?"true":"false",getenv("MAG_SKIP_SETUP")?"true":"false",getenv("MAG_PLAYER_LOGS_ROOT")?getenv("MAG_PLAYER_LOGS_ROOT"):"",movie?movie:"",gamedata,saves,
   session?session:"",request?request:"");fclose(f);
  if(!launcher)return 17;
  f=fopen(getenv("MAG_HANDOFF_REQUEST"),"w");if(!f)return 63;
@@ -230,6 +230,8 @@ int main(int argc,char**argv) {
             before=json.loads((launch/'launcher-env.json').read_text())
             after=json.loads((launch/'engine-env.json').read_text())
             self.assertTrue(before['setup']);self.assertTrue(before['show']);self.assertFalse(before['skip'])
+            # The Debug page's Open logs folder: this MAG folder's logs, in both phases.
+            self.assertEqual((Path(before['logs']).resolve(),Path(after['logs']).resolve()),((mag/'logs').resolve(),)*2)
             self.assertFalse(after['setup']);self.assertFalse(after['show']);self.assertFalse(after['skip'])
             self.assertEqual((before['movie'],after['movie']),('1','1'))  # decoder build: playback switches ship
             # Saves live in the installation's home/gamedata for both stages, not in the launch folder.

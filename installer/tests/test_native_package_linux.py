@@ -19,6 +19,11 @@ REPOSITORY = Path(__file__).resolve().parents[2]
 
 
 class LinuxPackageTests(unittest.TestCase):
+    def test_logs_folder_for_the_debug_page(self):
+        # MAG Settings' Debug page opens this MAG folder's logs, which the supervisor names.
+        from mag_installer.native_package_linux import _SUPERVISOR
+        self.assertIn('{"MAG_PLAYER_LOGS_ROOT",(root/"logs").string()}', _SUPERVISOR)
+
     def setUp(self):
         # Supervisor runs here send no reports, except in the reports test.
         environment = patch.dict(os.environ, {'MAG_REPORTS': '0'}); environment.start(); self.addCleanup(environment.stop)
