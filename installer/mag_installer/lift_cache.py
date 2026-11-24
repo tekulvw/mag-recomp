@@ -12,6 +12,8 @@ the same files. An entry in the build cache records what generation wrote, keyed
 - the identities of the decrypted executables and firmware module the build uses;
 - the content of every file below ``tools/`` and ``profiles/`` (the recipe, the reviewed profiles
   and the pinned ps3recomp revisions; the SDK checkouts are clean clones of those revisions);
+- what each pinned checkout's HEAD, pinned commits and pinned tags resolve to, and whether the
+  workspace lies in a Git repository, asked of git by the installer before generation runs;
 - and, recorded when the entry was made, the content of every other file generation read (game
   files, for example), the absence of files it looked for, and the names in every other folder it
   listed. An entry is reused only when all of those are unchanged.
@@ -19,8 +21,19 @@ the same files. An entry in the build cache records what generation wrote, keyed
 What generation reads is observed, not assumed: each generation process runs with a small Python
 audit hook (written into the build folder; ``PYTHONPATH``) that records the files it opens, the
 folders it lists and the programs it starts. If generation read a file outside the cases above,
-or started a program other than Python or git (which only reads the pinned checkouts), its
-results are not stored, and the next build generates again.
+or started any program other than the traced Python and these read-only git questions, its
+results are not stored, and the next build generates again:
+
+- about a pinned checkout (``git -C <checkout or a folder in it>``): ``rev-parse`` of HEAD, of one
+  of that checkout's pinned commits or of one of its pinned tags (``refs/tags/<tag>``), optionally
+  peeled with ``^{commit}`` or ``^{tree}`` and with ``--verify``/``--quiet``; ``status --porcelain
+  --untracked-files=no``; and ``show <pinned commit>:<path>``. Their answers follow from the
+  pinned commits and the resolutions in the key (a pinned commit names fixed content);
+- about the output location (``git -C <folder in the workspace>``): ``rev-parse --show-toplevel``
+  and ``rev-parse --is-inside-git-dir``, which the key answers for the workspace.
+
+Python on Windows reports a started program to audit hooks as one command line rather than a list
+of arguments; it is split back with the rules Windows programs use to read their command line.
 """
 from __future__ import annotations
 
@@ -28,22 +41,28 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import stat
+import subprocess
 import sys
 import time
 
 from .build_cache import BuildCache, digest, duration_text, file_hash
 from .model import InstallerError
 
-SCHEMA = 1
+SCHEMA = 2
 # Hashed whole: the recipe's tools and the reviewed profiles (with the ps3recomp pins).
 STATIC = ('tools', 'profiles')
 TRACE_VARIABLE = 'MAG_GENERATION_TRACE'
-# Programs generation may start besides Python: git, which only reads the pinned checkouts.
+# Programs generation may start besides Python: git, for the read-only questions above.
 ALLOWED_PROGRAMS = ('git', 'git.exe')
+# Options of `git rev-parse <revision>` that change only how an answer is reported.
+REV_PARSE_OPTIONS = ('--verify', '--quiet', '-q')
+# What the output-location checks ask git about a folder in the workspace (the key holds the answers).
+LOCATION_QUESTIONS = ('--show-toplevel', '--is-inside-git-dir')
 
 TRACER = r'''"""MAG installer: record what this Python process opens, lists and starts (build cache keys)."""
-import os, sys, threading
+import json, os, sys, threading
 _folder = os.environ.get('MAG_GENERATION_TRACE')
 if _folder:
     _lock = threading.RLock()
@@ -82,18 +101,31 @@ if _folder:
                         return
                     line = 'L\t' + os.path.abspath(os.fsdecode('.' if path is None else path))
                 elif event == 'subprocess.Popen':
-                    argv = args[1]
-                    argv = [argv] if isinstance(argv, (str, bytes)) else list(argv or [])
-                    line = 'X\t' + '\x1f'.join(os.fsdecode(a) for a in [args[0] or (argv[0] if argv else '')] + argv[1:])
-                else:
-                    line = 'X\t' + os.fsdecode(str(args[0]))
+                    executable, argv, cwd = args[0], args[1], args[2]
+                    # POSIX reports the argument list; Windows the command line it will start.
+                    start = ({'command_line': os.fsdecode(argv)} if isinstance(argv, (str, bytes, os.PathLike))
+                             else {'argv': [os.fsdecode(a) for a in argv or []]})
+                    start['executable'] = None if executable is None else os.fsdecode(executable)
+                    start['cwd'] = os.getcwd() if cwd is None else os.path.abspath(os.fsdecode(cwd))
+                    line = 'X\t' + json.dumps(start, sort_keys=True)
+                elif event == 'os.system':
+                    line = 'X\t' + json.dumps({'shell': os.fsdecode(args[0])})
+                else:   # os.exec(path, args, env), os.posix_spawn(path, argv, env), os.spawn(mode, path, args, env)
+                    path, argv = (args[1], args[2]) if event == 'os.spawn' else (args[0], args[1])
+                    line = 'X\t' + json.dumps({'executable': os.fsdecode(path), 'argv': [os.fsdecode(a) for a in argv],
+                                               'cwd': os.getcwd()}, sort_keys=True)
                 if line in _state['seen']:
                     return
                 _state['seen'].add(line)
                 _state['busy'] = False
                 _write(line)
             except Exception:
-                pass
+                # Unrecorded: the trace says so, and the results are not kept.
+                try:
+                    _state['busy'] = False
+                    _write('E\t' + event)
+                except Exception:
+                    pass
             finally:
                 _state['busy'] = False
     _write('P\t' + '\x1f'.join([sys.executable] + list(sys.argv)))
@@ -104,6 +136,84 @@ if _folder:
 
 def _norm(path):
     return os.path.normcase(os.path.normpath(str(path)))
+
+
+def _inside(path, folder):
+    path, folder = _norm(path), _norm(folder)
+    return path == folder or path.startswith(folder.rstrip(os.sep) + os.sep)
+
+
+def split_command_line(line):
+    """The arguments of a Windows command line, read as Windows programs read theirs: whitespace
+    separates arguments outside double quotes; backslashes are literal except before a double
+    quote, where each pair is one backslash and an odd one makes the quote literal. This reverses
+    subprocess.list2cmdline, which is how Python on Windows joins an argument list."""
+    arguments, index, size = [], 0, len(line)
+    while True:
+        while index < size and line[index] in ' \t':
+            index += 1
+        if index >= size:
+            return arguments
+        argument, quoted = [], False
+        while index < size and (quoted or line[index] not in ' \t'):
+            if line[index] == '\\':
+                end = index
+                while end < size and line[end] == '\\':
+                    end += 1
+                if end < size and line[end] == '"':
+                    argument.append('\\' * ((end - index) // 2))
+                    if (end - index) % 2:
+                        argument.append('"'); end += 1
+                else:
+                    argument.append('\\' * (end - index))
+                index = end
+            elif line[index] == '"':
+                quoted = not quoted; index += 1
+            else:
+                argument.append(line[index]); index += 1
+        arguments.append(''.join(argument))
+
+
+def _pinned(pin):
+    """A checkout's pinned commits and tags: its own and its fixed lifters' (splice_after)."""
+    from .native_recipe import splice_pins
+    extras = splice_pins(pin)
+    return [pin['commit'], *(e['commit'] for e in extras)], [pin['tag'], *(e['tag'] for e in extras)]
+
+
+def _git(config, env, folder, *args, stdin=None):
+    """git's answer in a folder, or None when it gives none."""
+    try:
+        result = subprocess.run([config.get('git') or 'git', '-C', str(folder), *args], input=stdin,
+                                capture_output=True, text=True, env=env, timeout=300)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return result.stdout.strip() if result.returncode == 0 else None
+
+
+def _resolved_pins(config, workspace, pins, env):
+    """What HEAD, the pinned commits and the pinned tags name in each pinned checkout (None: nothing).
+    Generation may ask git about exactly these, so its answers are part of the key."""
+    resolved = {}
+    for role, pin in sorted(pins.items()):
+        commits, tags = _pinned(pin)
+        questions = ['HEAD', *commits, *('refs/tags/' + tag for tag in tags)]
+        answers = dict.fromkeys(questions)
+        checkout = workspace / pin['path']
+        if (checkout / '.git').exists():   # never a repository around it
+            found = _git(config, env, checkout, 'cat-file', '--batch-check=%(objectname)',
+                         stdin=''.join(q + '^{commit}\n' for q in questions))
+            lines = found.splitlines() if found is not None else []
+            if len(lines) == len(questions):
+                answers = {q: line if re.fullmatch('[0-9a-f]{40}|[0-9a-f]{64}', line) else None
+                           for q, line in zip(questions, lines)}
+        resolved[role] = answers
+    return resolved
+
+
+def _location(config, workspace, env):
+    """What git says about the workspace's place: the repository around it, if any."""
+    return {question: _git(config, env, workspace, 'rev-parse', question) for question in LOCATION_QUESTIONS}
 
 
 def _snapshot(root):
@@ -149,14 +259,16 @@ def _static_digest(workspace, token):
     return hasher.hexdigest()
 
 
-def key_material(config, workspace, stages, token):
-    from .native_recipe import config_host
+def key_material(config, workspace, stages, token, env=None):
+    from .native_recipe import config_host, framework_pins
     return {'kind': 'generation', 'schema': SCHEMA, 'host': config_host(config),
             'build_folder': str(config['build_cache']['base_dir']), 'workspace': str(workspace),
             'stages': [{'id': stage['id'], 'argv': [str(a) for a in stage['argv']]} for stage in stages],
             'python': _python_identity(config),
             'inputs': {key: file_hash(config[key], token) for key in ('eboot_elf', 'engine_elf', 'firmware')},
-            'static': _static_digest(workspace, token)}
+            'static': _static_digest(workspace, token),
+            'checkouts': _resolved_pins(config, workspace, framework_pins(workspace), env),
+            'location': _location(config, workspace, env)}
 
 
 def _names_digest(names):
@@ -201,9 +313,37 @@ def _read_traces(folder):
             if kind == 'R': reads.add(value)
             elif kind == 'W': writes.add(value)
             elif kind == 'L': lists.add(value)
-            elif kind == 'X': programs.append(value.split('\x1f'))
+            elif kind == 'X': programs.append(json.loads(value))
+            elif kind == 'E': programs.append({'unrecorded': value})
             elif kind == 'S': prefixes.update(value.split('\x1f'))
     return reads, writes, lists, programs, prefixes
+
+
+def _git_problem(arguments, cwd, workspace, pins):
+    """Why a git command is not one of the read-only questions of the module docstring, or None."""
+    if len(arguments) < 3 or arguments[0] != '-C':
+        return 'outside a pinned checkout'
+    # Real paths: the tools find the checkouts from their own resolved location.
+    folder = os.path.realpath(os.path.join(cwd or str(workspace), arguments[1]))
+    command, rest = arguments[2], arguments[3:]
+    for pin in pins.values():
+        if _inside(folder, os.path.realpath(workspace / pin['path'])):
+            commits, tags = _pinned(pin)
+            if command == 'rev-parse':
+                revisions = [a for a in rest if a not in REV_PARSE_OPTIONS]
+                base = re.sub(r'\^\{(commit|tree)\}$', '', revisions[0]) if len(revisions) == 1 else None
+                if base == 'HEAD' or base in commits or base in {'refs/tags/' + tag for tag in tags}:
+                    return None
+            elif command == 'status' and sorted(rest) == ['--porcelain', '--untracked-files=no']:
+                return None
+            elif command == 'show' and len(rest) == 1:
+                commit, _, path = rest[0].partition(':')
+                if commit in commits and path:
+                    return None
+            return 'with a question about its checkout that is not a pinned revision check'
+    if _inside(folder, os.path.realpath(workspace)) and command == 'rev-parse' and len(rest) == 1 and rest[0] in LOCATION_QUESTIONS:
+        return None
+    return 'outside a pinned checkout'
 
 
 def _allowed_outside(path, config, prefixes=()):
@@ -229,17 +369,25 @@ def _classify(config, workspace, output, before, after_files, traces, pins):
     reads, writes, lists, programs, prefixes = traces
     files_before, folders_before = before
     python = _norm(Path(config['python']).resolve())
-    for argv in programs:
-        program = Path(argv[0]).name.lower() if argv else ''
-        if not argv:
+    for start in programs:
+        if 'unrecorded' in start:
+            return None, None, f'generation did something its trace could not record ({start["unrecorded"]})'
+        if 'shell' in start:
+            return None, None, f'generation ran a shell command: {start["shell"]}'
+        argv = split_command_line(start['command_line']) if 'command_line' in start else list(start.get('argv') or [])
+        program = start.get('executable') or (argv[0] if argv else '')
+        if not program or not argv:
             return None, None, 'generation started a program it did not name'
-        if _norm(Path(argv[0]).resolve()) == python or _norm(argv[0]) == _norm(config['python']):
+        if _norm(Path(program).resolve()) == python or _norm(program) == _norm(config['python']):
             if any(flag in argv[1:2] for flag in ('-I', '-E', '-S')):
                 return None, None, f'generation started Python without its trace: {argv[:2]}'
             continue
-        if program in ALLOWED_PROGRAMS or _norm(argv[0]) == _norm(config['git']):
-            continue
-        return None, None, f'generation started {argv[0]}'
+        if Path(program).name.lower() in ALLOWED_PROGRAMS or _norm(program) == _norm(config.get('git') or 'git'):
+            problem = _git_problem(argv[1:], start.get('cwd'), workspace, pins)
+            if problem is None:
+                continue
+            return None, None, f'generation started git {problem}: {" ".join(argv[1:])}'
+        return None, None, f'generation started {program}'
     workspace_prefix = _norm(workspace) + os.sep
     output_prefix = _norm(output) + os.sep
     checkouts = [_norm(workspace / pin['path']) + os.sep for pin in pins.values()]
@@ -289,7 +437,7 @@ def run_generation(config, workspace, stages, run_stage, env, token, events):
     workspace = Path(workspace)
     output = workspace.parent
     cache = BuildCache(config['build_cache']['root'], token, events)
-    material = key_material(config, workspace, stages, token)
+    material = key_material(config, workspace, stages, token, env)
     key = digest(material)
     record = cache.lookup('lift', key)
     if record is not None and _still_valid(record, workspace, token):

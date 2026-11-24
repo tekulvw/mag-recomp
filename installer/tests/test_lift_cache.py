@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -188,6 +189,14 @@ GIT_IDENTITY = {'GIT_AUTHOR_NAME': 'Synthetic', 'GIT_AUTHOR_EMAIL': 'synthetic@e
                 'GIT_CONFIG_NOSYSTEM': '1'}
 
 
+def remove(path):
+    """shutil.rmtree, also for Git's read-only object files on Windows."""
+    def writable(function, name, _):
+        os.chmod(name, stat.S_IWRITE)
+        function(name)
+    shutil.rmtree(path, **({'onexc': writable} if sys.version_info >= (3, 12) else {'onerror': writable}))
+
+
 @unittest.skipUnless(shutil.which('git'), 'needs git')
 class PinnedCheckoutTests(GenerationFixture):
     """Generation asks git about the pinned ps3recomp checkouts (their HEAD, cleanliness, pinned
@@ -248,7 +257,7 @@ class PinnedCheckoutTests(GenerationFixture):
                 self.assertIsNone(result)
                 self.assertEqual([e['event'] for e in events if e['event'].startswith('build-cache')],
                                  ['build-cache-miss', 'build-cache-stored'], events)
-                shutil.rmtree(build)
+                remove(build)
                 build, workspace = self.build_folder(f'{label}/MAG-build')
                 result, events = self.generate(build, workspace, extra)
                 self.assertIsNotNone(result, events)
@@ -290,12 +299,12 @@ class PinnedCheckoutTests(GenerationFixture):
         # Same profiles (same pins), but the checkout's pinned tag or HEAD names another commit.
         for runs, change in enumerate((dict(fix='base'), dict(head='fix')), start=2):
             with self.subTest(**change):
-                shutil.rmtree(build)
+                remove(build)
                 build, workspace = self.build_folder('MAG-build', **change)
                 result, events = self.generate(build, workspace, extra)
                 self.assertIsNone(result, events)
                 self.assertEqual(self.runs(), runs)
-        shutil.rmtree(build)
+        remove(build)
         build, workspace = self.build_folder('MAG-build')
         self.assertIsNotNone(self.generate(build, workspace, extra)[0])
         self.assertEqual(self.runs(), 3)
