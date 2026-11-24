@@ -613,7 +613,9 @@ Returns false (the game recognizes the control itself) unless every step below a
    - Other actions: gameplay must be eligible; the channel contract must still be current (7.4),
      otherwise revoke gameplay and mouse eligibility and return false; on the owner's handler the
      token (after aliases) must equal the action; on another handler it must be a gameplay route,
-     or, for a situational action, any system route (a vehicle's or a menu's own handler).
+     or, for a situational action, any system route (a vehicle's or a menu's own handler). While a
+     menu holds look on foot (8.2), no gameplay or situational action is taken over on a handler
+     other than the player's: return false.
 4. `mouse look` = gameplay, a look token, mouse eligible and the frame's look owner is the mouse.
    Ask the engine for this action's offer (`mag_controls_offer`). `remapped` = the profile remaps
    the controller and the action allows controller remapping. `deny native` = (gameplay or system)
@@ -939,7 +941,19 @@ first spawn, the pause menu, the death and spawn-selection screens, any UI that 
 the adapter attaches as
 Menu and routes the system buttons alone (Escape, Tab and the arrows), so the pad stays live
 (`mag_input_capture_set_keyboard_pad_live`) and the menu's other buttons work from the keyboard as
-they do in the front end. The pad's readers (macOS window pad, SDL keyboard pad, Win32 keyboard
+they do in the front end.
+
+Some in-match menus do not stop gameplay: in a match the pause (Start) menu and the in-match
+loadout screen leave the game running, so the poll still attaches on foot, but the menu takes the
+look channels before the player's handler ("a menu holds look", 7.2 step 5, after its hold has been
+stable for three handler updates). While a menu holds look on foot the pad is live too, as in a
+menu, so the menu's face buttons, shoulders and stick clicks work from the pad's keys (Z Square
+for EXIT GAME, X Cross, C Circle, V Triangle, Q/E, F/G). The adapter then takes over no
+gameplay or situational action on any handler other than the player's own (7.3 step 3): the menu's
+controls read the pad. The player's handler keeps its keys, and the channels the menu consumes reach
+it blocked, as a controller's would. System buttons (Escape, Tab, the arrows) stay with the adapter
+on every route. When look comes back (stably, as above) the pad is muted again at the next poll;
+the gate below makes any key still held from the menu wait for a release. The pad's readers (macOS window pad, SDL keyboard pad, Win32 keyboard
 fallback) obey `mag_input_capture_keyboard_pad_muted()`: owned and not live. When the pad comes back
 from being muted, a key or stick direction still held counts only after it has been released once
 (`player_input_keyboard_pad_gate.h`), so a gameplay key held across the change does not press a

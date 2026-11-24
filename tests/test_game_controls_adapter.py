@@ -86,6 +86,9 @@ class GameControlsAdapterTests(unittest.TestCase):
     def test_in_match_menus_keep_the_legacy_keyboard_pad_live(self):
         self.run_scenario('menu-pad')
 
+    def test_a_menu_holding_look_on_foot_gets_the_keyboard_pad(self):
+        self.run_scenario('menu-look-pad')
+
     def test_situational_actions_are_optional_and_recognized_by_their_own_token(self):
         self.run_scenario('situational')
 

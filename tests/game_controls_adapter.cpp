@@ -924,6 +924,53 @@ void menu_holds_look() {
     require(h.status() == std::string("on-foot Rust input attached"), "status did not return to gameplay");
 }
 
+// A menu that holds look while the player stays on foot (the in-match pause menu, the loadout
+// screen) is served by the keyboard pad like any menu: the pad goes live once the hold is stable,
+// the adapter takes over nothing on the menu's own handlers (their controls read the pad), the
+// player's handler keeps its keys, and the pad is muted again once look returns.
+void menu_holding_look_gets_the_pad() {
+    Harness h;
+    uint32_t record = 0;
+    const uint32_t menu = route_handler(h.m, record);  // a scripted menu element on Jump's channel
+    require(h.idle_tick() == Attached, "first tick did not attach on foot");
+    const auto muted = [] { return mag_input_capture_keyboard_pad_muted() != 0; };
+    require(muted(), "on foot the pad is muted");
+    constexpr uint32_t Look = 0xFu << 20;
+    auto update = [&](uint32_t consumed) {
+        h.m.put32(Pad + 0x80, consumed);
+        h.begin_tick();
+        h.enter_handler();
+        h.fire(Hook::HandlerExit);
+        h.end_poll();
+        h.end_tick();
+    };
+    update(Look);
+    update(Look);
+    update(Look);
+    require(h.status() == std::string("on-foot input attached; a menu holds look"), "the menu hold was not taken");
+    mag_controls_push_event({{InputSource::Keyboard, 44}, true, time_ns()});  // Space: Jump.
+    h.begin_tick();  // the poll after the hold became stable
+    require(!muted() && mag_input_capture_keyboard_owned(), "a menu holding look on foot did not get the pad");
+    h.m.put32(Pad + 0x80, Look);
+    h.enter_handler();
+    require(h.recognize(Jump), "the player's handler lost its keys under the menu");
+    h.fire(Hook::HandlerExit);
+    h.enter_handler(menu);
+    const auto before = h.tuple_at(record);
+    require(!h.recognize_record(record, menu) && h.tuple_at(record) == before, "the adapter took over the menu's control");
+    h.fire(Hook::HandlerExit);
+    h.end_poll();
+    h.end_tick();
+    mag_controls_push_event({{InputSource::Keyboard, 44}, false, time_ns()});
+    update(0);
+    update(0);
+    update(0);
+    h.begin_tick();
+    require(muted(), "look returning did not mute the pad again");
+    h.end_poll();
+    h.end_tick();
+}
+
 // The legacy keyboard pad (the SDK's fixed key layout: Cross on X, ...) is muted only while a poll
 // attaches on foot. In an in-match menu with a local player (paused, the player's handler disabled
 // as after death, a UI element that blocks gameplay) the adapter routes the system buttons alone,
@@ -1269,7 +1316,7 @@ int main(int argc, char** argv) {
         {"mouse", mouse_look},       {"assist", aim_assist},     {"lifecycle", lifecycle},
         {"threads", threads_and_errors}, {"snapshot", update_snapshot}, {"menu", menu_holds_look},
         {"withdrawn", withdrawn_frame},
-        {"menu-pad", menu_keyboard_pad}, {"situational", situational_actions}, {"census", census},
+        {"menu-pad", menu_keyboard_pad}, {"menu-look-pad", menu_holding_look_gets_the_pad}, {"situational", situational_actions}, {"census", census},
         {"prompt-queries", prompt_queries}};
     try {
         if (argc != 2 || !scenarios.count(argv[1])) throw std::runtime_error("usage: game_controls_adapter <scenario>");
