@@ -16,6 +16,16 @@ if(WIN32 OR APPLE)
         "Plain big-endian PPU guest accesses when no probe, coherence or MMIO work is needed")
 endif()
 
+# PS3RECOMP_PAD_USE_SDL2 (Windows): cellPad reads controllers through SDL2's GameController API, as
+# it does on Linux and macOS, instead of XInput. XInput sees Xbox-class pads only, so a DualSense or
+# DualShock 4 was ignored unless Steam Input or DS4Windows wrapped it; SDL reads those through its
+# HIDAPI drivers (rumble included) as well as XInput pads. The build needs SDL2's CMake package
+# (SDL2_DIR; the managed installer passes the official SDL2-devel VC package) and ships SDL2.dll
+# beside the executables. OFF restores the XInput backend. Not a performance switch: no A/B applies.
+if(WIN32)
+    set(PS3RECOMP_PAD_USE_SDL2 ON CACHE BOOL "Read Windows controllers through SDL2 instead of XInput")
+endif()
+
 # SPU_FLOAT_X86_RZ: on x86 builds that target AVX-512 F/VL/DQ (x86-64-v4, chosen automatically
 # where the CPU has AVX-512), SPU single-precision add, subtract, multiply and fused ops run as one
 # native instruction with AVX-512 embedded round-toward-zero instead of the exact double-precision

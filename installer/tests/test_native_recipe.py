@@ -157,6 +157,37 @@ class NativeRecipeTests(unittest.TestCase):
             self.assertIn('-DCMAKE_PREFIX_PATH=' + prefix.resolve().as_posix(), configure)
             self.assertTrue(all('\\' not in argument for argument in configure if argument.startswith('-D')))
 
+    def test_windows_sdl2_selects_sdl_pads_and_older_configs_keep_xinput(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); data = self.config(root); data.pop('ffmpeg'); workspace = self.workspace(root)
+            for name in ('vcvars64.bat', 'clang-cl.exe'):
+                (root / name).write_text('fixture'); (root / name).chmod(0o755)
+            data['msvc'] = {'vcvars': 'vcvars64.bat', 'clang_cl': 'clang-cl.exe'}
+            sdl2_root = root / 'SDL2-2.32.10'; (sdl2_root / 'cmake').mkdir(parents=True); (sdl2_root / 'lib/x64').mkdir(parents=True)
+            (sdl2_root / 'lib/x64/SDL2.dll').write_text('fixture'); (sdl2_root / 'LICENSE.txt').write_text('fixture')
+            sdl2 = {'cmake_dir': 'SDL2-2.32.10/cmake', 'dll': 'SDL2-2.32.10/lib/x64/SDL2.dll', 'license': 'SDL2-2.32.10/LICENSE.txt'}
+            config = self.load(root, dict(data, sdl2=sdl2))
+            self.assertEqual(config['sdl2']['dll'], str((sdl2_root / 'lib/x64/SDL2.dll').resolve()))
+            commands = {stage['id']: stage['argv'] for stage in build_plan(config, workspace)}
+            for name in ('configure-launcher', 'configure-engine'):
+                self.assertIn('-DPS3RECOMP_PAD_USE_SDL2=ON', commands[name])
+                self.assertIn('-DSDL2_DIR=' + (sdl2_root / 'cmake').resolve().as_posix(), commands[name])
+                self.assertNotIn('-DPS3RECOMP_PAD_USE_SDL2=OFF', commands[name])
+            # A build-settings.json written before SDL2 was pinned still builds, with XInput pads.
+            older = {stage['id']: stage['argv'] for stage in build_plan(self.load(root, data), workspace)}['configure-engine']
+            self.assertIn('-DPS3RECOMP_PAD_USE_SDL2=OFF', older)
+            self.assertFalse(any(argument.startswith('-DSDL2_DIR=') for argument in older))
+            for broken in (dict(sdl2, extra='x'), {k: v for k, v in sdl2.items() if k != 'license'},
+                           dict(sdl2, cmake_dir='SDL2-2.32.10/LICENSE.txt'), dict(sdl2, dll='SDL2-2.32.10/missing.dll')):
+                with self.subTest(sdl2=broken), self.assertRaisesRegex(InstallerError, 'sdl2'):
+                    self.load(root, dict(data, sdl2=broken))
+            # macOS and Linux take SDL2 from the managed prefix: no record, no pad flags.
+            unix = {key: value for key, value in data.items() if key != 'msvc'}
+            unix['ffmpeg'] = dict(include='headers', **{n: n for n in ['avcodec', 'avformat', 'avutil', 'swscale']})
+            with self.assertRaisesRegex(InstallerError, 'sdl2'): self.load(root, dict(unix, sdl2=sdl2))
+            macos = {stage['id']: stage['argv'] for stage in build_plan(self.load(root, unix), workspace)}['configure-engine']
+            self.assertFalse(any('PAD_USE_SDL2' in argument or argument.startswith('-DSDL2_DIR=') for argument in macos))
+
     def test_native_edge_hooks_after_streamed_lift_and_links_only_engine(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp); data = self.config(root); workspace = self.workspace(root)
