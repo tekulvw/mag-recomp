@@ -961,6 +961,30 @@ void menu_keyboard_pad() {
     h.m.put8(Handler + 0x40, 1);
     require(h.idle_tick() == Attached && pad_muted(), "re-enabling did not mute the pad again");
 
+    // Before the first spawn (the pre-battle lobby and the first deploy screen) the player's
+    // movement state is the pre-spawn one: those screens are menus too, so X is the pad's Cross
+    // there and Q/E, Z, V and the rest are the pad's buttons, not gameplay keys by channel (the
+    // left mouse button pressing R1, R pressing Square...).
+    h.m.put32(State, 0x01A6CE38);
+    h.m.put8(State + 0x10, 0);
+    require(h.idle_tick() == "native menu buttons attached", "the pre-battle lobby attached on foot");
+    require(owned() && !pad_muted(), "the pre-battle lobby muted the legacy keyboard pad");
+    require(capture_on && !mouse_on, "the pre-battle lobby took the mouse lock");
+    mag_controls_push_event({{InputSource::Mouse, 0}, true, time_ns()});  // Fire's button.
+    h.begin_tick();
+    h.enter_handler();
+    require(!h.recognize(Fire) && !h.recognize(Jump), "a gameplay key pressed a button in the pre-battle lobby");
+    h.end_poll();
+    h.enter_actor();
+    h.end_tick();
+    mag_controls_push_event({{InputSource::Mouse, 0}, false, time_ns()});
+    // Only that exact state: id 0 under another vtable is not the pre-spawn state.
+    h.m.put32(State, BasicStateVtable);
+    require(h.idle_tick() == Attached && pad_muted(), "id 0 of another state was taken for the pre-battle lobby");
+    // Spawning (a basic movement state) attaches on foot and mutes the pad again.
+    h.m.put8(State + 0x10, 1);
+    require(h.idle_tick() == Attached && pad_muted(), "spawning did not attach on foot");
+
     // A UI element of unknown type blocks gameplay: the same.
     ui_package(h.m, 1, true);
     ui_element(h.m, 0, 0x01A00000, 0x01A00040, true);

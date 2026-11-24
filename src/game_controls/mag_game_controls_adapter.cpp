@@ -582,7 +582,8 @@ struct MagGameControlsAdapter::State {
             if (const auto local = guest.local_owner()) {
                 owned = !lifecycle.exhausted && !lifecycle.is_tombstoned(local->handler) &&
                         removal_known_clear(local->handler) && guest.system_routes().has_value();
-                on_foot = owned && local->enabled && guest.gameplay_routes().has_value() && build_contract(*local);
+                on_foot = owned && local->enabled && !local->pre_spawn && guest.gameplay_routes().has_value() &&
+                          build_contract(*local);
             }
         } catch (...) {
             mag_input_capture_set_keyboard_pad_live(0);
@@ -788,7 +789,9 @@ struct MagGameControlsAdapter::State {
         owner = local;
         gameplay_routes = gameplay;
         contract = std::move(built);
-        gameplay_eligible = gameplay && contract && local->enabled;
+        // Before the first spawn the pre-battle lobby and the first deploy screen are menus: the
+        // keyboard pad serves them as it serves every other menu (X Cross, Z Square, Q/E L1/R1...).
+        gameplay_eligible = gameplay && contract && local->enabled && !local->pre_spawn;
         channel_actions.clear();
         clear_receipts();
         mouse_eligible = false;
