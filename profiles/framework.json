@@ -4,8 +4,8 @@
   "upstream": "https://github.com/sp00nznet/ps3recomp",
   "ps3recomp": {
     "runtime": {
-      "tag": "mag-recomp/runtime-2026.11.24-ticketrefill",
-      "commit": "78891139d432ee9a9a956848a250f52a35683fed",
+      "tag": "mag-recomp/runtime-2026.11.24-texoverride",
+      "commit": "e0cdf4421c4790aeb63c4f0e56e299c67953506b",
       "path": "local/ps3recomp-runtime"
     },
     "lifter-spu": {
@@ -35,13 +35,13 @@
     }
   },
   "allowed_runtime_revisions": [
-    "78891139d432ee9a9a956848a250f52a35683fed"
+    "e0cdf4421c4790aeb63c4f0e56e299c67953506b"
   ],
   "strict_runtime_revisions": [
-    "78891139d432ee9a9a956848a250f52a35683fed"
+    "e0cdf4421c4790aeb63c4f0e56e299c67953506b"
   ],
   "strict_hle_runtime_revisions": [
-    "78891139d432ee9a9a956848a250f52a35683fed"
+    "e0cdf4421c4790aeb63c4f0e56e299c67953506b"
   ],
   "first_nonblack_capture_revisions": [],
   "allowed_lifter_revisions": [
