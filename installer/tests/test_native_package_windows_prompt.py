@@ -131,7 +131,13 @@ class WindowsSetupTests(unittest.TestCase):
         self.assertIn('import_device_token(*transport, portal, settings.server_address, token, link_path(path), link)', body)
         self.assertIn('int mag_portal_link_token(', (root / 'player_portal_win32.h').read_text(encoding='utf-8'))
         # Each phase asks for a ticket for the configured server.
-        self.assertIn('settings.server_address, "Run MAG.exe --link to link it again.");', portal)
+        self.assertIn('"Link it again in MAG Settings (Account), or run MAG.exe --link."', portal)
+        self.assertIn('settings.server_address, relink);', portal)
+        self.assertIn('start_ticket_refill(make_platform_transport', portal)
+        # After the game exits, a refused or expired sign-in is said once, in the account dialog.
+        source = (ROOT / 'installer/mag_installer/native_package_windows.py').read_text()
+        self.assertEqual(source.count('if (mag_portal_take_notice(ticket, sign_in, 1024)) notice(logs, sign_in, prompt, MB_ICONWARNING);'), 2)
+        self.assertIn('take_sign_in_notice(fs::path(ticket_file), text)', portal)
 
     @unittest.skipUnless(shutil.which('x86_64-w64-mingw32-g++') and shutil.which('x86_64-w64-mingw32-gcc'), 'MinGW-w64 cross compiler')
     def test_supervisor_and_portal_sources_compile(self):

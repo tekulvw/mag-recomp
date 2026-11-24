@@ -161,8 +161,13 @@ function(mag_enable_game_controls target)
     endif()
     # Keyboard and mouse button prompts (docs/native-controls.md, section 12), with the key names of
     # the host's keyboard layout: AppKit's text input sources on macOS, Win32 on Windows, SDL on Linux.
-    list(APPEND _sources "${_controls}/mag_game_controls_prompts.cpp"
-        "${_controls}/mag_game_controls_prompts_runtime.cpp" "${_src}/player_prompt_labels.cpp")
+    list(APPEND _sources "${_controls}/mag_game_controls_prompts.cpp" "${_controls}/mag_game_controls_icons.cpp"
+        "${_controls}/mag_game_controls_prompts_runtime.cpp" "${_src}/player_prompt_labels.cpp"
+        "${_src}/player_prompt_keycap.cpp")
+    if(APPLE)
+        # The icon identities are SHA-256 digests; elsewhere the player settings already build it.
+        list(APPEND _sources "${_src}/player_sha256.cpp")
+    endif()
     if(_desktop STREQUAL "macos")
         list(APPEND _sources "${_src}/player_prompt_labels_macos.mm")
         set_source_files_properties("${_src}/player_prompt_labels_macos.mm" TARGET_DIRECTORY ${target}

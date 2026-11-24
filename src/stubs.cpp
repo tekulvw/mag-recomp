@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "player_sign_in_refusal.h"
 extern "C" void mag_load_queue_firmware(void);
 extern "C" void ppu_register_function(uint64_t, void (*)(ppu_context*));
 void mag_sre_func_210127CC(ppu_context*);
@@ -165,10 +166,37 @@ static void frontend_command_trace(ppu_context* ctx,const char* label,void(*orig
     }
     original(ctx);
 }
+// The game server refuses a bad ticket without a reason, and the game shows its generic error
+// screen once its connection times out. In the single-use ticket profile, an error screen that
+// follows a ticket sign-in within 60 s leaves a marker for the ticket refill, which asks the portal
+// why and keeps the note the supervisor shows after the game exits (player_sign_in.h).
+static const char* sign_in_watch_file() {
+    static const char* file=[]() -> const char* {
+        const char* refill=getenv("PS3RECOMP_NP_TICKET_REFILL");const char* path=getenv("PS3RECOMP_NP_TICKET_FILE");
+        return refill&&!strcmp(refill,"1")&&path&&*path?path:nullptr;
+    }();
+    return file;
+}
+static bool frontend_tracing() { static const bool on=getenv("MAG_TRACE_FRONTEND")!=nullptr; return on; }
+static void frontend_start_observe(ppu_context* ctx) {
+    if(const char* file=sign_in_watch_file()) {
+        const uint32_t args=uint32_t(ctx->gpr[4]),count=uint32_t(ctx->gpr[5]);
+        char screen[32]{};
+        if(count>=1 && job_marker_range(args,16) && vm_read32(args)==4) {
+            const uint64_t data=vm_read32(uint64_t(args)+8);
+            for(unsigned j=0;j+1<sizeof(screen) && job_marker_range(data+j,1);j++){const unsigned ch=vm_read8(data+j);if(!ch)break;screen[j]=char(ch);}
+        }
+        if(!strcmp(screen,"UI_Error") && mag::error_follows_sign_in(file)) {
+            mag::mark_refused_sign_in(file,screen);
+            fprintf(stderr,"[mag-net] error screen after a ticket sign-in: the game server refused it or never answered\n");
+        }
+    }
+    if(frontend_tracing()) frontend_command_trace(ctx,"start",func_002637C0);
+    else func_002637C0(ctx);
+}
 static void frontend_event_trace(ppu_context*c){frontend_command_trace(c,"event",func_00263AD0);}
 static void frontend_load_trace(ppu_context*c){frontend_command_trace(c,"load",func_00263458);}
 static void frontend_unload_trace(ppu_context*c){frontend_command_trace(c,"unload",func_002633E4);}
-static void frontend_start_trace(ppu_context*c){frontend_command_trace(c,"start",func_002637C0);}
 static void frontend_stop_trace(ppu_context*c){frontend_command_trace(c,"stop",func_0026374C);}
 
 static void startup_ui_trace(ppu_context* ctx) {
@@ -447,10 +475,12 @@ extern "C" void ps3_load_prx_modules(void) {
     if(getenv("MAG_TRACE_FRONTEND")) {
         const struct { uint32_t ea,word;void(*fn)(ppu_context*); } hooks[]={
             {0x00263AD0,0x2F850000,frontend_event_trace},{0x00263458,0x7C832378,frontend_load_trace},
-            {0x002633E4,0x7C832378,frontend_unload_trace},{0x002637C0,0x7C832378,frontend_start_trace},
-            {0x0026374C,0x7C832378,frontend_stop_trace}};
+            {0x002633E4,0x7C832378,frontend_unload_trace},{0x0026374C,0x7C832378,frontend_stop_trace}};
         for(const auto& h:hooks) if(job_marker_range(h.ea,4)&&vm_read32(h.ea)==h.word) ppu_register_function(h.ea,h.fn);
     }
+    // The start handler serves both the trace and the sign-in watch; installed for either.
+    if((frontend_tracing()||sign_in_watch_file()) && job_marker_range(0x002637C0,4) && vm_read32(0x002637C0)==0x7C832378)
+        ppu_register_function(0x002637C0,frontend_start_observe);
     if (getenv("MAG_TRACE_STARTUP_UI") && job_marker_range(0x0027268C,4) && vm_read32(0x0027268C)==0x38630070)
         ppu_register_function(0x0027268C,startup_ui_trace);
     if (getenv("MAG_TRACE_MOVIE") && job_marker_range(0x003CE224,4) && vm_read32(0x003CE224)==0x38800000 &&

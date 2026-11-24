@@ -151,9 +151,18 @@ NSError* error(const std::exception& e){return [NSError errorWithDomain:@"MAGCon
     NSNotificationCenter* center=NSNotificationCenter.defaultCenter;
     [_captureObservers addObject:[center addObserverForName:NSWindowDidResignKeyNotification object:self.view.window queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification*){[weakSelf cancelBindingCapture];}]];
     [_captureObservers addObject:[center addObserverForName:NSApplicationDidResignActiveNotification object:NSApp queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification*){[weakSelf cancelBindingCapture];}]];
-    _monitor=[NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskKeyDown|NSEventMaskKeyUp|NSEventMaskFlagsChanged|NSEventMaskLeftMouseDown|NSEventMaskLeftMouseUp|NSEventMaskRightMouseDown|NSEventMaskRightMouseUp|NSEventMaskOtherMouseDown|NSEventMaskOtherMouseUp handler:^NSEvent*(NSEvent* e){
+    _monitor=[NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskKeyDown|NSEventMaskKeyUp|NSEventMaskFlagsChanged|NSEventMaskLeftMouseDown|NSEventMaskLeftMouseUp|NSEventMaskRightMouseDown|NSEventMaskRightMouseUp|NSEventMaskOtherMouseDown|NSEventMaskOtherMouseUp|NSEventMaskScrollWheel handler:^NSEvent*(NSEvent* e){
         auto owner=weakSelf;if(!owner || !owner->_capturing)return e;
         if(e.window!=owner.view.window || (e.modifierFlags&NSEventModifierFlagCommand)){[owner cancelBindingCapture];return e;}
+        // A notch of the wheel binds wheel up or down, in the wheel's own direction (natural
+        // scrolling inverts what AppKit reports). Trackpad gestures (phased scrolls) are not a wheel.
+        if(e.type==NSEventTypeScrollWheel){
+            if(!owner->_captureController && e.phase==NSEventPhaseNone && e.momentumPhase==NSEventPhaseNone && e.scrollingDeltaY!=0){
+                const double y=e.isDirectionInvertedFromDevice?-e.scrollingDeltaY:e.scrollingDeltaY;
+                [owner acceptControl:{InputSource::Mouse,y>0?MouseWheelUp:MouseWheelDown}];
+            }
+            return nil;
+        }
         if(e.type==NSEventTypeKeyDown && e.keyCode==53){[owner cancelBindingCapture];return nil;}return nil;
     }];
     GCKeyboardInput* keyboard=GCKeyboard.coalescedKeyboard.keyboardInput;

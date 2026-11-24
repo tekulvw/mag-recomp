@@ -57,6 +57,9 @@ class DesktopCaptureCoreTests(unittest.TestCase):
     def test_clicks_do_not_reacquire_a_held_lock(self):
         self.run_case('click')
 
+    def test_wheel_steps_are_presses_and_releases_while_ready(self):
+        self.run_case('wheel')
+
 
 if __name__ == '__main__':
     unittest.main()

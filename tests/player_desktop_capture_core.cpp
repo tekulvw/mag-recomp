@@ -48,8 +48,10 @@ struct FakeEngine final : DesktopCaptureSink {
     std::set<PhysicalControl> down, blocked;
     std::set<PhysicalControl> active;  // accepted presses not yet released
     double dx = 0, dy = 0;
+    std::vector<PhysicalInputEvent> log;  // every event, in order
     void push_event(const PhysicalInputEvent& event) override {
         ++pushes;
+        log.push_back(event);
         const auto control = event.control;
         if (event.down) down.insert(control);
         else down.erase(control), active.erase(control);
@@ -361,6 +363,41 @@ void click_recapture() {
 }
 }  // namespace
 
+// Wheel steps are presses and immediate releases of the wheel codes, only while ready, from a
+// stamp taken while ready, at most MaxWheelSteps per report; nothing stays held.
+void wheel_steps() {
+    Fixture f;
+    f.core.mouse_wheel(2, 7, 100, f.core.stamp());
+    require(f.engine.log.size() == 4, "two steps are two presses and two releases");
+    for (size_t i = 0; i < 4; ++i) {
+        const auto& e = f.engine.log[i];
+        require(e.control == PhysicalControl{InputSource::Mouse, MouseWheelUp} && e.down == (i % 2 == 0) && e.device == 7,
+                "a wheel-up step is a press then a release of the wheel-up code");
+        if (i) require(e.time_ns > f.engine.log[i - 1].time_ns, "step events keep their order in time");
+    }
+    require(f.engine.down.empty(), "a wheel step leaves nothing held");
+    f.engine.log.clear();
+    f.core.mouse_wheel(-1, 7, 200, f.core.stamp());
+    require(f.engine.log.size() == 2 && f.engine.log[0].control.code == MouseWheelDown, "down is the wheel-down code");
+    f.engine.log.clear();
+    f.core.mouse_wheel(100, 7, 300, f.core.stamp());
+    require(f.engine.log.size() == size_t(2 * DesktopCaptureCore::MaxWheelSteps), "a burst is capped");
+    f.engine.log.clear();
+    const auto stale = f.core.stamp();
+    f.platform.focused = false;
+    f.core.refresh();
+    f.core.mouse_wheel(1, 7, 400, f.core.stamp());
+    f.platform.focused = true;
+    f.core.refresh();
+    f.core.mouse_wheel(1, 7, 500, stale);
+    f.core.mouse_wheel(0, 7, 600, f.core.stamp());
+    require(f.engine.log.empty(), "no steps while unfocused, from before the readiness change, or of size zero");
+    f.core.request_mouse(false);
+    f.core.refresh();
+    f.core.mouse_wheel(1, 7, 700, f.core.stamp());
+    require(f.engine.log.size() == 2, "the wheel counts in menus too (it is a button, not motion)");
+}
+
 int main(int argc, char** argv) {
     try {
         if (argc != 2) return 2;
@@ -376,6 +413,7 @@ int main(int argc, char** argv) {
         else if (which == "mouse-lock") mouse_lock();
         else if (which == "reacquire") reacquire_discards_warp_motion();
         else if (which == "click") click_recapture();
+        else if (which == "wheel") wheel_steps();
         else return 2;
         return 0;
     } catch (const std::exception& error) {
