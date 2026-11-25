@@ -62,9 +62,13 @@ jobs:
         run: cargo clippy --locked --offline --all-targets -- -D warnings
       - name: Tests
         run: cargo test --locked --offline
-      - name: Compiler cache statistics
+      - name: Compiler cache statistics and upload
         if: always() && env.SCCACHE_BIN != ''
-        run: '"$SCCACHE_BIN" --stop-server' # prints the job's final counters
+        uses: ./.github/actions/sccache
+        with:
+          upload: 'true'
+          access-key-id: ${{ secrets.SCCACHE_AWS_ACCESS_KEY_ID }}
+          secret-access-key: ${{ secrets.SCCACHE_AWS_SECRET_ACCESS_KEY }}
   native-edgegeom:
     # The opt-in native Edge geometry job's synthetic tests on the other two hosts; the python
     # jobs run them on Linux and macOS with the rest of the suite.
@@ -155,9 +159,13 @@ jobs:
         run: python -m unittest discover -s tests -t . -v
       - name: Tool self-tests
         run: python -m unittest discover -s tools -p 'test_*.py' -t . -v
-      - name: Compiler cache statistics
+      - name: Compiler cache statistics and upload
         if: always() && env.SCCACHE_BIN != ''
-        run: '"$SCCACHE_BIN" --stop-server' # prints the job's final counters
+        uses: ./.github/actions/sccache
+        with:
+          upload: 'true'
+          access-key-id: ${{ secrets.SCCACHE_AWS_ACCESS_KEY_ID }}
+          secret-access-key: ${{ secrets.SCCACHE_AWS_SECRET_ACCESS_KEY }}
 
   python-macos:
     # Apple Silicon is the supported target; several tests build macOS fixtures with clang.

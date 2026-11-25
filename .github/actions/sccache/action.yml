@@ -1,15 +1,21 @@
 name: Shared compiler cache (self-hosted Linux)
 description: >-
-  Start a pinned, hash-checked sccache (0.20.1) backed by the in-house S3 store and route
-  this job's later Rust and C/C++ compiles through it, so ephemeral runners stop
-  recompiling (and rewriting) the same objects on every job. Skipped on hosted
-  and non-Linux runners; without credentials or a reachable store it reports
-  why and the job compiles uncached. End the job with a step that runs
-  "$SCCACHE_BIN" --stop-server (it prints the counters) when SCCACHE_BIN is set.
+  Start a pinned, hash-checked sccache with two levels, local disk and the
+  in-house S3 store, and route this job's later Rust and C/C++
+  compiles through it, so ephemeral runners stop recompiling the same objects.
+  S3 is read-only while the job runs, so no compile waits for an upload; end
+  the job with this action again, upload 'true' and if always(), to send the
+  job's new entries to S3. Skipped on hosted and non-Linux runners; without
+  credentials or a reachable store it reports why and the job compiles uncached.
 inputs:
   prefix:
-    description: Key prefix in the bucket, one per repository and job (for example mag-recomp/tests-python)
-    required: true
+    description: Key prefix in the bucket, one per repository and job (for example mag-recomp/tests-python); required to start
+    required: false
+    default: ''
+  upload:
+    description: "'true' at the end of the job: stop the server, print its counters and send the job's new entries to S3"
+    required: false
+    default: 'false'
   access-key-id:
     description: The store's access key (secrets.SCCACHE_AWS_ACCESS_KEY_ID); empty turns the cache off
     required: false
@@ -36,7 +42,7 @@ runs:
   using: composite
   steps:
     - name: Start sccache
-      if: runner.environment == 'self-hosted' && runner.os == 'Linux'
+      if: inputs.upload != 'true' && runner.environment == 'self-hosted' && runner.os == 'Linux'
       shell: bash
       env:
         AWS_ACCESS_KEY_ID: ${{ inputs.access-key-id }}
@@ -46,3 +52,10 @@ runs:
         SCCACHE_SETUP_BUCKET: ${{ inputs.bucket }}
         SCCACHE_SETUP_WRAP: ${{ inputs.wrap-compilers }}
       run: bash "$GITHUB_ACTION_PATH/setup.sh"
+    - name: Upload new sccache entries
+      if: inputs.upload == 'true' && runner.environment == 'self-hosted' && runner.os == 'Linux'
+      shell: bash
+      env:
+        AWS_ACCESS_KEY_ID: ${{ inputs.access-key-id }}
+        AWS_SECRET_ACCESS_KEY: ${{ inputs.secret-access-key }}
+      run: bash "$GITHUB_ACTION_PATH/upload.sh"
