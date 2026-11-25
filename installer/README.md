@@ -66,7 +66,9 @@ Inside the installation location you chose:
 
 Each launch writes its logs to `MAG/logs/launch-*`: `launcher.log`, `engine.log`, `supervisor.log`,
 and the engine's session summaries (`session-launcher.json`, `session-engine.json`: frame pacing,
-slow frames, hitches and audio timing). When you have linked an account, MAG sends a performance and
+slow frames, hitches and audio timing). While the game runs, Windows File Explorer can list
+`engine.log` as 0 KB: Windows updates the listed size of a file another program is still writing
+only when that program closes it or the file is opened, so open the file to read it. When you have linked an account, MAG sends a performance and
 error report to that account's portal after a session that crashed, failed to start or ran badly, or
 when you press **Send report** in MAG Settings. Reports waiting to be sent are kept in
 `home/reports` inside the MAG folder. Turn reports off in MAG Settings → General → Reports. See
