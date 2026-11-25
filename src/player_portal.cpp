@@ -656,6 +656,8 @@ struct TicketRefill::State {
     std::string last_failure;  // the last fetch problem, for an expiry note
     std::string server_refusal;  // the game server refused a sign-in: kept until the session ends
     std::string portal_refusal;  // the portal refused the account (unlinked, banned...): kept until a ticket arrives
+    bool held = false;           // a ticket was in the file, so its absence means the game took it
+    unsigned long long taken = 0;
     std::thread worker;
 
     // Keep (or drop) the note for the player beside the ticket. A refusal outranks an expiry: once
@@ -681,6 +683,13 @@ struct TicketRefill::State {
         const long long lifetime = expires > now ? expires - now : 0;
         renew_at = expires > 0 ? expires - std::min(policy.renew_before_seconds, lifetime / 2) : 0;
     }
+    // The game took the ticket for a sign-in: a new stamp value (player_sign_in_refusal.h), written
+    // before the next ticket is fetched, so a waiting ticket always has its take stamped.
+    void stamp_taken() {
+        const auto at = std::chrono::system_clock::now().time_since_epoch().count();
+        std::string error;
+        write_private_file(mag::sign_in_taken_stamp(file), std::to_string(at) + "-" + std::to_string(++taken) + "\n", error);
+    }
     void run() {
         long long retry_at = 0;
         track(expires_at, clock());
@@ -692,12 +701,17 @@ struct TicketRefill::State {
             const long long now = clock();
             std::error_code code;
             bool present = fs::exists(fs::symlink_status(file, code));
+            if (!present && held) stamp_taken();
+            held = present;
             if (fs::exists(fs::symlink_status(mag::refused_sign_in_marker(file), code))) {
                 // The game's error screen followed a ticket sign-in: ask the portal why. A token
                 // it no longer accepts means link again; otherwise the server refused this sign-in.
                 fs::remove(mag::refused_sign_in_marker(file), code);
                 LaunchTicket check = fetch();
-                if (check.state == LaunchTicket::State::Ready) track(check.expires_at, now);
+                if (check.state == LaunchTicket::State::Ready) {
+                    track(check.expires_at, now);
+                    held = true;
+                }
                 server_refusal = check.status == Status::Unlinked || check.status == Status::Banned
                                      ? sign_in_notice(check.status, check.message)
                                      : "Your MAG sign-in was refused by the game server. Restart MAG to sign in again.";
@@ -708,7 +722,7 @@ struct TicketRefill::State {
             if (present && expires_at > 0 && now >= expires_at) {
                 // Expired while waiting and not replaced in time: never let the game present it.
                 fs::remove(file, code);
-                present = false;
+                present = held = false;
                 say("The waiting sign-in ticket expired before a fresh one arrived; it was removed.");
                 note(sign_in_notice(Status::Expired, last_failure), true);
             }
@@ -717,6 +731,7 @@ struct TicketRefill::State {
                 LaunchTicket ticket = fetch();
                 if (ticket.state == LaunchTicket::State::Ready) {
                     track(ticket.expires_at, now);
+                    held = true;  // even if the game takes it before the next poll
                     retry_at = 0;
                     ++fetched;
                     last_failure.clear();
@@ -753,6 +768,8 @@ TicketRefill::TicketRefill(fs::path file, long long expires_at, Fetch fetch, Rep
     state_->report = std::move(report);
     state_->policy = policy;
     state_->clock = clock ? std::move(clock) : Clock([] { return static_cast<long long>(std::time(nullptr)); });
+    std::error_code code;
+    state_->held = fs::exists(fs::symlink_status(state_->file, code));  // before the game can take it
     state_->worker = std::thread([s = state_.get()] { s->run(); });
 }
 
