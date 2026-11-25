@@ -99,9 +99,15 @@ std::string legacy_view_problem(const fs::path &view, const fs::path &source) {
         if (fs::is_directory(status)) continue;
         if (!fs::is_regular_file(status)) return relative.generic_string() + " is not an ordinary file";
         if (relative == fs::path(archive_path)) continue;  // the view's own rewritten archive
+        // A file with no other name exists only in the view: what the game wrote there (its system
+        // cache), or a copy. Removing it touches no other file.
+        const auto links = fs::hard_link_count(it->path(), error);
+        if (error) break;
+        if (links == 1) continue;
+        // Otherwise it must be the game's own file at the same place, which keeps its other names.
         const auto original = source / relative;
         if (!fs::is_regular_file(fs::symlink_status(original, error)) || !fs::equivalent(it->path(), original, error) || error)
-            return relative.generic_string() + " is not a link to the game's own file";
+            return relative.generic_string() + " shares its data with a file other than the game's own at that place";
     }
     return error ? "it cannot be read (" + error.message() + ")" : "";
 }

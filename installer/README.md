@@ -99,7 +99,8 @@ links to your original game folder, which is expected.
 
 MAG 0.9.0 and earlier also kept a second, linked view of all game files in
 `home/player/server/vfs`, which zip tools count at full size. The first launch after updating
-removes it once it has checked that it holds only links and its own archive; if the launch log
+removes it once it has checked that it holds nothing but the game's files at their places and
+files of its own; if the launch log
 says it was left in place, delete that folder yourself before zipping.
 
 Installers before this layout kept the build files inside the `MAG` folder, whose app read its game

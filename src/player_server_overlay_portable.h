@@ -22,10 +22,11 @@ OverlayResult create_server_overlay(const std::filesystem::path &source_root, co
 
 // Earlier versions kept a whole view of the game folder in <owned_root>/vfs: real folders, hard
 // links to the game files and the rewritten archive (and .vfs-* stages a stopped launch left).
-// Removes each such tree once every file in it is shown to be a link to the game file at the same
-// place under source_root, or the view's own archive; anything else (a copy, a symbolic link, a
-// file the game folder lacks) leaves that tree in place. Returns what it did for the log, or ""
-// when there was no old view.
+// Removes each such tree once every file in it is shown to be the game file at the same place
+// under source_root (a hard link), the view's own archive, or a file with no other name (what the
+// game wrote into the view, or a copy); anything else (a symbolic link, a link to some other file,
+// the game folder itself) leaves that tree in place. Returns what it did for the log, or "" when
+// there was no old view.
 std::string remove_legacy_server_view(const std::filesystem::path &source_root, const std::filesystem::path &owned_root);
 
 // The Lua appended to the retail settings member for this server (shared with tests).

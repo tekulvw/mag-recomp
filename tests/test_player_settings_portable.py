@@ -277,13 +277,22 @@ class PortablePlayerSettingsTests(unittest.TestCase):
             self.assertFalse(view.exists()); self.assertFalse(stage.exists())
             self.assertEqual({p: p.read_bytes() for p in vfs.rglob('*') if p.is_file()}, before)  # game files intact
             self.assertEqual((vfs / 'PS3_GAME/PARAM.SFO').stat().st_nlink, 1)
-            # A copy (an unzipped folder, say), a symbolic link or a file the game lacks: kept, and said.
-            for damage in ('copy', 'symlink', 'extra'):
+            # Files with no other name (the game's system cache written into the view, or copies left
+            # by unzipping an old folder) belong to the view alone: removed with it.
+            view = self.legacy_view(vfs, owned)
+            sibling = view / ARCHIVE.parent / 'other.asset'
+            sibling.unlink(); sibling.write_bytes(b'unchanged sibling')
+            (view / 'cache/index').parent.mkdir(); (view / 'cache/index').write_bytes(b'system cache')
+            self.assertIn(b'Removed the old private game view', self.run_driver('legacy', vfs, owned).stdout)
+            self.assertFalse(view.exists())
+            self.assertEqual({p: p.read_bytes() for p in vfs.rglob('*') if p.is_file()}, before)
+            # A symbolic link, or a link to some other file: kept, and said.
+            for damage in ('symlink', 'misplaced link'):
                 view = self.legacy_view(vfs, owned)
                 sibling = view / ARCHIVE.parent / 'other.asset'
-                if damage == 'copy': sibling.unlink(); sibling.write_bytes(b'unchanged sibling')
-                elif damage == 'symlink': sibling.unlink(); sibling.symlink_to(vfs / ARCHIVE.parent / 'other.asset')
-                else: (view / 'PS3_GAME/notes.txt').write_bytes(b'mine')
+                sibling.unlink()
+                if damage == 'symlink': sibling.symlink_to(vfs / ARCHIVE.parent / 'other.asset')
+                else: os.link(vfs / 'PS3_GAME/PARAM.SFO', sibling)
                 result = self.run_driver('legacy', vfs, owned)
                 self.assertIn(b'in place', result.stdout, damage); self.assertIn(b'delete it to free the space', result.stdout)
                 self.assertTrue(view.is_dir(), damage)
