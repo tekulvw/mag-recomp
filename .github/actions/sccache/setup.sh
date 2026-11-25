@@ -80,7 +80,8 @@ export SCCACHE_SKIP_CACHE_CHECK=1
 
 # The store must answer these credentials: 200 or 404 for an object under the prefix.
 # (A multi-level cache counts a refused read as a miss, so the counters cannot tell.)
-code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 --aws-sigv4 "aws:amz:$region:s3" \
+# curl retries a 503 (the NAS store's answer when busy) with a growing delay.
+code=$(curl -sS -o /dev/null -w '%{http_code}' --retry 5 --max-time 20 --aws-sigv4 "aws:amz:$region:s3" \
   --user "$AWS_ACCESS_KEY_ID:$AWS_SECRET_ACCESS_KEY" -I "$store/.sccache_check") || code=000
 case "$code" in
   200|404) ;;
