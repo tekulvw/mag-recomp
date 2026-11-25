@@ -80,6 +80,9 @@ class GameControlsAdapterTests(unittest.TestCase):
     def test_a_menu_holding_look_releases_the_mouse_lock_until_look_returns(self):
         self.run_scenario('menu')
 
+    def test_kbm_presses_show_on_raw_channel_values_on_foot_only(self):
+        self.run_scenario('raw-channels')
+
     def test_a_frame_withdrawn_by_another_thread_mid_recognition_is_left_to_the_game(self):
         self.run_scenario('withdrawn')
 

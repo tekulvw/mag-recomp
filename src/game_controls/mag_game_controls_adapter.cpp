@@ -267,6 +267,8 @@ struct MagGameControlsAdapter::State {
     std::map<uint32_t, HostCache> host_caches;
     std::map<uint32_t, SystemCache> system_caches;
     std::map<ActionId, ControlOffer> gameplay_receipts, system_receipts;
+    // 7.7: channel values written for keyboard and mouse presses: channel -> (before, written).
+    std::map<uint32_t, std::pair<float, float>> raw_written;
 
     MagGameControlsMouseAim latch;
     std::optional<MagMouseAimIdentity> latch_identity;
@@ -377,6 +379,7 @@ struct MagGameControlsAdapter::State {
     // 6.2.
     void cancel(const char* reason) {
         status = reason;
+        restore_raw_channels();
         reset_system_caches();
         reset_host_caches();
         last_context.reset();
@@ -403,8 +406,43 @@ struct MagGameControlsAdapter::State {
         }
     }
 
+    // 7.7: the input manager's value of a pad channel.
+    static uint64_t channel_value_address(uint32_t channel) { return uint64_t(InputManager) + 0x7E0 + 4ull * channel; }
+    // Put back what the game had in each channel this adapter pressed, where it still holds the
+    // adapter's value.
+    void restore_raw_channels() {
+        const auto written = std::exchange(raw_written, {});
+        auto r = guest.reads();
+        for (const auto& [channel, values] : written) {
+            const auto current = r.f32(channel_value_address(channel));
+            if (current && *current == values.second) r.write_f32(channel_value_address(channel), values.first);
+        }
+    }
+    // 7.7: show each keyboard or mouse press of a digital gameplay button on its channel value.
+    void present_raw_channels() {
+        if (!contract || !gameplay_eligible || profile.mode == InputMode::Controller || !sample_key) return;
+        auto r = guest.reads();
+        for (const auto& control : contract->controls) {
+            if (raw_written.count(control.channel) || mag_game_controls_look_token(control.token)) continue;
+            const ActionId action = mag_game_controls_token_action(control.token);
+            const auto* entry = mag_game_controls_action(action);
+            if (!entry || !entry->digital_controller || entry->system_channel >= 0 || entry->optional) continue;
+            const auto offer = mag_controls_offer(*sample_key, action);
+            constexpr uint32_t KeyboardMouse = 1u << unsigned(InputSource::Keyboard) | 1u << unsigned(InputSource::Mouse);
+            if (!offer || !offer->down || !(offer->source_mask & KeyboardMouse)) continue;
+            const auto tuning = r.u32(uint64_t(control.record) + RecordTuning);
+            const auto high = tuning && *tuning ? r.f32(uint64_t(*tuning) + 0x0C) : std::nullopt;
+            const auto current = r.f32(channel_value_address(control.channel));
+            if (!high || !current || !std::isfinite(*high) || *current >= *high) continue;
+            if (!r.write_f32(channel_value_address(control.channel), *high))
+                throw std::runtime_error("cannot write a channel value");
+            raw_written[control.channel] = {*current, *high};
+        }
+    }
+
     // 6.3.
     void retire() {
+        restore_raw_channels();
         if (sample_key && !frame_valid()) {
             reset_host_caches();
             clear_receipts();
@@ -821,6 +859,7 @@ struct MagGameControlsAdapter::State {
         // handler update to release again, so the lock flapped for as long as the menu stayed.
         if (mouse_capture) mouse_capture(gameplay_eligible && !look_held_by_menu && profile.mode != InputMode::Controller);
         attached_tick = tick;
+        present_raw_channels();
         status = gameplay_eligible ? "on-foot Rust input attached" : "native menu buttons attached";
         return true;
     }
@@ -964,7 +1003,10 @@ struct MagGameControlsAdapter::State {
         // Steps 5 to 7.
         const Tuning tune = read_tuning(*tuning);
         const bool preserve = !remapped && !kbm && frame->policy.controller_connected;
-        double value = preserve && !mouse_look ? native_value(tune, cpu.fpr[1]) : 0.0;
+        // A channel value this adapter wrote (7.7) is no native contribution: use what was there.
+        double raw = cpu.fpr[1];
+        if (const auto written = raw_written.find(*channel); written != raw_written.end()) raw = written->second.first;
+        double value = preserve && !mouse_look ? native_value(tune, raw) : 0.0;
         const bool native_contribution = preserve && value > 0;
         if (offer && offer->down && !mouse_look) value = 1.0;
         if (mouse_look) value = 0.0;

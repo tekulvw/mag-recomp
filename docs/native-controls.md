@@ -464,7 +464,8 @@ controller sample tracking (8.3); the profile and the pending profile.
 
 ### 6.2 Cancel (with a reason)
 
-Reset system caches (6.5) and host caches (6.4); forget the last semantic context; cancel the
+Put back the channel values written for keyboard and mouse presses (7.7); reset system caches
+(6.5) and host caches (6.4); forget the last semantic context; cancel the
 mouse latch; drop the actor-scope owner, handler-scope owner and frame; drop the channel contract;
 clear receipts; report the context unsupported (`mag_controls_set_supported_context(false)`);
 release engine input for a context change (`mag_controls_release_input(Context)`); release mouse
@@ -473,7 +474,8 @@ kept.
 
 ### 6.3 Retire
 
-When a sample key exists and the frame is missing or no longer valid
+Put back the channel values written for keyboard and mouse presses (7.7). When a sample key
+exists and the frame is missing or no longer valid
 (`mag_controls_frame_valid`): reset host caches and clear receipts. Then cancel the mouse latch,
 drop the frame and channel contract, retire the sample in the engine and drop the sample key.
 
@@ -750,6 +752,30 @@ Denial is remembered per camera so that the game finishes any assist motion it a
 - `AssistCleanupExit`: pop; when the scope is not empty, still associated and the record is clean,
   the entry is no longer dirty.
 - `AssistFrictionYaw` / `AssistFrictionPitch`: when the camera in r3 is denied, set f1 to 1.0.
+
+### 7.7 Raw channel values (KBM)
+
+Some of the game reads a pad button through the input manager's channel value (2.1: the float at
+`+0x7E0 + 4*channel`) rather than through a watched control. Observed: holding breath with a
+scoped rifle reads L3 that way. The player's handler watches only `sprint` on L3's channel, no
+other handler watches L3 while scoped, holding L3 while scoped does not start a sprint, and
+publishing Left Shift into the sprint control (7.3) does not hold breath. A keyboard or mouse
+press therefore also has to show on the channel value, as a pressed button does:
+
+- **When:** once per poll, as the sample is attached on foot (7.2 step 3, gameplay eligible),
+  outside Controller mode. Never in a menu: the keyboard pad serves menus (8.2).
+- **Which channels:** each channel of the channel contract (7.4) whose action is a digital
+  gameplay button (a catalog action a controller button may be remapped to, not a system button,
+  not situational, not movement or look) and whose engine offer in that frame is down with a
+  keyboard or mouse contributor.
+- **Value:** the tuning `high` (2.2) of the player's watched control on that channel, the value
+  of a fully pressed button; a channel already at or above it is left alone.
+- **Recognition:** where the adapter recognizes a control on such a channel (7.3), its native
+  contribution (step 6) uses the value the channel held before the write, so the press is not
+  counted twice.
+- **Release:** retire (6.3) and cancel (6.2) put back the value that was there before, wherever
+  the channel still holds the written value. The game's next poll rewrites every channel value
+  from the pad in any case.
 
 ## 8. Host input
 
