@@ -314,6 +314,11 @@ jobs:
         # Reads the installer, pins and tools but no MAG source: skipped for src/-only pull requests.
         if: needs.changes.outputs.installer_toolchain == 'true'
         run: python .github/scripts/linux_toolchain_smoke.py --runtime-sdk local/ps3recomp-runtime --work "$RUNNER_TEMP/linux-managed"
+      - uses: ./.github/actions/sccache
+        with:
+          prefix: mag-recomp/installer-linux
+          access-key-id: ${{ secrets.SCCACHE_AWS_ACCESS_KEY_ID }}
+          secret-access-key: ${{ secrets.SCCACHE_AWS_SECRET_ACCESS_KEY }}
       - name: Compile Linux runtime, MAG sources and supervisor (synthetic inputs)
         run: python .github/scripts/linux_native_check.py --runtime-sdk local/ps3recomp-runtime --ppu-sdk local/ps3recomp-lifter-dfa7073 --work "$RUNNER_TEMP/linux-native"
       - name: Replace the source placeholder with the generated kit manifest
@@ -348,6 +353,9 @@ jobs:
           if-no-files-found: error
           retention-days: 30
           compression-level: 0
+      - name: Compiler cache statistics
+        if: always() && env.SCCACHE_BIN != ''
+        run: '"$SCCACHE_BIN" --show-stats && "$SCCACHE_BIN" --stop-server'
 
   verify:
     name: Verify the installer set
