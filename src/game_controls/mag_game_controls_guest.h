@@ -21,6 +21,9 @@ constexpr uint32_t BaseHandlerVtable = 0x01A57350;
 // and the first deploy screen (docs/native-controls.md, 2.2). Never seen once the player spawned.
 constexpr uint8_t PreSpawnStateId = 0;
 constexpr uint32_t PreSpawnStateVtable = 0x01A6CE38;
+// The respawn screens after a death (docs/native-controls.md, 2.2): menus like the pre-spawn screens.
+constexpr uint8_t AwaitingSpawnStateId = 20;
+constexpr uint32_t AwaitingSpawnStateVtable = 0x01A6C2F8;
 constexpr uint32_t BaseUpdateEntry = 0x003A2C84, SharedToc = 0x01B35B20;
 constexpr uint32_t CameraVtable = 0x01A644E0;
 constexpr uint32_t CameraTarget = 0x22C, CameraAssistRecord = 0x1A0;
@@ -70,7 +73,9 @@ struct MagGuestOwner {
     uint32_t actor{}, logic{}, controller{}, handler{}, state{};
     uint8_t state_id{};
     bool enabled{}, mouse_supported{};
-    bool pre_spawn{};  // the movement state is the one before the first spawn (lobby, first deploy)
+    // The movement state is a spawn screen's: before the first spawn (lobby, first deploy) or awaiting
+    // a respawn after a death (the respawn bar, spawn map and loadout picker). Those screens are menus.
+    bool pre_spawn{};
     MagMouseAimState aim = MagMouseAimState::Basic;
     uint32_t handle() const { return generation << 16 | index; }
     friend bool operator==(const MagGuestOwner&, const MagGuestOwner&) = default;

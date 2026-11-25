@@ -76,6 +76,19 @@ traces on macOS and Windows). A traced hosted Sabotage on macOS (about 11 minute
 respawns) never showed it after the first spawn; downed, deploy and respawn screens use other
 states. The adapter treats the pre-spawn state as a menu (8.2).
 
+The **awaiting-spawn state** is id 20 with vtable `0x01A6C2F8`: the local player has it on every
+respawn screen after a death. That is the respawn bar (CHANGE SPAWN LOCATION, CHANGE LOADOUT, the
+squad respawn countdown) and the spawn map and loadout picker it opens. Lab traces of a hosted
+Sabotage on macOS (2026-11-25) show the state change to 20 when the game starts its spawn screen
+(`UI_SpawnHud`) after a death, and back to a basic movement state when it stops that screen at
+the respawn. The users' traces show it only around deaths. The respawn bar does not block
+gameplay and does not always take the look channels, so without this rule the adapter attached on
+foot there. The keyboard pad was then muted, so X did not reach the bar (#289 stopped the adapter
+pressing Confirm on foot), and the adapter took over the player's own controls on the Cross channel
+(Jump, Bleed out) while the bar read it. The adapter treats the awaiting-spawn state as a menu
+too (8.2), exactly as the pre-spawn state: on the respawn screens X is the pad's Cross and a
+controller's Cross reaches the game natively, as on the console.
+
 **Input handler** (base layout shared by every handler): `+0` vtable; watched-control list head at
 `+4` (nodes described below); `+0x38` u32 priority; `+0x3C` u32 slot; `+0x40` u8 enabled; `+0x44`
 u32 fixed channel mask; `+0x48` u32 mapped channel mask. The base handler vtable is `0x01A57350`.
@@ -568,7 +581,7 @@ since last seen, reset system and host caches, clear receipts and cancel the mou
      changed"), adopt the new owner, stop;
    - adopt the owner; keep the gameplay routes (or none); gameplay is eligible when gameplay routes
      exist, the contract was built, the owner's handler is enabled and the owner is not in the
-     pre-spawn movement state (2.2);
+     pre-spawn or awaiting-spawn movement state (2.2);
    - clear the channel map, gameplay and system receipts, mouse eligibility;
    - map each contract channel whose token is a look token or a catalog action (after aliases)
      that is not situational to that action; two different actions on one channel cancel ("ambiguous native action channel");
@@ -944,10 +957,12 @@ backends withhold from the window while it is owned (8.1).
 The **legacy keyboard pad** (the SDK's fixed key-to-button layout: X Cross, C Circle, Z Square,
 V Triangle, Return Start, Space Select, arrows the D-pad, W/A/S/D and I/J/K/L the sticks, Q/E, R/T
 and F/G the shoulders, triggers and stick buttons) is muted only while the keyboard is owned *and*
-this poll would attach on foot: the owner is enabled and not in the pre-spawn movement state (2.2),
+this poll would attach on foot: the owner is enabled and not in the pre-spawn or awaiting-spawn
+movement state (2.2),
 gameplay routes are available (5.4) and the channel contract builds (7.4). Otherwise, in an
 in-match menu that has a local player (the pre-battle lobby and the first deploy screen before the
-first spawn, the pause menu, the death and spawn-selection screens, any UI that blocks gameplay),
+first spawn, the respawn bar, spawn map and loadout picker after a death, the pause menu, any UI
+that blocks gameplay),
 the adapter attaches as
 Menu and routes the system buttons alone (Escape, Tab and the arrows), so the pad stays live
 (`mag_input_capture_set_keyboard_pad_live`) and the menu's other buttons work from the keyboard as

@@ -1032,6 +1032,39 @@ void menu_keyboard_pad() {
     h.m.put8(State + 0x10, 1);
     require(h.idle_tick() == Attached && pad_muted(), "spawning did not attach on foot");
 
+    // After a death the player waits on the respawn screens (the respawn bar, the spawn map, the
+    // loadout picker) in the awaiting-spawn movement state. They are menus too: X is the pad's Cross,
+    // and nothing the player presses on Cross's channel is taken over (a controller's Cross, or the
+    // pad's, reaches the respawn bar natively), even though the bar leaves gameplay routes and look.
+    h.m.put32(State, 0x01A6C2F8);
+    h.m.put8(State + 0x10, 20);
+    require(h.idle_tick() == "native menu buttons attached", "the respawn screen attached on foot");
+    require(owned() && !pad_muted(), "the respawn screen muted the legacy keyboard pad");
+    require(capture_on && !mouse_on, "the respawn screen took the mouse lock");
+    mag_controls_push_event({{InputSource::Keyboard, 44}, true, time_ns()});  // Space: Jump, on Cross's channel.
+    h.begin_tick();
+    h.enter_handler();
+    require(!h.recognize(Jump), "a gameplay key was taken over on the respawn screen");
+    h.end_poll();
+    h.enter_actor();
+    h.end_tick();
+    mag_controls_push_event({{InputSource::Keyboard, 44}, false, time_ns()});
+    // Escape still presses Start there (system buttons stay with the adapter).
+    mag_controls_push_event({{InputSource::Keyboard, 41}, true, time_ns()});
+    h.begin_tick();
+    h.enter_handler();
+    require(h.recognize(Start), "Escape did not press Start on the respawn screen");
+    h.end_poll();
+    h.enter_actor();
+    h.end_tick();
+    mag_controls_push_event({{InputSource::Keyboard, 41}, false, time_ns()});
+    // Only that exact state: id 20 under another vtable is not the awaiting-spawn state.
+    h.m.put32(State, BasicStateVtable);
+    require(h.idle_tick() == Attached && pad_muted(), "id 20 of another state was taken for the respawn screen");
+    // Respawning (a basic movement state) attaches on foot and mutes the pad again.
+    h.m.put8(State + 0x10, 1);
+    require(h.idle_tick() == Attached && pad_muted(), "respawning did not attach on foot");
+
     // A UI element of unknown type blocks gameplay: the same.
     ui_package(h.m, 1, true);
     ui_element(h.m, 0, 0x01A00000, 0x01A00040, true);
