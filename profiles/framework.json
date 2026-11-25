@@ -4,8 +4,8 @@
   "upstream": "https://github.com/sp00nznet/ps3recomp",
   "ps3recomp": {
     "runtime": {
-      "tag": "mag-recomp/runtime-2026.11.25-vfsoverlay",
-      "commit": "5327bd4362cb3d34de332152cfe92fd287aa7d21",
+      "tag": "mag-recomp/runtime-2026.11.25-joinrelease",
+      "commit": "75ef003b884128eab606c1cad06c4cbe0a5fbde8",
       "path": "local/ps3recomp-runtime"
     },
     "lifter-spu": {
@@ -35,13 +35,13 @@
     }
   },
   "allowed_runtime_revisions": [
-    "5327bd4362cb3d34de332152cfe92fd287aa7d21"
+    "75ef003b884128eab606c1cad06c4cbe0a5fbde8"
   ],
   "strict_runtime_revisions": [
-    "5327bd4362cb3d34de332152cfe92fd287aa7d21"
+    "75ef003b884128eab606c1cad06c4cbe0a5fbde8"
   ],
   "strict_hle_runtime_revisions": [
-    "5327bd4362cb3d34de332152cfe92fd287aa7d21"
+    "75ef003b884128eab606c1cad06c4cbe0a5fbde8"
   ],
   "first_nonblack_capture_revisions": [],
   "allowed_lifter_revisions": [
