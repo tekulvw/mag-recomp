@@ -19,6 +19,12 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 MEMBER = '/run/mag/ps3/settings/maglocalsettings.lua'
 ARCHIVE = pathlib.Path('PS3_GAME/USRDIR/run/mag/ps3/game.psarc.sdat')
 COMPILER = shutil.which('c++') or shutil.which('clang++') or shutil.which('g++')
+# A made-up settings member the driver's launch hook treats as the retail one.
+RETAIL_LIKE = b'MAGClientNetConfig = { UseNPTicket = true } -- synthetic\n'
+
+
+def files_under(folder):
+    return sorted(str(p.relative_to(folder)) for p in folder.rglob('*') if not p.is_dir())
 
 
 def synthetic_archive(script, compress=True):
@@ -46,8 +52,10 @@ class PortablePlayerSettingsTests(unittest.TestCase):
                    'src/player_server_overlay_portable.cpp', 'src/player_archive.cpp',
                    'src/player_inflate.cpp', 'src/player_sha256.cpp']
         # As Windows and Linux players build it: the Vulkan renderer, with rendering scale.
+        # The launch hook accepts the synthetic RETAIL_LIKE member as the retail one.
         result = subprocess.run([COMPILER, '-std=c++20', '-Wall', '-Wextra', '-Werror', '-DMAG_PLAYER_ARCHIVE_NO_ZLIB=1',
                                  '-DMAG_PLAYER_RENDER_SCALE_SUPPORTED=1',
+                                 '-DMAG_PLAYER_SETTINGS_MEMBER_SHA256="%s"' % hashlib.sha256(RETAIL_LIKE).hexdigest(),
                                  '-I' + str(ROOT / 'src'), '-I' + str(root), *[str(ROOT / s) for s in sources],
                                  '-o', str(cls.binary)], capture_output=True, text=True, timeout=120)
         if result.returncode:
@@ -189,13 +197,15 @@ class PortablePlayerSettingsTests(unittest.TestCase):
             original = (vfs / ARCHIVE).read_bytes()
             bad = self.run_driver('overlay', vfs, owned, '127.0.0.1', '0' * 64)
             self.assertEqual(bad.returncode, 1); self.assertTrue(bad.stdout.startswith(b'2\n'))  # archive error
-            self.assertIn(b'supported retail version', bad.stdout); self.assertFalse((owned / 'vfs').exists())
+            self.assertIn(b'supported retail version', bad.stdout); self.assertFalse((owned / 'overlay').exists())
             blank = self.run_driver('overlay', vfs, owned, '', sha)
-            self.assertEqual(blank.stdout.split(b'\n')[:2], [b'0', str(vfs).encode()])
+            self.assertEqual(blank.stdout.split(b'\n')[:2], [b'0', b''])
             good = self.run_driver('overlay', vfs, owned, '127.0.0.1', sha)
             self.assertEqual(good.returncode, 0, good.stdout)
             view = pathlib.Path(good.stdout.split(b'\n')[1].decode())
-            self.assertEqual(view, owned / 'vfs')
+            self.assertEqual(view, owned / 'overlay')
+            # Only the rewritten archive: the runtime reads every other file from the game folder.
+            self.assertEqual(files_under(view), [str(ARCHIVE)])
             _, _, extract, *_ = psarc.parse((view / ARCHIVE).read_bytes())
             text = extract(1)
             self.assertTrue(text.startswith(script))
@@ -204,10 +214,7 @@ class PortablePlayerSettingsTests(unittest.TestCase):
                 self.assertIn(line, text)
             self.assertEqual(extract(2), bytes(range(200)))
             self.assertEqual((vfs / ARCHIVE).read_bytes(), original)
-            sibling = view / ARCHIVE.parent / 'other.asset'
-            self.assertEqual(sibling.read_bytes(), b'unchanged sibling')
-            self.assertEqual(sibling.stat().st_ino, (vfs / ARCHIVE.parent / 'other.asset').stat().st_ino)  # a link, not a copy
-            self.assertFalse(sibling.is_symlink())
+            self.assertEqual((vfs / ARCHIVE.parent / 'other.asset').stat().st_nlink, 1)  # never linked or copied
             inode = (view / ARCHIVE).stat().st_ino
             self.assertEqual(self.run_driver('overlay', vfs, owned, '127.0.0.1', sha).returncode, 0)
             self.assertEqual((view / ARCHIVE).stat().st_ino, inode)  # reused
@@ -218,7 +225,12 @@ class PortablePlayerSettingsTests(unittest.TestCase):
             self.assertIn(b'"127.0.0.2"', psarc.parse((view / ARCHIVE).read_bytes())[2](1))
             self.assertEqual((vfs / ARCHIVE.parent / 'other.asset').read_bytes(), b'unchanged sibling')
             self.assertEqual((vfs / ARCHIVE).read_bytes(), original)
-            self.assertEqual(sorted(p.name for p in owned.iterdir()), ['server-overlay.txt', 'vfs'])
+            self.assertEqual(sorted(p.name for p in owned.iterdir()), ['overlay', 'server-overlay.txt'])
+            self.assertEqual(files_under(view), [str(ARCHIVE)])
+            # A stage a stopped launch left behind is cleared on the next build.
+            (owned / '.overlay-123').mkdir(); (owned / '.overlay-123/partial').write_bytes(b'x')
+            self.assertEqual(self.run_driver('overlay', vfs, owned, '127.0.0.3', sha).returncode, 0)
+            self.assertEqual(sorted(p.name for p in owned.iterdir()), ['overlay', 'server-overlay.txt'])
 
     def test_ticket_profile_overlay_keeps_np_tickets_on(self):
         # The engine is its own process with no launcher init to turn UseNPTicket on again: in the
@@ -234,11 +246,100 @@ class PortablePlayerSettingsTests(unittest.TestCase):
                                       (('ticket',), b'UseNPTicket = true')):
                 result = self.run_driver('overlay', vfs, owned, '127.0.0.1', sha, *profile)
                 self.assertEqual(result.returncode, 0, result.stdout)
-                text = psarc.parse((owned / 'vfs' / ARCHIVE).read_bytes())[2](1)
+                text = psarc.parse((owned / 'overlay' / ARCHIVE).read_bytes())[2](1)
                 self.assertTrue(text.startswith(script))
                 self.assertEqual(last_setting(text), expected)
                 marker = (owned / 'server-overlay.txt').read_text()
                 self.assertIn('connection_profile=' + ('portal-ticket-v1' if profile else 'community-no-ticket-v1'), marker)
+
+    def legacy_view(self, vfs, owned):
+        """The whole-folder view earlier versions built: real folders, hard links, the rewritten archive."""
+        view = owned / 'vfs'
+        for path in sorted(vfs.rglob('*')):
+            target = view / path.relative_to(vfs)
+            if path.is_dir(): target.mkdir(parents=True, exist_ok=True)
+            elif path.relative_to(vfs) == ARCHIVE: target.parent.mkdir(parents=True, exist_ok=True); target.write_bytes(b'rewritten')
+            else: target.parent.mkdir(parents=True, exist_ok=True); os.link(path, target)
+        (owned / 'server-overlay.txt').write_text('source=' + str(vfs) + '\n')
+        return view
+
+    def test_legacy_whole_folder_view_is_removed_only_when_it_holds_links(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp); vfs = self.vfs(root, RETAIL_LIKE); owned = root / 'owned'
+            before = {p: p.read_bytes() for p in vfs.rglob('*') if p.is_file()}
+            self.assertEqual(self.run_driver('legacy', vfs, owned).stdout.strip(), b'')  # nothing to do
+            view = self.legacy_view(vfs, owned)
+            stage = owned / '.vfs-42'; (stage / 'PS3_GAME').mkdir(parents=True); os.link(vfs / 'PS3_GAME/PARAM.SFO', stage / 'PS3_GAME/PARAM.SFO')
+            self.assertEqual((vfs / 'PS3_GAME/PARAM.SFO').stat().st_nlink, 3)
+            result = self.run_driver('legacy', vfs, owned)
+            self.assertEqual(result.returncode, 0)
+            self.assertIn(b'Removed the old private game view', result.stdout)
+            self.assertFalse(view.exists()); self.assertFalse(stage.exists())
+            self.assertEqual({p: p.read_bytes() for p in vfs.rglob('*') if p.is_file()}, before)  # game files intact
+            self.assertEqual((vfs / 'PS3_GAME/PARAM.SFO').stat().st_nlink, 1)
+            # Files with no other name (the game's system cache written into the view, or copies left
+            # by unzipping an old folder) belong to the view alone: removed with it.
+            view = self.legacy_view(vfs, owned)
+            sibling = view / ARCHIVE.parent / 'other.asset'
+            sibling.unlink(); sibling.write_bytes(b'unchanged sibling')
+            (view / 'cache/index').parent.mkdir(); (view / 'cache/index').write_bytes(b'system cache')
+            self.assertIn(b'Removed the old private game view', self.run_driver('legacy', vfs, owned).stdout)
+            self.assertFalse(view.exists())
+            self.assertEqual({p: p.read_bytes() for p in vfs.rglob('*') if p.is_file()}, before)
+            # A symbolic link, or a link to some other file: kept, and said.
+            for damage in ('symlink', 'misplaced link'):
+                view = self.legacy_view(vfs, owned)
+                sibling = view / ARCHIVE.parent / 'other.asset'
+                sibling.unlink()
+                if damage == 'symlink': sibling.symlink_to(vfs / ARCHIVE.parent / 'other.asset')
+                else: os.link(vfs / 'PS3_GAME/PARAM.SFO', sibling)
+                result = self.run_driver('legacy', vfs, owned)
+                self.assertIn(b'in place', result.stdout, damage); self.assertIn(b'delete it to free the space', result.stdout)
+                self.assertTrue(view.is_dir(), damage)
+                self.assertEqual({p: p.read_bytes() for p in vfs.rglob('*') if p.is_file()}, before)
+                shutil.rmtree(view)
+            # The game folder itself is never treated as a view, nor is a link to a folder.
+            elsewhere = root / 'elsewhere'; shutil.copytree(vfs, elsewhere / 'vfs')
+            self.assertIn(b'it is the game folder', self.run_driver('legacy', elsewhere / 'vfs', elsewhere).stdout)
+            self.assertEqual(files_under(elsewhere / 'vfs'), files_under(vfs))
+            linked = root / 'linked'; linked.mkdir(); (linked / 'vfs').symlink_to(vfs, target_is_directory=True)
+            self.assertIn(b'not an ordinary folder', self.run_driver('legacy', vfs, linked).stdout)
+            self.assertEqual({p: p.read_bytes() for p in vfs.rglob('*') if p.is_file()}, before)
+
+    def test_launch_hook_points_the_runtime_at_the_one_file_overlay(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp); vfs = self.vfs(root, RETAIL_LIKE)
+            settings = root / 'config/MAG/settings.json'; owned = root / 'owned'
+            settings.parent.mkdir(parents=True)
+            settings.write_text(json.dumps({'server_address': '127.0.0.1', 'player_name': 'Rook_7'}))
+            legacy = self.legacy_view(vfs, owned / 'server')
+            common = {'MAG_PLAYER_SETTINGS_PATH': str(settings), 'MAG_PLAYER_OVERLAY_ROOT': str(owned), 'PS3_VFS_ROOT': str(vfs)}
+            code, values, err = self.prepare(root, **common, MAG_PLAYER_SETUP='1', PS3_VFS_OVERLAY=str(root / 'stale'))
+            self.assertEqual(code, 0, err)
+            # The game folder stays the root; the overlay holds only the rewritten archive.
+            overlay = owned / 'server/overlay'
+            self.assertEqual((values['PS3_VFS_ROOT'], values['PS3_VFS_OVERLAY'], values['PS3_NET_ONLINE']),
+                             (str(vfs), str(overlay), '1'))
+            self.assertEqual(files_under(overlay), [str(ARCHIVE)])
+            self.assertIn(b'"127.0.0.1"', psarc.parse((overlay / ARCHIVE).read_bytes())[2](1))
+            # The upgrade removed the old whole-folder view, and only it.
+            self.assertFalse(legacy.exists()); self.assertIn('Removed the old private game view', err)
+            self.assertEqual((vfs / ARCHIVE).read_bytes(), synthetic_archive(RETAIL_LIKE))
+            self.assertEqual(files_under(owned / 'server'), ['overlay/' + str(ARCHIVE), 'server-overlay.txt'])
+            # The engine phase reuses it.
+            inode = (overlay / ARCHIVE).stat().st_ino
+            code, values, err = self.prepare(root, **common)
+            self.assertEqual((code, values['PS3_VFS_OVERLAY']), (0, str(overlay)), err)
+            self.assertEqual((overlay / ARCHIVE).stat().st_ino, inode)
+            # A server change rebuilds it; offline play uses no overlay at all, even an inherited one.
+            settings.write_text(json.dumps({'server_address': '127.0.0.2', 'player_name': 'Rook_7'}))
+            code, values, err = self.prepare(root, **common, MAG_PLAYER_SETUP='1')
+            self.assertEqual(code, 0, err)
+            self.assertIn(b'"127.0.0.2"', psarc.parse((overlay / ARCHIVE).read_bytes())[2](1))
+            settings.write_text(json.dumps({'server_address': '', 'player_name': 'Rook_7'}))
+            code, values, err = self.prepare(root, **common, MAG_PLAYER_SETUP='1', PS3_VFS_OVERLAY=str(overlay))
+            self.assertEqual((code, values['PS3_VFS_ROOT'], values['PS3_VFS_OVERLAY'], values['PS3_NET_ONLINE']),
+                             (0, str(vfs), '', ''), err)
 
     def prepare(self, root, **variables):
         env = {k: v for k, v in os.environ.items() if not k.startswith(('MAG_', 'PS3'))}

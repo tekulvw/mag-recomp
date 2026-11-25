@@ -80,6 +80,29 @@ they are copied. A **Retry build** reuses `MAG-build`. A build that ended, or an
 crashed, never blocks the next Build MAG there; only an installer that is still running does. Once MAG works you may delete `MAG-build` to reclaim
 space. The firmware module is only used to build, so it stays in `MAG-build`.
 
+### Backing up or zipping the MAG folder
+
+The `MAG` folder holds the game data once, in `game/`, so a zip or backup of the whole folder is
+about the size of your game files plus a few hundred MB for the app, saves and logs. Everything else
+the game needs is small: `home/gamedata` (saves and trophies), `home/player` (your launch settings
+and, with a server chosen, one rewritten settings archive of a few MB; see
+[Player settings](../docs/player-settings.md)) and `logs/`, which you may leave out.
+
+- **Windows:** use a zip tool that handles files over 4 GB (ZIP64), such as 7-Zip, or
+  `tar -a -c -f MAG.zip MAG` in a Command Prompt from the installation location.
+- **macOS:** Finder's **Compress "MAG"**, or `ditto -c -k --keepParent MAG MAG.zip`.
+- **Linux:** `zip -r MAG.zip MAG`, or `tar -czf MAG.tar.gz MAG`.
+
+Close MAG first. An unzipped or moved folder plays as it is: the first launch there rebuilds the
+small server overlay for the new location. Its `game/` files are then ordinary files rather than
+links to your original game folder, which is expected.
+
+MAG 0.9.0 and earlier also kept a second, linked view of all game files in
+`home/player/server/vfs`, which zip tools count at full size. The first launch after updating
+removes it once it has checked that it holds nothing but the game's files at their places and
+files of its own; if the launch log says it was left in place, delete that folder yourself before
+zipping.
+
 Installers before this layout kept the build files inside the `MAG` folder, whose app read its game
 files from there. Such a `MAG` folder keeps working as it is. Selecting the same location and
 clicking **Build MAG** moves it to the layout above without rebuilding: its finished launcher and
