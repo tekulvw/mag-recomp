@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.1](https://github.com/tekulvw/mag-recomp/compare/v0.10.0...v0.10.1) (2026-11-25)
+
+
+### Bug Fixes
+
+* **sdk:** pin runtime-2026.11.25-releasefetch so a loaded machine no longer freezes in a match ([#304](https://github.com/tekulvw/mag-recomp/issues/304)) ([0841d37](https://github.com/tekulvw/mag-recomp/commit/0841d37be720aa651c2d3f599991de913a74c3cc))
+
 ## [0.10.0](https://github.com/tekulvw/mag-recomp/compare/v0.9.0...v0.10.0) (2026-11-25)
 
 
