@@ -13,10 +13,13 @@
 # instead of the pinned download (for trying this script off Linux).
 set -uo pipefail
 
-VERSION=0.19.0
+# 0.8.2 on purpose: it is the last release whose server answers a cache miss
+# while the object is still being stored. From 0.9.0 the compile waits for the
+# S3 PUT, and the NAS-backed store takes seconds per PUT under CI load.
+VERSION=0.8.2
 ARCHIVE="sccache-v${VERSION}-x86_64-unknown-linux-musl"
-# The release asset's SHA-256 (GitHub's asset digest, checked against a download).
-SHA256=aa73c7270c997894038c0d8f0d297865f57569e1687883322bc431713d4bb9dd
+# The release's own .sha256 file, checked against a download.
+SHA256=ecda4ddc89a49f1ec6f35bdce5ecbf6f205b399a680d11119d4ce9f6d962104e
 
 dir="$RUNNER_TEMP/sccache"
 bin=''
