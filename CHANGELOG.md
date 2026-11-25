@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.10.0](https://github.com/tekulvw/mag-recomp/compare/v0.9.0...v0.10.0) (2026-11-25)
+
+
+### Features
+
+* **sdk:** keep only the rewritten settings archive for the server override ([#298](https://github.com/tekulvw/mag-recomp/issues/298)) ([4d01cfa](https://github.com/tekulvw/mag-recomp/commit/4d01cfaa3dcd8e00473fae69b042aa6cbb5bc96b))
+
+
+### Bug Fixes
+
+* **controls:** give input back to the game window while the settings window stays open ([#301](https://github.com/tekulvw/mag-recomp/issues/301)) ([ce4a9a8](https://github.com/tekulvw/mag-recomp/commit/ce4a9a801ff2804fdda2371864baa6e15d31c624))
+* **controls:** treat the respawn screens as menus so X and Cross select spawns ([#299](https://github.com/tekulvw/mag-recomp/issues/299)) ([1a8af82](https://github.com/tekulvw/mag-recomp/commit/1a8af82c6cc848a95af2348653b7463a202abaf9))
+* **player:** only call an error screen a refused sign-in before the sign-in completed ([#297](https://github.com/tekulvw/mag-recomp/issues/297)) ([cf751a1](https://github.com/tekulvw/mag-recomp/commit/cf751a118094532d6ee6cb7dc046c4e1ef5aa092))
+* **sdk:** pin runtime-2026.11.25-joinrelease so a long session can still load maps ([#302](https://github.com/tekulvw/mag-recomp/issues/302)) ([6f22f9d](https://github.com/tekulvw/mag-recomp/commit/6f22f9dfe8884a39a021609793d336a273099a18))
+
 ## [0.9.0](https://github.com/tekulvw/mag-recomp/compare/v0.8.0...v0.9.0) (2026-11-24)
 
 
