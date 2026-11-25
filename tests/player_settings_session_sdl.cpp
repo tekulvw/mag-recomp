@@ -7,7 +7,9 @@
 // (mag_player_settings_window_command) runs with a stand-in for the window itself: it sends the
 // game a display preview and saved controls over the events pipe, stepping when the game side
 // writes a "go" file, then closes without keeping the preview. The game side checks the output
-// size at attach, F10, the input hold, the preview applied by the pump and its restore.
+// size at attach, F10, the input hold (only while the game window does not have the focus: the
+// player can click back into the game with the settings window still open), the preview applied by
+// the pump and its restore.
 #include "player_settings_session.h"
 #include "player_settings_window.h"
 #include "mag_extension.h"
@@ -75,6 +77,14 @@ void f10(bool repeat = false, Uint32 id = 0) {
     event.key.keysym.sym = SDLK_F10;
     SDL_PushEvent(&event);
 }
+// The window system moving the keyboard focus to or from a window (the game window by default).
+void focus(bool gained, Uint32 id = 0) {
+    SDL_Event event{};
+    event.type = SDL_WINDOWEVENT;
+    event.window.windowID = id ? id : SDL_GetWindowID(window);
+    event.window.event = gained ? SDL_WINDOWEVENT_FOCUS_GAINED : SDL_WINDOWEVENT_FOCUS_LOST;
+    SDL_PushEvent(&event);
+}
 // The SDK's window pump: poll every event, then the per-pump seam.
 void pump() {
     SDL_Event event;
@@ -113,10 +123,30 @@ void run() {
     pump();
     require(!mag_player_settings_is_open(), "an auto-repeat or another window's F10 opens nothing");
     f10();
+    focus(false);  // the settings window comes forward with the keyboard
     pump();
     require(mag_player_settings_is_open() && g_blocked == 1, "F10 opens the window and holds gameplay input");
     f10();
     pump();  // a second F10 while it is open starts no second window (it would fail: no go files)
+
+    // The player clicks back into the game with the settings window still open: the game takes its
+    // input again at once, and the settings window taking the focus back holds it again. Another
+    // window's focus changes nothing.
+    focus(true);
+    pump();
+    require(mag_player_settings_is_open() && g_blocked == 0, "the focused game window plays while the settings window stays open");
+    focus(false, SDL_GetWindowID(window) + 100);
+    pump();
+    require(g_blocked == 0, "another window's focus change leaves the game's input alone");
+    focus(false);
+    pump();
+    require(g_blocked == 1, "the game window losing the focus holds gameplay input again");
+    focus(true);
+    pump();
+    require(g_blocked == 0, "and the game window's focus gives it back again");
+    focus(false);
+    pump();
+    require(g_blocked == 1, "held while the settings window has the focus");
 
     // The window previews a resolution: the game's own pump applies it to the game window.
     require(pump_until([] { return size_is(320, 240); }), "the preview's windowed size reaches the game window");

@@ -4,8 +4,10 @@
  * the game window's thread, message pump or SDL event queue, and the game, an online match
  * included, keeps running behind it:
  * - in game, F10 in the game window opens it (mag_player_settings_open); gameplay input is held
- *   while it is open, and saved controls apply to the running game when it closes. Connection
- *   and display changes apply at the next launch.
+ *   while it is open and the game window does not have the focus, and is live again whenever the
+ *   game window has it (the window's pump seams below report that every frame). Saved controls
+ *   apply to the running game when the window saves them. Connection and display changes apply
+ *   at the next launch.
  * - before the game starts, setup (with Play MAG): on Windows the packaged supervisor opens it at
  *   every launch (`MagEngine --mag-player-settings-setup`) and sets MAG_SKIP_SETUP for the
  *   launcher; elsewhere the launcher opens it on the first launch (mag_player_settings_setup).
@@ -36,11 +38,15 @@ int mag_player_settings_setup_wanted(int settings_exist);
 /* The game window as it is attached: kept for the settings window's display preview, and sized to
  * the saved output resolution (MAG_PLAYER_OUTPUT_SIZE, set by the launch settings) when windowed. */
 void mag_player_settings_win32_window(void* window);
+/* The game window's pump, every frame, before the desktop capture backend: whether the game
+ * window has the focus, which decides the input hold while the settings window is open. */
+void mag_player_settings_win32_pump(void);
 /* One message of the game window's pump; nonzero when it was F10 and has been handled. F10 is
  * otherwise the Windows menu key, and its default handling would stall the game window. */
 int mag_player_settings_win32_message(const void* msg);
 #else
-/* The SDL game window's pump, after its events are polled (NULL when the window goes). */
+/* The SDL game window's pump, after its events are polled (NULL when the window goes): F10, the
+ * display preview, and whether the game window has the focus (the input hold, as on Windows). */
 void mag_player_settings_sdl_pump(void* sdl_window);
 #endif
 
