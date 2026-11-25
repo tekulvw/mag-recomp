@@ -319,6 +319,8 @@ jobs:
           prefix: mag-recomp/installer-linux
           access-key-id: ${{ secrets.SCCACHE_AWS_ACCESS_KEY_ID }}
           secret-access-key: ${{ secrets.SCCACHE_AWS_SECRET_ACCESS_KEY }}
+          # The synthetic runtime/MAG compile below takes the launcher (linux_native_check.py).
+          cmake-launchers: 'true'
       - name: Compile Linux runtime, MAG sources and supervisor (synthetic inputs)
         run: python .github/scripts/linux_native_check.py --runtime-sdk local/ps3recomp-runtime --ppu-sdk local/ps3recomp-lifter-dfa7073 --work "$RUNNER_TEMP/linux-native"
       - name: Replace the source placeholder with the generated kit manifest

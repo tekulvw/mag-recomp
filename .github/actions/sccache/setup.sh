@@ -8,7 +8,7 @@
 # Inputs (environment): AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, SCCACHE_SETUP_PREFIX
 # (the job's key prefix), SCCACHE_SETUP_ENDPOINT, SCCACHE_SETUP_BUCKET,
 # SCCACHE_SETUP_WRAP ('true': put cc/c++/gcc/g++/clang/clang++ wrappers first on
-# PATH instead of setting the CMake launchers), and GITHUB_ENV, GITHUB_PATH and
+# PATH), SCCACHE_SETUP_CMAKE ('true': set the CMake compiler launchers), and GITHUB_ENV, GITHUB_PATH and
 # RUNNER_TEMP from the runner. SCCACHE_SETUP_BINARY uses an existing sccache
 # instead of the pinned download (for trying this script off Linux).
 set -uo pipefail
@@ -108,7 +108,7 @@ if [ "${SCCACHE_SETUP_WRAP:-false}" = true ]; then
     echo "wrapped $name -> $real"
   done
   echo "$wrap" >> "$GITHUB_PATH"
-else
+elif [ "${SCCACHE_SETUP_CMAKE:-false}" = true ]; then
   {
     echo "CMAKE_C_COMPILER_LAUNCHER=$bin"
     echo "CMAKE_CXX_COMPILER_LAUNCHER=$bin"

@@ -18,10 +18,18 @@ inputs:
     description: The store's secret key (secrets.SCCACHE_AWS_SECRET_ACCESS_KEY); empty turns the cache off
     required: false
     default: ''
+  cmake-launchers:
+    description: >-
+      'true' also sets CMAKE_C/CXX_COMPILER_LAUNCHER for the rest of the job. Off by default: every
+      CMake configure then runs its compiler checks through the cache, and a miss waits for the
+      store's write, which pushed configure-only unit tests past their timeouts. Turn it on only
+      for steps that build real sources. RUSTC_WRAPPER is set either way.
+    required: false
+    default: 'false'
   wrap-compilers:
     description: >-
       'true' puts cc/c++/gcc/g++/clang/clang++ wrappers first on PATH, for jobs whose tests call the
-      compiler by name; otherwise CMAKE_C/CXX_COMPILER_LAUNCHER are set. RUSTC_WRAPPER is set either way.
+      compiler by name (it implies every compile in the job goes through the cache).
     required: false
     default: 'false'
   endpoint:
@@ -45,4 +53,5 @@ runs:
         SCCACHE_SETUP_ENDPOINT: ${{ inputs.endpoint }}
         SCCACHE_SETUP_BUCKET: ${{ inputs.bucket }}
         SCCACHE_SETUP_WRAP: ${{ inputs.wrap-compilers }}
+        SCCACHE_SETUP_CMAKE: ${{ inputs.cmake-launchers }}
       run: bash "$GITHUB_ACTION_PATH/setup.sh"
