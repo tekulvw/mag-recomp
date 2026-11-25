@@ -70,6 +70,7 @@ void osk_native_win32_pump(void) {
 }
 // The settings window's seams (player_settings_session.h): the game window, and F10.
 void mag_player_settings_win32_window(void* window) { calls += std::string("settings-window(") + (window ? "w" : "0") + ");"; }
+void mag_player_settings_win32_pump(void) { calls += "settings-pump;"; }
 int mag_player_settings_win32_message(const void* message) {
     calls += "settings-message;";
     return *static_cast<const int*>(message) == 121;  // stands in for an F10 message
@@ -154,7 +155,9 @@ void window() {
             "the backend hears of the window first, so it lets the cursor go before the window goes");
     calls.clear();
     mag_player_win32_pump();
-    require(calls == "osk-pump;capture-pump(1);", "the keyboard's pump runs first; the backend gets its dialog flag");
+    require(calls == "settings-pump;osk-pump;capture-pump(1);",
+            "the settings window's input hold follows the game window's focus before the backend refreshes; "
+            "the keyboard's pump runs next; the backend gets its dialog flag");
     calls.clear();
     int msg = 0;
     osk_handles = 1;

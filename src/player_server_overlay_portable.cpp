@@ -73,7 +73,7 @@ std::string ipv4(const std::string &host) {
 }
 
 std::string identity(const fs::path &source, const mag::ServerChoice &choice, const std::string &member) {
-    return "source=" + source.generic_string() + "\nserver_address=" + choice.server_address +
+    return "layout=runtime-file-overlay-v1\nsource=" + source.generic_string() + "\nserver_address=" + choice.server_address +
            "\ntcp_port=" + std::to_string(choice.tcp_port) + "\nudp_port=" + std::to_string(choice.udp_port) +
            "\nmember_sha256=" + member + "\nconnection_profile=" +
            (choice.np_ticket ? "portal-ticket-v1" : "community-no-ticket-v1") + "\n";
@@ -86,21 +86,62 @@ std::string read_text(const fs::path &path) {
     return std::string(bytes.begin(), bytes.end());
 }
 
-// A directory tree of real directories and hard links: removing it never follows into the game files.
-void mirror(const fs::path &source, const fs::path &target, const fs::path &skip) {
-    for (auto it = fs::recursive_directory_iterator(source); it != fs::recursive_directory_iterator(); ++it) {
-        const auto relative = it->path().lexically_relative(source);
-        const auto destination = target / relative;
-        const auto status = it->symlink_status();
-        if (fs::is_directory(status)) { fs::create_directory(destination); continue; }
-        if (relative == skip) continue;
-        require(fs::is_regular_file(status), "The game folder holds an unsupported entry: " + relative.generic_string());
-        std::error_code error;
-        fs::create_hard_link(it->path(), destination, error);
-        require(!error, "The private game view could not be linked (" + error.message() +
-                        "). Keep MAG and its game files on the same drive.");
+// Why a tree from an earlier version cannot be shown to hold only links to the game files and
+// its own archive, or "" when it can. Nothing is followed: a symbolic link is itself a refusal.
+std::string legacy_view_problem(const fs::path &view, const fs::path &source) {
+    std::error_code error;
+    if (fs::equivalent(view, source, error) || error) return error ? "the game folder cannot be checked" : "it is the game folder";
+    for (auto it = fs::recursive_directory_iterator(view, error); !error && it != fs::recursive_directory_iterator();
+         it.increment(error)) {
+        const auto relative = it->path().lexically_relative(view);
+        const auto status = it->symlink_status(error);
+        if (error) break;
+        if (fs::is_directory(status)) continue;
+        if (!fs::is_regular_file(status)) return relative.generic_string() + " is not an ordinary file";
+        if (relative == fs::path(archive_path)) continue;  // the view's own rewritten archive
+        // A file with no other name exists only in the view: what the game wrote there (its system
+        // cache), or a copy. Removing it touches no other file.
+        const auto links = fs::hard_link_count(it->path(), error);
+        if (error) break;
+        if (links == 1) continue;
+        // Otherwise it must be the game's own file at the same place, which keeps its other names.
+        const auto original = source / relative;
+        if (!fs::is_regular_file(fs::symlink_status(original, error)) || !fs::equivalent(it->path(), original, error) || error)
+            return relative.generic_string() + " shares its data with a file other than the game's own at that place";
     }
+    return error ? "it cannot be read (" + error.message() + ")" : "";
 }
+}
+
+std::string mag::remove_legacy_server_view(const fs::path &source_root, const fs::path &owned_root) {
+    std::error_code error;
+    if (source_root.empty() || owned_root.empty() || !fs::is_directory(fs::symlink_status(owned_root, error))) return {};
+    std::vector<fs::path> views;
+    for (auto it = fs::directory_iterator(owned_root, error); !error && it != fs::directory_iterator(); it.increment(error)) {
+        const auto name = it->path().filename().string();
+        if (name == "vfs" || name.rfind(".vfs-", 0) == 0) views.push_back(it->path());
+    }
+    std::string report;
+    const auto source = fs::absolute(source_root, error).lexically_normal();
+    for (const auto &view : views) {
+        if (!report.empty()) report += " ";
+        if (!fs::is_directory(fs::symlink_status(view, error))) {
+            report += "Left " + view.string() + " in place: it is not an ordinary folder.";
+            continue;
+        }
+        const auto problem = legacy_view_problem(view, source);
+        if (!problem.empty()) {
+            report += "Left the old private game view " + view.string() + " in place: " + problem +
+                      ". MAG no longer uses it; delete it to free the space.";
+            continue;
+        }
+        // Only folders, links and the view's archive: removing them never touches the game files.
+        fs::remove_all(view, error);
+        report += error ? "Could not remove the old private game view " + view.string() + " (" + error.message() + ")."
+                        : "Removed the old private game view " + view.string() + "; the game files were not touched.";
+        error.clear();
+    }
+    return report;
 }
 
 std::string mag::server_override_text(const std::string &host, int tcp_port, int udp_port, bool np_ticket) {
@@ -115,17 +156,21 @@ std::string mag::server_override_text(const std::string &host, int tcp_port, int
 
 mag::OverlayResult mag::create_server_overlay(const fs::path &source_root, const fs::path &owned_root,
                                               const ServerChoice &choice, const std::string &expected_member_sha256) {
-    if (choice.server_address.empty()) return {OverlayStatus::NotNeeded, source_root, {}};
+    if (choice.server_address.empty()) return {OverlayStatus::NotNeeded, {}, {}};
     fs::path stage;
     try {
         require(!source_root.empty() && !owned_root.empty(), "The private server overlay location is unavailable.");
         const auto source = fs::absolute(source_root).lexically_normal();
-        const auto destination = owned_root / "vfs", marker = owned_root / "server-overlay.txt";
+        const auto destination = owned_root / "overlay", marker = owned_root / "server-overlay.txt";
         const auto relative_archive = fs::path(archive_path);
         const auto wanted = identity(source, choice, expected_member_sha256);
         std::error_code error;
         fs::create_directories(owned_root, error);
         require(!error && fs::is_directory(fs::symlink_status(owned_root)), "The private server overlay folder could not be created.");
+        // Stages a stopped launch left hold only this overlay's own files.
+        for (auto it = fs::directory_iterator(owned_root, error); !error && it != fs::directory_iterator(); it.increment(error))
+            if (it->path().filename().string().rfind(".overlay-", 0) == 0) { std::error_code ignored; fs::remove_all(it->path(), ignored); }
+        error.clear();
         const auto existing = fs::symlink_status(destination, error);
         if (fs::exists(existing)) {
             require(fs::is_directory(existing), "The private server overlay is not an ordinary folder.");
@@ -134,7 +179,7 @@ mag::OverlayResult mag::create_server_overlay(const fs::path &source_root, const
             if (text.rfind(wanted, 0) == 0 && fs::is_regular_file(fs::symlink_status(target, error)) &&
                 text.substr(wanted.size()) == "archive_sha256=" + sha(read_all(target, archive_limit)) + "\n")
                 return {OverlayStatus::Ready, destination, {}};
-            // A view for other settings, or a changed one: it holds only folders and links, so drop it.
+            // An overlay for other settings, or a changed one: it holds only its own archive, so drop it.
             fs::remove(marker, error);
             fs::remove_all(destination);
         }
@@ -161,9 +206,9 @@ mag::OverlayResult mag::create_server_overlay(const fs::path &source_root, const
         auto changed = mag::rewrite_psarc_member(archive, settings_member, replacement);
 
         std::random_device random;
-        stage = owned_root / (".vfs-" + std::to_string(random()) + std::to_string(random()));
+        stage = owned_root / (".overlay-" + std::to_string(random()) + std::to_string(random()));
         require(fs::create_directory(stage), "The private server overlay could not be staged.");
-        mirror(source, stage, relative_archive);
+        fs::create_directories(stage / relative_archive.parent_path());
         write_new(stage / relative_archive, std::string(changed.bytes.begin(), changed.bytes.end()));
         write_new(marker, wanted + "archive_sha256=" + sha(changed.bytes) + "\n");
         fs::rename(stage, destination);

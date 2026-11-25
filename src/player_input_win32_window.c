@@ -6,7 +6,9 @@
  * on-screen keyboard's own function, unchanged:
  * - attaching or detaching the window tells the settings window's seam (the display preview and
  *   the saved output size) and then the backend (it releases the cursor before the window goes);
- * - the per-pump call runs the keyboard's pump, then the backend with the keyboard's dialog flag;
+ * - the per-pump call tells the settings window's seam whether the game window has the focus (it
+ *   holds gameplay input while the settings window is open and the game window lacks it), then
+ *   runs the keyboard's pump, then the backend with the keyboard's dialog flag;
  * - the per-message call lets the backend observe the message first. It only ever withholds a
  *   press of Escape that the window would treat as quit (unless a dialog owns the keyboard), and
  *   the messages that would put the window in its menu mode (a lone Alt released, Alt with a
@@ -30,6 +32,7 @@ void mag_player_win32_set_window(void* window)
 
 void mag_player_win32_pump(void)
 {
+    mag_player_settings_win32_pump();
     osk_native_win32_pump();
     mag_input_desktop_win32_pump(osk_native_win32_input_active());
 }

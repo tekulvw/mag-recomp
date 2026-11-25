@@ -526,7 +526,11 @@ static void refill(const fs::path &scratch) {
         CHECK(!mag::error_follows_sign_in(file, -1));  // a ticket older than the window: unrelated
         {
             TicketRefill refill(file, now + 3600, fetch, {}, policy, [&] { return now.load(); });
-            mag::mark_refused_sign_in(file, "UI_Error");
+            // The game took the ticket at its sign-in screen and showed its error screen before the
+            // main menu: a refused sign-in.
+            mag::SignInProgress game(file);
+            CHECK(game.screen_started("UI_Character_Master") == mag::ErrorScreen::None);
+            CHECK(game.screen_started("UI_Error") == mag::ErrorScreen::SignInRefused);
             const std::string expected = "Your MAG sign-in was refused by the game server. Restart MAG to sign in again.\n";
             for (int waited = 0; read(policy.notice_file) != expected && waited < kWait; waited += 5)
                 std::this_thread::sleep_for(std::chrono::milliseconds(5));
@@ -550,6 +554,55 @@ static void refill(const fs::path &scratch) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(5));
         }
         CHECK(take_sign_in_notice(file, text) && text.find("Link your account again in MAG Settings") != std::string::npos);
+    }
+    {   // an error screen after the sign-in completed (the main menu, then a match) is a lost
+        // connection, not a refusal: no marker and no note, even right after a refill
+        std::error_code ignored; fs::remove(file, ignored); fs::remove(policy.notice_file, ignored);
+        fs::remove(mag::sign_in_taken_stamp(file), ignored);
+        CHECK(write_private_file(file, "MAGT-launch", error));
+        auto taken_within = [&](const std::string &before) {
+            for (int waited = 0; waited < kWait; waited += 5) {
+                if (mag::latest_sign_in_taken(file) != before && fs::exists(file, ignored)) return true;
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            }
+            return false;
+        };
+        {
+            TicketRefill refill(file, now + 3600, fetch, {}, policy, [&] { return now.load(); });
+            mag::SignInProgress game(file);
+            using mag::ErrorScreen;
+            for (const char *screen : {"UI_Legal", "UI_Splash", "UI_Frontend_Background_Animation", "UI_Character_Master"})
+                CHECK(game.screen_started(screen) == ErrorScreen::None);
+            std::string got, stamp = mag::latest_sign_in_taken(file);
+            CHECK(take_within(file, got, kWait) && got == "MAGT-launch");  // the sign-in
+            CHECK(taken_within(stamp));  // stamped, and a fresh ticket waits
+            stamp = mag::latest_sign_in_taken(file);
+            for (const char *screen : {"UI_MainMenu", "UI_PlayerCard", "UI_Deploy", "UI_Pre_Battle", "UI_Load", "UI_SpawnHud",
+                                       "UI_HUD_MASTER", "HUD_MiniMap"})
+                CHECK(game.screen_started(screen) == ErrorScreen::None);
+            CHECK(mag::error_follows_sign_in(file));  // a ticket written just now: the old rule called this a refusal
+            CHECK(game.screen_started("UI_Error") == ErrorScreen::ConnectionLost);
+            CHECK(!fs::exists(mag::refused_sign_in_marker(file), ignored));
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            CHECK(!fs::exists(policy.notice_file, ignored));
+            // Back to the front end and a sign-in again (a return to the lobby): refused before the
+            // main menu, so the marker and the note follow.
+            for (const char *screen : {"UI_Splash", "UI_Character_Master"}) CHECK(game.screen_started(screen) == ErrorScreen::None);
+            CHECK(take_within(file, got, kWait));
+            CHECK(taken_within(stamp));
+            CHECK(game.screen_started("UI_Error") == ErrorScreen::SignInRefused);
+            const std::string expected = "Your MAG sign-in was refused by the game server. Restart MAG to sign in again.\n";
+            for (int waited = 0; read(policy.notice_file) != expected && waited < kWait; waited += 5)
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            CHECK(read(policy.notice_file) == expected);
+        }
+        std::string text;
+        CHECK(take_sign_in_notice(file, text) && text.find("refused by the game server") != std::string::npos);
+        {   // an error screen with neither a completed sign-in nor a recent one: nothing to say
+            mag::SignInProgress game(file);
+            CHECK(game.screen_started("UI_Error", -1) == mag::ErrorScreen::None);
+            CHECK(!fs::exists(mag::refused_sign_in_marker(file), ignored));
+        }
     }
     {   // unlinked mid-session, then the last ticket expires: the note still says to link again
         std::error_code ignored; fs::remove(file, ignored); fs::remove(policy.notice_file, ignored);

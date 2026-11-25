@@ -24,8 +24,12 @@
 namespace fs = std::filesystem;
 
 namespace {
-// Retail v1.0 identity of the settings member, as on macOS (not game content).
-const char *const member_sha256 = "220ea0f1cfff8dfac86d4ea72fb68200a092304cbf51a1a3046fcf4783af8cfe";
+// Retail v1.0 identity of the settings member, as on macOS (not game content). The synthetic tests
+// build with their own made-up member's identity.
+#ifndef MAG_PLAYER_SETTINGS_MEMBER_SHA256
+#define MAG_PLAYER_SETTINGS_MEMBER_SHA256 "220ea0f1cfff8dfac86d4ea72fb68200a092304cbf51a1a3046fcf4783af8cfe"
+#endif
+const char *const member_sha256 = MAG_PLAYER_SETTINGS_MEMBER_SHA256;
 
 void export_variable(const char *name, const std::string &value) {
 #ifdef _WIN32
@@ -33,6 +37,15 @@ void export_variable(const char *name, const std::string &value) {
     SetEnvironmentVariableA(name, value.c_str());  // Native readers use the process block.
 #else
     setenv(name, value.c_str(), 1);
+#endif
+}
+
+void unset_variable(const char *name) {
+#ifdef _WIN32
+    _putenv_s(name, "");  // an empty value removes it from the C runtime's copy
+    SetEnvironmentVariableA(name, nullptr);
+#else
+    unsetenv(name);
 #endif
 }
 
@@ -127,6 +140,13 @@ extern "C" int mag_player_settings_prepare(void) {
     if (owned.empty()) { say("The private launch settings folder is unavailable."); return -1; }
     const bool launcher = variable("MAG_PLAYER_SETUP") != nullptr;
     const fs::path snapshot = owned / "launch-settings.json";
+    // Only this launch's server choice decides the overlay (set below).
+    unset_variable("PS3_VFS_OVERLAY");
+    if (launcher) {
+        // Earlier versions mirrored the whole game folder here; that copy is no longer used.
+        const auto note = mag::remove_legacy_server_view(path_variable("PS3_VFS_ROOT"), owned / "server");
+        if (!note.empty()) say(note);
+    }
     mag::PortableSettings settings;
     std::string text, error; bool exists = false;
     if (launcher) {
@@ -214,11 +234,13 @@ extern "C" int mag_player_settings_prepare(void) {
                                                  {settings.server_address, settings.tcp_port, settings.udp_port,
                                                   !settings.ticket_file.empty()}, member_sha256);
         if (result.status == mag::OverlayStatus::Ready) {
+            // The game root stays PS3_VFS_ROOT; the runtime reads the rewritten archive from the
+            // overlay instead (docs/player-settings.md).
 #ifdef _WIN32
-            _wputenv_s(L"PS3_VFS_ROOT", result.root.c_str());
-            SetEnvironmentVariableW(L"PS3_VFS_ROOT", result.root.c_str());
+            _wputenv_s(L"PS3_VFS_OVERLAY", result.root.c_str());
+            SetEnvironmentVariableW(L"PS3_VFS_OVERLAY", result.root.c_str());
 #else
-            export_variable("PS3_VFS_ROOT", result.root.string());
+            export_variable("PS3_VFS_OVERLAY", result.root.string());
 #endif
             // No ticket file: the no-ticket profile signs in with the player's name. A ticket file
             // selects the portal ticket profile instead (player_sign_in.h).
