@@ -13,13 +13,13 @@
 # instead of the pinned download (for trying this script off Linux).
 set -uo pipefail
 
-# 0.8.2 on purpose: it is the last release whose server answers a cache miss
-# while the object is still being stored. From 0.9.0 the compile waits for the
-# S3 PUT, and the NAS-backed store takes seconds per PUT under CI load.
-VERSION=0.8.2
+# Every release since 0.9.0 answers a cache miss only after the object is
+# stored, so on a miss the compile waits for the S3 PUT; the NAS-backed store
+# takes seconds per PUT under CI load. 0.8.2 was the last release that did not.
+VERSION=0.20.1
 ARCHIVE="sccache-v${VERSION}-x86_64-unknown-linux-musl"
 # The release's own .sha256 file, checked against a download.
-SHA256=ecda4ddc89a49f1ec6f35bdce5ecbf6f205b399a680d11119d4ce9f6d962104e
+SHA256=c9f6c5a3ae84d9da0956b28c357a365827bda33f3383647fc0b67484c74a5ea9
 
 dir="$RUNNER_TEMP/sccache"
 bin=''
@@ -61,6 +61,9 @@ export SCCACHE_S3_KEY_PREFIX="$SCCACHE_SETUP_PREFIX"
 export SCCACHE_IDLE_TIMEOUT=0
 export SCCACHE_ERROR_LOG="$dir/server.log"
 export SCCACHE_LOG=warn
+# The server's own storage check runs inside the client's 10 s startup wait, which the
+# NAS store has overrun under load. The probe below checks the store instead.
+export SCCACHE_SKIP_CACHE_CHECK=1
 timeout 60 "$bin" --start-server || off 'The sccache server did not start'
 
 # One real compile through the server, then its counters: the store must have

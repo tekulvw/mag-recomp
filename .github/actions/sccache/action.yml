@@ -1,6 +1,6 @@
 name: Shared compiler cache (self-hosted Linux)
 description: >-
-  Start a pinned, hash-checked sccache (0.8.2) backed by the in-house S3 store and route
+  Start a pinned, hash-checked sccache (0.20.1) backed by the in-house S3 store and route
   this job's later Rust and C/C++ compiles through it, so ephemeral runners stop
   recompiling (and rewriting) the same objects on every job. Skipped on hosted
   and non-Linux runners; without credentials or a reachable store it reports
