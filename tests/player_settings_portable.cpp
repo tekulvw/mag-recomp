@@ -52,13 +52,17 @@ int main(int argc, char **argv) {
         std::cout << int(result.status) << '\n' << result.root.string() << '\n' << result.message << '\n';
         return result.status == mag::OverlayStatus::Ready || result.status == mag::OverlayStatus::NotNeeded ? 0 : 1;
     }
+    if (mode == "legacy" && argc == 4) {  // legacy <vfs> <owned>: remove an earlier version's whole view
+        std::cout << mag::remove_legacy_server_view(argv[2], argv[3]) << '\n';
+        return 0;
+    }
     if (mode == "sign-in" && argc == 4) {  // sign-in <player name> <ticket file or "">: the server profile
         for (const auto &[name, value] : mag::server_sign_in_environment(argv[2], argv[3])) std::cout << name << '=' << value << '\n';
         return 0;
     }
     if (mode == "prepare") {
         int result = mag_player_settings_prepare();
-        for (const char *name : {"PS3_VFS_ROOT", "PS3_NET_ONLINE", "MAG_LOCAL_NO_TICKET", "PS3_NP_ONLINE_ID", "PS3RECOMP_OSK_INITIAL_TEXT", "MAG_LOCAL_ACCOUNT_NAME",
+        for (const char *name : {"PS3_VFS_ROOT", "PS3_VFS_OVERLAY", "PS3_NET_ONLINE", "MAG_LOCAL_NO_TICKET", "PS3_NP_ONLINE_ID", "PS3RECOMP_OSK_INITIAL_TEXT", "MAG_LOCAL_ACCOUNT_NAME",
                                  "PS3RECOMP_NP_LOCAL_TICKET", "PS3RECOMP_NP_TICKET_FILE", "PS3RECOMP_VK_FULLSCREEN",
                                  "MAG_PLAYER_OUTPUT_SIZE", "MAG_PLAYER_RENDER_SCALE"}) {
             const char *value = std::getenv(name);
