@@ -4,8 +4,9 @@ description: >-
   in-house S3 store, and route this job's later Rust and C/C++
   compiles through it, so ephemeral runners stop recompiling the same objects.
   S3 is read-only while the job runs, so no compile waits for an upload; end
-  the job with this action again, upload 'true' and if always(), to send the
-  job's new entries to S3. Skipped on hosted and non-Linux runners; without
+  the job with this action again, upload 'true' and if always(): it prints the
+  counters and, on pushes to main only, gently sends the job's new entries to S3
+  (upload.sh says when and why it skips). Skipped on hosted and non-Linux runners; without
   credentials or a reachable store it reports why and the job compiles uncached.
 inputs:
   prefix:
@@ -13,7 +14,7 @@ inputs:
     required: false
     default: ''
   upload:
-    description: "'true' at the end of the job: stop the server, print its counters and send the job's new entries to S3"
+    description: "'true' at the end of the job: stop the server, print its counters and, on main, send the job's new entries to S3"
     required: false
     default: 'false'
   access-key-id:
