@@ -15,6 +15,7 @@
 #include <cstring>
 #include <exception>
 #include <filesystem>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
@@ -30,7 +31,6 @@
 #include <SDL2/SDL_vulkan.h>
 #include <fcntl.h>
 #include <deque>
-#include <mutex>
 #include <spawn.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -85,6 +85,34 @@ void hold_input(bool held) {
     (void)held;
 #endif
 }
+
+// Gameplay input is held while the settings window is open and the game window does not have the
+// focus: what the player types or presses in the settings window (a binding capture among it) never
+// reaches the game, and clicking back into the game plays as usual with the window still open.
+// The window's open and close and the game window's pump (its focus, every frame) report here.
+std::mutex s_hold_lock;
+bool s_hold_open = false;     // the settings window is open
+bool s_game_focused = false;  // the game window had the focus at its last pump
+bool s_held = false;          // what the input block was last given
+enum class Report { Open, Closed, Focused, Unfocused };
+void update_hold(Report report) {
+    std::lock_guard<std::mutex> lock(s_hold_lock);
+    switch (report) {
+    case Report::Open: s_hold_open = true; break;
+    case Report::Closed: s_hold_open = false; break;
+    case Report::Focused: s_game_focused = true; break;
+    case Report::Unfocused: s_game_focused = false; break;
+    }
+    const bool held = s_hold_open && !s_game_focused;
+    if (held == s_held) return;
+    s_held = held;
+    hold_input(held);
+    // Opening and closing say so themselves; a change of focus with the window open is said here.
+    if (s_hold_open && (report == Report::Focused || report == Report::Unfocused))
+        say(held ? "gameplay input is held while the settings window is open and the game window does not have the focus"
+                 : "the game window has the focus; gameplay input is live while the settings window stays open");
+}
+void game_focus(bool focused) { update_hold(focused ? Report::Focused : Report::Unfocused); }
 
 #ifndef _WIN32
 // Requests from the settings window for the game window (`display ...`), applied by the window's
@@ -244,8 +272,8 @@ extern "C" void mag_player_settings_open(void) {
     if (!s_open.compare_exchange_strong(expected, true)) return;
     const fs::path self = own_binary();
     if (self.empty()) { s_open.store(false); say("cannot find this program to open the settings window"); return; }
-    hold_input(true);
-    say("settings window opened; gameplay input is held until it closes");
+    update_hold(Report::Open);
+    say("settings window opened; gameplay input is held while it is open and the game window does not have the focus");
     std::thread([self] {
         std::string arguments = MAG_PLAYER_SETTINGS_SWITCH;
         void* event = nullptr;
@@ -278,7 +306,7 @@ extern "C" void mag_player_settings_open(void) {
         if (code < 0) say("the settings window could not start");
         else if (code == 0) apply_saved_controls();  // also after General: harmless when unchanged
         else say(code == 3 ? "settings window closed without saving" : "the settings window failed; see the log above");
-        hold_input(false);
+        update_hold(Report::Closed);
         s_open.store(false, std::memory_order_release);
     }).detach();
 }
@@ -341,6 +369,11 @@ extern "C" void mag_player_settings_win32_window(void* window) {
     if (set_thread && previous_context) set_thread(previous_context);
 }
 
+extern "C" void mag_player_settings_win32_pump(void) {
+    const HWND game = s_game_window.load();
+    game_focus(game && GetForegroundWindow() == game && !IsIconic(game));
+}
+
 extern "C" int mag_player_settings_win32_message(const void* message) {
     const MSG* msg = static_cast<const MSG*>(message);
     if (!msg || msg->wParam != VK_F10) return 0;
@@ -359,12 +392,17 @@ extern "C" int mag_player_settings_win32_message(const void* message) {
 #else
 namespace {
 std::atomic<bool> s_requested{false};
+std::atomic<bool> s_focused{false};  // the watched game window has the keyboard focus
 SDL_Window* s_watched = nullptr;
 int watch(void* userdata, SDL_Event* event) {
     auto* window = static_cast<SDL_Window*>(userdata);
     if (event->type == SDL_KEYDOWN && event->key.keysym.scancode == SDL_SCANCODE_F10 && !event->key.repeat &&
         window && event->key.windowID == SDL_GetWindowID(window))
         s_requested.store(true, std::memory_order_release);
+    if (event->type == SDL_WINDOWEVENT && window && event->window.windowID == SDL_GetWindowID(window)) {
+        if (event->window.event == SDL_WINDOWEVENT_FOCUS_GAINED) s_focused.store(true, std::memory_order_release);
+        else if (event->window.event == SDL_WINDOWEVENT_FOCUS_LOST) s_focused.store(false, std::memory_order_release);
+    }
     return 1;
 }
 // The window's client size in physical pixels (`width` x `height`), centred: SDL sizes windows in
@@ -410,6 +448,7 @@ extern "C" void mag_player_settings_sdl_pump(void* sdl_window) {
         if (s_watched) SDL_DelEventWatch(watch, s_watched);
         s_watched = window;
         s_display_previewing = false;
+        s_focused.store(window && (SDL_GetWindowFlags(window) & SDL_WINDOW_INPUT_FOCUS), std::memory_order_release);
         if (window) {
             SDL_AddEventWatch(watch, window);
             // The saved output resolution (MAG_PLAYER_OUTPUT_SIZE) when windowed and it fits the screen.
@@ -430,6 +469,7 @@ extern "C" void mag_player_settings_sdl_pump(void* sdl_window) {
     }
     for (const auto& line : requests)
         if (window) apply_display(window, line);
+    game_focus(window && s_focused.load(std::memory_order_acquire));
     if (s_requested.exchange(false, std::memory_order_acq_rel)) mag_player_settings_open();
 }
 #endif

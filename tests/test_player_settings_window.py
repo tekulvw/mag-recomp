@@ -139,6 +139,11 @@ class SdlSettingsSessionTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn('settings session checks passed', result.stdout)
             self.assertEqual(result.stderr.count('[mag settings] settings window opened'), 1, result.stderr)
+            # Each change of the game window's focus while the window is open is said once.
+            self.assertEqual(result.stderr.count('[mag settings] the game window has the focus; gameplay input is live '
+                                                 'while the settings window stays open'), 2, result.stderr)
+            self.assertEqual(result.stderr.count('[mag settings] gameplay input is held while the settings window is open '
+                                                 'and the game window does not have the focus'), 2, result.stderr)
             # "controls" from the window: the game applies saved controls at once (this build has none).
             self.assertIn('[mag settings] saved; server and display changes apply at the next launch', result.stderr)
             self.assertIn('[mag settings] settings window closed without saving', result.stderr)
