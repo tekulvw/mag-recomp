@@ -4,8 +4,8 @@ description: >-
   this job's later Rust and C/C++ compiles through it, so ephemeral runners stop
   recompiling (and rewriting) the same objects on every job. Skipped on hosted
   and non-Linux runners; without credentials or a reachable store it reports
-  why and the job compiles uncached. End the job with a step that prints
-  "$SCCACHE_BIN" --show-stats when SCCACHE_BIN is set.
+  why and the job compiles uncached. End the job with a step that runs
+  "$SCCACHE_BIN" --stop-server (it prints the counters) when SCCACHE_BIN is set.
 inputs:
   prefix:
     description: Key prefix in the bucket, one per repository and job (for example mag-recomp/tests-python)

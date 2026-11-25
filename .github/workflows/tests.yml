@@ -64,7 +64,7 @@ jobs:
         run: cargo test --locked --offline
       - name: Compiler cache statistics
         if: always() && env.SCCACHE_BIN != ''
-        run: '"$SCCACHE_BIN" --show-stats && "$SCCACHE_BIN" --stop-server'
+        run: '"$SCCACHE_BIN" --stop-server' # prints the job's final counters
   native-edgegeom:
     # The opt-in native Edge geometry job's synthetic tests on the other two hosts; the python
     # jobs run them on Linux and macOS with the rest of the suite.
@@ -157,7 +157,7 @@ jobs:
         run: python -m unittest discover -s tools -p 'test_*.py' -t . -v
       - name: Compiler cache statistics
         if: always() && env.SCCACHE_BIN != ''
-        run: '"$SCCACHE_BIN" --show-stats && "$SCCACHE_BIN" --stop-server'
+        run: '"$SCCACHE_BIN" --stop-server' # prints the job's final counters
 
   python-macos:
     # Apple Silicon is the supported target; several tests build macOS fixtures with clang.

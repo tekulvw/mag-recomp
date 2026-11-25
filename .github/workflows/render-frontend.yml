@@ -242,7 +242,7 @@ jobs:
           if-no-files-found: error
       - name: Compiler cache statistics
         if: always() && env.SCCACHE_BIN != ''
-        run: '"$SCCACHE_BIN" --show-stats && "$SCCACHE_BIN" --stop-server'
+        run: '"$SCCACHE_BIN" --stop-server' # prints the job's final counters
 
   frontend-native:
     name: Frontend native (${{ matrix.os }}, ${{ matrix.backend }})
@@ -347,7 +347,7 @@ jobs:
         run: python tools/check_render_frontend_native.py --backend vulkan --compile-only --sdk-source build/compat-sdk-source
       - name: Compiler cache statistics
         if: always() && env.SCCACHE_BIN != ''
-        run: '"$SCCACHE_BIN" --show-stats && "$SCCACHE_BIN" --stop-server'
+        run: '"$SCCACHE_BIN" --stop-server' # prints the job's final counters
 
   owned-program-targets:
     name: Owned program compiler (${{ matrix.os }})
@@ -447,7 +447,7 @@ jobs:
         run: cargo clippy --manifest-path crates/mag-render-adapter-scene/Cargo.toml --features owned-programs --all-targets --locked --offline -- -D warnings
       - name: Compiler cache statistics
         if: always() && env.SCCACHE_BIN != ''
-        run: '"$SCCACHE_BIN" --show-stats && "$SCCACHE_BIN" --stop-server'
+        run: '"$SCCACHE_BIN" --stop-server' # prints the job's final counters
 
   vulkan-sdk-cpu:
     name: Vulkan SDK provider and bridge (CPU only)

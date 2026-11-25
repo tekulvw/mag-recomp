@@ -355,7 +355,7 @@ jobs:
           compression-level: 0
       - name: Compiler cache statistics
         if: always() && env.SCCACHE_BIN != ''
-        run: '"$SCCACHE_BIN" --show-stats && "$SCCACHE_BIN" --stop-server'
+        run: '"$SCCACHE_BIN" --stop-server' # prints the job's final counters
 
   verify:
     name: Verify the installer set
