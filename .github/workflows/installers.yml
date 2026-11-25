@@ -353,9 +353,13 @@ jobs:
           if-no-files-found: error
           retention-days: 30
           compression-level: 0
-      - name: Compiler cache statistics
+      - name: Compiler cache statistics and upload
         if: always() && env.SCCACHE_BIN != ''
-        run: '"$SCCACHE_BIN" --stop-server' # prints the job's final counters
+        uses: ./.github/actions/sccache
+        with:
+          upload: 'true'
+          access-key-id: ${{ secrets.SCCACHE_AWS_ACCESS_KEY_ID }}
+          secret-access-key: ${{ secrets.SCCACHE_AWS_SECRET_ACCESS_KEY }}
 
   verify:
     name: Verify the installer set

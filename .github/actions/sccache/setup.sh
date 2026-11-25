@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Start a pinned sccache server for this job, backed by the self-hosted runners'
-# S3 store, and route later compiles through it. Never fails the job over the
+# Start a pinned sccache server for this job, with a local disk level in front of
+# the self-hosted runners' S3 store (read-only until upload.sh runs at the end of
+# the job), and route later compiles through it. Never fails the job over the
 # cache itself: without credentials (a fork pull request, a hosted runner, unset
 # secrets), or when the store does not answer, it says so and the job compiles
 # uncached. Only a wrong archive hash fails, since that is not a cache problem.
@@ -33,6 +34,7 @@ off() {
 if [ -z "${AWS_ACCESS_KEY_ID:-}" ] || [ -z "${AWS_SECRET_ACCESS_KEY:-}" ]; then
   off 'No cache credentials (a fork pull request, or the SCCACHE_AWS_* secrets are unset)'
 fi
+[ -n "${SCCACHE_SETUP_PREFIX:-}" ] || off 'No key prefix given'
 mkdir -p "$dir"
 
 if [ -n "${SCCACHE_SETUP_BINARY:-}" ]; then
@@ -51,42 +53,60 @@ else
   bin="$dir/sccache"
 fi
 
-# Server-side settings. The credentials stay in the server's environment only;
-# later steps talk to the running server and never see them.
+# Two levels: a miss is stored on local disk only (L0), and S3 (L1) is read-only
+# while the job runs, so no compile waits for an upload (sccache 0.9.0 and later
+# answer a miss only after storing it, and the NAS store takes seconds per PUT).
+# upload.sh sends this job's new disk entries to S3 when the job ends. The two
+# backends name an entry alike: disk a/b/<key>, S3 <prefix>/a/b/c/<key>.
+# The credentials stay in the server's environment (and the upload step's).
+region=us-east-1
+store="${SCCACHE_SETUP_ENDPOINT%/}/$SCCACHE_SETUP_BUCKET/$SCCACHE_SETUP_PREFIX"
+export SCCACHE_MULTILEVEL_CHAIN=disk,s3
+export SCCACHE_DIR="$dir/disk"
+export SCCACHE_S3_RW_MODE=READ_ONLY
 export SCCACHE_BUCKET="$SCCACHE_SETUP_BUCKET"
 export SCCACHE_ENDPOINT="$SCCACHE_SETUP_ENDPOINT"
-export SCCACHE_REGION=us-east-1
+export SCCACHE_REGION="$region"
 export SCCACHE_S3_USE_SSL=false
 export SCCACHE_S3_KEY_PREFIX="$SCCACHE_SETUP_PREFIX"
+# A slow store turns a lookup into a miss instead of stalling the compile.
+export SCCACHE_CACHE_READ_TIMEOUT_SECS=5
 export SCCACHE_IDLE_TIMEOUT=0
 export SCCACHE_ERROR_LOG="$dir/server.log"
 export SCCACHE_LOG=warn
 # The server's own storage check runs inside the client's 10 s startup wait, which the
-# NAS store has overrun under load. The probe below checks the store instead.
+# NAS store has overrun under load; the signed request below checks the store instead.
 export SCCACHE_SKIP_CACHE_CHECK=1
+
+# The store must answer these credentials: 200 or 404 for an object under the prefix.
+# (A multi-level cache counts a refused read as a miss, so the counters cannot tell.)
+# curl retries a 503 (the NAS store's answer when busy) with a growing delay.
+code=$(curl -sS -o /dev/null -w '%{http_code}' --retry 5 --max-time 20 --aws-sigv4 "aws:amz:$region:s3" \
+  --user "$AWS_ACCESS_KEY_ID:$AWS_SECRET_ACCESS_KEY" -I "$store/.sccache_check") || code=000
+case "$code" in
+  200|404) ;;
+  *) off "The S3 store at $SCCACHE_SETUP_ENDPOINT refused or did not answer (HTTP $code)" ;;
+esac
 timeout 60 "$bin" --start-server || off 'The sccache server did not start'
 
-# One real compile through the server, then its counters: the store must have
-# been read without errors and be the S3 bucket, not a local fallback.
+# One real compile through the server, and the levels it reports.
 probe="$dir/probe"
 mkdir -p "$probe"
 printf 'int sccache_ci_probe(int x) { return x * 3 + 1; }\n' > "$probe/probe.c"
 cc=$(command -v cc || command -v gcc || command -v clang) || off 'No C compiler for the probe'
 (cd "$probe" && timeout 60 "$bin" "$cc" -c probe.c -o probe.o) || off 'The probe compile through sccache failed'
 stats=$(timeout 30 "$bin" --show-stats) || off 'sccache --show-stats failed'
-if ! grep -qE '^Cache location +s3' <<<"$stats"; then
+if ! grep -qE '^ +L1 \(s3\) +s3, name:' <<<"$stats"; then
   printf '%s\n' "$stats"
-  off 'sccache did not select the S3 store'
+  off 'sccache did not set up the disk and S3 levels'
 fi
-if grep -qE '^Cache read errors +[1-9]' <<<"$stats"; then
-  printf '%s\n' "$stats"
-  cat "$SCCACHE_ERROR_LOG" 2>/dev/null | tail -20
-  off "The S3 store at $SCCACHE_ENDPOINT did not answer the probe"
-fi
-grep -E '^Cache location' <<<"$stats"
+grep -E '^ +L[01] \((disk|s3)\) +(Local disk|s3, name)' <<<"$stats"
 
 {
   echo "SCCACHE_BIN=$bin"
+  # For upload.sh at the end of the job (not secret).
+  echo "SCCACHE_UPLOAD_STORE=$store"
+  echo "SCCACHE_UPLOAD_REGION=$region"
   # A lost server makes a compile run uncached instead of failing it.
   echo 'SCCACHE_IGNORE_SERVER_IO_ERROR=1'
   echo 'SCCACHE_IDLE_TIMEOUT=0'

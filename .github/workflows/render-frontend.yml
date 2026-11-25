@@ -240,9 +240,13 @@ jobs:
           name: render-frontend-shaders-${{ runner.os }}
           path: build/shader-translation
           if-no-files-found: error
-      - name: Compiler cache statistics
+      - name: Compiler cache statistics and upload
         if: always() && env.SCCACHE_BIN != ''
-        run: '"$SCCACHE_BIN" --stop-server' # prints the job's final counters
+        uses: ./.github/actions/sccache
+        with:
+          upload: 'true'
+          access-key-id: ${{ secrets.SCCACHE_AWS_ACCESS_KEY_ID }}
+          secret-access-key: ${{ secrets.SCCACHE_AWS_SECRET_ACCESS_KEY }}
 
   frontend-native:
     name: Frontend native (${{ matrix.os }}, ${{ matrix.backend }})
@@ -345,9 +349,13 @@ jobs:
       - name: Compat fixture syntax (Vulkan)
         if: runner.os == 'Linux'
         run: python tools/check_render_frontend_native.py --backend vulkan --compile-only --sdk-source build/compat-sdk-source
-      - name: Compiler cache statistics
+      - name: Compiler cache statistics and upload
         if: always() && env.SCCACHE_BIN != ''
-        run: '"$SCCACHE_BIN" --stop-server' # prints the job's final counters
+        uses: ./.github/actions/sccache
+        with:
+          upload: 'true'
+          access-key-id: ${{ secrets.SCCACHE_AWS_ACCESS_KEY_ID }}
+          secret-access-key: ${{ secrets.SCCACHE_AWS_SECRET_ACCESS_KEY }}
 
   owned-program-targets:
     name: Owned program compiler (${{ matrix.os }})
@@ -445,9 +453,13 @@ jobs:
         run: cargo test --manifest-path crates/mag-render-adapter-scene/Cargo.toml --features owned-programs --locked --offline
       - name: Adapter scene owned-programs Clippy
         run: cargo clippy --manifest-path crates/mag-render-adapter-scene/Cargo.toml --features owned-programs --all-targets --locked --offline -- -D warnings
-      - name: Compiler cache statistics
+      - name: Compiler cache statistics and upload
         if: always() && env.SCCACHE_BIN != ''
-        run: '"$SCCACHE_BIN" --stop-server' # prints the job's final counters
+        uses: ./.github/actions/sccache
+        with:
+          upload: 'true'
+          access-key-id: ${{ secrets.SCCACHE_AWS_ACCESS_KEY_ID }}
+          secret-access-key: ${{ secrets.SCCACHE_AWS_SECRET_ACCESS_KEY }}
 
   vulkan-sdk-cpu:
     name: Vulkan SDK provider and bridge (CPU only)
