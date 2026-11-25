@@ -61,12 +61,14 @@ def main():
             jobs.append((image, sdk / name, list(base), []))
     # The musttail SPU dispatch path MAG compiles itself (CMake: SPU_USE_DISPATCH_MT, -O2).
     jobs.append(('mage_g', sdk / 'runtime/spu/spu_dispatch_mt.c', [sdk / 'runtime/spu'] + base, ['-DSPU_USE_DISPATCH_MT', '-O2']))
+    # CI's compiler cache, when the job set one up (the same launcher CMake takes from the environment).
+    launcher = [os.environ['CMAKE_C_COMPILER_LAUNCHER']] if os.environ.get('CMAKE_C_COMPILER_LAUNCHER') else []
     failures = []
     for image, source, includes, defines in jobs:
         out = work / 'obj' / image / (source.stem + '.obj')
         out.parent.mkdir(parents=True, exist_ok=True)
         language = ['-std=gnu17'] if source.suffix == '.c' else ['-std=gnu++20']
-        result = run(['clang' if source.suffix == '.c' else 'clang++', *flags, *language, *defines, *(f'-I{p}' for p in includes),
+        result = run([*launcher, 'clang' if source.suffix == '.c' else 'clang++', *flags, *language, *defines, *(f'-I{p}' for p in includes),
                       '-o', out, source], capture_output=True, text=True)
         if result.returncode:
             failures.append(f'{image}: {source.name}')

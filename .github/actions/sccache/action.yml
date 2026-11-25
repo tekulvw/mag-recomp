@@ -1,0 +1,48 @@
+name: Shared compiler cache (self-hosted Linux)
+description: >-
+  Start a pinned, hash-checked sccache (0.20.1) backed by the in-house S3 store and route
+  this job's later Rust and C/C++ compiles through it, so ephemeral runners stop
+  recompiling (and rewriting) the same objects on every job. Skipped on hosted
+  and non-Linux runners; without credentials or a reachable store it reports
+  why and the job compiles uncached. End the job with a step that runs
+  "$SCCACHE_BIN" --stop-server (it prints the counters) when SCCACHE_BIN is set.
+inputs:
+  prefix:
+    description: Key prefix in the bucket, one per repository and job (for example mag-recomp/tests-python)
+    required: true
+  access-key-id:
+    description: The store's access key (secrets.SCCACHE_AWS_ACCESS_KEY_ID); empty turns the cache off
+    required: false
+    default: ''
+  secret-access-key:
+    description: The store's secret key (secrets.SCCACHE_AWS_SECRET_ACCESS_KEY); empty turns the cache off
+    required: false
+    default: ''
+  wrap-compilers:
+    description: >-
+      'true' puts cc/c++/gcc/g++/clang/clang++ wrappers first on PATH, for jobs whose tests call the
+      compiler by name; otherwise CMAKE_C/CXX_COMPILER_LAUNCHER are set. RUSTC_WRAPPER is set either way.
+    required: false
+    default: 'false'
+  endpoint:
+    description: S3 endpoint the self-hosted runners reach (path-style, plain HTTP)
+    required: false
+    default: http://192.168.1.204:9000
+  bucket:
+    description: S3 bucket
+    required: false
+    default: mag-ci-sccache
+runs:
+  using: composite
+  steps:
+    - name: Start sccache
+      if: runner.environment == 'self-hosted' && runner.os == 'Linux'
+      shell: bash
+      env:
+        AWS_ACCESS_KEY_ID: ${{ inputs.access-key-id }}
+        AWS_SECRET_ACCESS_KEY: ${{ inputs.secret-access-key }}
+        SCCACHE_SETUP_PREFIX: ${{ inputs.prefix }}
+        SCCACHE_SETUP_ENDPOINT: ${{ inputs.endpoint }}
+        SCCACHE_SETUP_BUCKET: ${{ inputs.bucket }}
+        SCCACHE_SETUP_WRAP: ${{ inputs.wrap-compilers }}
+      run: bash "$GITHUB_ACTION_PATH/setup.sh"
