@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "player_sign_in_refusal.h"
+#include <mutex>
 extern "C" void mag_load_queue_firmware(void);
 extern "C" void ppu_register_function(uint64_t, void (*)(ppu_context*));
 void mag_sre_func_210127CC(ppu_context*);
@@ -167,9 +168,11 @@ static void frontend_command_trace(ppu_context* ctx,const char* label,void(*orig
     original(ctx);
 }
 // The game server refuses a bad ticket without a reason, and the game shows its generic error
-// screen once its connection times out. In the single-use ticket profile, an error screen that
-// follows a ticket sign-in within 60 s leaves a marker for the ticket refill, which asks the portal
-// why and keeps the note the supervisor shows after the game exits (player_sign_in.h).
+// screen once its connection times out; a connection lost after the sign-in ends on the same
+// screen. In the single-use ticket profile, every screen the game starts goes to SignInProgress
+// (player_sign_in_refusal.h): an error screen before the sign-in completed, within 60 s of a
+// ticket sign-in, leaves a marker for the ticket refill, which asks the portal why and keeps the
+// note the supervisor shows after the game exits; one after it completed is a lost connection.
 static const char* sign_in_watch_file() {
     static const char* file=[]() -> const char* {
         const char* refill=getenv("PS3RECOMP_NP_TICKET_REFILL");const char* path=getenv("PS3RECOMP_NP_TICKET_FILE");
@@ -186,10 +189,14 @@ static void frontend_start_observe(ppu_context* ctx) {
             const uint64_t data=vm_read32(uint64_t(args)+8);
             for(unsigned j=0;j+1<sizeof(screen) && job_marker_range(data+j,1);j++){const unsigned ch=vm_read8(data+j);if(!ch)break;screen[j]=char(ch);}
         }
-        if(!strcmp(screen,"UI_Error") && mag::error_follows_sign_in(file)) {
-            mag::mark_refused_sign_in(file,screen);
-            fprintf(stderr,"[mag-net] error screen after a ticket sign-in: the game server refused it or never answered\n");
-        }
+        static std::mutex progress_lock;
+        static mag::SignInProgress progress{file};
+        mag::ErrorScreen error;
+        { std::lock_guard<std::mutex> hold(progress_lock); error=progress.screen_started(screen); }
+        if(error==mag::ErrorScreen::SignInRefused)
+            fprintf(stderr,"[mag-net] error screen before the ticket sign-in completed: the game server refused it or never answered\n");
+        else if(error==mag::ErrorScreen::ConnectionLost)
+            fprintf(stderr,"[mag-net] game server connection lost after sign-in (error screen after the sign-in completed; not a sign-in refusal)\n");
     }
     if(frontend_tracing()) frontend_command_trace(ctx,"start",func_002637C0);
     else func_002637C0(ctx);
