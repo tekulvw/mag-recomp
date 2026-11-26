@@ -154,10 +154,10 @@ int main(int argc, char** argv) {
         put32(init, 0), put32(init + 4, 100), put32(init + 8, 1u << 29);
         CHECK(call("cellVoiceInit", init) == 0);
         params(param, 0, 0);
-        CHECK(call("cellVoiceCreatePort", param, id) == 0);
+        CHECK(call("cellVoiceCreatePort", id, param) == 0);
         const uint32_t mic = get32(id);
         params(param, 4, 7300);
-        CHECK(call("cellVoiceCreatePort", param, id) == 0);
+        CHECK(call("cellVoiceCreatePort", id, param) == 0);
         const uint32_t out = get32(id);
         CHECK(call("cellVoiceConnectIPortToOPort", mic, out) == 0);
         const auto wait = [](int ms) { std::this_thread::sleep_for(std::chrono::milliseconds(ms)); };
