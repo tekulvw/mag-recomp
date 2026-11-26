@@ -27,7 +27,7 @@ class ShaderWarmTests(unittest.TestCase):
         with patch.object(shader_warm, 'run_command', side_effect=run):
             return shader_warm.warm(config, self.root / 'workspace', self.root / 'logs', {'PATH': 'build'},
                                     Cancellation(), self.events.append,
-                                    environ={'LOCALAPPDATA': 'C:/Users/P/AppData/Local'} if environ is None else environ)
+                                    environ={'LOCALAPPDATA': 'D:/profile/AppData/Local'} if environ is None else environ)
 
     def test_only_windows_vulkan_builds(self):
         calls = []
@@ -51,7 +51,7 @@ class ShaderWarmTests(unittest.TestCase):
             if stage == 'shader-warm':
                 Path(log).write_text('[mag] noise\n[shader-warm] 692 programs (288 vertex, 404 fragment) found in 0.3 s; '
                                      '2044 texts: 2044 translated\n')
-        player = {'LOCALAPPDATA': 'C:/Users/P/AppData/Local', 'PS3RECOMP_SPIRV_CACHE': 'D:/mine'}
+        player = {'LOCALAPPDATA': 'D:/profile/AppData/Local', 'PS3RECOMP_SPIRV_CACHE': 'D:/mine'}
         result = self.warm(WINDOWS, run, environ=player)
         self.assertEqual(result['status'], 'done')
         (build, build_env, build_stage), (tool, tool_env, tool_stage) = calls
