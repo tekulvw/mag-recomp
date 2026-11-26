@@ -44,13 +44,16 @@ std::unique_ptr<Transport> make_platform_transport() { return std::make_unique<F
 enum {
     IdGeneral = 100, IdControls, IdServer, IdName, IdAccount, IdAdvanced, IdTcp, IdUdp, IdDisplay, IdOutput, IdRendering, IdAntiAliasing,
     IdSendReports, IdReportNow, IdReportComment, IdReportCounter,
-    IdDebugPage = 120, IdDebugNote, IdDebugItem = 400, IdDebugHint = 450,
+    IdDebugPage = 120, IdDebugNote, IdDebugItem = 400, IdDebugHint = 450, IdVoiceChat = 130, IdVoiceVolume,
     IdKeyboardMouse = 200, IdController, IdMode, IdScope, IdSensitivity, IdInvert, IdReset, IdRows, IdHint,
     IdError = 300, IdRevert, IdKeep, IdCancel, IdApply, IdPlay, IdStatus, IdAccountStatus, IdReportStatus,
     IdBinding = 1000,
 };
 
 static std::atomic<int> failures{0};
+#ifndef MAG_PLAYER_VOICE_SUPPORTED
+#define MAG_PLAYER_VOICE_SUPPORTED 0  // as the window: voice rows need the voice service
+#endif
 #define CHECK(condition) do { if (!(condition)) { std::printf("FAIL %s:%d %s\n", __FILE__, __LINE__, #condition); ++failures; } } while (0)
 
 static HWND wait_window(const wchar_t* type, const wchar_t* title) {
@@ -173,6 +176,10 @@ static void in_game(const fs::path& folder) {
 #else
         CHECK(!enabled(window, IdRendering) && !enabled(window, IdAntiAliasing));  // the Metal renderer's
 #endif
+        // Voice: Off at 100% by default; disabled where the build has no voice service.
+        CHECK(visible(window, IdVoiceChat) && SendMessageW(GetDlgItem(window, IdVoiceChat), CB_GETCURSEL, 0, 0) == 0);
+        CHECK(SendMessageW(GetDlgItem(window, IdVoiceVolume), CB_GETCURSEL, 0, 0) == 4);
+        CHECK(enabled(window, IdVoiceChat) == bool(MAG_PLAYER_VOICE_SUPPORTED) && enabled(window, IdVoiceVolume) == bool(MAG_PLAYER_VOICE_SUPPORTED));
         CHECK(!visible(window, IdTcp));
         click(window, IdAdvanced);
         CHECK(visible(window, IdTcp));
@@ -393,7 +400,7 @@ static void in_game(const fs::path& folder) {
 static void setup(const fs::path& folder) {
     fs::create_directories(folder);
     const fs::path settings = folder / "settings.json";
-    std::ofstream(settings) << "{\"server_address\": \"play.magtest.online\", \"render_scale\": 200}";
+    std::ofstream(settings) << "{\"server_address\": \"play.magtest.online\", \"render_scale\": 200, \"voice_chat\": \"ptt\", \"voice_volume\": 90}";
     SettingsForm form;
     std::string error;
     CHECK(settings_form_load(settings, form, error));
@@ -407,6 +414,8 @@ static void setup(const fs::path& folder) {
         CHECK(visible(window, IdPlay) && enabled(window, IdPlay) && item(window, IdPlay) == "Play MAG");
         CHECK(item(window, IdServer) == "play.magtest.online" && !enabled(window, IdApply));  // the saved settings
         CHECK(SendMessageW(GetDlgItem(window, IdRendering), CB_GETCURSEL, 0, 0) == 2);  // kept as stored
+        CHECK(SendMessageW(GetDlgItem(window, IdVoiceChat), CB_GETCURSEL, 0, 0) == 1);
+        CHECK(SendMessageW(GetDlgItem(window, IdVoiceVolume), CB_GETCURSEL, 0, 0) == 4);  // 90: the nearest step, 100%
         click(window, IdPlay);
         CHECK(contains(window, IdError, "Enter a player name to play on a server"));
         type(window, IdName, L"Rook_7");
@@ -416,6 +425,7 @@ static void setup(const fs::path& folder) {
     player.join();
     std::string saved = read(settings);
     CHECK(saved.find("\"player_name\": \"Rook_7\"") != std::string::npos && saved.find("\"render_scale\": 200") != std::string::npos);
+    CHECK(saved.find("\"voice_chat\": \"ptt\"") != std::string::npos && saved.find("\"voice_volume\": 90") != std::string::npos);
     // Cancel: no play, nothing written.
     CHECK(settings_form_load(settings, form, error));
     std::thread canceller([&] {

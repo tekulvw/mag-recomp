@@ -1,4 +1,5 @@
 #include "player_controls.h"
+#include "player_host_actions.h"
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -32,6 +33,7 @@ struct ControlsState {
     InputDevice last_device=InputDevice::None;
     uint64_t profile_revision=0;
     std::map<std::pair<uint64_t,uint32_t>,uint64_t> retired;
+    HostActionTracker host;
 };
 ControlsState& controls() { static ControlsState state; return state; }
 bool gameplay_context(InputContext context) {
@@ -73,6 +75,7 @@ void release_locked(ControlsState& state, std::optional<InputSource> source={}) 
     ++state.generation;
 }
 void update_capture_locked(ControlsState& state,const InputCaptureState& capture) {
+    state.host.focus(capture.focused);
     if(capture.time_ns<state.capture.time_ns) throw std::invalid_argument("input time moved backwards");
     if((state.capture.focused && !capture.focused) || (state.capture.supported_context && !capture.supported_context)) release_locked(state);
     else {
@@ -237,6 +240,7 @@ void mag_controls_configure(const ControlsProfile& profile) {
     auto& state=controls(); std::lock_guard lock(state.mutex);
     release_locked(state);
     state.profile=profile;
+    state.host.configure(profile);
     ++state.profile_revision;
     for(const auto& b:profile.bindings) state.actions.try_emplace(b.action);
     if(profile.mode!=InputMode::Controller) {
@@ -274,6 +278,7 @@ void mag_controls_push_event(const PhysicalInputEvent& event) {
     auto& state=controls(); std::lock_guard lock(state.mutex);
     if(event.down) state.last_device=event.control.source==InputSource::Controller?InputDevice::Controller:InputDevice::KeyboardMouse;
     if(event.down) state.physical_down.insert(event.control); else state.physical_down.erase(event.control);
+    state.host.event(event.control,event.down);
     if(state.blocked.contains(event.control)) {
         if(!event.down) state.blocked.erase(event.control);
         return;
@@ -461,6 +466,7 @@ bool mag_controls_frame_valid(InputFrameKey key,uint64_t generation) {
     auto& state=controls(); std::lock_guard lock(state.mutex);
     return state.frame && state.frame->key==key && state.generation==generation && enabled(state);
 }
+HostActionState mag_controls_host_action(ActionId action) {auto& state=controls();std::lock_guard lock(state.mutex);return state.host.state(action);}
 InputDevice mag_controls_last_device() {auto& state=controls();std::lock_guard lock(state.mutex);return state.last_device;}
 std::vector<ControlBinding> mag_controls_action_bindings(ActionId action,InputContext context) {
     auto& state=controls();std::lock_guard lock(state.mutex);std::vector<ControlBinding> result;

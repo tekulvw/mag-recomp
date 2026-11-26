@@ -162,6 +162,25 @@ static void general(const fs::path& folder) {
 #else
     CHECK(!panel.enabled("choice:rendering") && !panel.enabled("choice:aa"));
 #endif
+    // Voice: Off at 100% by default; the rows are disabled where the build has no voice service.
+    CHECK(panel.label("choice:voice") == "Off" && panel.label("choice:voice_volume") == "100%");
+#if MAG_PLAYER_VOICE_SUPPORTED
+    CHECK(panel.enabled("choice:voice") && panel.enabled("choice:voice_volume"));
+    CHECK(panel.focus("choice:voice"));
+    send(panel, key(SDL_SCANCODE_RIGHT));
+    CHECK(form.voice_chat == 1 && panel.label("choice:voice") == "Push to talk");
+    send(panel, key(SDL_SCANCODE_LEFT));
+    click(panel, "choice:voice_volume");
+    CHECK(panel.choosing());
+    send(panel, key(SDL_SCANCODE_DOWN));
+    send(panel, key(SDL_SCANCODE_RETURN));
+    CHECK(!panel.choosing() && form.voice_volume == 125 && panel.label("choice:voice_volume") == "125%");
+    CHECK(panel.focus("choice:voice_volume"));
+    send(panel, key(SDL_SCANCODE_LEFT));
+    CHECK(form.voice_volume == 100 && form.voice_chat == 0);
+#else
+    CHECK(panel.shown("choice:voice") && !panel.enabled("choice:voice") && !panel.enabled("choice:voice_volume"));
+#endif
     CHECK(panel.label("choice:output") == "1280 \xC3\x97 720");
     type_into(panel, "text:server", "Example.org");
     CHECK(panel.account_status() == "Accounts are for play.magtest.online" && !panel.enabled("button:account"));
@@ -408,6 +427,20 @@ static void general_apply(const fs::path& folder) {
     saved = read(settings);
     CHECK(saved.find("\"portal_url\": \"https://portal.example.org\"") != std::string::npos);
     CHECK(saved.find("\"render_scale\": 200") != std::string::npos && saved.find("\"anti_aliasing\": \"fxaa\"") != std::string::npos);
+    // Voice: a volume between the menu's steps shows as the nearest and is kept until another is
+    // picked; the microphone, which has no row, is kept as the file holds it.
+    std::ofstream(settings) << "{\"server_address\": \"\", \"voice_chat\": \"ptt\", \"voice_volume\": 90, \"voice_input\": \"Desk Mic\"}";
+    CHECK(settings_form_load(settings, form, error) && form.voice_chat == 1 && form.voice_volume == 90 && form.voice_input == "Desk Mic");
+    CHECK(settings_form_voice_volume_step(form) == 4 && !settings_form_general_dirty(form));
+    settings_form_set_voice_volume_step(form, 4);
+    CHECK(form.voice_volume == 90 && !settings_form_general_dirty(form));
+    settings_form_set_voice_volume_step(form, 6);
+    CHECK(form.voice_volume == 150 && settings_form_general_dirty(form));
+    form.voice_chat = 0;
+    CHECK(settings_form_general_draft(form, draft, error) && settings_form_apply_general(settings, form, draft, error));
+    saved = read(settings);
+    CHECK(saved.find("voice_chat") == std::string::npos && saved.find("\"voice_volume\": 150") != std::string::npos &&
+          saved.find("\"voice_input\": \"Desk Mic\"") != std::string::npos);
     // A damaged file: recovery until an explicit Apply replaces it.
     std::ofstream(settings) << "{broken";
     CHECK(!settings_form_load(settings, form, error) && form.recovery && form.needs_save && settings_form_general_dirty(form));

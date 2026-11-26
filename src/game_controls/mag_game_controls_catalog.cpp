@@ -17,7 +17,8 @@ constexpr ActionId Confirm = 0x33e32a99 /* os_enter */, Cancel = 0x75453127 /* o
     TacticalAbilities = 0xa79b7198 /* tcm_abilities */, TacticalFrago = 0x6b7b7c6c /* tcm_frago */,
     TacticalVoice = 0xf69d4193 /* tcm_voicechat */, SeatNext = 0x74700e10 /* vseatnext */,
     Smoke = 0xe3dd5118 /* vsmoke */;
-constexpr const char *Prompts = "Prompts and downed", *Commands = "Commands", *Vehicles = "Vehicles";
+constexpr const char *Prompts = "Prompts and downed", *Commands = "Commands", *Vehicles = "Vehicles", *Voice = "Voice";
+constexpr ActionId PushToTalk = MagGameControlsPushToTalk;
 constexpr MagGameControlsAction catalog[] = {
     {Forward, "Move forward", false}, {Backward, "Move backward", false},
     {Left, "Strafe left", false}, {Right, "Strafe right", false},
@@ -36,7 +37,9 @@ constexpr MagGameControlsAction catalog[] = {
     {TacticalFrago, "Tactical menu: FRAGO", false, -1, true, 2, Commands},
     {TacticalVoice, "Tactical menu: voice chat", false, -1, true, 2, Commands},
     {SeatNext, "Change seats", false, -1, true, 2, Vehicles},
-    {Smoke, "Smoke screen", false, -1, true, 2, Vehicles}};
+    {Smoke, "Smoke screen", false, -1, true, 2, Vehicles},
+    // Revision 5: a host action. K on the keyboard; a controller button only if the player binds one.
+    {PushToTalk, "Push to talk", true, -1, false, 5, Voice, false, true}};
 constexpr ActionId retired[] = {CommandScreen};
 // turnleft, turnright, aimup, aimdown.
 constexpr uint32_t look_tokens[] = {0xc8a3e21d, 0x941734a2, 0x661cb595, 0xc34f3a66};
@@ -135,6 +138,8 @@ ControlsProfile mag_game_controls_default_profile() {
                             {30u, TacticalAbilities}, {31u, TacticalFrago}, {32u, TacticalVoice},
                             {25u, SeatNext}, {5u, Smoke}})
         profile.bindings.push_back({{InputSource::Keyboard, code}, id});
+    // Revision 5: K talks while held (voice chat, a host action). No controller default.
+    profile.bindings.push_back({{InputSource::Keyboard, 14}, PushToTalk});
     profile.catalog_revision = MagGameControlsCatalogRevision;
     return profile;
 }
@@ -233,6 +238,16 @@ void add_scope_wheel(ControlsProfile& profile) {
         profile.bindings.push_back({wheel, action, OnFoot});
     }
 }
+// Revision 5: K for Push to talk, only where the player uses K for nothing on foot. Never a
+// controller button: the player chooses one if they want it.
+void add_push_to_talk(ControlsProfile& profile) {
+    const bool bound = std::any_of(profile.bindings.begin(), profile.bindings.end(), [](const auto& b) {
+        return b.action == PushToTalk && b.control.source != InputSource::Controller;
+    });
+    const PhysicalControl k{InputSource::Keyboard, 14};
+    if (bound || uses_on_foot(profile, k)) return;
+    profile.bindings.push_back({k, PushToTalk, OnFoot});
+}
 void upgrade_before_revision_2(ControlsProfile& profile);
 }  // namespace
 
@@ -243,7 +258,8 @@ void mag_game_controls_upgrade_profile(ControlsProfile& profile) {
     if (from == MagGameControlsCatalogRevision) return;
     if (from == 2) upgrade_from_revision_2(profile);
     else if (from < 2) upgrade_before_revision_2(profile);
-    add_scope_wheel(profile);
+    if (from < 4) add_scope_wheel(profile);
+    add_push_to_talk(profile);
     profile.catalog_revision = MagGameControlsCatalogRevision;
 }
 

@@ -503,6 +503,53 @@ static void prompt_query_tests() {
     check(mag_controls_last_device()==InputDevice::Controller,"a stick pushed past half way");
 }
 
+// Host actions (Push to talk): held only while a binding is down and the window has focus; a key
+// held when focus returns counts only after its release; controller bindings only with a remap.
+static void host_action_tests() {
+    constexpr ActionId Talk=77, Jump=3;
+    ControlsProfile profile;
+    profile.bindings={{{InputSource::Keyboard,14},Talk},{{InputSource::Controller,3},Talk},{{InputSource::Keyboard,44},Jump}};
+    mag_controls_configure(profile);
+    const PhysicalControl k{InputSource::Keyboard,14}, pad{InputSource::Controller,3};
+    mag_controls_set_window_capture(false,false);
+    check(!mag_controls_host_action(Talk).held && !mag_controls_host_action(Talk).focused,"nothing before focus");
+    mag_controls_push_event({k,true,1});
+    mag_controls_set_window_capture(true,false);
+    check(mag_controls_host_action(Talk).focused && !mag_controls_host_action(Talk).held,"a key held before focus does not talk");
+    mag_controls_push_event({k,false,2});
+    mag_controls_push_event({k,true,3});
+    check(mag_controls_host_action(Talk).held,"a fresh press talks");
+    check(!mag_controls_host_action(Jump).held,"another action is not held");
+    mag_controls_set_window_capture(false,false);
+    check(!mag_controls_host_action(Talk).held && !mag_controls_host_action(Talk).focused,"focus loss releases at once");
+    mag_controls_set_window_capture(true,false);
+    check(!mag_controls_host_action(Talk).held,"focus return does not resume a press");
+    mag_controls_push_event({k,false,4});
+    mag_controls_push_event({k,true,5});
+    check(mag_controls_host_action(Talk).held,"pressed again after focus returned");
+    mag_controls_push_event({k,false,6});
+    check(!mag_controls_host_action(Talk).held,"release");
+    // A settings panel or another app owning input reports no focus (capture state from the backend).
+    mag_controls_set_capture_state({false,true,false,true,true,false,7});
+    mag_controls_push_event({k,true,8});
+    check(!mag_controls_host_action(Talk).held,"no talking while the window lacks focus");
+    mag_controls_push_event({k,false,9});
+    mag_controls_set_capture_state({true,false,false,true,true,false,10});
+    // The context does not matter: a vehicle, a menu or an unsupported context still talks.
+    mag_controls_push_event({pad,true,11});
+    check(!mag_controls_host_action(Talk).held,"a controller binding without a remap stays the game's button");
+    mag_controls_push_event({pad,false,12});
+    profile.controller_remap=true;
+    mag_controls_configure(profile);
+    mag_controls_push_event({pad,true,13});
+    check(mag_controls_host_action(Talk).held,"a remapped controller button talks in any context");
+    mag_controls_push_event({pad,false,14});
+    profile.mode=InputMode::KBM;
+    mag_controls_configure(profile);
+    mag_controls_push_event({pad,true,15});
+    check(!mag_controls_host_action(Talk).held,"keyboard and mouse mode ignores the controller binding");
+}
+
 int main(int argc, char** argv) {
     try {
         if (argc!=2) return 2;
@@ -513,7 +560,7 @@ int main(int argc, char** argv) {
         else if(name=="device") device_tests(); else if(name=="device-order") device_order_tests(); else if(name=="sample-phases") sample_phase_tests();
         else if(name=="sample-lifecycle") sample_lifecycle_tests(); else if(name=="sample-contexts") sample_context_tests(); else if(name=="sample-revocation") sample_revocation_tests();
         else if(name=="sample-mouse-revocation") sample_mouse_revocation_tests(); else if(name=="configure-policy") configure_policy_tests(); else if(name=="native-neutral") native_neutral_tests();
-        else if(name=="precise-mouse") precise_mouse_tests(); else if(name=="capture-producers") capture_producer_tests(); else if(name=="source-disconnect") source_disconnect_tests(); else if(name=="action-time") action_time_tests(); else if(name=="prompt-queries") prompt_query_tests(); else return 2;
+        else if(name=="precise-mouse") precise_mouse_tests(); else if(name=="capture-producers") capture_producer_tests(); else if(name=="source-disconnect") source_disconnect_tests(); else if(name=="action-time") action_time_tests(); else if(name=="prompt-queries") prompt_query_tests(); else if(name=="host-actions") host_action_tests(); else return 2;
         return 0;
     } catch(const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }
 }

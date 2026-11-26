@@ -229,6 +229,10 @@ int main(int argc,char **argv) { @autoreleasepool {
 '''
 
 
+# Why MAG asks for the microphone (Info.plist NSMicrophoneUsageDescription).
+MICROPHONE_USAGE = 'MAG uses the microphone for in-match voice chat while you hold push to talk.'
+
+
 # Sources the supervisor compiles with it: the reports (src/player_reports.h), their gzip, and the
 # portal transport that sends them with the linked account's token.
 SUPERVISOR_SOURCES = ('player_reports.h', 'player_reports.cpp', 'player_gzip.h', 'player_gzip.cpp', 'player_portal.h',
@@ -408,11 +412,14 @@ def package(config, workspace, destination, token=None, events=None):
                    '-x','c++',*[str(scratch/n) for n in SUPERVISOR_SOURCES if n.endswith('.cpp')],
                    '-framework','Foundation','-framework','AppKit','-o',str(supervisor)],token)
         _ordinary(supervisor).chmod(0o755); shutil.rmtree(scratch)
+        # Voice chat (docs/player-settings.md, "Voice"): macOS shows this when MAG first opens the
+        # microphone. The game runs as this app's child processes, so the app is the one asked; the
+        # bundle is ad hoc signed without the hardened runtime, so no audio-input entitlement.
         with (destination/'Contents/Info.plist').open('wb') as stream:
             plistlib.dump({'CFBundleExecutable':'MAG','CFBundleName':'MAG','CFBundleDisplayName':'MAG',
                            'CFBundleIdentifier':'local.mag.native','CFBundlePackageType':'APPL',
                            'CFBundleShortVersionString':'0.1','LSMinimumSystemVersion':'12.0',
-                           'NSHighResolutionCapable':True},stream)
+                           'NSHighResolutionCapable':True,'NSMicrophoneUsageDescription':MICROPHONE_USAGE},stream)
         _run_tool(['/usr/bin/codesign','--force','--sign','-',str(destination)],token)
         events({'event':'app-packaged','output':str(destination),'launcher':str(supervisor),
                 'message':'MAG.app packaged. Its MAG folder is self-contained: move it as a whole.'})

@@ -8,6 +8,8 @@
 #include <map>
 #include <sstream>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace {
 struct Value { bool text = false, boolean = false; std::string string; long long number = 0; };
@@ -162,6 +164,43 @@ bool mag::check_anti_aliasing(const std::string &mode, std::string &error) {
     return false;
 }
 
+bool mag::check_voice_chat(const std::string &mode, std::string &error) {
+    for (int i = 0; i < MAG_SETTINGS_VOICE_MODES; ++i)
+        if (mode == mag_settings_voice_values[i]) return true;
+    error = "Choose Off or Push to talk for voice chat.";
+    return false;
+}
+
+bool mag::check_voice_volume(int percent, std::string &error) {
+    if (percent >= 0 && percent <= MAG_SETTINGS_VOICE_VOLUME_MAX) return true;
+    error = "The voice volume must be a whole percentage from 0 to 200.";
+    return false;
+}
+
+bool mag::check_voice_input(const std::string &name, std::string &error) {
+    // UTF-8 without control characters: it is shown in the window and passed to the engine as is.
+    bool ok = name.size() <= MAG_SETTINGS_VOICE_INPUT_LIMIT;
+    for (size_t i = 0; ok && i < name.size();) {
+        const unsigned char c = (unsigned char)name[i];
+        const size_t length = c < 0x80 ? 1 : (c & 0xE0) == 0xC0 ? 2 : (c & 0xF0) == 0xE0 ? 3 : (c & 0xF8) == 0xF0 ? 4 : 0;
+        ok = length && i + length <= name.size() && c >= 0x20 && c != 0x7F && !(c >= 0xC0 && c < 0xC2) && c < 0xF5;
+        for (size_t k = 1; ok && k < length; ++k) ok = ((unsigned char)name[i + k] & 0xC0) == 0x80;
+        if (ok && c == 0xC2) ok = (unsigned char)name[i + 1] >= 0xA0;  // U+0080 to U+009F are control characters too
+        i += length ? length : 1;
+    }
+    if (!ok) error = MAG_SETTINGS_VOICE_INPUT_RULE;
+    return ok;
+}
+
+std::vector<std::pair<std::string, std::string>> mag::voice_environment(const PortableSettings &settings) {
+    std::vector<std::pair<std::string, std::string>> out;
+    if (settings.voice_chat != "ptt") return out;
+    out.emplace_back("MAG_VOICE_MODE", "ptt");
+    out.emplace_back("MAG_VOICE_VOLUME", std::to_string(settings.voice_volume));
+    if (!settings.voice_input.empty()) out.emplace_back("MAG_VOICE_INPUT", settings.voice_input);
+    return out;
+}
+
 bool mag::parse_portable_settings(const std::string &json, PortableSettings &settings, std::string &error) {
     std::map<std::string, Value> values;
     if (!parse_object(json, values, error)) return false;
@@ -201,12 +240,16 @@ bool mag::parse_portable_settings(const std::string &json, PortableSettings &set
         !text("ticket_file", parsed.ticket_file) || !text("portal_url", parsed.portal_url) ||
         !text("display_mode", parsed.display_mode) || !number("output_width", parsed.output_width) ||
         !number("output_height", parsed.output_height) || !number("render_scale", parsed.render_scale) ||
-        !text("anti_aliasing", parsed.anti_aliasing) || !flag("send_reports", parsed.send_reports))
+        !text("anti_aliasing", parsed.anti_aliasing) || !flag("send_reports", parsed.send_reports) ||
+        !text("voice_chat", parsed.voice_chat) || !number("voice_volume", parsed.voice_volume) ||
+        !text("voice_input", parsed.voice_input))
         return false;
     if (!check_server_address(parsed.server_address, error) || !check_player_name(parsed.player_name, error) ||
         !check_ticket_file(parsed.ticket_file, error) || !mag::portal::check_portal_url(parsed.portal_url, error) ||
         !check_display_mode(parsed.display_mode, error) || !check_output_size(parsed.output_width, parsed.output_height, error) ||
-        !check_render_scale(parsed.render_scale, error) || !check_anti_aliasing(parsed.anti_aliasing, error))
+        !check_render_scale(parsed.render_scale, error) || !check_anti_aliasing(parsed.anti_aliasing, error) ||
+        !check_voice_chat(parsed.voice_chat, error) || !check_voice_volume(parsed.voice_volume, error) ||
+        !check_voice_input(parsed.voice_input, error))
         return false;
     settings = parsed;
     return true;
@@ -223,6 +266,9 @@ std::string mag::format_portable_settings(const PortableSettings &s) {
                 : ",\n  \"output_width\": " + std::to_string(s.output_width) + ",\n  \"output_height\": " + std::to_string(s.output_height)) +
            (s.render_scale == 100 ? std::string() : ",\n  \"render_scale\": " + std::to_string(s.render_scale)) +
            (s.anti_aliasing == "off" ? std::string() : ",\n  \"anti_aliasing\": " + quoted(s.anti_aliasing)) +
-           (s.send_reports ? std::string() : ",\n  \"send_reports\": false") + "\n}\n";
+           (s.send_reports ? std::string() : ",\n  \"send_reports\": false") +
+           (s.voice_chat == "off" ? std::string() : ",\n  \"voice_chat\": " + quoted(s.voice_chat)) +
+           (s.voice_volume == 100 ? std::string() : ",\n  \"voice_volume\": " + std::to_string(s.voice_volume)) +
+           (s.voice_input.empty() ? std::string() : ",\n  \"voice_input\": " + quoted(s.voice_input)) + "\n}\n";
 }
 

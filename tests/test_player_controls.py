@@ -21,6 +21,9 @@ class PlayerControlsTests(unittest.TestCase):
                         '-I'+str(ROOT/'src'), str(ROOT/'tests/player_controls.cpp'),
                         str(ROOT/'src/player_controls.cpp'), '-o', str(cls.binary)], check=True)
 
+    def test_host_actions_follow_focus_and_fresh_presses(self):
+        subprocess.run([str(self.binary), 'host-actions'], check=True)
+
     def test_device_policy_and_look_arbitration(self):
         subprocess.run([str(self.binary), 'policy'], check=True)
 

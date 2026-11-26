@@ -31,6 +31,11 @@ struct SettingsForm {
     int render_scale = 0;    // index into mag_settings_render_scales
     int anti_aliasing = 0;   // index into mag_settings_anti_aliasing_values
     bool send_reports = true;  // the Reports checkbox (send_reports)
+    int voice_chat = 0;        // index into mag_settings_voice_values
+    // The voice volume in percent. The menus offer mag_settings_voice_volumes; a saved value between
+    // them stays as it is until the player picks a step (settings_form_set_voice_volume_step).
+    int voice_volume = 100;
+    std::string voice_input;   // the microphone's name as typed; blank is the system default
     // What the file holds now (ticket_file and portal_url, which the window does not edit, are
     // kept from it), and whether Apply must write it even unchanged: no file yet, or a damaged one
     // (`recovery`, which also holds Play MAG back until the player has reviewed the defaults).
@@ -67,6 +72,9 @@ bool settings_form_play_ready(const PortableSettings& draft, std::string& error)
 // Cancel: every field back to what the files hold.
 void settings_form_discard(SettingsForm&);
 void settings_form_fill_general(SettingsForm&, const PortableSettings&);
+// The voice volume menu: the step shown (the nearest to the volume), and choosing one.
+int settings_form_voice_volume_step(const SettingsForm&);
+void settings_form_set_voice_volume_step(SettingsForm&, int step);
 
 std::vector<SettingsBindingRow> settings_form_rows(const SettingsForm&, SettingsDevice, uint32_t scope);
 // Assigns `control` to one slot of an action in a scope. When the control is bound to another

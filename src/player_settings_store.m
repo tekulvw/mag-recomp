@@ -30,6 +30,28 @@ static BOOL integer(id value, NSInteger low, NSInteger high) {
            [value longLongValue] >= low && [value longLongValue] <= high;
 }
 
+BOOL MAGSettingsVoiceInputValid(id value) {
+    // As src/player_settings_file.cpp: UTF-8 of at most MAG_SETTINGS_VOICE_INPUT_LIMIT bytes, no
+    // control characters (U+0000 to U+001F, U+007F to U+009F) and no lone surrogates.
+    if (![value isKindOfClass:NSString.class]) return NO;
+    NSString *name = value;
+    NSData *bytes = [name dataUsingEncoding:NSUTF8StringEncoding allowLossyConversion:NO];
+    if (!bytes || bytes.length > MAG_SETTINGS_VOICE_INPUT_LIMIT) return NO;
+    for (NSUInteger i = 0; i < name.length; ++i) {
+        unichar c = [name characterAtIndex:i];
+        if (c < 0x20 || (c >= 0x7F && c < 0xA0)) return NO;
+    }
+    return YES;
+}
+
+NSDictionary<NSString *, NSString *> *MAGSettingsVoiceEnvironment(NSDictionary *settings) {
+    if (![settings[@"voice_chat"] isEqual:@"ptt"]) return @{};
+    NSMutableDictionary *out = [NSMutableDictionary dictionaryWithDictionary:@{@"MAG_VOICE_MODE":@"ptt",
+        @"MAG_VOICE_VOLUME":[(settings[@"voice_volume"] ?: @100) stringValue]}];
+    if ([settings[@"voice_input"] length]) out[@"MAG_VOICE_INPUT"] = settings[@"voice_input"];
+    return out;
+}
+
 NSDictionary *MAGSettingsValidate(id value, NSError **error) {
     if (error) *error = nil;
     if (![value isKindOfClass:NSDictionary.class]) return invalid(error, @"Settings must contain an object.");
@@ -79,8 +101,22 @@ NSDictionary *MAGSettingsValidate(id value, NSError **error) {
         return invalid(error, @"Setting \"send_reports\" must be true or false.");
     if (reports && [reports boolValue]) [normalized removeObjectForKey:@"send_reports"];
     else if (reports) normalized[@"send_reports"] = @NO;
+    // Optional, and each written only when not the default: voice chat ("off" or "ptt"), its volume
+    // (a whole percentage, 0 to 200) and the microphone's name (no field: the system default).
+    id voice = normalized[@"voice_chat"];
+    if (voice && (![voice isKindOfClass:NSString.class] || ![@[@"off",@"ptt"] containsObject:voice]))
+        return invalid(error, @"Choose Off or Push to talk for voice chat.");
+    if ([voice isEqual:@"off"]) [normalized removeObjectForKey:@"voice_chat"];
+    id volume = normalized[@"voice_volume"];
+    if (volume && !integer(volume,0,MAG_SETTINGS_VOICE_VOLUME_MAX))
+        return invalid(error, @"The voice volume must be a whole percentage from 0 to 200.");
+    if (volume && [volume integerValue] == 100) [normalized removeObjectForKey:@"voice_volume"];
+    id input = normalized[@"voice_input"];
+    if (input && !MAGSettingsVoiceInputValid(input)) return invalid(error, @MAG_SETTINGS_VOICE_INPUT_RULE);
+    if (input && ![input length]) [normalized removeObjectForKey:@"voice_input"];
     d = normalized;
-    if (d.count != MAGSettingsDefaults().count + (d[@"ticket_file"] ? 1 : 0) + (d[@"portal_url"] ? 1 : 0) + (d[@"send_reports"] ? 1 : 0))
+    if (d.count != MAGSettingsDefaults().count + (d[@"ticket_file"] ? 1 : 0) + (d[@"portal_url"] ? 1 : 0) + (d[@"send_reports"] ? 1 : 0) +
+                   (d[@"voice_chat"] ? 1 : 0) + (d[@"voice_volume"] ? 1 : 0) + (d[@"voice_input"] ? 1 : 0))
         return invalid(error, @"Settings contain missing or unsupported fields.");
     if (![d[@"server_address"] isKindOfClass:NSString.class]) return invalid(error, @"Enter a server hostname or IPv4 address.");
     NSString *host = [d[@"server_address"] stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet].lowercaseString;

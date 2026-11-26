@@ -1,6 +1,8 @@
 #pragma once
 #include <filesystem>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace mag {
 // The player's settings on Windows and Linux (parsed in player_settings_file.cpp): the macOS settings file's connection fields,
@@ -23,6 +25,12 @@ struct PortableSettings {
     // Send performance and error reports (docs/player-settings.md, "Reports"). The file holds
     // "send_reports": false only when the player turned them off; no field means on.
     bool send_reports = true;
+    // Voice chat (docs/player-settings.md, "Voice"): "off" or "ptt" (push to talk), the playback
+    // volume in percent (0 to 200) and the host input device's name (UTF-8; empty: the system's).
+    // Each is written only when not the default.
+    std::string voice_chat = "off";
+    int voice_volume = 100;
+    std::string voice_input;
 };
 // Parse a settings file. On failure returns false and an explanation in `error`.
 bool parse_portable_settings(const std::string &json, PortableSettings &settings, std::string &error);
@@ -34,6 +42,13 @@ bool check_display_mode(const std::string &mode, std::string &error);
 bool check_output_size(int width, int height, std::string &error);
 bool check_render_scale(int percent, std::string &error);
 bool check_anti_aliasing(const std::string &mode, std::string &error);
+bool check_voice_chat(const std::string &mode, std::string &error);
+bool check_voice_volume(int percent, std::string &error);
+bool check_voice_input(const std::string &name, std::string &error);
+// The engine environment the voice settings ask for: nothing with voice chat off; with push to
+// talk MAG_VOICE_MODE=ptt, MAG_VOICE_VOLUME=<percent> and, only when a device is named,
+// MAG_VOICE_INPUT=<name> (UTF-8).
+std::vector<std::pair<std::string, std::string>> voice_environment(const PortableSettings &settings);
 // The settings file itself: a missing file gives the defaults with `exists` false. Saving is
 // atomic (a temporary file renamed over the old one).
 bool load_portable_settings(const std::filesystem::path &path, PortableSettings &settings, bool &exists, std::string &error);

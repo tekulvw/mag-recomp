@@ -22,9 +22,14 @@ struct MagGameControlsAction {
     // Menu buttons (Confirm, Back): only menus read them, from the keyboard pad, so the adapter never
     // takes them over (docs/native-controls.md, 2.3 and 7.3); their keys still name prompts.
     bool menu_prompt = false;
+    // Host actions (Push to talk): MAG's own, read by the host and never fed to the game. They
+    // have no game token, so the adapter never maps, requires or answers them.
+    bool host = false;
 };
 
-constexpr unsigned MagGameControlsCatalogRevision = 4;
+constexpr unsigned MagGameControlsCatalogRevision = 5;
+// Push to talk (catalog revision 5): CRC-32 of "mag_push_to_talk", a name no game prompt uses.
+constexpr mag::ActionId MagGameControlsPushToTalk = 0xd8c5452f;
 
 std::span<const MagGameControlsAction> mag_game_controls_actions();
 // Actions an older catalog had. A saved profile may still bind them, so loading accepts them;

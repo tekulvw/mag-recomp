@@ -58,6 +58,12 @@ static NSStackView *row(NSString *title,NSString *hint,NSView *control) {
     return view;
 }
 
+// The voice rows need the voice service in this build (cmake/MagVoice.cmake defines it); without
+// it they stay visible, disabled, and the saved values are kept.
+#ifndef MAG_PLAYER_VOICE_SUPPORTED
+#define MAG_PLAYER_VOICE_SUPPORTED 0
+#endif
+
 @interface MAGSettingsController () <NSTextViewDelegate>
 @property(nonatomic,readwrite) NSDictionary *settings;
 @property(nonatomic,readwrite) BOOL editing;
@@ -72,7 +78,7 @@ static NSStackView *row(NSString *title,NSString *hint,NSView *control) {
     NSView *_controlsHost;
     id<MAGControlsSettingsPane> _controlsPane;
     NSTextField *_server,*_name,*_tcp,*_udp,*_errorLabel,*_status,*_countdown;
-    NSPopUpButton *_mode,*_resolution,*_rendering,*_aa;
+    NSPopUpButton *_mode,*_resolution,*_rendering,*_aa,*_voice,*_voiceVolume;
     NSButton *_applyButton,*_cancelButton,*_playButton,*_advancedButton,*_accountButton;
     NSStackView *_accountRow;
     NSBox *_accountSeparator;
@@ -181,6 +187,15 @@ static NSStackView *row(NSString *title,NSString *hint,NSView *control) {
     add(graphics,row(@MAG_SETTINGS_ANTI_ALIASING,@MAG_SETTINGS_NEXT_LAUNCH_HINT,_aa));add(_general,group(graphics));
     add(_general,label(@MAG_SETTINGS_GRAPHICS_NOTE,11,YES));
     gap=[NSView new];[gap.heightAnchor constraintEqualToConstant:6].active=YES;add(_general,gap);
+    heading=label(@MAG_SETTINGS_HEADING_VOICE,14,NO);heading.font=[NSFont boldSystemFontOfSize:14];add(_general,heading);
+    _voice=[NSPopUpButton new];[_voice addItemsWithTitles:titles(mag_settings_voice_labels,MAG_SETTINGS_VOICE_MODES)];_voice.identifier=@"voice_chat";
+    _voiceVolume=[NSPopUpButton new];[_voiceVolume addItemsWithTitles:titles(mag_settings_voice_volume_labels,MAG_SETTINGS_VOICE_VOLUMES)];_voiceVolume.identifier=@"voice_volume";
+    for(NSPopUpButton *control in @[_voice,_voiceVolume]){control.target=self;control.action=@selector(changed:);control.enabled=MAG_PLAYER_VOICE_SUPPORTED;}
+    NSStackView *voice=stack(NSUserInterfaceLayoutOrientationVertical,5);
+    add(voice,row(@MAG_SETTINGS_VOICE_CHAT,MAG_PLAYER_VOICE_SUPPORTED?@MAG_SETTINGS_VOICE_CHAT_HINT:@MAG_SETTINGS_VOICE_UNSUPPORTED_HINT,_voice));add(voice,separator());
+    add(voice,row(@MAG_SETTINGS_VOICE_VOLUME,@MAG_SETTINGS_VOICE_VOLUME_HINT,_voiceVolume));add(_general,group(voice));
+    add(_general,label(@MAG_SETTINGS_VOICE_NOTE,11,YES));
+    gap=[NSView new];[gap.heightAnchor constraintEqualToConstant:6].active=YES;add(_general,gap);
     heading=label(@MAG_SETTINGS_HEADING_REPORTS,14,NO);heading.font=[NSFont boldSystemFontOfSize:14];add(_general,heading);
     _sendReports=[NSButton checkboxWithTitle:@MAG_SETTINGS_SEND_REPORTS_ON target:self action:@selector(changed:)];_sendReports.identifier=@"send_reports";
     _reportButton=[NSButton buttonWithTitle:@MAG_SETTINGS_SEND_REPORT_NOW target:self action:@selector(sendReport:)];_reportButton.identifier=@"send_report";
@@ -223,6 +238,7 @@ static NSStackView *row(NSString *title,NSString *hint,NSView *control) {
     _playButton=[NSButton buttonWithTitle:@MAG_SETTINGS_PLAY target:self action:@selector(play:)];_playButton.keyEquivalent=@"\r";_playButton.hidden=YES;_playButton.enabled=!_recovery;_playButton.identifier=@"play";
     for(NSButton *button in @[_cancelButton,_applyButton,_playButton])[footer addArrangedSubview:button];
     add(_root,footer);_fields=@[_server,_name,_tcp,_udp,_mode,_resolution,_rendering,_aa,_sendReports,_section];
+    if(MAG_PLAYER_VOICE_SUPPORTED)_fields=[_fields arrayByAddingObjectsFromArray:@[_voice,_voiceVolume]];
     [self fill:settings];[self changed:nil];
     if(error)[self showError:error.localizedDescription];
     [self fit];[window center];return self;
@@ -290,6 +306,8 @@ static NSStackView *row(NSString *title,NSString *hint,NSView *control) {
     [_rendering selectItemAtIndex:index==NSNotFound?0:index];
     [_aa selectItemAtIndex:[settings[@"anti_aliasing"] isEqual:@"fxaa"]?1:0];
     _sendReports.state=[settings[@"send_reports"] isEqual:@NO]?NSControlStateValueOff:NSControlStateValueOn;
+    [_voice selectItemAtIndex:[settings[@"voice_chat"] isEqual:@"ptt"]?1:0];
+    [_voiceVolume selectItemAtIndex:mag_settings_voice_volume_step([settings[@"voice_volume"]?:@100 intValue])];
 }
 - (NSDictionary *)draft:(NSError **)error {
     NSMutableDictionary *draft=MAGSettingsDefaults().mutableCopy;draft[@"server_address"]=_server.stringValue;draft[@"player_name"]=_name.stringValue;
@@ -309,6 +327,13 @@ static NSStackView *row(NSString *title,NSString *hint,NSView *control) {
     draft[@"render_scale"]=@(mag_settings_render_scales[_rendering.indexOfSelectedItem]);
     draft[@"anti_aliasing"]=_aa.indexOfSelectedItem==1?@"fxaa":@"off";
     if(_sendReports.state==NSControlStateValueOff)draft[@"send_reports"]=@NO;  // no field: on
+    // Defaults are dropped by validation. A saved volume between the menu's steps is kept until
+    // another step is picked.
+    draft[@"voice_chat"]=_voice.indexOfSelectedItem==1?@"ptt":@"off";
+    NSNumber *volume=self.settings[@"voice_volume"]?:@100;
+    draft[@"voice_volume"]=_voiceVolume.indexOfSelectedItem==mag_settings_voice_volume_step(volume.intValue)?volume
+                           :@(mag_settings_voice_volumes[_voiceVolume.indexOfSelectedItem]);
+    if(_settings[@"voice_input"])draft[@"voice_input"]=_settings[@"voice_input"];  // edited in the file; keep it
     return MAGSettingsValidate(draft,error);
 }
 - (void)controlTextDidChange:(NSNotification *)note {[self changed:nil];}

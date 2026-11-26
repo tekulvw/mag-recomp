@@ -21,6 +21,12 @@
 #include <unistd.h>
 #endif
 
+// The voice rows need the voice service in this build (cmake/MagVoice.cmake defines it); without
+// it they stay visible, disabled, and the saved values are kept.
+#ifndef MAG_PLAYER_VOICE_SUPPORTED
+#define MAG_PLAYER_VOICE_SUPPORTED 0
+#endif
+
 namespace mag {
 namespace {
 constexpr int Glyph = 8, Line = 11;
@@ -145,6 +151,8 @@ int SettingsPanel::choice_value(const std::string& name) const {
     if (name == "choice:output") return form_.output;
     if (name == "choice:rendering") return form_.render_scale;
     if (name == "choice:aa") return form_.anti_aliasing;
+    if (name == "choice:voice") return form_.voice_chat;
+    if (name == "choice:voice_volume") return settings_form_voice_volume_step(form_);
     if (name == "choice:scope") return scope_;
     return form_.profile.mode == InputMode::KBM ? 1 : form_.profile.mode == InputMode::Controller ? 2 : 0;
 }
@@ -153,6 +161,8 @@ int SettingsPanel::choice_count(const std::string& name) const {
     if (name == "choice:output") return MAG_SETTINGS_OUTPUT_SIZES;
     if (name == "choice:rendering") return MAG_SETTINGS_RENDER_SCALES;
     if (name == "choice:aa") return MAG_SETTINGS_ANTI_ALIASING_MODES;
+    if (name == "choice:voice") return MAG_SETTINGS_VOICE_MODES;
+    if (name == "choice:voice_volume") return MAG_SETTINGS_VOICE_VOLUMES;
     if (name == "choice:scope") return MAG_CONTROLS_SCOPES;
     return MAG_CONTROLS_MODES;
 }
@@ -162,6 +172,8 @@ const char* SettingsPanel::choice_label(const std::string& name, int value) cons
     if (name == "choice:output") return mag_settings_output_labels[value];
     if (name == "choice:rendering") return mag_settings_render_scale_labels[value];
     if (name == "choice:aa") return mag_settings_anti_aliasing_labels[value];
+    if (name == "choice:voice") return mag_settings_voice_labels[value];
+    if (name == "choice:voice_volume") return mag_settings_voice_volume_labels[value];
     if (name == "choice:scope") return mag_controls_scope_labels[value];
     return mag_controls_mode_labels[value];
 }
@@ -169,6 +181,9 @@ void SettingsPanel::set_choice(const std::string& name, int value) {
     value = std::clamp(value, 0, choice_count(name) - 1);
     if (name == "choice:display") form_.borderless = value == 1;
     else if (name == "choice:output") form_.output = value;
+    else if (name == "choice:rendering") form_.render_scale = value;
+    else if (name == "choice:voice") form_.voice_chat = value;
+    else if (name == "choice:voice_volume") settings_form_set_voice_volume_step(form_, value);
     else if (name == "choice:scope") { end_capture(nullptr); scope_ = value; scroll_ = 0; refresh_rows(); }
     else if (name == "choice:mode")
         settings_form_set_mode(form_, value == 1 ? InputMode::KBM : value == 2 ? InputMode::Controller : InputMode::Auto);
@@ -262,6 +277,14 @@ SettingsPanel::Layout SettingsPanel::layout() const {
 #else
         y += words(Margin, y, MAG_SETTINGS_GRAPHICS_NOTE_NO_SCALE, 1, Content) + 14;
 #endif
+        y += words(Margin, y, MAG_SETTINGS_HEADING_VOICE, 0, Content, true) + 8;
+        group({{MAG_SETTINGS_VOICE_CHAT, MAG_PLAYER_VOICE_SUPPORTED ? MAG_SETTINGS_VOICE_CHAT_HINT : MAG_SETTINGS_VOICE_UNSUPPORTED_HINT,
+                "choice:voice", Kind::Choice, "", bool(MAG_PLAYER_VOICE_SUPPORTED)},
+               {MAG_SETTINGS_VOICE_VOLUME, MAG_SETTINGS_VOICE_VOLUME_HINT, "choice:voice_volume", Kind::Choice, "",
+                bool(MAG_PLAYER_VOICE_SUPPORTED)}},
+              false);
+        y += 6;
+        y += words(Margin, y, MAG_SETTINGS_VOICE_NOTE, 1, Content) + 14;
         y += words(Margin, y, MAG_SETTINGS_HEADING_REPORTS, 0, Content, true) + 8;
         const char* blocker = report_blocker();
         group({{MAG_SETTINGS_SEND_REPORTS, MAG_SETTINGS_SEND_REPORTS_HINT, "check:reports", Kind::Check, MAG_SETTINGS_SEND_REPORTS_ON, true},

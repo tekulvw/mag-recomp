@@ -6,6 +6,7 @@
 #include "mag_game_controls_adapter.h"
 #include "mag_game_controls_catalog.h"
 #include "mag_game_controls_memory.h"
+#include "mag_game_controls_push_to_talk.h"
 #include "player_controls_settings.h"
 #include "player_controls_store.h"
 #include "player_input_capture.h"
@@ -32,6 +33,7 @@ std::string last_status;  // what was printed last (statuses may name an error)
 std::mutex settings_lifetime;
 uint64_t settings_session{};
 std::atomic<bool> explicit_apply{false};
+std::atomic<bool> running{false};  // the adapter exists: push to talk can be read
 
 bool enabled() {
     const char* value = std::getenv("MAG_GAME_CONTROLS");
@@ -215,9 +217,11 @@ void start(const char*) {
     }
     register_settings(path, sessions.load());
     mag_game_controls_install_hooks(hook);
+    running.store(true, std::memory_order_release);
     std::fprintf(stderr, "[game-controls] registered; controller sticks keep the native response; awaiting the local player\n");
 }
 void stop() {
+    running.store(false, std::memory_order_release);
     mag::mag_controls_settings_unregister();
     mag_game_controls_install_hooks(nullptr);
     {
@@ -229,6 +233,19 @@ void stop() {
     mag_input_desktop_set_enabled(0);
 }
 
+}  // namespace
+
+extern "C" int mag_game_controls_push_to_talk(int* held, int* focused) {
+    if (held) *held = 0;
+    if (focused) *focused = 0;
+    if (!running.load(std::memory_order_acquire)) return 0;
+    const auto state = mag::mag_controls_host_action(MagGameControlsPushToTalk);
+    if (held) *held = state.held;
+    if (focused) *focused = state.focused;
+    return 1;
+}
+
+namespace {
 const bool registered = [] {
     MagExtensionCallbacks callbacks{};
     callbacks.prepare = prepare;

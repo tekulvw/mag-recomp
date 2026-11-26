@@ -55,6 +55,7 @@ enum : int {
     IdKeyboardMouse = 200, IdController, IdMode, IdScope, IdSensitivity, IdInvert, IdReset, IdRows, IdHint,
     IdError = 300, IdRevert, IdKeep, IdCancel, IdApply, IdPlay, IdStatus, IdAccountStatus, IdReportStatus,
     IdDebugPage = 120, IdDebugNote,
+    IdVoiceChat = 130, IdVoiceVolume,
     IdDebugItem = 400,  // + its index in mag_settings_debug_items; its hint is IdDebugHint + index
     IdDebugHint = 450,
     IdBinding = 1000,  // + row * 4 + slot * 2, and + 1 for its clear button
@@ -186,11 +187,12 @@ struct Window {
     HWND account_button = nullptr, account_status = nullptr, advanced_link = nullptr;
     HWND tcp = nullptr, udp = nullptr, tcp_label = nullptr, udp_label = nullptr, connection_note = nullptr, graphics_note = nullptr;
     HWND display = nullptr, output = nullptr, rendering = nullptr, anti_aliasing = nullptr;
+    HWND heading_voice = nullptr, voice_chat = nullptr, voice_volume = nullptr, voice_note = nullptr;
     HWND heading_reports = nullptr, send_reports = nullptr, report_button = nullptr, report_status = nullptr;
     std::string report_requested;  // after Send report: requested, or why it failed
     // Send report's comment: a multi-line box under the Reports group, its title, hint and counter.
     HWND report_comment_title = nullptr, report_comment_hint = nullptr, report_comment = nullptr, report_counter = nullptr;
-    std::vector<Row> connection_rows, graphics_rows, reports_rows;
+    std::vector<Row> connection_rows, graphics_rows, voice_rows, reports_rows;
     // Debug: one row per mag_settings_debug_items entry.
     HWND heading_debug = nullptr, debug_note = nullptr;
     std::vector<Row> debug_rows;
@@ -302,6 +304,13 @@ bool scale_supported() { return true; }
 #else
 bool scale_supported() { return false; }
 #endif
+// Voice chat comes with the voice service (cmake/MagVoice.cmake defines MAG_PLAYER_VOICE_SUPPORTED);
+// without it the rows stay visible, disabled, and the saved values are kept.
+#if MAG_PLAYER_VOICE_SUPPORTED
+bool voice_supported() { return true; }
+#else
+bool voice_supported() { return false; }
+#endif
 
 void layout();
 void show_error(const std::string& message) {
@@ -326,6 +335,9 @@ void read_general() {
     f.render_scale = int(SendMessageW(s->rendering, CB_GETCURSEL, 0, 0));
     f.anti_aliasing = int(SendMessageW(s->anti_aliasing, CB_GETCURSEL, 0, 0));
     f.send_reports = SendMessageW(s->send_reports, BM_GETCHECK, 0, 0) == BST_CHECKED;
+    if (const int voice = int(SendMessageW(s->voice_chat, CB_GETCURSEL, 0, 0)); voice >= 0) f.voice_chat = voice;
+    // The step shown keeps a saved volume between steps; another step replaces it.
+    if (const int step = int(SendMessageW(s->voice_volume, CB_GETCURSEL, 0, 0)); step >= 0) settings_form_set_voice_volume_step(f, step);
 }
 bool filling = false;  // EN_CHANGE from filling the fields is not an edit
 void fill_general() {
@@ -341,6 +353,8 @@ void fill_general() {
     SendMessageW(s->rendering, CB_SETCURSEL, f.render_scale, 0);
     SendMessageW(s->anti_aliasing, CB_SETCURSEL, f.anti_aliasing, 0);
     SendMessageW(s->send_reports, BM_SETCHECK, f.send_reports ? BST_CHECKED : BST_UNCHECKED, 0);
+    SendMessageW(s->voice_chat, CB_SETCURSEL, f.voice_chat, 0);
+    SendMessageW(s->voice_volume, CB_SETCURSEL, settings_form_voice_volume_step(f), 0);
 }
 
 // The Account row: the link to the portal of the server being edited, or why there is none.
@@ -414,7 +428,8 @@ void layout_group(int& y, const std::vector<Row>& list, bool advanced_part) {
         const int text = title + (hint ? 2 + hint : 0), height = std::max(MAG_SETTINGS_ROW_HEIGHT, text + 4);
         place(row.title, inner, y + (height - text) / 2, labels, title);
         if (row.hint) place(row.hint, inner, y + (height - text) / 2 + title + 2, labels, hint);
-        const bool list_box = GetDlgCtrlID(row.control) >= IdDisplay && GetDlgCtrlID(row.control) <= IdAntiAliasing;
+        const int id = GetDlgCtrlID(row.control);
+        const bool list_box = (id >= IdDisplay && id <= IdAntiAliasing) || id == IdVoiceChat || id == IdVoiceVolume;
         place(row.control, inner + inner_width - MAG_SETTINGS_CONTROL_WIDTH, y + (height - 24) / 2, MAG_SETTINGS_CONTROL_WIDTH,
               list_box ? 200 : 24);
         y += height;
@@ -486,6 +501,13 @@ void layout() {
         const int graphics = text_height(s->graphics_note, width);
         place(s->graphics_note, left, y, width, graphics);
         y += graphics + spacing + 6;
+        place(s->heading_voice, left, y, width, 20);
+        y += 20 + spacing;
+        layout_group(y, s->voice_rows, false);
+        y += spacing;
+        const int voice = text_height(s->voice_note, width);
+        place(s->voice_note, left, y, width, voice);
+        y += voice + spacing + 6;
         place(s->heading_reports, left, y, width, 20);
         y += 20 + spacing;
         layout_group(y, s->reports_rows, false);
@@ -1044,6 +1066,7 @@ void set_editing_enabled(bool enabled) {
     for (HWND h : {s->segment[0], s->segment[1], s->segment[2], s->server, s->name, s->tcp, s->udp, s->display, s->output, s->advanced_link,
                    s->account_button, s->send_reports, s->report_button, s->cancel, s->play})
         EnableWindow(h, enabled);
+    for (HWND h : {s->voice_chat, s->voice_volume}) EnableWindow(h, enabled && voice_supported());
     EnableWindow(s->apply, false);
     if (enabled) {
         EnableWindow(s->output, !s->form->borderless);
@@ -1268,7 +1291,7 @@ void command(int id, int code) {
     case IdServer: case IdName: case IdTcp: case IdUdp:
         if (code == EN_CHANGE && !filling) changed();
         return;
-    case IdDisplay: case IdOutput: case IdRendering: case IdAntiAliasing:
+    case IdDisplay: case IdOutput: case IdRendering: case IdAntiAliasing: case IdVoiceChat: case IdVoiceVolume:
         if (code == CBN_SELCHANGE) changed();
         return;
     case IdSendReports: changed(); return;
@@ -1499,6 +1522,17 @@ void build() {
     EnableWindow(w.rendering, scale_supported());
     EnableWindow(w.anti_aliasing, false);
     w.graphics_note = small_label(scale_supported() ? MAG_SETTINGS_GRAPHICS_NOTE : MAG_SETTINGS_GRAPHICS_NOTE_NO_SCALE);
+    // General: Voice.
+    w.heading_voice = label(MAG_SETTINGS_HEADING_VOICE, s->heading);
+    heading_text.push_back(w.heading_voice);
+    w.voice_chat = combo(IdVoiceChat, mag_settings_voice_labels, MAG_SETTINGS_VOICE_MODES);
+    row(w.voice_rows, MAG_SETTINGS_VOICE_CHAT, voice_supported() ? MAG_SETTINGS_VOICE_CHAT_HINT : MAG_SETTINGS_VOICE_UNSUPPORTED_HINT,
+        w.voice_chat);
+    w.voice_volume = combo(IdVoiceVolume, mag_settings_voice_volume_labels, MAG_SETTINGS_VOICE_VOLUMES);
+    row(w.voice_rows, MAG_SETTINGS_VOICE_VOLUME, MAG_SETTINGS_VOICE_VOLUME_HINT, w.voice_volume);
+    EnableWindow(w.voice_chat, voice_supported());
+    EnableWindow(w.voice_volume, voice_supported());
+    w.voice_note = small_label(MAG_SETTINGS_VOICE_NOTE);
     // General: Reports.
     w.heading_reports = label(MAG_SETTINGS_HEADING_REPORTS, s->heading);
     heading_text.push_back(w.heading_reports);
@@ -1516,7 +1550,7 @@ void build() {
     small_text.push_back(w.report_counter);
     w.general.insert(w.general.end(), {w.report_comment_title, w.report_comment_hint, w.report_comment, w.report_counter});
     w.general.insert(w.general.end(), {w.heading_connection, w.advanced_link, w.connection_note, w.heading_graphics, w.graphics_note,
-                                       w.heading_reports});
+                                       w.heading_voice, w.voice_note, w.heading_reports});
     // Controls.
     w.device[0] = button(MAG_CONTROLS_DEVICE_KBM, IdKeyboardMouse, segment | WS_GROUP);
     w.device[1] = button(MAG_CONTROLS_DEVICE_CONTROLLER, IdController, segment);

@@ -156,8 +156,11 @@ uint32_t Service::end() {
     std::lock_guard<std::mutex> hold(lock_);
     if (!initialized_) return status::NotInitialized;
     summary(now(), true);
+    if (started_ && options_.source) options_.source->stop();
     initialized_ = false;
     started_ = false;
+    gate_ = false;
+    energy_ = 0;
     ports_.clear();
     return status::Ok;
 }
@@ -169,6 +172,7 @@ uint32_t Service::start() {
         started_ = true;
         started_at_ = now();
         frames_done_ = 0;
+        if (options_.source) options_.source->start();
     }
     return status::Ok;
 }
@@ -176,6 +180,7 @@ uint32_t Service::start() {
 uint32_t Service::stop() {
     std::lock_guard<std::mutex> hold(lock_);
     if (!initialized_) return status::NotInitialized;
+    if (started_ && options_.source) options_.source->stop();
     started_ = false;
     gate_ = false;
     energy_ = 0;

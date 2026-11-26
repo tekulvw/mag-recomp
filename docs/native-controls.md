@@ -307,6 +307,28 @@ else the game reads on D-pad up and down, since the adapter cannot tell a scope 
 Upgrading adds each wheel step only where the player uses it for nothing on foot and the D-pad
 direction has fewer than two keyboard or mouse controls there.
 
+**Catalog revision 5** adds **Push to talk** (`MagGameControlsPushToTalk`, `0xD8C5452F`, the CRC-32
+of `mag_push_to_talk`, a name no game prompt uses), in its own settings group "Voice". It is a
+*host action*: MAG's own, read by the voice service (docs/voice-chat.md) and never by the game. The
+adapter treats it as no catalog action at all (`game_action` in the adapter): it is never part of a
+contract's needed actions, never maps a channel and is never answered to a watched token, so
+binding, unbinding or holding it changes nothing the game sees. Its default is K (USB HID usage 14)
+on foot. It has no controller default; a remappable controller button may be bound to it like any
+digital action, and then it counts only while the profile remaps the controller (the game's own
+button stands otherwise). Upgrading a profile from an earlier revision adds K once, only where the
+player uses K for nothing on foot and has no keyboard or mouse binding of their own for it, and
+never adds a controller button. (From revision 5 on, the revision 4 wheel step is not added again.)
+
+Host actions are tracked beside the input engine (`player_host_actions.h`, in both the portable C++
+engine and the Rust bridge, `mag_controls_host_action`): an action is held while one of its bindings
+is down and the game window has input focus, whatever the game's input context (on foot, a seat, a
+menu). Losing focus (another app, or the settings panel owning input) releases it at once, and a
+control already held when focus returns counts only after it is released once. The keys reach the
+tracker through the desktop capture, so they count while the adapter owns the keyboard: on foot,
+seated and in the in-match menus it attaches to, but not in Controller input mode, where only a
+controller binding works. The voice service reads it through `mag_game_controls_push_to_talk`
+(`mag_game_controls_push_to_talk.h`), which reports nothing while the adapter is off.
+
 Token aliases (a watched token that stands for a catalog action): `0x68C3570D` is Aim,
 `0x9716C7A1` is Crouch/prone, `0x71C8F2F0` (contaction, the held form) is Interact, `0xC6DCD89F`
 (commandscreen) is Select, `0xE88EB86F` (respawn) is Start, `0xF280DD78` and `0x6BF6CA31`
@@ -1100,7 +1122,7 @@ The settings registration uses the catalog (`mag_game_controls_descriptors`): on
 contexts OnFoot|Menu for system actions and OnFoot otherwise, sources keyboard|mouse|controller for
 controller-capable actions and keyboard|mouse otherwise, group "Native menu / command buttons",
 "On-foot actions" or the situational action's own group ("Prompts and downed", "Commands",
-"Vehicles"). Validation is the catalog's profile validation; upgrade is the catalog upgrade.
+"Vehicles", and "Voice" for Push to talk). Validation is the catalog's profile validation; upgrade is the catalog upgrade.
 With a session, apply queues the profile on the adapter (after the session ends it reports that the
 saved controls apply next launch). Without a session (startup), apply only records that the player
 chose explicitly, so the startup mode override no longer applies.
