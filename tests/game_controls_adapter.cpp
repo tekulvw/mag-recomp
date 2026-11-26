@@ -15,6 +15,7 @@
 #include <map>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
 using namespace mag;
 using Hook = MagControlsHook;
@@ -1397,6 +1398,94 @@ void unread_presses_are_spent() {
     require(tick("held released") == 0.0f, "releasing a held Left did not release D-pad Left");
 }
 
+// The respawn bar starts reading the D-pad about 1.5 s after the awaiting-spawn state begins (a
+// Windows lab trace). A press made on the respawn screen before that first read waits for it, for a
+// bounded time; presses made on foot never reach it, and a press no menu handler read never acts
+// on foot after the player spawns.
+void menu_press_waits_for_its_reader() {
+    Harness h;
+    uint32_t record = 0;
+    const uint32_t bar = route_handler(h.m, record);  // a routed UI element, as the respawn bar is
+    require(h.idle_tick() == Attached, "first tick did not attach on foot");
+    const auto press = [&](uint32_t key, bool down) { mag_controls_push_event({{InputSource::Keyboard, key}, down, time_ns()}); };
+    const auto idle_for = [&](int ms) {
+        const auto end = std::chrono::steady_clock::now() + std::chrono::milliseconds(ms);
+        do {
+            h.idle_tick();
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        } while (std::chrono::steady_clock::now() < end);
+    };
+    // On foot: taps of Left and Right that nothing reads.
+    for (const uint32_t key : {80u, 79u, 80u}) {
+        press(key, true);
+        h.idle_tick();
+        press(key, false);
+        h.idle_tick();
+    }
+    // The player dies and waits on the respawn screen (the awaiting-spawn state), a menu.
+    h.m.put32(State, 0x01A6C2F8);
+    h.m.put8(State + 0x10, 20);
+    require(h.idle_tick() == "native menu buttons attached", "the respawn screen attached on foot");
+    // Right, half a second in, before the bar reads the D-pad.
+    idle_for(500);
+    press(79, true);
+    h.idle_tick();
+    press(79, false);
+    idle_for(500);
+    // The bar starts reading D-pad Up, Left and Right.
+    const uint32_t up = watch(h.m, bar, 1, 0xF1F918C7, 0), left = watch(h.m, bar, 2, 0x853D3A53, 2),
+                   right = watch(h.m, bar, 3, 0x053EC6ED, 3);
+    const auto read = [&](uint32_t control) {
+        const bool taken = h.recognize_record(control, bar);
+        return taken ? mag_guest_tuple_value(h.tuple_at(control)) : -1.0f;
+    };
+    struct Pad { float up, left, right; };
+    const auto tick = [&] {
+        h.begin_tick();
+        h.enter_handler(bar);
+        const Pad pad{read(up), read(left), read(right)};
+        h.fire(Hook::HandlerExit);
+        h.enter_handler();
+        h.end_poll();
+        h.enter_actor();
+        h.end_tick();
+        return pad;
+    };
+    Pad pad = tick();
+    require(pad.right == 1.0f, "a Right pressed on the respawn screen before the bar read it did not switch the tab");
+    require(pad.left <= 0.0f, "a Left tapped on foot reached the respawn bar");
+    pad = tick();
+    require(pad.right == 0.0f && pad.left <= 0.0f, "the respawn screen's Right did not release, or an old tap followed it");
+    for (int i = 0; i < 3; ++i) {
+        pad = tick();
+        require(pad.right <= 0.0f && pad.left <= 0.0f, "a press reached the respawn bar twice or late");
+    }
+    // A press that nothing on the menu reads for the whole wait is spent.
+    press(80, true);
+    h.idle_tick();
+    press(80, false);
+    idle_for(3300);
+    pad = tick();
+    require(pad.left <= 0.0f, "a press left unread on a menu acted after the wait");
+    // Spawning: a press made on the respawn screen that no menu handler read never acts on foot.
+    press(82, true);
+    h.idle_tick();
+    press(82, false);
+    h.idle_tick();
+    h.m.put32(State, BasicStateVtable);
+    h.m.put8(State + 0x10, 1);
+    pad = tick();
+    require(h.status() == Attached, "respawning did not attach on foot");
+    require(pad.up <= 0.0f, "an Up pressed on the respawn screen acted on foot after spawning");
+    // A fresh press on foot still acts at once.
+    press(82, true);
+    pad = tick();
+    require(pad.up == 1.0f, "a fresh Up on foot did not press D-pad Up");
+    press(82, false);
+    pad = tick();
+    require(pad.up == 0.0f, "releasing Up did not release D-pad Up");
+}
+
 void census_line(const char* line) { census_lines.push_back(line); }
 
 // The census describes each distinct handler update once, and changes nothing.
@@ -1785,7 +1874,7 @@ int main(int argc, char** argv) {
         {"mouse", mouse_look},       {"assist", aim_assist},     {"lifecycle", lifecycle},
         {"threads", threads_and_errors}, {"snapshot", update_snapshot}, {"menu", menu_holds_look},
         {"withdrawn", withdrawn_frame},
-        {"menu-pad", menu_keyboard_pad}, {"menu-look-pad", menu_holding_look_gets_the_pad}, {"situational", situational_actions}, {"closed-menu-confirm", closed_menu_never_sees_confirm}, {"downed-x", downed_x_bleeds_out}, {"unread-presses", unread_presses_are_spent}, {"census", census},
+        {"menu-pad", menu_keyboard_pad}, {"menu-look-pad", menu_holding_look_gets_the_pad}, {"situational", situational_actions}, {"closed-menu-confirm", closed_menu_never_sees_confirm}, {"downed-x", downed_x_bleeds_out}, {"unread-presses", unread_presses_are_spent}, {"menu-press-waits", menu_press_waits_for_its_reader}, {"census", census},
         {"prompt-queries", prompt_queries}, {"mounted", mounted_weapon},
         {"registered-on-foot", registered_handler_on_foot}, {"mounted-controller-mode", mounted_weapon_controller_mode},
         {"vehicle-driver", vehicle_driver}};
