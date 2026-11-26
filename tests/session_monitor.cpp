@@ -12,6 +12,12 @@
 #include <sstream>
 #include <string>
 #include <thread>
+#ifndef _WIN32
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <unistd.h>
+#endif
 
 using namespace mag::session;
 static int failures = 0;
@@ -333,6 +339,37 @@ static void network(const char *scratch) {
     std::ofstream(std::string(scratch) + "/network.json") << json;
 }
 
+// The OS's round-trip time for a real loopback TCP connection (POSIX here; Windows' SIO_TCP_INFO is
+// checked on a Windows machine with the same function). Not a socket: no time.
+static void round_trip() {
+    CHECK(net::tcp_round_trip_ms(-1) < 0);
+#ifndef _WIN32
+    const int listener = socket(AF_INET, SOCK_STREAM, 0), client = socket(AF_INET, SOCK_STREAM, 0);
+    sockaddr_in a{};
+    a.sin_family = AF_INET;
+    a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    socklen_t length = sizeof a;
+    CHECK(bind(listener, (sockaddr *)&a, sizeof a) == 0 && listen(listener, 1) == 0);
+    CHECK(getsockname(listener, (sockaddr *)&a, &length) == 0);
+    CHECK(connect(client, (sockaddr *)&a, sizeof a) == 0);
+    const int server_side = accept(listener, nullptr, nullptr);
+    char buffer[64] = {};
+    for (int i = 0; i < 20; ++i) {
+        CHECK(send(client, "ping", 4, 0) == 4);
+        CHECK(recv(server_side, buffer, sizeof buffer, 0) == 4);
+        CHECK(send(server_side, "pong", 4, 0) == 4);
+        CHECK(recv(client, buffer, sizeof buffer, 0) == 4);
+    }
+    const double rtt = net::tcp_round_trip_ms(client);
+    std::printf("[session_monitor] loopback tcp rtt %.3f ms\n", rtt);
+    CHECK(rtt >= 0 && rtt < 1000);  // known, and a loopback one is short
+    CHECK(net::tcp_round_trip_ms(listener) < 1000);
+    close(server_side);
+    close(client);
+    close(listener);
+#endif
+}
+
 static void process_monitor(const char *scratch) {
 #ifdef _WIN32
     _putenv_s("MAG_SESSION_DIR", scratch);
@@ -386,6 +423,7 @@ int main(int argc, char **argv) {
     buckets();
     counters(argv[1]);
     network(argv[1]);
+    round_trip();
     process_monitor(argv[1]);
     benchmark();
     if (failures) { std::fprintf(stderr, "%d failures\n", failures); return 1; }
