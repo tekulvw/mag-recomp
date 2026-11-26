@@ -343,3 +343,15 @@ extern "C" void mag_session_monitor_finish(const char *ending) {
     if (!g_monitor || g_finished.exchange(true)) return;
     write_summary(ending && *ending ? ending : "exit");
 }
+
+extern "C" uint64_t mag_session_now_ns(void) { return now_ns(); }
+
+extern "C" uint64_t mag_session_last_frame_ns(void) {
+    const Monitor *m = g_monitor;
+    return m ? m->last_frame_ns() : 0;
+}
+
+extern "C" int mag_session_in_match(void) {
+    const Monitor *m = g_monitor;
+    return m && m->phase() == MAG_SESSION_PHASE_MATCH;
+}

@@ -49,6 +49,11 @@ void mag_session_set_phase(enum MagSessionPhase phase);
 /* Writes the final summary. `ending` says how the session ended ("exit", "window_closed"). Called
  * at exit (an atexit handler does it when nothing else did) and before an abrupt _Exit. */
 void mag_session_monitor_finish(const char *ending);
+/* For the stall reporter (src/mag_stall_reporter.h): the monitor's clock, the time of the latest
+ * presented frame on it (0 before the first), and whether the phase is MAG_SESSION_PHASE_MATCH. */
+uint64_t mag_session_now_ns(void);
+uint64_t mag_session_last_frame_ns(void);
+int mag_session_in_match(void);
 
 #ifdef __cplusplus
 }
@@ -131,6 +136,8 @@ public:
     /* The counters at `now_ns`. Also closes any whole minutes that have passed since the last
      * snapshot into the per-minute series, so take one at least once a minute. */
     Snapshot snapshot(uint64_t now_ns);
+    uint64_t last_frame_ns() const { return last_ns_.load(std::memory_order_relaxed); }
+    int phase() const { return phase_.load(std::memory_order_relaxed); }
 
 private:
     uint64_t start_ns_;

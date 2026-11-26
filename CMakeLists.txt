@@ -291,6 +291,8 @@ add_executable(${PROJECT_NAME}
     src/mag_runtime_defaults_early.cpp
     src/mag_extension.cpp
     src/mag_session_monitor.cpp
+    src/mag_stall_reporter.cpp
+    src/mag_stall_probe.cpp
     src/mag_jobio_selector.cpp
     src/mag_timer_gcm_pump_diagnostics.cpp
     src/stubs.cpp
