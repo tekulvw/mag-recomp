@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.13.0](https://github.com/tekulvw/mag-recomp/compare/v0.12.0...v0.13.0) (2026-11-26)
+
+
+### Features
+
+* **reports:** report sustained frame-rate drops, not just long frames ([#329](https://github.com/tekulvw/mag-recomp/issues/329)) ([2d94891](https://github.com/tekulvw/mag-recomp/commit/2d948915775503614a2045f211b5cd65e9e0e5e3))
+* **reports:** say what each slow frame built or uploaded ([#332](https://github.com/tekulvw/mag-recomp/issues/332)) ([2264f05](https://github.com/tekulvw/mag-recomp/commit/2264f05c217309f166f17290b6a244ec2f351337))
+* **sdk:** pin runtime-2026.11.26-buildstats so slow frames say what they built ([#334](https://github.com/tekulvw/mag-recomp/issues/334)) ([9c3d566](https://github.com/tekulvw/mag-recomp/commit/9c3d566e25a23fafed68e9fcee653f9b980b1e43))
+
+
+### Bug Fixes
+
+* **reports:** build the network monitor on Windows again ([#330](https://github.com/tekulvw/mag-recomp/issues/330)) ([44da7f2](https://github.com/tekulvw/mag-recomp/commit/44da7f276bb03576c5e643cb6b4ac40b684b0683))
+
+
+### Performance
+
+* **engine:** keep translated shaders between sessions on Windows ([#333](https://github.com/tekulvw/mag-recomp/issues/333)) ([eaba957](https://github.com/tekulvw/mag-recomp/commit/eaba957379b06c469542580cfd86ff838ebee8a7))
+* **engine:** keep Vulkan pipelines between sessions on Windows ([#335](https://github.com/tekulvw/mag-recomp/issues/335)) ([48ebd22](https://github.com/tekulvw/mag-recomp/commit/48ebd2289819a2e84b878d69cf9c0d8438452259))
+
 ## [0.12.0](https://github.com/tekulvw/mag-recomp/compare/v0.11.0...v0.12.0) (2026-11-26)
 
 
