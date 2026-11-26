@@ -4,8 +4,8 @@
   "upstream": "https://github.com/sp00nznet/ps3recomp",
   "ps3recomp": {
     "runtime": {
-      "tag": "mag-recomp/runtime-2026.11.26-udpicmp",
-      "commit": "9fc09bc938dd86f7ad456bf518541cb1620fce2a",
+      "tag": "mag-recomp/runtime-2026.11.26-netobserver",
+      "commit": "f80e949bc492f4afd7436bf07334d5207db9329a",
       "path": "local/ps3recomp-runtime"
     },
     "lifter-spu": {
@@ -35,13 +35,13 @@
     }
   },
   "allowed_runtime_revisions": [
-    "9fc09bc938dd86f7ad456bf518541cb1620fce2a"
+    "f80e949bc492f4afd7436bf07334d5207db9329a"
   ],
   "strict_runtime_revisions": [
-    "9fc09bc938dd86f7ad456bf518541cb1620fce2a"
+    "f80e949bc492f4afd7436bf07334d5207db9329a"
   ],
   "strict_hle_runtime_revisions": [
-    "9fc09bc938dd86f7ad456bf518541cb1620fce2a"
+    "f80e949bc492f4afd7436bf07334d5207db9329a"
   ],
   "first_nonblack_capture_revisions": [],
   "allowed_lifter_revisions": [
