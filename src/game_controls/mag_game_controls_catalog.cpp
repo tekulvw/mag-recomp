@@ -19,8 +19,8 @@ constexpr ActionId Confirm = 0x33e32a99 /* os_enter */, Cancel = 0x75453127 /* o
     Smoke = 0xe3dd5118 /* vsmoke */;
 constexpr const char *Prompts = "Prompts and downed", *Commands = "Commands", *Vehicles = "Vehicles";
 constexpr MagGameControlsAction catalog[] = {
-    {Forward, "Move forward", false}, {Backward, "Move backward", false},
-    {Left, "Strafe left", false}, {Right, "Strafe right", false},
+    {Forward, "Move forward (vehicles: accelerate)", false}, {Backward, "Move backward (vehicles: brake / reverse)", false},
+    {Left, "Strafe left (vehicles: steer left)", false}, {Right, "Strafe right (vehicles: steer right)", false},
     {Fire, "Fire / use equipment", true}, {Aim, "Aim / scope", true}, {Jump, "Jump", true},
     {Sprint, "Sprint", true}, {Reload, "Reload", true}, {Interact, "Interact (hold for objectives)", true},
     {Stance, "Crouch / prone (tap / hold)", true}, {CycleWeapons, "Cycle weapons", true},
@@ -74,6 +74,9 @@ ActionId mag_game_controls_token_action(uint32_t token) {
 
 mag::ActionId mag_game_controls_downed_alias(ActionId action) { return action == Bleedout ? Confirm : 0; }
 mag::ActionId mag_game_controls_seat_alias(ActionId action) { return action == CycleWeapons ? Aim : 0; }
+mag::ActionId mag_game_controls_drive_alias(ActionId action) {
+    return action == CycleWeapons ? Forward : action == CycleEquipment ? Backward : 0;
+}
 
 uint32_t mag_game_controls_name_token(std::string_view name) {
     uint32_t crc = 0xFFFFFFFFu;

@@ -39,7 +39,7 @@ def check_contract(test, body):
     test.assertLessEqual(set(report), {'schema_version', 'report_id', 'trigger', 'client', 'session', 'metrics', 'logs'})
     test.assertEqual(report['schema_version'], 1)
     test.assertRegex(report['report_id'], UUID)
-    test.assertIn(report['trigger'], {'crash', 'launch_error', 'halt', 'slow_frames', 'audio', 'manual'})
+    test.assertIn(report['trigger'], {'crash', 'launch_error', 'halt', 'slow_frames', 'network', 'audio', 'manual'})
     client = report['client']
     test.assertTrue(1 <= len(client['version']) <= 64)
     test.assertIn(client['platform'], {'macos', 'linux', 'windows'})

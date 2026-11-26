@@ -1,5 +1,66 @@
 # Changelog
 
+## [0.13.0](https://github.com/tekulvw/mag-recomp/compare/v0.12.0...v0.13.0) (2026-11-26)
+
+
+### Features
+
+* **reports:** report sustained frame-rate drops, not just long frames ([#329](https://github.com/tekulvw/mag-recomp/issues/329)) ([2d94891](https://github.com/tekulvw/mag-recomp/commit/2d948915775503614a2045f211b5cd65e9e0e5e3))
+* **reports:** say what each slow frame built or uploaded ([#332](https://github.com/tekulvw/mag-recomp/issues/332)) ([2264f05](https://github.com/tekulvw/mag-recomp/commit/2264f05c217309f166f17290b6a244ec2f351337))
+* **sdk:** pin runtime-2026.11.26-buildstats so slow frames say what they built ([#334](https://github.com/tekulvw/mag-recomp/issues/334)) ([9c3d566](https://github.com/tekulvw/mag-recomp/commit/9c3d566e25a23fafed68e9fcee653f9b980b1e43))
+
+
+### Bug Fixes
+
+* **reports:** build the network monitor on Windows again ([#330](https://github.com/tekulvw/mag-recomp/issues/330)) ([44da7f2](https://github.com/tekulvw/mag-recomp/commit/44da7f276bb03576c5e643cb6b4ac40b684b0683))
+
+
+### Performance
+
+* **engine:** keep translated shaders between sessions on Windows ([#333](https://github.com/tekulvw/mag-recomp/issues/333)) ([eaba957](https://github.com/tekulvw/mag-recomp/commit/eaba957379b06c469542580cfd86ff838ebee8a7))
+* **engine:** keep Vulkan pipelines between sessions on Windows ([#335](https://github.com/tekulvw/mag-recomp/issues/335)) ([48ebd22](https://github.com/tekulvw/mag-recomp/commit/48ebd2289819a2e84b878d69cf9c0d8438452259))
+
+## [0.12.0](https://github.com/tekulvw/mag-recomp/compare/v0.11.0...v0.12.0) (2026-11-26)
+
+
+### Features
+
+* **reports:** tell frame-rate dips from network gaps ([#324](https://github.com/tekulvw/mag-recomp/issues/324)) ([2f00988](https://github.com/tekulvw/mag-recomp/commit/2f00988655f02f70bfc0b1255efd8c9f4126be1d))
+* **sdk:** pin runtime-2026.11.26-netobserver so sessions measure network health ([#328](https://github.com/tekulvw/mag-recomp/issues/328)) ([f01bd12](https://github.com/tekulvw/mag-recomp/commit/f01bd12e63c262127d252e5101f2fdc05bca62fe))
+
+
+### Bug Fixes
+
+* **controls:** spend unread presses on menus again, so spawn-map arrows no longer move the respawn bar ([#327](https://github.com/tekulvw/mag-recomp/issues/327)) ([2352422](https://github.com/tekulvw/mag-recomp/commit/23524221c2f42d15e0438bddc3eab6423ec17760))
+* **sdk:** pin runtime-2026.11.26-udpicmp so a stray ICMP no longer drops a Windows player from the match ([#325](https://github.com/tekulvw/mag-recomp/issues/325)) ([9394018](https://github.com/tekulvw/mag-recomp/commit/93940180fd1c169e0aa8ac112ea74466c5ad0a52))
+
+## [0.11.0](https://github.com/tekulvw/mag-recomp/compare/v0.10.3...v0.11.0) (2026-11-26)
+
+
+### Features
+
+* **engine:** report what each guest thread is doing when a match freezes ([#323](https://github.com/tekulvw/mag-recomp/issues/323)) ([382f09c](https://github.com/tekulvw/mag-recomp/commit/382f09c01c9492ad6a2191b16c0bc9be9432c16e))
+
+
+### Bug Fixes
+
+* **controls:** drive ground vehicles with W and S on keyboard ([#318](https://github.com/tekulvw/mag-recomp/issues/318)) ([93c2400](https://github.com/tekulvw/mag-recomp/commit/93c240036ae9d8370dcc7a3c4ae77f421f616dc6))
+* **controls:** let a press made on the respawn screen wait for the bar to read it ([#321](https://github.com/tekulvw/mag-recomp/issues/321)) ([cc5d389](https://github.com/tekulvw/mag-recomp/commit/cc5d3899d53ff7f0a28669b8cf2ec8225ec5c387))
+* **sdk:** pin runtime-2026.11.26-lineorder so a stalled SPU copy no longer freezes a match ([#322](https://github.com/tekulvw/mag-recomp/issues/322)) ([1adb681](https://github.com/tekulvw/mag-recomp/commit/1adb6817d435a2fbf0c219f7b452279b44e69564))
+
+
+### Documentation
+
+* specify in-match voice chat ([#314](https://github.com/tekulvw/mag-recomp/issues/314)) ([b7209af](https://github.com/tekulvw/mag-recomp/commit/b7209af0e6c47295eba37661b8c16a6236d801bc))
+
+## [0.10.3](https://github.com/tekulvw/mag-recomp/compare/v0.10.2...v0.10.3) (2026-11-26)
+
+
+### Bug Fixes
+
+* **controls:** aim and fire bunker turrets and seats with keyboard and mouse ([#311](https://github.com/tekulvw/mag-recomp/issues/311)) ([99f26cf](https://github.com/tekulvw/mag-recomp/commit/99f26cf49bbcee818df1f62f316ce92316f47330))
+* **controls:** spend presses nothing read, so old arrows no longer flip the respawn bar ([#313](https://github.com/tekulvw/mag-recomp/issues/313)) ([45d1209](https://github.com/tekulvw/mag-recomp/commit/45d12093f3342df67399706307fd90eaed0f8488))
+
 ## [0.10.2](https://github.com/tekulvw/mag-recomp/compare/v0.10.1...v0.10.2) (2026-11-26)
 
 

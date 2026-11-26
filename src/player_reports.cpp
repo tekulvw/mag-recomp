@@ -417,6 +417,7 @@ const char *trigger_name(Trigger t) {
     case Trigger::Halt: return "halt";
     case Trigger::SlowFrames: return "slow_frames";
     case Trigger::Audio: return "audio";
+    case Trigger::Network: return "network";
     case Trigger::Manual: return "manual";
     case Trigger::None: break;
     }
@@ -497,6 +498,7 @@ Settings load_settings(const fs::path &path) {
 std::string category(Trigger t) {
     if (t == Trigger::Manual) return "manual";
     if (t == Trigger::SlowFrames || t == Trigger::Audio) return "performance";
+    if (t == Trigger::Network) return "network";
     return "error";
 }
 }  // namespace
@@ -511,9 +513,68 @@ Trigger judge_summary(const Json &summary, std::vector<std::string> &reasons) {
             reasons.push_back(role + ": " + percent(over_50 / frames) + " of frames took 50 ms or more");
             result = Trigger::SlowFrames;
         }
-        if (over_250 >= double(long_frame_count)) {
-            reasons.push_back(role + ": " + std::to_string((long long)over_250) + " frames took 250 ms or more");
+        // Loading (the boot and loading screens) is left out; older summaries have no count of it.
+        const double in_play = over_250 - field(summary, {"frames", "loading", "over_250ms"});
+        if (in_play >= double(long_frame_count)) {
+            reasons.push_back(role + ": " + std::to_string((long long)in_play) + " frames took 250 ms or more outside loading");
             result = Trigger::SlowFrames;
+        }
+    }
+    auto text_of = [](const Json &object, const char *key) {
+        const Json *v = object.get(key);
+        return v && v->kind == Json::Kind::String ? v->text : std::string();
+    };
+    // Sustained frame-rate drops in a match (the engine's fps_drops), the worst named.
+    if (const Json *drops = summary.get("fps_drops"); drops && drops->get("episodes") && drops->get("episodes")->kind == Json::Kind::Array) {
+        int count = 0;
+        const Json *worst = nullptr;
+        for (const Json &e : drops->get("episodes")->items) {
+            if (e.kind != Json::Kind::Object || text_of(e, "phase") != "match") continue;
+            ++count;
+            if (!worst || field(e, {"lost_frames"}) > field(*worst, {"lost_frames"})) worst = &e;
+        }
+        if (worst) {
+            const double mean = field(*worst, {"mean_fps"}), baseline = field(*worst, {"baseline_fps"});
+            reasons.push_back(role + ": FPS fell to " + std::to_string(std::lround(mean)) + " (" +
+                              std::to_string(baseline > 0 ? std::lround(100 * mean / baseline) : 0) + "% of " +
+                              std::to_string(std::lround(baseline)) + ") for " + std::to_string(std::lround(field(*worst, {"s"}))) +
+                              " s in a match" + (count > 1 ? " (" + std::to_string(count) + " drops)" : std::string()));
+            result = Trigger::SlowFrames;
+        }
+    }
+    // A freeze: the engine presented no frame for frozen_report_seconds before its summary.
+    const double frozen = field(summary, {"frozen", "s"});
+    if (role == "engine" && frozen >= frozen_report_seconds) {
+        const std::string phase = summary.get("frozen") ? text_of(*summary.get("frozen"), "phase") : std::string();
+        reasons.push_back(role + ": no frame for " + std::to_string(std::lround(frozen)) + " s " +
+                          (text_of(summary, "state") == "ended" ? "before the session ended" : "at the last summary") +
+                          (phase == "match" ? " (frozen in a match)" : phase.empty() ? "" : " (frozen in the " + phase + ")"));
+        result = Trigger::SlowFrames;
+    }
+    // Network gaps: the server went silent during a match while frames kept coming. A silence still
+    // open when the summary was written counts only if the session was still in a match then.
+    if (const Json *timeline = summary.get("timeline"); timeline && timeline->kind == Json::Kind::Array) {
+        auto text = [](const Json &object, const char *key) {
+            const Json *v = object.get(key);
+            return v && v->kind == Json::Kind::String ? v->text : std::string();
+        };
+        const bool still_in_match = text(summary, "phase") == "match";
+        int gaps = 0;
+        double longest = 0;
+        for (const Json &event : timeline->items) {
+            if (event.kind != Json::Kind::Object || text(event, "kind") != "network" || text(event, "verdict") != "network" ||
+                text(event, "phase") != "match")
+                continue;
+            const double length = field(event, {"ms"});
+            const Json *open = event.get("open");
+            if (length < network_gap_report_ms || (open && open->boolean && !still_in_match)) continue;
+            ++gaps;
+            longest = std::max(longest, length);
+        }
+        if (gaps) {
+            reasons.push_back(role + ": the game server went silent for " + std::to_string((long long)(longest / 1000)) + " s during a match (" +
+                              std::to_string(gaps) + (gaps == 1 ? " gap" : " gaps") + " of 2 s or more while frames kept coming)");
+            if (result == Trigger::None) result = Trigger::Network;
         }
     }
     const Json *audio = summary.get("audio");
@@ -530,8 +591,17 @@ Trigger judge_summary(const Json &summary, std::vector<std::string> &reasons) {
             reasons.push_back(role + ": " + std::to_string((long long)errors) + " audio device errors");
             problem = true;
         }
-        if (clock >= judge_min_seconds && std::fabs(drift) >= audio_drift_limit_ms) {
-            reasons.push_back(role + ": audio clock drifted " + std::to_string((long long)drift) + " ms");
+        // A stall drops the audio backlog, which puts the clock behind by the time dropped: that
+        // much of a negative drift is the stall's, not the audio path's.
+        double stalls_ms = frozen * 1000;
+        if (const Json *hitches = summary.get("hitches"); hitches && hitches->kind == Json::Kind::Array)
+            for (const Json &h : hitches->items)
+                if (field(h, {"ms"}) >= 1000) stalls_ms += field(h, {"ms"});
+        const double dropped_ms = field(*audio, {"dropped_periods"}) * audio_period_frames / audio_rate * 1000;
+        const double explained = drift < 0 ? std::min({dropped_ms, stalls_ms, -drift}) : 0, residual = drift + explained;
+        if (clock >= judge_min_seconds && std::fabs(residual) >= audio_drift_limit_ms) {
+            reasons.push_back(role + ": audio clock drifted " + std::to_string((long long)residual) + " ms" +
+                              (explained > 0 ? " beyond its stalls (" + std::to_string((long long)drift) + " ms in all)" : std::string()));
             problem = true;
         }
         if (problem && result == Trigger::None) result = Trigger::Audio;
@@ -569,7 +639,9 @@ Decision decide(const Session &s) {
             Json summary;
             if (!load_summary(s.logs / (std::string("session-") + role + ".json"), summary)) continue;
             const Trigger t = judge_summary(summary, d.reasons);
-            if (t == Trigger::SlowFrames || (t == Trigger::Audio && d.trigger == Trigger::None)) d.trigger = t;
+            // Slow frames, then network gaps, then audio.
+            auto rank = [](Trigger x) { return x == Trigger::SlowFrames ? 3 : x == Trigger::Network ? 2 : x == Trigger::Audio ? 1 : 0; };
+            if (rank(t) > rank(d.trigger)) d.trigger = t;
         }
         if (d.trigger == Trigger::None && d.manual) d.trigger = Trigger::Manual;
     }
@@ -665,11 +737,20 @@ std::string receipt(const fs::path &path) {
     return to_json(out);
 }
 
-// A summary without its bulkier series, for when the metrics would be too large.
+// A summary without its bulkier series, for when the metrics would be too large: the per-minute
+// series and the histograms go; the timeline and the endpoints' totals stay.
 Json slim(Json summary) {
     summary.members.erase(std::remove_if(summary.members.begin(), summary.members.end(),
                                          [](const auto &m) { return m.first == "minutes"; }),
                           summary.members.end());
+    for (auto &m : summary.members)
+        if (m.first == "network")
+            for (auto &n : m.second.members)
+                if (n.first == "endpoints")
+                    for (auto &endpoint : n.second.items)
+                        endpoint.members.erase(std::remove_if(endpoint.members.begin(), endpoint.members.end(),
+                                                              [](const auto &f) { return f.first == "gaps_ms"; }),
+                                               endpoint.members.end());
     for (auto &m : summary.members)
         if (m.first == "frames")
             m.second.members.erase(std::remove_if(m.second.members.begin(), m.second.members.end(),
@@ -967,7 +1048,10 @@ Finished finish_session(const Session &s) {
     if (!settings.send_reports && d.manual) trigger = Trigger::Manual;
     const long long now = (long long)current(s.now);
     const std::string kind = category(trigger);
-    const int limit = kind == "manual" ? daily_manual_reports : kind == "performance" ? daily_performance_reports : daily_error_reports;
+    const int limit = kind == "manual" ? daily_manual_reports
+                      : kind == "performance" ? daily_performance_reports
+                      : kind == "network" ? daily_network_reports
+                                          : daily_error_reports;
     if (created_since(s.queue, kind, now - 86400) >= limit) {
         f.line = std::string("reports: the daily limit for ") + kind + " reports is reached (a " + trigger_name(trigger) + " report was not created)";
         return f;

@@ -43,6 +43,8 @@
 #include "mag_extension.h"
 #include "mag_frame_clock.h"
 #include "mag_session_monitor.h"
+#include "mag_shader_cache.h"
+#include "mag_stall_reporter.h"
 #if defined(MAG_SOCIAL_BRIDGE)
 #include "mag_social_bridge.h"
 #endif
@@ -57,6 +59,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#if defined(_WIN32) && defined(PS3RECOMP_RSX_VULKAN)
+#include <filesystem>   /* the shader and pipeline cache folders (src/mag_shader_cache.h) */
+#include <string>
+#endif
 
 #ifdef _WIN32
 /* timeBeginPeriod: <windows.h> arrives with WIN32_LEAN_AND_MEAN set, which
@@ -225,8 +232,10 @@ static void present_guest_frame(const CellGcmFlipReceipt& receipt)
     /* Present-to-present timing for the session summary: a clock read and a few relaxed
      * counters (src/mag_session_monitor.h). */
     mag_session_frame_presented();
+    /* t= is the session monitor's clock (seconds since the engine started), the one the
+     * session summary's times use, so the log lines up with the report. */
     if (count <= 3 || count % 120 == 0)
-        fprintf(stderr, "[mag] guest frame presented %ld\n", (long)count);
+        fprintf(stderr, "[mag] guest frame presented %ld t=%.1f\n", (long)count, mag_session_seconds());
 }
 
 static DWORD WINAPI frame_clock(LPVOID)
@@ -466,6 +475,25 @@ int main(int argc, char** argv)
         for (const auto &d : defaults)
             if (!getenv(d[0])) _putenv_s(d[0], d[1]);
     }
+    {
+        /* Shader translations and Vulkan pipelines kept on disk between sessions
+         * (src/mag_shader_cache.h): the Windows A/B removed about 1.75 s of glslang per map
+         * load; the pipeline cache is for drivers that do not keep their own, such as AMD's
+         * (docs/ps3recomp-flags.md). */
+        const auto make_dir = [](const std::string &dir) {
+            std::error_code error;
+            std::filesystem::create_directories(dir, error);
+            return std::filesystem::is_directory(dir, error);
+        };
+        const mag::ShaderCacheChoice cache = mag::choose_shader_cache(
+            getenv("PS3RECOMP_SPIRV_CACHE"), getenv("MAG_SHADER_CACHE"), getenv("LOCALAPPDATA"), make_dir);
+        if (!cache.dir.empty()) _putenv_s("PS3RECOMP_SPIRV_CACHE", cache.dir.c_str());
+        printf("[mag] %s\n", cache.why.c_str());
+        const mag::ShaderCacheChoice pipelines = mag::choose_pipeline_cache(
+            getenv("PS3RECOMP_VK_PIPELINE_CACHE"), getenv("MAG_PIPELINE_CACHE"), getenv("LOCALAPPDATA"), make_dir);
+        if (!pipelines.dir.empty()) _putenv_s("PS3RECOMP_VK_PIPELINE_CACHE", pipelines.dir.c_str());
+        printf("[mag] %s\n", pipelines.why.c_str());
+    }
 #endif
 
     printf("=== ps3recomp game runner ===\n");
@@ -495,6 +523,9 @@ int main(int argc, char** argv)
     /* The session performance monitor: the launcher image (EBOOT) is the front end, mage_g the
      * engine. It writes its summary only where the supervisor's MAG_SESSION_DIR says. */
     mag_session_monitor_start(strstr(argv[1], "mage_g") ? "engine" : "launcher");
+    /* A match that stops presenting frames names what each guest thread is inside
+     * (src/mag_stall_reporter.h); silent while the game draws. */
+    if (strstr(argv[1], "mage_g")) mag_stall_reporter_start();
     derive_vfs_root(argv[1]);
     printf("[boot] VFS root: %s\n", ppu_vfs_root);
     /* Our runner always uses a private disc-layout overlay. */
