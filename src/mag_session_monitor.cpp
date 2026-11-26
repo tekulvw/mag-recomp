@@ -217,7 +217,7 @@ bool Monitor::ring_after(uint64_t ns, Window &out, const Histogram *&hist) const
 double Monitor::baseline(int phase) const {
     const Baseline &b = baselines_[size_t(phase)];
     if (b.count < warmup_windows_) return 0;
-    std::array<float, drop_baseline_windows_max> sorted;
+    std::array<float, drop_baseline_windows_max> sorted{};
     std::copy(b.fps.begin(), b.fps.begin() + std::ptrdiff_t(b.count), sorted.begin());
     auto middle = sorted.begin() + std::ptrdiff_t(b.count / 2);
     std::nth_element(sorted.begin(), middle, sorted.begin() + std::ptrdiff_t(b.count));
