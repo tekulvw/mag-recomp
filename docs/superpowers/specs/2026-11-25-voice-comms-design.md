@@ -32,18 +32,29 @@ These are interface facts and observed behaviour of retail v1.0, stated as what 
 its code is arranged.
 
 - The game uses the PlayStation voice library (cellVoice) and no other audio-input library. It builds a
-  port graph at startup: the microphone feeds an encoded-voice output port; several encoded-voice input
-  ports, one per remote talker, feed the headset output; there is also a 16 kHz PCM port. Voice ports
-  are created at the library's 7300 bps rate.
-- The game reads encoded bytes from the voice output port and hands them to its network layer, and
-  writes encoded bytes it receives into an input port. **It never interprets the bytes**, so the codec
-  inside them is ours to choose as long as the byte rate and the sizes fit the game's buffers.
-- Up to four remote talkers play at once. Each carries a talk channel, a priority and a gain chosen by
-  the game.
-- Audio never goes peer to peer. The client tags each voice packet with a **relay group** number and
-  sends it to the game's DME server; the server delivers it to every client that listens to that group,
-  stamped with the talker's client index (U1, U10).
+  port graph at startup: the microphone feeds an encoded-voice output port; each remote talker slot has
+  an encoded-voice input port connected to a 16-bit 16 kHz PCM output port, which the game reads and
+  mixes in its own audio engine (retail keeps 16 such slots). Voice ports are created at the library's
+  7300 bps rate.
+- **Sending.** About once per game frame the game reads up to 1024 bytes from the encoded output port
+  and hands them to its network layer. Recording runs from the moment the client joins the game server
+  until it leaves; the game's own self-mute stops and restarts it. So the game behaves as an open mic,
+  and what limits transmission on PC is our push-to-talk gate.
+- **Receiving.** Before writing a talker's bytes into its input port the game reads that port's info and
+  refuses a write that is not a whole number of frames or exceeds the port's free space (U4: the
+  frame-size and free-space semantics it expects are part of the capture's check).
+- **It never interprets the bytes**, so the codec inside them is ours to choose as long as the byte rate
+  and the sizes fit the game's buffers.
+- Each remote talker carries a talk channel and a priority; the game chooses which talkers play.
+- Audio never goes peer to peer. The client sends each voice packet to its **relay group** through the
+  game's DME server. The packet carries the group (one byte), a media type (one byte), the data size
+  (two bytes), a per-sender sequence number (two bytes) and at most 248 data bytes. The server delivers
+  it to every client that listens to that group, marked with the sender's DME client index (U1: which
+  transport message carries the group-addressed send, and the delivery form; U10).
 - The game server takes no part in audio. It only decides which groups each client listens to.
+- The game reads one microphone-port signal-state attribute (number 11) and adjusts the microphone
+  port's volume when the value changes (U5: its meaning). The talk indicators come from the game's own
+  voice events, not from that attribute.
 
 ### Channels
 
@@ -61,30 +72,40 @@ catalog). The channels, with the game's wire values:
 | 6 | Proximity | (compiled off in retail; see below) | 1 |
 | 7 | Party | (party voice; out of scope) | |
 
-When several talkers compete for the four playback slots, higher priority wins; broadcasts therefore
-cut through channel talk. Priority and the slot choice are the game's own client behaviour; we keep it
-by delivering packets the way the game expects.
+Higher priority is meant to win when talkers compete; the exact ducking rule is the game's own client
+behaviour, which we keep by delivering packets the way the game expects.
 
-**Role gating (U6).** The working rule, which matches how MAG played and is to be confirmed: every
-player talks and listens on Squad. Squad leaders also have Platoon chat; platoon leaders also have
-Company chat and may Platoon-broadcast; the OIC also has Company chat and may Team-broadcast. Which menu
-entries each role sees is the game's; which groups each player may listen and transmit to is the
-server's (companion document). The server enforces the transmit rule so a modified client cannot reach
-a group its role does not have.
+**Role gating.** The voice menu offers each role these channels (the default is Squad chat):
 
-**Channel select message.** When the player changes channel the client sends game message `0x0259`
-whose body names the new channel (one value from the table; exact layout U7). The server records it per
-player.
+| Role | Channels offered |
+| --- | --- |
+| Member | Squad only (no cycling) |
+| Squad leader | Squad, Platoon |
+| Platoon leader, 128 and 256 players | Squad, Platoon, Company, Platoon broadcast |
+| Platoon leader, 64 players (one platoon, no OIC) | Squad, Platoon, Team broadcast |
+| OIC (256 players) | Squad, Platoon, Company, Team broadcast |
 
-**Relay groups.** One world has 83 relay groups: per side a team group and a company group, per
-platoon a platoon group and a platoon-broadcast group, per squad a squad group, and party groups (out
-of scope). The client works out the group itself from its channel and its own squad; with no squad it
-does not transmit. The exact numbering is U8.
+A lab check remains: whether a member's menu in the larger modes sets "none" when it opens. The
+server enforces matching transmit rules (companion document) so a modified client cannot reach a group
+its role does not have; retail's own server did not check the stored channel.
+
+**Channel select message.** Game message `0x0259` carries one byte, the channel value. The client sends
+it when the voice menu opens and on each change a leader makes, every time (no deduplication). The
+game's listen mute is local and sends nothing.
+
+**Relay groups.** The client computes its group from its channel, its side and its world squad index
+(0 to 31; a platoon is four consecutive squads): Team broadcast is the side (0 or 1); Company chat is 2
+plus the side; Platoon chat is 4 plus the platoon (squad index divided by four); Platoon broadcast is 12
+plus the platoon; Squad chat is 20 plus the squad index. 52 to 82 are party groups (out of scope). Retail
+adds 256 proximity groups (83 to 338) and so carries group numbers wider than a byte; how those travel is
+part of U1. Without a character the client does not transmit.
 
 ### Comms jamming
 
-An enemy OIC's comms-jamming ability makes the game add static to voice chat (U9: whether that static
-reaches us as PCM written to a port, as a gain change, or as a call we must render).
+An enemy OIC's comms-jamming ability makes the victim's client generate white-noise bursts into its own
+voice mix; outgoing audio is unaffected. The noise is the game's (it may arrive as PCM written to an
+input port, which the service mixes like any other input). Which clients the server jams is gameplay's
+existing ability logic, not voice routing.
 
 ## The runtime voice service
 
@@ -102,7 +123,7 @@ cellVoice stub answers every call exactly as today. Nothing changes in the ps3re
 | `MAG_VOICE` | CMake option | `OFF` until the mag-test soak passes | builds `src/voice/` and its dependencies; with it off the build, outputs and receipts are unchanged |
 | `voice_chat` | player setting | **Off** | Off, or Push to talk; the supervisor passes it to the engine as `MAG_VOICE_MODE` |
 | `voice_volume` | player setting | 100% | playback gain for voice |
-| `voice_input` / `voice_output` | player setting | system default | host capture and playback device names |
+| `voice_input` | player setting | system default | host capture device name |
 | `MAG_VOICE_MODE` | engine environment | unset (off) | `off`, `ptt`; also `open` later if open mic is added |
 | `MAG_VOICE_TEST_TONE` | engine environment, lab only | unset | replaces the microphone with a synthetic signal (below) |
 | `MAG_VOICE_TRACE` | engine environment, lab only | unset | path of a JSON-lines trace of port calls: sizes, counts and times, never audio |
@@ -124,22 +145,23 @@ big-endian port parameter block: type, threshold, mute flag, volume, and the bit
   nothing is encoded.
 - **Encoded output (OUT_VOICE).** Encodes its input in fixed-duration frames into voice blocks (below)
   and queues them as a byte stream. Reading returns whole blocks only, up to the size the caller
-  allows; the port info reports the queued byte count and the block size. Silence produces no blocks,
+  allows; the port info reports the readable byte count and the block size as the frame size. Silence produces no blocks,
   so the game sends nothing between transmissions. The queue holds at most about half a second and
   drops the oldest blocks beyond that.
-- **Encoded inputs (IN_VOICE).** Each port has its own byte queue, block parser and decoder. Bytes may
-  arrive split or joined in any way; the parser recovers block boundaries from the block marker and
+- **Encoded inputs (IN_VOICE).** Each port has its own byte queue, block parser and decoder; its port
+  info reports the bytes it can take now and the block size as the frame size. Bytes may arrive split or
+  joined in any way; the parser recovers block boundaries from the block marker and
   discards bytes that do not form a valid block. A reset clears the queue and the decoder state (a new
   talker on the port). Decoded audio plays through a small jitter buffer (about 60 ms target, 300 ms
   cap) with the decoder's loss concealment for sequence gaps.
-- **PCM ports.** OUT_PCMAUDIO returns the PCM mix of its inputs in the port's format; IN_PCMAUDIO
-  accepts PCM from the game and mixes into whatever it is connected to (this is where jamming static is
-  expected to arrive, U9).
-- **Headset output (OUT_SECONDARY).** Mixed voice goes to a host playback stream of its own, opened on
-  the selected output device beside the game's main audio, at the player's voice volume.
+- **PCM ports.** OUT_PCMAUDIO returns the decoded PCM of its inputs in the port's format, at the
+  player's voice volume; this is how the game plays remote talkers, through its own audio engine, so no
+  separate playback device is needed. IN_PCMAUDIO accepts PCM from the game and mixes into whatever it
+  is connected to.
+- **Headset output (OUT_SECONDARY).** Mixed into a host playback stream only if the capture shows the
+  game routes talkers there instead of reading PCM ports.
 - **Signal state.** The energy and voice-activity attributes report the microphone's real level while
-  the gate is open and silence otherwise (U5 says which attribute the game reads). Other attributes
-  keep the runtime stub's answer.
+  the gate is open and silence otherwise. Attribute 11 keeps the stub's answer until U5 is settled.
 - **Unsupported use stays visible.** A port type, edge or attribute the service does not handle logs
   once and answers as the stub does.
 
@@ -160,6 +182,10 @@ any way the game splits or joins the stream keeps them decodable:
 - **Frame duration** 40 ms. **Block size** follows the port's bitrate so that the byte rate matches what
   retail sent: at the game's 7300 bps rate, 37 bytes per 40 ms block (33 bytes of Opus, 6.6 kbps). The encoder
   runs constant bitrate at the payload size, so the padding is normally empty.
+- A voice packet holds at most 248 data bytes. The capture checks that the game sends whole blocks (a
+  multiple of the frame size it reads from the port info); if it cut blocks across packets, the
+  receiving game would refuse the partial frames, and the block size would then be chosen to divide
+  the game's packet size.
 - **Opus settings:** 16 kHz input, mono, VoIP application, constant bitrate, in-band FEC off (the block
   size has no room), DTX handled by the gate. If the capture shows the game's buffers take more (U2), a
   higher rate (for example 12-16 kbps) becomes a setting of the service, never of the wire format.
@@ -249,17 +275,18 @@ channel to it. The server documents how its routing keeps room for this.
 
 ## Unknowns the lab capture settles
 
-- **U1** Which transport message carries a voice packet from the client, its header (audio type,
-  group, sizes, flags) and the form in which the server delivers it back.
-- **U2** How the game reads the encoded output port: whether it checks the port info first, the bytes
-  per read, how often, and how large its outgoing voice buffer is.
-- **U3** Whether the game reads the output port all the time or only in a talk state, and what starts
-  that state.
-- **U4** How the game assigns talkers to input ports, the bytes per write, and whether it resets a port
-  when its talker changes.
-- **U5** Which signal-state attribute the game reads and what it shows with it.
-- **U6** The role gating: which channels each role can pick, and the listen set of each role.
-- **U7** The layout of message `0x0259` and when it is sent; any other in-match voice messages.
-- **U8** The exact relay-group numbering (squad and party ranges).
-- **U9** How jamming static reaches the voice path.
-- **U10** Which index the server stamps as the talker (the DME client index or another).
+- **U1** Which transport message carries the group-addressed voice packet from the client, how retail
+  carries group numbers above 255, and the form in which the server delivers it back.
+- **U2** Confirm in the trace: read sizes and cadence on the encoded output port, and that the game's
+  packets hold whole blocks.
+- **U3** Settled by static reading: recording runs while connected to the game server (open mic);
+  the trace confirms it.
+- **U4** How the game assigns talkers to input ports, the bytes per write, its frame-size and free-space
+  checks, and whether it resets a port when its talker changes.
+- **U5** The meaning of signal-state attribute 11.
+- **U6** Settled for the menu (table above); the listen sets follow the retail delivery rule in the
+  companion document. Remaining: the member menu's "none" on open in larger modes.
+- **U7** Settled: one byte, sent on menu open and each change.
+- **U8** Settled, except how retail carries proximity groups above 255 (U1).
+- **U9** Settled: the victim's client makes the noise itself.
+- **U10** Likely the DME sender index; the capture confirms it.
