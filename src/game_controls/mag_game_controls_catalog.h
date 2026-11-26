@@ -50,6 +50,10 @@ mag::ActionId mag_game_controls_seat_alias(mag::ActionId action);
 // also press `action` there: Move forward (W) for the control on Cycle weapons' button, R2, which
 // accelerates, and Move backward (S) for Cycle equipment's, L2, which brakes and reverses. 0 otherwise.
 mag::ActionId mag_game_controls_drive_alias(mag::ActionId action);
+// While an in-match menu holds look on foot (docs/native-controls.md, 2.3, 7.3 and 8.2), whether the keys of
+// `action` still press its button on the menu's own handlers: Melee only, whose button is R3, the in-match
+// pause menu's Kill Self. Every other button of such a menu reads the keyboard pad alone.
+bool mag_game_controls_menu_button(mag::ActionId action);
 // Bit 0..3 for the four look-axis tokens, 0 for any other token.
 unsigned mag_game_controls_look_bit(uint32_t token);
 inline bool mag_game_controls_look_token(uint32_t token) { return mag_game_controls_look_bit(token) != 0; }

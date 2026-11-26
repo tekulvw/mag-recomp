@@ -77,6 +77,7 @@ mag::ActionId mag_game_controls_seat_alias(ActionId action) { return action == C
 mag::ActionId mag_game_controls_drive_alias(ActionId action) {
     return action == CycleWeapons ? Forward : action == CycleEquipment ? Backward : 0;
 }
+bool mag_game_controls_menu_button(ActionId action) { return action == Melee; }
 
 uint32_t mag_game_controls_name_token(std::string_view name) {
     uint32_t crc = 0xFFFFFFFFu;

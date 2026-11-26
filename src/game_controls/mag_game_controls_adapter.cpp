@@ -1048,6 +1048,7 @@ struct MagGameControlsAdapter::State {
         const bool system = catalog && catalog->system_channel >= 0;
         const bool gameplay = owner_handler(handler);
         const bool registered = !gameplay && contains(registered_routes, handler);
+        bool menu_button = false;
         if (system) {
             if (!contains(system_routes, handler)) {
                 cancel("native system route changed");
@@ -1063,8 +1064,10 @@ struct MagGameControlsAdapter::State {
                 gameplay_eligible = mouse_eligible = false;
                 return false;
             }
-            // While a menu holds look on foot the pad serves every handler but the player's (8.2).
-            if (!gameplay && look_held_by_menu) return false;
+            // While a menu holds look on foot the pad serves every handler but the player's (8.2), except
+            // that Melee's keys still press R3 there (the pause menu's Kill Self), beside the pad's own key.
+            menu_button = !gameplay && look_held_by_menu && mag_game_controls_menu_button(action);
+            if (!gameplay && look_held_by_menu && !menu_button) return false;
             // Situational actions may be watched by any system route (a vehicle's or a menu's own
             // handler); other actions only by the owner, a gameplay route or a handler registered
             // with the input manager (a mounted weapon's or a seat's, the pad-button reader), which
@@ -1108,7 +1111,9 @@ struct MagGameControlsAdapter::State {
 
         // Steps 5 to 7.
         const Tuning tune = read_tuning(*tuning);
-        const bool preserve = !remapped && !kbm && frame->policy.controller_connected;
+        // On a menu's button that Melee's keys also press, the pad's own press (the keyboard pad's key for
+        // R3, or a controller's) still counts.
+        const bool preserve = (!remapped && !kbm && frame->policy.controller_connected) || menu_button;
         double value = preserve && !mouse_look && !stick ? native_value(tune, cpu.fpr[1]) : 0.0;
         const bool native_contribution = preserve && value > 0;
         if (offer && offer->down && !mouse_look) value = 1.0;

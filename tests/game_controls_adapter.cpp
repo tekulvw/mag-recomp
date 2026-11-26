@@ -971,6 +971,55 @@ void menu_holding_look_gets_the_pad() {
     h.end_tick();
 }
 
+uint32_t watch(Memory& m, uint32_t handler, uint32_t slot, uint32_t token, uint32_t channel);
+
+// The in-match pause menu holds look on foot and binds R3 to Kill Self on its own handler. Melee's keys (F,
+// the player's R3 on keyboard and mouse) press that R3 too, while the pad's own R3 (G on the keyboard pad,
+// or a controller's) keeps reaching it; the menu's other buttons still read the pad alone.
+void menu_r3_kill_self() {
+    Harness h;
+    uint32_t jump_record = 0;
+    const uint32_t menu = route_handler(h.m, jump_record);  // a menu element: Jump's channel ...
+    const uint32_t r3 = watch(h.m, menu, 7, 0x516D9E2A, 19);  // ... and R3 (Melee's channel), as padr3
+    require(h.idle_tick() == Attached, "first tick did not attach on foot");
+    constexpr uint32_t Look = 0xFu << 20;
+    const auto poll = [&](uint32_t consumed, double r3_raw, bool* r3_taken = nullptr, bool* jump_taken = nullptr) {
+        h.m.put32(Pad + 0x80, consumed);
+        h.begin_tick();
+        h.enter_handler();
+        h.fire(Hook::HandlerExit);
+        h.enter_handler(menu);
+        const bool taken = h.recognize_record(r3, menu, r3_raw);
+        const bool jump = h.recognize_record(jump_record, menu);
+        if (r3_taken) *r3_taken = taken;
+        if (jump_taken) *jump_taken = jump;
+        h.fire(Hook::HandlerExit);
+        h.end_poll();
+        h.end_tick();
+    };
+    const auto value = [&] { return mag_guest_tuple_value(h.tuple_at(r3)); };
+    for (int i = 0; i < 3; ++i) poll(Look, 0);
+    require(h.status() == std::string("on-foot input attached; a menu holds look"), "the menu hold was not taken");
+
+    // F (Melee) presses the menu's R3.
+    mag_controls_push_event({{InputSource::Keyboard, 9}, true, time_ns()});
+    mag_controls_push_event({{InputSource::Keyboard, 44}, true, time_ns()});  // Space: Jump, a pad button there
+    bool taken = false, jump = false;
+    poll(Look, 0, &taken, &jump);
+    require(taken && value() == 1.0f, "Melee's key did not press R3 in a menu holding look");
+    require(!jump, "the adapter took over a menu button other than R3");
+    mag_controls_push_event({{InputSource::Keyboard, 9}, false, time_ns()});
+    mag_controls_push_event({{InputSource::Keyboard, 44}, false, time_ns()});
+    poll(Look, 0);
+    require(value() == 0.0f, "R3 stayed pressed after Melee's key was released");
+
+    // The pad's own R3 still reaches the menu (the game reads it, or the adapter passes it on).
+    poll(Look, 1.0, &taken);
+    require(!taken || value() == 1.0f, "the pad's R3 no longer reached the menu");
+    poll(Look, 0, &taken);
+    require(!taken || value() == 0.0f, "the pad's R3 stayed pressed after its release");
+}
+
 // The legacy keyboard pad (the SDK's fixed key layout: Cross on X, ...) is muted only while a poll
 // attaches on foot. In an in-match menu with a local player (paused, the player's handler disabled
 // as after death, a UI element that blocks gameplay) the adapter routes the system buttons alone,
@@ -1835,7 +1884,7 @@ int main(int argc, char** argv) {
         {"mouse", mouse_look},       {"assist", aim_assist},     {"lifecycle", lifecycle},
         {"threads", threads_and_errors}, {"snapshot", update_snapshot}, {"menu", menu_holds_look},
         {"withdrawn", withdrawn_frame},
-        {"menu-pad", menu_keyboard_pad}, {"menu-look-pad", menu_holding_look_gets_the_pad}, {"situational", situational_actions}, {"closed-menu-confirm", closed_menu_never_sees_confirm}, {"downed-x", downed_x_bleeds_out}, {"unread-presses", unread_presses_are_spent}, {"menu-unread-presses", menu_unread_presses_are_spent}, {"census", census},
+        {"menu-pad", menu_keyboard_pad}, {"menu-look-pad", menu_holding_look_gets_the_pad}, {"menu-r3", menu_r3_kill_self}, {"situational", situational_actions}, {"closed-menu-confirm", closed_menu_never_sees_confirm}, {"downed-x", downed_x_bleeds_out}, {"unread-presses", unread_presses_are_spent}, {"menu-unread-presses", menu_unread_presses_are_spent}, {"census", census},
         {"prompt-queries", prompt_queries}, {"mounted", mounted_weapon},
         {"registered-on-foot", registered_handler_on_foot}, {"mounted-controller-mode", mounted_weapon_controller_mode},
         {"vehicle-driver", vehicle_driver}};
