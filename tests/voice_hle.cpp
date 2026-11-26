@@ -134,7 +134,7 @@ int main(int argc, char** argv) {
             vm_base[param + 16] = 1;
             put32(param + 20, 2);
             put32(param + 24, 16000);
-            CHECK(call("cellVoiceCreatePort", param, id) == 0);
+            CHECK(call("cellVoiceCreatePort", id, param) == 0);
             pcm = get32(id);
             CHECK(call("cellVoiceConnectIPortToOPort", in, pcm) == 0);
         }
