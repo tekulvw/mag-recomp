@@ -113,6 +113,7 @@ class NativePackageTests(unittest.TestCase):
                 self.assertFalse({'--options','--entitlements','runtime'} & set(argv),argv)
             self.assertFalse(list(app.rglob('*.entitlements')))
 
+    @unittest.skipUnless(platform.system() == 'Darwin' and Path('/usr/bin/xcrun').is_file(), 'macOS signing/toolchain fixture')
     def test_real_macos_packaging_signs_synthetic_dylib_closure_without_launch(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp).resolve();workspace=self.fixture(root)
