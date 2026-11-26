@@ -2,11 +2,13 @@
 // and the public parameter and info blocks read and written big-endian. Synthetic; no game data.
 //   voice_hle disabled   expects no handler registered
 //   voice_hle pattern    expects the handlers and drives a port graph through them
+//   voice_hle tone       the same with Opus, and the received talker read back as PCM
 #include "mag_extension.h"
 #include "ppu/ppu_context.h"
 #include "ps3emu/nid.h"
 
 #include <chrono>
+#include <cstdlib>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -122,8 +124,35 @@ int main(int argc, char** argv) {
         CHECK(got >= 4 * 37 && got % 37 == 0);
         CHECK(vm_base[data] == 0xA1 && vm_base[data + 1] == 0);
         // Feed what was read into the encoded input, as a relay would deliver it.
+        uint32_t pcm = 0;
+        if (mode == "tone") {
+            // A 16-bit big-endian PCM port for the talker, as the game reads talkers.
+            std::memset(vm_base + param, 0, 64);
+            put32(param, 3);
+            putf(param + 8, 1.0f);
+            put32(param + 12, 3200);
+            vm_base[param + 16] = 1;
+            put32(param + 20, 2);
+            put32(param + 24, 16000);
+            CHECK(call("cellVoiceCreatePort", id, param) == 0);
+            pcm = get32(id);
+            CHECK(call("cellVoiceConnectIPortToOPort", in, pcm) == 0);
+        }
         put32(size, got);
         CHECK(call("cellVoiceWriteToIPort", in, data, size) == 0 && get32(size) == got);
+        if (mode == "tone") {
+            std::this_thread::sleep_for(std::chrono::milliseconds(120));
+            std::memset(vm_base + info, 0, 64);
+            CHECK(call("cellVoiceGetPortInfo", pcm, info) == 0 && get32(info + 20) == 1280 && get32(info + 16) > 0);
+            put32(size, 8192);
+            CHECK(call("cellVoiceReadFromOPort", pcm, data + 0x2000, size) == 0);
+            const uint32_t pcm_bytes = get32(size);
+            CHECK(pcm_bytes > 0 && pcm_bytes % 2 == 0);
+            int loud = 0;
+            for (uint32_t k = 0; k < pcm_bytes; k += 2) loud += std::abs(int16_t(get16(data + 0x2000 + k))) > 1000;
+            std::printf("tone read back: %u bytes, %d loud samples\n", pcm_bytes, loud);
+            CHECK(loud > 50);
+        }
         put32(size, 0);
         CHECK(call("cellVoiceGetSignalState", mic, 1001, size) == 0 && get32(size) == 1);
         params(param, 2, 14400);

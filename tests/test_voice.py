@@ -25,13 +25,33 @@ def runtime_checkout():
     return None
 
 
-def build(binary, sources, includes):
+def opus():
+    """(include flags, link flags) for Opus, or None: MAG_TEST_OPUS_ROOT (an install prefix),
+    pkg-config, or the system's default paths."""
+    root = os.environ.get('MAG_TEST_OPUS_ROOT')
+    if root:
+        lib = Path(root) / 'lib'
+        archive = next((p for p in (lib / 'libopus.a', lib / 'opus.lib') if p.is_file()), None)
+        return (['-I' + str(Path(root) / 'include')], [str(archive)] if archive else ['-L' + str(lib), '-lopus'])
+    if shutil.which('pkg-config'):
+        run = subprocess.run(['pkg-config', '--cflags', '--libs', 'opus'], capture_output=True, text=True)
+        if run.returncode == 0:
+            flags = run.stdout.split()
+            includes = [f[:-len('/opus')] if f.endswith('/opus') else f for f in flags if f.startswith('-I')]
+            return (includes, [f for f in flags if not f.startswith('-I')])
+    if Path('/usr/include/opus/opus.h').is_file():
+        return ([], ['-lopus'])
+    return None
+
+
+def build(binary, sources, includes, extra=((), ())):
     flags = ['-std=c++17', '-O2', '-Wall', '-Wextra', '-Werror']
     if sys.platform == 'win32':
         flags += ['-D_CRT_SECURE_NO_WARNINGS']
     else:
         flags += ['-pthread']
-    result = subprocess.run([compiler(), *flags, *('-I' + str(i) for i in includes), *map(str, sources), '-o', str(binary)],
+    result = subprocess.run([compiler(), *flags, *('-I' + str(i) for i in includes), *extra[0], *map(str, sources),
+                             '-o', str(binary), *extra[1]],
                             capture_output=True, text=True, timeout=300)
     if result.returncode:
         raise AssertionError(result.stdout + result.stderr)
@@ -62,17 +82,30 @@ class VoiceCore(unittest.TestCase):
                     self.assertTrue(isinstance(value, (int, float)) or key == 'event', (key, value))
 
 
-@unittest.skipUnless(compiler() and runtime_checkout(), 'clang++ and a ps3recomp runtime checkout required')
+@unittest.skipUnless(compiler() and opus(), 'clang++ and Opus (MAG_TEST_OPUS_ROOT, pkg-config or libopus-dev) required')
+class VoiceOpus(unittest.TestCase):
+    def test_tone_survives_the_codec_and_two_services(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            binary = Path(tmp) / ('opus.exe' if sys.platform == 'win32' else 'opus')
+            build(binary, [SOURCES / 'mag_voice_core.cpp', SOURCES / 'mag_voice_opus.cpp', ROOT / 'tests/voice_opus.cpp'],
+                  [SOURCES], opus())
+            run = subprocess.run([str(binary)], capture_output=True, text=True, timeout=60, env=clean_env())
+            self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+            self.assertIn('PASS voice opus', run.stdout)
+
+
+@unittest.skipUnless(compiler() and runtime_checkout() and opus(),
+                     'clang++, a ps3recomp runtime checkout and Opus required')
 class VoiceGuestGlue(unittest.TestCase):
     def test_off_unless_selected_and_big_endian_blocks(self):
         sdk = runtime_checkout()
         with tempfile.TemporaryDirectory() as tmp:
             binary = Path(tmp) / ('hle.exe' if sys.platform == 'win32' else 'hle')
-            build(binary, [ROOT / 'src/mag_extension.cpp', SOURCES / 'mag_voice_core.cpp', SOURCES / 'mag_voice_hle.cpp',
-                           ROOT / 'tests/voice_hle.cpp'],
-                  [ROOT / 'src', SOURCES, sdk / 'runtime', sdk / 'include'])
+            build(binary, [ROOT / 'src/mag_extension.cpp', SOURCES / 'mag_voice_core.cpp', SOURCES / 'mag_voice_opus.cpp',
+                           SOURCES / 'mag_voice_hle.cpp', ROOT / 'tests/voice_hle.cpp'],
+                  [ROOT / 'src', SOURCES, sdk / 'runtime', sdk / 'include'], opus())
             for env in (clean_env(), clean_env(MAG_VOICE_TEST_TONE='0'), clean_env(MAG_VOICE_MODE='off'),
-                        clean_env(MAG_VOICE_MODE='ptt')):
+                        clean_env(MAG_VOICE_MODE='ptt'), clean_env(MAG_VOICE_VOLUME='50')):
                 off = subprocess.run([str(binary), 'disabled'], capture_output=True, text=True, timeout=60, env=env)
                 self.assertEqual(off.returncode, 0, off.stdout + off.stderr)
             trace = Path(tmp) / 'hle.jsonl'
@@ -87,6 +120,10 @@ class VoiceGuestGlue(unittest.TestCase):
             summary = [e for e in events if e['event'] == 'summary'][-1]
             self.assertGreater(summary['received_blocks'], 0)
             self.assertEqual(summary['received_blocks'], summary['pattern_ok'])
+            tone = subprocess.run([str(binary), 'tone'], capture_output=True, text=True, timeout=60,
+                                  env=clean_env(MAG_VOICE_TEST_TONE='tone', MAG_VOICE_VOLUME='80'))
+            self.assertEqual(tone.returncode, 0, tone.stdout + tone.stderr)
+            self.assertIn('PASS voice hle tone', tone.stdout)
 
 
 class VoiceBuildSwitch(unittest.TestCase):
