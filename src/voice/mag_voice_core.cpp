@@ -194,8 +194,10 @@ uint32_t Service::create_port(const PortParams& params, uint32_t& id) {
         // Slot in the high byte, a wrapping creation count in the low byte: never 0, never reused at once.
         port.id = (uint32_t(slot + 1) << 8) | (serial_++ % 0xA0u);
         port.params = params;
-        if (params.type == uint32_t(PortType::InVoice))
+        if (params.type == uint32_t(PortType::InVoice)) {
             port.parser = std::make_unique<BlockParser>(block_size_for_bitrate(params.bitrate));
+            if (options_.decoder) port.decoder = options_.decoder();
+        }
         id = port.id;
         return status::Ok;
     }
@@ -244,6 +246,11 @@ uint32_t Service::reset_port(uint32_t id) {
     port->queue.clear();
     if (port->parser) port->parser->reset();
     port->have_sequence = false;
+    // A new talker on the port: forget the old one's audio and decoder state.
+    port->pending.clear();
+    port->ready.clear();
+    port->playing = false;
+    if (port->decoder && options_.decoder) port->decoder = options_.decoder();
     return status::Ok;
 }
 
@@ -300,9 +307,30 @@ uint32_t Service::volume(uint32_t id, float& volume) {
     return status::Ok;
 }
 
-static uint32_t pcm_frame_bytes(const PortParams& p) {
-    const uint32_t sample = (p.pcm_type <= 1 || p.pcm_type >= 4) ? 4 : 2;  // float and int32: 4, short: 2
-    return FrameSamples * sample * std::max<uint32_t>(p.pcm_channels, 1);
+// Bytes per sample frame (all channels) of a PCM port: float and 32-bit integer 4 bytes a channel,
+// 16-bit integer 2.
+static uint32_t pcm_sample_bytes(const PortParams& p) {
+    const uint32_t sample = (p.pcm_type == 2 || p.pcm_type == 3) ? 2 : 4;
+    return sample * std::max<uint32_t>(p.pcm_channels, 1);
+}
+static uint32_t pcm_frame_bytes(const PortParams& p) { return FrameSamples * pcm_sample_bytes(p); }
+
+// Writes one sample in a PCM port's format: types 0/1 float, 2/3 16-bit, 4/5 32-bit; odd types
+// little-endian, even types big-endian (the console's order).
+static void put_sample(uint8_t* out, const PortParams& p, float value) {
+    value = std::max(-1.0f, std::min(1.0f, value));
+    uint32_t bits = 0;
+    unsigned width = 4;
+    if (p.pcm_type == 2 || p.pcm_type == 3) {
+        bits = static_cast<uint16_t>(static_cast<int16_t>(std::lround(value * 32767.0f)));
+        width = 2;
+    } else if (p.pcm_type == 4 || p.pcm_type == 5) {
+        bits = static_cast<uint32_t>(static_cast<int32_t>(std::llround(double(value) * 2147483647.0)));
+    } else {
+        std::memcpy(&bits, &value, 4);
+    }
+    const bool little = (p.pcm_type & 1u) != 0;
+    for (unsigned i = 0; i < width; ++i) out[i] = uint8_t(bits >> (8 * (little ? i : width - 1 - i)));
 }
 
 uint32_t Service::port_info(uint32_t id, PortInfo& info) {
@@ -322,9 +350,12 @@ uint32_t Service::port_info(uint32_t id, PortInfo& info) {
         } else {
             info.bytes = static_cast<uint32_t>(port->queue.size());
         }
-    } else if (port->params.type == uint32_t(PortType::InPcm) || port->params.type == uint32_t(PortType::OutPcm)) {
+    } else if (port->params.type == uint32_t(PortType::OutPcm)) {
         info.frame_bytes = pcm_frame_bytes(port->params);
-        info.bytes = 0;
+        info.bytes = static_cast<uint32_t>(pcm_ready(*port) * pcm_sample_bytes(port->params));
+    } else if (port->params.type == uint32_t(PortType::InPcm)) {
+        info.frame_bytes = pcm_frame_bytes(port->params);
+        info.bytes = std::max<uint32_t>(port->params.pcm_buffer, info.frame_bytes);
     } else {
         info.frame_bytes = 0;
         info.bytes = 0;
@@ -340,6 +371,32 @@ uint32_t Service::read(uint32_t id, uint8_t* out, size_t capacity, size_t& copie
     Port* port = find(id);
     if (!port || port->params.type <= uint32_t(PortType::InVoice)) return status::Topology;
     ++send_.read_calls;
+    if (port->params.type == uint32_t(PortType::OutPcm)) {
+        const uint32_t frame = pcm_sample_bytes(port->params);
+        const size_t count = std::min(pcm_ready(*port), capacity / frame);
+        if (!count || !out) return status::Ok;
+        const unsigned channels = std::max<unsigned>(port->params.pcm_channels, 1);
+        const float out_gain = port->params.mute ? 0.0f : port->params.volume * options_.voice_gain;
+        const size_t width = frame / channels;
+        for (size_t i = 0; i < count; ++i) {
+            float mix = 0;
+            for (uint32_t input : port->edges) {
+                Port* in = find(input);
+                if (!in || i >= in->ready.size() || in->params.mute) continue;
+                mix += float(in->ready[i]) / 32768.0f * in->params.volume;
+            }
+            for (unsigned c = 0; c < channels; ++c) put_sample(out + i * frame + c * width, port->params, mix * out_gain);
+        }
+        for (uint32_t input : port->edges) {
+            Port* in = find(input);
+            if (!in) continue;
+            const size_t used = std::min(count, in->ready.size());
+            in->ready.erase(in->ready.begin(), in->ready.begin() + static_cast<std::ptrdiff_t>(used));
+        }
+        copied = count * frame;
+        receive_.samples_played += count;
+        return status::Ok;
+    }
     if (port->params.type == uint32_t(PortType::OutVoice)) {
         const size_t block = block_size_for_bitrate(port->params.bitrate);
         const size_t whole = std::min(capacity, port->queue.size()) / block * block;
@@ -362,7 +419,7 @@ uint32_t Service::write(uint32_t id, const uint8_t* data, size_t bytes, size_t& 
     if (!port || port->params.type >= uint32_t(PortType::OutPcm)) return status::Topology;
     ++receive_.write_calls;
     if (!port->parser) {
-        accepted = bytes;  // PCM input: accepted; mixing it is the host-audio stage's work
+        accepted = bytes;  // PCM input from the game: accepted; nothing the game connects it to plays it yet
         return status::Ok;
     }
     const size_t room = options_.input_capacity > port->parser->pending() ? options_.input_capacity - port->parser->pending() : 0;
@@ -374,10 +431,12 @@ uint32_t Service::write(uint32_t id, const uint8_t* data, size_t bytes, size_t& 
     while (port->parser->next(block)) {
         ++receive_.blocks;
         if (pattern_payload_valid(block.payload)) ++receive_.pattern_ok; else ++receive_.pattern_bad;
-        if (port->have_sequence && block.sequence != static_cast<uint8_t>(port->last_sequence + 1)) ++receive_.sequence_gaps;
+        decode_block(*port, block);
         port->have_sequence = true;
         port->last_sequence = block.sequence;
     }
+    port->last_write = now();
+    if (started_) advance_playout(port->last_write);  // a talker that reaches its hold starts now
     receive_.skipped_bytes += port->parser->skipped_bytes() - skipped_before;
     return status::Ok;
 }
@@ -400,9 +459,85 @@ uint32_t Service::signal_state(uint32_t id, uint32_t attr, float& energy, uint32
     return status::DeviceNotPresent;  // as the runtime stub answers every attribute
 }
 
+void Service::decode_block(Port& port, const Block& block) {
+    const unsigned gap = port.have_sequence ? static_cast<uint8_t>(block.sequence - port.last_sequence - 1) : 0;
+    if (gap) ++receive_.sequence_gaps;
+    if (!port.decoder) return;
+    std::vector<int16_t> samples(FrameSamples);
+    if (gap > options_.max_concealed) {
+        // Too much lost to bridge: start the talker again from this block.
+        port.pending.clear();
+        port.playing = false;
+    } else {
+        for (unsigned i = 0; i < gap; ++i)
+            if (port.decoder->decode(nullptr, 0, samples.data())) {
+                port.pending.insert(port.pending.end(), samples.begin(), samples.end());
+                ++receive_.frames_concealed;
+            }
+    }
+    if (!port.decoder->decode(block.payload.data(), block.payload.size(), samples.data())) {
+        ++receive_.decode_errors;
+        return;
+    }
+    ++receive_.frames_decoded;
+    port.pending.insert(port.pending.end(), samples.begin(), samples.end());
+    const size_t cap = size_t(options_.playout_cap_ms) * SampleRate / 1000;
+    if (port.pending.size() > cap) {
+        const size_t drop = port.pending.size() - cap;
+        port.pending.erase(port.pending.begin(), port.pending.begin() + static_cast<std::ptrdiff_t>(drop));
+        receive_.samples_dropped += drop;
+    }
+}
+
+// Moves each talker's decoded audio to its PCM output as real time passes, after a short hold so
+// network bursts play smoothly. A talker that runs dry stops and holds again when audio returns.
+void Service::advance_playout(uint64_t t) {
+    const size_t hold = size_t(options_.jitter_ms) * SampleRate / 1000;
+    const size_t cap = size_t(options_.playout_cap_ms) * SampleRate / 1000;
+    for (auto& port : ports_) {
+        if (!port.used || !port.decoder) continue;
+        if (!port.playing) {
+            const bool held = port.pending.size() >= hold || (!port.pending.empty() && t - port.last_write >= options_.jitter_ms);
+            if (!held) continue;
+            port.playing = true;
+            port.play_start = t;
+            port.released = 0;
+        }
+        const uint64_t due = (t - port.play_start) * SampleRate / 1000;
+        const size_t want = due > port.released ? static_cast<size_t>(due - port.released) : 0;
+        const size_t moved = std::min(want, port.pending.size());
+        port.ready.insert(port.ready.end(), port.pending.begin(), port.pending.begin() + static_cast<std::ptrdiff_t>(moved));
+        port.pending.erase(port.pending.begin(), port.pending.begin() + static_cast<std::ptrdiff_t>(moved));
+        port.released += moved;
+        if (port.ready.size() > cap) {
+            // Nobody reads this talker's output: keep only the newest audio.
+            const size_t drop = port.ready.size() - cap;
+            port.ready.erase(port.ready.begin(), port.ready.begin() + static_cast<std::ptrdiff_t>(drop));
+            receive_.samples_dropped += drop;
+        }
+        if (port.pending.empty() && want > moved) {
+            port.playing = false;
+            ++receive_.underruns;
+        }
+    }
+}
+
+// Talker samples due on a PCM output: the most any connected input has ready.
+size_t Service::pcm_ready(const Port& output) {
+    size_t most = 0;
+    for (uint32_t input : output.edges)
+        if (const Port* in = find(input)) most = std::max(most, in->ready.size());
+    return most;
+}
+
 void Service::pump() {
-    if (!started_ || !options_.source) return;
+    if (!started_) return;
     const uint64_t t = now();
+    advance_playout(t);
+    if (!options_.source) {
+        summary(t);
+        return;
+    }
     const uint64_t due = (t - started_at_) / FrameMs;
     if (due <= frames_done_) {
         summary(t);
@@ -431,7 +566,7 @@ void Service::pump() {
             const size_t n = options_.encoder ? options_.encoder->encode(index, samples.data(), payload.data(), payload.size()) : 0;
             if (!n) continue;
             block.resize(size);
-            write_block(static_cast<uint8_t>(index), payload.data(), n, size, block.data());
+            write_block(out.next_sequence++, payload.data(), n, size, block.data());
             out.queue.insert(out.queue.end(), block.begin(), block.end());
             ++send_.blocks;
             const size_t cap = std::max<size_t>(size, size * (options_.queue_ms / FrameMs));
@@ -447,17 +582,22 @@ void Service::pump() {
 void Service::summary(uint64_t t, bool force) {
     if (!options_.trace || (!force && t < next_summary_)) return;
     next_summary_ = t + 5000;
-    char fields[512];
+    char fields[1024];
     std::snprintf(fields, sizeof fields,
                   "\"frames\":%llu,\"blocks\":%llu,\"blocks_dropped\":%llu,\"read_calls\":%llu,\"bytes_read\":%llu,"
                   "\"write_calls\":%llu,\"bytes_written\":%llu,\"received_blocks\":%llu,\"pattern_ok\":%llu,"
-                  "\"pattern_bad\":%llu,\"sequence_gaps\":%llu,\"skipped_bytes\":%llu",
+                  "\"pattern_bad\":%llu,\"sequence_gaps\":%llu,\"skipped_bytes\":%llu,\"frames_decoded\":%llu,"
+                  "\"frames_concealed\":%llu,\"decode_errors\":%llu,\"samples_played\":%llu,\"samples_dropped\":%llu,"
+                  "\"underruns\":%llu",
                   (unsigned long long)send_.frames, (unsigned long long)send_.blocks, (unsigned long long)send_.blocks_dropped,
                   (unsigned long long)send_.read_calls, (unsigned long long)send_.bytes_read,
                   (unsigned long long)receive_.write_calls, (unsigned long long)receive_.bytes_written,
                   (unsigned long long)receive_.blocks, (unsigned long long)receive_.pattern_ok,
                   (unsigned long long)receive_.pattern_bad, (unsigned long long)receive_.sequence_gaps,
-                  (unsigned long long)receive_.skipped_bytes);
+                  (unsigned long long)receive_.skipped_bytes, (unsigned long long)receive_.frames_decoded,
+                  (unsigned long long)receive_.frames_concealed, (unsigned long long)receive_.decode_errors,
+                  (unsigned long long)receive_.samples_played, (unsigned long long)receive_.samples_dropped,
+                  (unsigned long long)receive_.underruns);
     options_.trace->event(t - epoch_, "summary", fields);
 }
 
