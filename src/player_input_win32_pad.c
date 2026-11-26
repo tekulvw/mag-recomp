@@ -27,6 +27,7 @@
 #endif
 #include <stdatomic.h>
 #include <string.h>
+#include <stdio.h>
 #include "player_input_capture.h"
 #include "player_input_keyboard_pad_gate.h"
 #include "player_input_win32_map.h"
@@ -90,7 +91,20 @@ SHORT WINAPI mag_player_get_async_key_state(int key)
     const int muted = mag_input_capture_keyboard_pad_muted();
     const SHORT state = mag_win32_keyboard_fallback_state(muted ? 0 : GetAsyncKeyState(key), muted);
     mag_keyboard_pad_gate_begin(&gate, muted);
-    return mag_keyboard_pad_gate_input(&gate, (unsigned)key & 0xFFu, (state & 0x8000) != 0) ? state : 0;
+    const int counted = mag_keyboard_pad_gate_input(&gate, (unsigned)key & 0xFFu, (state & 0x8000) != 0);
+    /* LAB trace: X and Return as the keyboard pad sees them. */
+    if ((key == 'X' || key == VK_RETURN)) {
+        static int last[2] = {-1, -1};
+        const int i = key == 'X' ? 0 : 1;
+        const int v = muted ? 2 : ((state & 0x8000) ? (counted ? 1 : 3) : 0);
+        if (v != last[i]) {
+            last[i] = v;
+            FILETIME ft; GetSystemTimeAsFileTime(&ft);
+            const unsigned long long t = ((((unsigned long long)ft.dwHighDateTime) << 32) | ft.dwLowDateTime) / 10000ULL - 11644473600000ULL;
+            fprintf(stderr, "[lab-rx] t=%llu kbpad %s %s\n", t, i ? "Return" : "X", v == 0 ? "up" : v == 1 ? "down" : v == 2 ? "muted" : "down-gated");
+        }
+    }
+    return counted ? state : 0;
 }
 
 /* cellPad.c sees these through the renamed system declarations, and user32's is declared as a DLL

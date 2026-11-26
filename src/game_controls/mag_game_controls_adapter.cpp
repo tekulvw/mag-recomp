@@ -28,6 +28,8 @@ using namespace mag_guest;
 using Hook = MagControlsHook;
 
 namespace {
+// LAB trace (never commit): wall-clock ms.
+long long lab_ms() { return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count(); }
 // Poll numbers are unique in the process so that a new session never reuses an engine sample key.
 std::atomic<uint64_t> poll_counter{};
 
@@ -593,6 +595,11 @@ struct MagGameControlsAdapter::State {
         }
         // A menu that holds look on foot (the in-match pause menu, the loadout screen) is served
         // by the pad as well.
+        {
+            static int last = -1;
+            const int live = owned && (!on_foot || look_held_by_menu);
+            if (live != last) { last = live; std::fprintf(stderr, "[lab-rx] t=%lld pad_live=%d owned=%d on_foot=%d look_held_by_menu=%d\n", lab_ms(), live, int(owned), int(on_foot), int(look_held_by_menu)); }
+        }
         mag_input_capture_set_keyboard_pad_live(owned && (!on_foot || look_held_by_menu));
         mag_input_capture_set_keyboard_owner(owned);
     }
@@ -834,6 +841,14 @@ struct MagGameControlsAdapter::State {
         // asking for the lock here while a menu holds look would take it back every poll for the
         // handler update to release again, so the lock flapped for as long as the menu stayed.
         if (mouse_capture) mouse_capture(gameplay_eligible && !look_held_by_menu && profile.mode != InputMode::Controller);
+        {
+            static std::string last;
+            char b[200];
+            std::snprintf(b, sizeof b, "state=%u/%08X downed=%d pre_spawn=%d ctx=%s gameplay=%d contract=%d enabled=%d", unsigned(local->state_id),
+                          guest.reads().u32(local->state).value_or(0), int(local->downed), int(local->pre_spawn),
+                          gameplay_eligible ? "OnFoot" : "Menu", int(gameplay.has_value()), int(contract.has_value()), int(local->enabled));
+            if (last != b) { last = b; std::fprintf(stderr, "[lab-rx] t=%lld attach %s mode=fix\n", lab_ms(), b); }
+        }
         attached_tick = tick;
         status = gameplay_eligible ? "on-foot Rust input attached" : "native menu buttons attached";
         return true;
@@ -1011,6 +1026,9 @@ struct MagGameControlsAdapter::State {
 
         // Step 10.
         const uint32_t bits = game_event_bits(result.events);
+        if (gameplay && (*channel == 5 || *channel == 12) && (bits || value > 0))
+            std::fprintf(stderr, "[lab-rx] t=%lld rec token=%08X ch=%u action=%08X value=%.2f offer=%d bits=%04X state=%u\n", lab_ms(), *token, *channel,
+                         action, value, offer ? int(offer->down) + 1 : 0, bits, unsigned(owner->state_id));
         const auto tuple = mag_guest_tuple(float(result.value), float(double(result.elapsed_ns) / 1e9),
                                            uint32_t(result.phase), bits);
         if (!r.write_bytes(uint64_t(n) + RecordTuple, tuple.data(), tuple.size()))
