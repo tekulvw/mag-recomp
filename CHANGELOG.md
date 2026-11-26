@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.11.0](https://github.com/tekulvw/mag-recomp/compare/v0.10.3...v0.11.0) (2026-11-26)
+
+
+### Features
+
+* **engine:** report what each guest thread is doing when a match freezes ([#323](https://github.com/tekulvw/mag-recomp/issues/323)) ([382f09c](https://github.com/tekulvw/mag-recomp/commit/382f09c01c9492ad6a2191b16c0bc9be9432c16e))
+
+
+### Bug Fixes
+
+* **controls:** drive ground vehicles with W and S on keyboard ([#318](https://github.com/tekulvw/mag-recomp/issues/318)) ([93c2400](https://github.com/tekulvw/mag-recomp/commit/93c240036ae9d8370dcc7a3c4ae77f421f616dc6))
+* **controls:** let a press made on the respawn screen wait for the bar to read it ([#321](https://github.com/tekulvw/mag-recomp/issues/321)) ([cc5d389](https://github.com/tekulvw/mag-recomp/commit/cc5d3899d53ff7f0a28669b8cf2ec8225ec5c387))
+* **sdk:** pin runtime-2026.11.26-lineorder so a stalled SPU copy no longer freezes a match ([#322](https://github.com/tekulvw/mag-recomp/issues/322)) ([1adb681](https://github.com/tekulvw/mag-recomp/commit/1adb6817d435a2fbf0c219f7b452279b44e69564))
+
+
+### Documentation
+
+* specify in-match voice chat ([#314](https://github.com/tekulvw/mag-recomp/issues/314)) ([b7209af](https://github.com/tekulvw/mag-recomp/commit/b7209af0e6c47295eba37661b8c16a6236d801bc))
+
 ## [0.10.3](https://github.com/tekulvw/mag-recomp/compare/v0.10.2...v0.10.3) (2026-11-26)
 
 
