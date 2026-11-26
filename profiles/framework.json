@@ -4,8 +4,8 @@
   "upstream": "https://github.com/sp00nznet/ps3recomp",
   "ps3recomp": {
     "runtime": {
-      "tag": "mag-recomp/runtime-2026.11.26-buildstats",
-      "commit": "947c5c13cd4303f4f68d93bafcefc85e6e4689f8",
+      "tag": "mag-recomp/runtime-2026.11.26-shaderwarm",
+      "commit": "3f8ad00258bf8e646f8a4fc1cb2515fe1b159e6f",
       "path": "local/ps3recomp-runtime"
     },
     "lifter-spu": {
@@ -35,13 +35,13 @@
     }
   },
   "allowed_runtime_revisions": [
-    "947c5c13cd4303f4f68d93bafcefc85e6e4689f8"
+    "3f8ad00258bf8e646f8a4fc1cb2515fe1b159e6f"
   ],
   "strict_runtime_revisions": [
-    "947c5c13cd4303f4f68d93bafcefc85e6e4689f8"
+    "3f8ad00258bf8e646f8a4fc1cb2515fe1b159e6f"
   ],
   "strict_hle_runtime_revisions": [
-    "947c5c13cd4303f4f68d93bafcefc85e6e4689f8"
+    "3f8ad00258bf8e646f8a4fc1cb2515fe1b159e6f"
   ],
   "first_nonblack_capture_revisions": [],
   "allowed_lifter_revisions": [
