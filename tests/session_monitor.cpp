@@ -128,6 +128,63 @@ static void counters(const char *scratch) {
     std::ofstream(std::string(scratch) + "/model.json") << json;
 }
 
+// ---- First-use builds: each hitch carries the build counters' difference across it ----
+static void builds(const char *scratch) {
+    Monitor m(0);
+    Builds b;  // cumulative, as the runtime reports them
+    uint64_t t = 1;
+    m.frame(t, &b);
+    BuildInfo info;
+    info.available = true;
+    info.backend = "vulkan";
+    info.vk_pipeline_cache = true;
+    m.build_info(info);
+    for (int i = 0; i < 60; ++i) { t += 16666667; m.frame(t, &b); }
+    // A 300 ms frame during which two programs were built: four shaders, two pipelines.
+    b.programs += 2; b.program_ns += 10 * ms; b.translations += 4; b.translation_ns += 120 * ms;
+    b.pipelines += 2; b.pipeline_ns += 150 * ms;
+    t += 300 * ms; m.frame(t, &b);
+    // A 120 ms frame that only uploaded textures.
+    b.uploads += 3; b.upload_ns += 90 * ms; b.upload_bytes += 6u << 20;
+    t += 120 * ms; m.frame(t, &b);
+    // A 60 ms frame with nothing in it, and builds in an ordinary frame (not a hitch).
+    t += 60 * ms; m.frame(t, &b);
+    b.pipelines += 1; b.pipeline_ns += 5 * ms;
+    t += 16666667; m.frame(t, &b);
+    info.totals = b;
+    m.build_info(info);
+    Snapshot s = m.snapshot(61 * 1000 * ms);  // closes minute 0
+    CHECK(s.hitches.size() == 3);
+    if (s.hitches.size() == 3) {
+        CHECK(s.hitches[0].builds.programs == 2 && s.hitches[0].builds.pipelines == 2 && s.hitches[0].builds.translations == 4);
+        NEAR(s.hitches[0].builds.build_ms(), 280, 1e-6);
+        CHECK(!s.hitches[1].builds.built() && s.hitches[1].builds.uploads == 3);
+        NEAR(s.hitches[1].builds.upload_ms(), 90, 1e-6);
+        CHECK(!s.hitches[2].builds.built() && !s.hitches[2].builds.uploads);
+    }
+    CHECK(s.slow_builds[0].frames == 3 && s.slow_builds[0].with_builds == 1 && s.slow_builds[0].with_uploads == 1);
+    CHECK(s.slow_builds[1].frames == 2 && s.slow_builds[2].frames == 1 && s.slow_builds[2].with_builds == 1);
+    NEAR(s.slow_builds[2].build_ms, 280, 1e-6);
+    CHECK(s.minutes.size() == 1);
+    if (!s.minutes.empty()) {
+        CHECK(s.minutes[0].builds.pipelines == 3 && s.minutes[0].builds.uploads == 3);
+        CHECK(s.minutes[0].slow_with_builds == 1);
+    }
+    CHECK(s.timeline.size() == 1);  // the 300 ms and 120 ms frames are one dip
+    if (!s.timeline.empty()) { NEAR(s.timeline[0].build_ms, 280, 1e-6); NEAR(s.timeline[0].upload_ms, 90, 1e-6); }
+    s.role = "engine";
+    s.ending = "exit";
+    std::ofstream(std::string(scratch) + "/builds.json") << summary_json(s);
+    // Without the runtime's counters a summary says so, and its hitches carry no builds.
+    Monitor plain(0);
+    uint64_t u = 1;
+    plain.frame(u);
+    u += 300 * ms; plain.frame(u);
+    const std::string json = summary_json(plain.snapshot(u));
+    CHECK(json.find("\"builds\": {\"available\": false}") != std::string::npos);
+    CHECK(json.find("\"build_ms\"") == std::string::npos);
+}
+
 // ---- Network health: a synthetic socket stream with injected silences beside a frame stream with
 // injected hitches (docs/player-settings.md, "Frame-rate dips and network gaps"). ----
 namespace {
@@ -691,6 +748,7 @@ int main(int argc, char **argv) {
     if (argc != 2) { std::fprintf(stderr, "usage: session_monitor <scratch>\n"); return 2; }
     buckets();
     counters(argv[1]);
+    builds(argv[1]);
     network(argv[1]);
     loading_and_frozen();
     drops(argv[1]);

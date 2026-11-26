@@ -21,7 +21,12 @@
  * Once a second the summary writer also hands the monitor a tick, which judges that second's frame
  * rate against its phase's baseline for sustained frame-rate drops (DropConfig below). The summary
  * counts loading frames apart (the boot and loading screens) and records a frame that is overdue
- * as a freeze ("frozen"); docs/player-settings.md, "Loading and freezes". */
+ * as a freeze ("frozen"); docs/player-settings.md, "Loading and freezes".
+ *
+ * First-use builds (the runtime's ps3emu/rsx_build_stats.h, when the pinned runtime has it): each
+ * presented frame reads the runtime's cumulative pipeline, shader and texture-upload counters, so
+ * every hitch carries what the renderer built or uploaded while it lasted, and the summary says
+ * how many slow frames had builds in them (docs/player-settings.md, "What a slow frame built"). */
 #include <stddef.h>
 #include <stdint.h>
 
@@ -121,10 +126,44 @@ size_t bucket_of(uint64_t us);
 uint64_t bucket_low_us(size_t bucket);   /* inclusive */
 uint64_t bucket_high_us(size_t bucket);  /* exclusive; the last bucket reports its low edge */
 
+/* The renderer's first-use work, cumulative or as a difference of two readings: draw-engine
+ * pipeline builds, shader translations, host pipeline creations, pipeline-cache file writes, and
+ * texture uploads. The *_ns times are exclusive and add up (ps3emu/rsx_build_stats.h). */
+struct Builds {
+    uint64_t programs = 0, program_ns = 0, translations = 0, translation_ns = 0;
+    uint64_t pipelines = 0, pipeline_ns = 0, cache_saves = 0, cache_save_ns = 0;
+    uint64_t uploads = 0, upload_ns = 0, upload_bytes = 0, slow_uploads = 0;
+    uint64_t shader_memory_hits = 0, shader_disk_hits = 0;
+    Builds since(const Builds &earlier) const;  /* this minus earlier, field by field */
+    /* Pipeline and shader work: programs, translations, pipelines and cache writes. */
+    double build_ms() const { return double(program_ns + translation_ns + pipeline_ns + cache_save_ns) / 1e6; }
+    double upload_ms() const { return double(upload_ns) / 1e6; }
+    bool built() const { return programs || translations || pipelines || cache_saves; }
+};
+
+/* What the slow frames of one threshold (50, 100 or 250 ms) had in them. */
+struct SlowBuilds {
+    uint64_t frames = 0, with_builds = 0, with_uploads = 0;
+    double frame_ms = 0, build_ms = 0, upload_ms = 0;
+};
+constexpr uint64_t slow_build_thresholds_us[3] = {50000, 100000, 250000};
+/* A frame of at least this long, with builds or uploads in it, also gets one log line. */
+constexpr uint64_t build_log_us = 250000;
+
+/* The runtime's build facts: which disk caches it uses and its totals. */
+struct BuildInfo {
+    bool available = false;
+    std::string backend;
+    bool spirv_disk_cache = false, vk_pipeline_cache = false;
+    uint64_t pipeline_cache_loaded_bytes = 0, pipeline_worst_ns = 0;
+    Builds totals;
+};
+
 struct Hitch {
     double at_s = 0;  /* seconds since the monitor started */
     double ms = 0;
     int phase = 0;
+    Builds builds;    /* what the renderer built and uploaded during the frame */
     bool loading = false;  /* boot or a loading screen (boot_seconds, load_frame_us) */
 };
 
@@ -139,6 +178,8 @@ struct Minute {
     double p50_ms = 0, p95_ms = 0, p99_ms = 0, max_ms = 0;
     uint64_t over_50ms = 0, over_100ms = 0;
     net::Minute net;
+    Builds builds;                 /* the minute's first-use work (when build counters are available) */
+    uint64_t slow_with_builds = 0; /* its frames of 50 ms or more that had builds in them */
 };
 /* "ok", "frames" (frame time high, network fine), "network" (frames fine, network gap) or "both". */
 const char *minute_verdict(const Minute &);
@@ -150,6 +191,7 @@ struct FrameDip {
     double worst_ms = 0;
     int phase = 0;                  /* when it began */
     bool open = false;              /* the frame was still not presented at the snapshot */
+    double build_ms = 0, upload_ms = 0;  /* first-use work during its slow frames */
 };
 
 /* One entry of the timeline: a frame-rate dip or a network gap, with its verdict. */
@@ -161,6 +203,7 @@ struct TimelineEvent {
     uint64_t frames = 0;  /* a dip's slow frames */
     double worst_ms = 0;  /* a dip's worst frame */
     bool stall = false;   /* a dip that was a match stall (stall_frame_ms) */
+    double build_ms = 0, upload_ms = 0;  /* a dip's first-use work */
     std::string endpoint; /* a gap's endpoint, "tcp 192.0.2.1:10073" */
     const char *verdict = "frames";  /* "frames", "network" or "both" */
 };
@@ -257,6 +300,8 @@ struct Snapshot {
     DropConfig drop_config;
     uint64_t drop_count = 0;   /* episodes this session, including one in progress */
     std::vector<Drop> drops;   /* the worst drop_config.keep, oldest first, any in progress last */
+    BuildInfo builds;
+    SlowBuilds slow_builds[3];  /* slow_build_thresholds_us */
 };
 
 /* The counters, separate from the process-wide instance and the clock so the tests drive them. */
@@ -264,8 +309,12 @@ class Monitor {
 public:
     explicit Monitor(uint64_t start_ns = 0)
         : ring_(drop_ring_windows), ring_hist_(drop_ring_windows), start_ns_(start_ns), network_(start_ns) {}
-    /* One presented frame at `now_ns` (a monotonic clock). The first frame only starts timing. */
-    void frame(uint64_t now_ns);
+    /* One presented frame at `now_ns` (a monotonic clock). The first frame only starts timing.
+     * `builds`, when the runtime has build counters, is their cumulative reading at this present;
+     * a hitch gets the difference from the previous frame's. */
+    void frame(uint64_t now_ns, const Builds *builds = nullptr);
+    /* The runtime's build facts and totals, polled with the audio counters. */
+    void build_info(const BuildInfo &info);
     void set_phase(int phase, uint64_t now_ns);
     /* The phase the first presented frame enters when nothing set one before it. */
     void set_default_phase(int phase);
@@ -371,6 +420,14 @@ private:
     uint64_t loading_slow_[4] = {};
     double loading_seconds_ = 0;
     net::Network network_;
+    /* Frame thread only: the build counters at the previous present. */
+    Builds previous_builds_;
+    bool builds_seen_ = false;
+    /* Under rare_: */
+    BuildInfo build_info_;
+    SlowBuilds slow_builds_[3];
+    Builds minute_builds_base_;
+    uint64_t minute_slow_builds_base_ = 0;
 };
 
 /* For the stall reporter: the network's state now (Network::status), "" without network counters. */

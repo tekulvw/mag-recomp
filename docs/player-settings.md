@@ -261,6 +261,16 @@ A frame of 1 s or more on foot is a stall in play, not loading. The slow-frame t
 
 **Freezes.** A frame that never arrives is not in the hitches or the longest frame. The summary records how long the next frame has been due when it is written (`frames.pending_ms`). From 10 s, it adds `"frozen": {"at_s": <the last frame>, "s": <seconds without one>, "phase": ...}`, and the engine's final summary writes `[mag session] no frame for 43.2 s before the session ended (menu)` to `engine.log`. A frozen engine makes a `slow_frames` report: `engine: no frame for 43 s before the session ended (frozen in a match)`.
 
+### What a slow frame built
+
+A frame can be slow because the renderer met something new: a program and render state it has not drawn before needs its shaders translated and a pipeline created, on the thread that walks the RSX command buffer, and a new or changed texture is decoded and uploaded. The runtime counts that work (`ps3emu/rsx_build_stats.h`, when the pinned runtime has it; its spec is the runtime's `docs/RSX_BUILD_STATS.md`). At each presented frame the session monitor reads those cumulative counters, so each frame of 50 ms or more knows what was built while it lasted. The summary then holds:
+- per hitch, a `builds` object: build time in ms (draw-engine programs, shader translations, host pipelines and pipeline-cache writes, which add up), how many of each, and texture uploads (count, ms and MB);
+- per frame-rate dip in the timeline, its `build_ms` and `upload_ms`;
+- per minute, when it built or uploaded anything, a compact `builds` object with `slow_with_builds`, the minute's frames of 50 ms or more that had builds in them;
+- a `builds` section: the backend, which disk caches are on (`spirv_disk_cache`, `vk_pipeline_cache`, and the pipeline-cache bytes loaded at start), the session's totals, and for frames of 50, 100 and 250 ms or more, how many there were, how many had builds or uploads in them, and the time those took.
+
+A frame of 250 ms or more that built or uploaded something also writes one `[mag session] slow frame` line to `engine.log`. Without the runtime's counters the summary says `"builds": {"available": false}`.
+
 ### Sending
 
 Sending never delays play and never shows an error.
