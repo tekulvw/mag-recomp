@@ -513,10 +513,43 @@ Trigger judge_summary(const Json &summary, std::vector<std::string> &reasons) {
             reasons.push_back(role + ": " + percent(over_50 / frames) + " of frames took 50 ms or more");
             result = Trigger::SlowFrames;
         }
-        if (over_250 >= double(long_frame_count)) {
-            reasons.push_back(role + ": " + std::to_string((long long)over_250) + " frames took 250 ms or more");
+        // Loading (the boot and loading screens) is left out; older summaries have no count of it.
+        const double in_play = over_250 - field(summary, {"frames", "loading", "over_250ms"});
+        if (in_play >= double(long_frame_count)) {
+            reasons.push_back(role + ": " + std::to_string((long long)in_play) + " frames took 250 ms or more outside loading");
             result = Trigger::SlowFrames;
         }
+    }
+    auto text_of = [](const Json &object, const char *key) {
+        const Json *v = object.get(key);
+        return v && v->kind == Json::Kind::String ? v->text : std::string();
+    };
+    // Sustained frame-rate drops in a match (the engine's fps_drops), the worst named.
+    if (const Json *drops = summary.get("fps_drops"); drops && drops->get("episodes") && drops->get("episodes")->kind == Json::Kind::Array) {
+        int count = 0;
+        const Json *worst = nullptr;
+        for (const Json &e : drops->get("episodes")->items) {
+            if (e.kind != Json::Kind::Object || text_of(e, "phase") != "match") continue;
+            ++count;
+            if (!worst || field(e, {"lost_frames"}) > field(*worst, {"lost_frames"})) worst = &e;
+        }
+        if (worst) {
+            const double mean = field(*worst, {"mean_fps"}), baseline = field(*worst, {"baseline_fps"});
+            reasons.push_back(role + ": FPS fell to " + std::to_string(std::lround(mean)) + " (" +
+                              std::to_string(baseline > 0 ? std::lround(100 * mean / baseline) : 0) + "% of " +
+                              std::to_string(std::lround(baseline)) + ") for " + std::to_string(std::lround(field(*worst, {"s"}))) +
+                              " s in a match" + (count > 1 ? " (" + std::to_string(count) + " drops)" : std::string()));
+            result = Trigger::SlowFrames;
+        }
+    }
+    // A freeze: the engine presented no frame for frozen_report_seconds before its summary.
+    const double frozen = field(summary, {"frozen", "s"});
+    if (role == "engine" && frozen >= frozen_report_seconds) {
+        const std::string phase = summary.get("frozen") ? text_of(*summary.get("frozen"), "phase") : std::string();
+        reasons.push_back(role + ": no frame for " + std::to_string(std::lround(frozen)) + " s " +
+                          (text_of(summary, "state") == "ended" ? "before the session ended" : "at the last summary") +
+                          (phase == "match" ? " (frozen in a match)" : phase.empty() ? "" : " (frozen in the " + phase + ")"));
+        result = Trigger::SlowFrames;
     }
     // Network gaps: the server went silent during a match while frames kept coming. A silence still
     // open when the summary was written counts only if the session was still in a match then.
@@ -558,8 +591,17 @@ Trigger judge_summary(const Json &summary, std::vector<std::string> &reasons) {
             reasons.push_back(role + ": " + std::to_string((long long)errors) + " audio device errors");
             problem = true;
         }
-        if (clock >= judge_min_seconds && std::fabs(drift) >= audio_drift_limit_ms) {
-            reasons.push_back(role + ": audio clock drifted " + std::to_string((long long)drift) + " ms");
+        // A stall drops the audio backlog, which puts the clock behind by the time dropped: that
+        // much of a negative drift is the stall's, not the audio path's.
+        double stalls_ms = frozen * 1000;
+        if (const Json *hitches = summary.get("hitches"); hitches && hitches->kind == Json::Kind::Array)
+            for (const Json &h : hitches->items)
+                if (field(h, {"ms"}) >= 1000) stalls_ms += field(h, {"ms"});
+        const double dropped_ms = field(*audio, {"dropped_periods"}) * audio_period_frames / audio_rate * 1000;
+        const double explained = drift < 0 ? std::min({dropped_ms, stalls_ms, -drift}) : 0, residual = drift + explained;
+        if (clock >= judge_min_seconds && std::fabs(residual) >= audio_drift_limit_ms) {
+            reasons.push_back(role + ": audio clock drifted " + std::to_string((long long)residual) + " ms" +
+                              (explained > 0 ? " beyond its stalls (" + std::to_string((long long)drift) + " ms in all)" : std::string()));
             problem = true;
         }
         if (problem && result == Trigger::None) result = Trigger::Audio;

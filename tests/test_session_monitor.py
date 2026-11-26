@@ -68,6 +68,25 @@ class SessionMonitorTests(unittest.TestCase):
             self.assertLess(len(json.dumps(network)), 16 * 1024)
             self.assertFalse(model['network']['available'])
 
+            # A sustained frame-rate drop (tests/session_monitor.cpp, drops()): 98 fps, then 34 fps
+            # for 41 s in a match, with its capture, as the report reads it.
+            summary = json.loads((scratch / 'drops.json').read_text())
+            drops = summary['fps_drops']
+            self.assertEqual((drops['count'], drops['ratio'], drops['floor_fps'], drops['min_s']), (1, 0.6, 60, 3.0))
+            [drop] = drops['episodes']
+            self.assertEqual((drop['at_s'], drop['s'], drop['phase']), (180.0, 41.0, 'match'))
+            self.assertEqual((drop['baseline_fps'], drop['mean_fps'], drop['min_fps'], drop['frames']), (98.0, 34.0, 34.0, 41 * 34))
+            self.assertEqual(drop['lost_frames'], (98 - 34) * 41)
+            self.assertEqual((drop['capture']['from_s'], drop['capture']['to_s']), (175.0, 226.0))
+            self.assertEqual(drop['capture']['frames'], 5 * 98 + 41 * 34 + 5 * 98)
+            self.assertAlmostEqual(drop['capture']['p50_ms'], 1000 / 34, delta=0.6)
+            self.assertNotIn('open', drop)
+            self.assertNotIn('network', drop)  # no socket observer in this run
+            self.assertIn('loading', summary['frames'])
+            self.assertLess(len(json.dumps(summary)), 16 * 1024)
+            self.assertIn('fps_drops', model)
+            self.assertNotIn('frozen', model)
+
             live = json.loads((scratch / 'session-engine.json').read_text())
             self.assertEqual((live['role'], live['state'], live['ending']), ('engine', 'ended', 'window_closed'))
             self.assertEqual(live['frames']['count'], 4)

@@ -226,8 +226,10 @@ static void present_guest_frame(const CellGcmFlipReceipt& receipt)
     /* Present-to-present timing for the session summary: a clock read and a few relaxed
      * counters (src/mag_session_monitor.h). */
     mag_session_frame_presented();
+    /* t= is the session monitor's clock (seconds since the engine started), the one the
+     * session summary's times use, so the log lines up with the report. */
     if (count <= 3 || count % 120 == 0)
-        fprintf(stderr, "[mag] guest frame presented %ld\n", (long)count);
+        fprintf(stderr, "[mag] guest frame presented %ld t=%.1f\n", (long)count, mag_session_seconds());
 }
 
 static DWORD WINAPI frame_clock(LPVOID)

@@ -16,7 +16,12 @@
  * Network health (src/mag_session_network.h): while it writes a summary, the monitor also listens
  * to the runtime's socket observer (ps3emu/net_host_observer.h, when the pinned runtime has it;
  * MAG_SESSION_NETWORK=0 leaves it off). Frame-rate dips and network gaps go into one timeline on
- * one clock, each with a verdict (docs/player-settings.md, "Frame-rate dips and network gaps"). */
+ * one clock, each with a verdict (docs/player-settings.md, "Frame-rate dips and network gaps").
+ *
+ * Once a second the summary writer also hands the monitor a tick, which judges that second's frame
+ * rate against its phase's baseline for sustained frame-rate drops (DropConfig below). The summary
+ * counts loading frames apart (the boot and loading screens) and records a frame that is overdue
+ * as a freeze ("frozen"); docs/player-settings.md, "Loading and freezes". */
 #include <stddef.h>
 #include <stdint.h>
 
@@ -59,10 +64,13 @@ void mag_session_monitor_finish(const char *ending);
 uint64_t mag_session_now_ns(void);
 uint64_t mag_session_last_frame_ns(void);
 int mag_session_in_match(void);
+/* Seconds since the monitor started (0 before), for the engine log's frame markers. */
+double mag_session_seconds(void);
 
 #ifdef __cplusplus
 }
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <mutex>
@@ -97,6 +105,14 @@ constexpr double minute_gap_ms = 1000;
 /* A frame-rate dip in a match whose worst frame reached this long is a stall: the stall reporter
  * (src/mag_stall_reporter.h, first threshold by default) wrote [mag-stall] lines for it. */
 constexpr double stall_frame_ms = 10000;
+/* Loading, which the report triggers and the drop detector leave out: every slow frame in the first
+ * boot_seconds (the title's start-up load), and outside a match, a frame of load_frame_us or more
+ * (a loading screen) and the slow frames within load_join_us after one. */
+constexpr uint64_t boot_seconds = 60;
+constexpr uint64_t load_frame_us = 1000000;
+constexpr uint64_t load_join_us = 15000000;
+/* A frame still not presented this long when the summary is written is a freeze ("frozen"). */
+constexpr double frozen_seconds = 10;
 
 /* The fixed histogram: 0.5 ms buckets to 50 ms, 2 ms to 100 ms, 10 ms to 500 ms, 100 ms to 2 s, and
  * one bucket for anything longer. */
@@ -109,6 +125,7 @@ struct Hitch {
     double at_s = 0;  /* seconds since the monitor started */
     double ms = 0;
     int phase = 0;
+    bool loading = false;  /* boot or a loading screen (boot_seconds, load_frame_us) */
 };
 
 using Histogram = std::array<uint64_t, bucket_count>;
@@ -152,6 +169,67 @@ struct TimelineEvent {
  * gaps cover that share of it, else "frames". */
 std::vector<TimelineEvent> build_timeline(const std::vector<FrameDip> &, const net::Snapshot &);
 
+/* Sustained frame-rate drops (docs/player-settings.md, "Sustained frame-rate drops").
+ *
+ * The frame clock's hot path is unchanged: once a second the summary writer calls Monitor::tick(),
+ * which reads the cumulative counters and turns their change into a window (frames over elapsed
+ * time). Each phase keeps its own baseline, the median of its latest windows, so menus (often at
+ * the frame cap) and matches never mix. Windows holding a frame of stall_ms or more (loading, a
+ * stall), windows in which the phase changed, and the first settle_seconds after a change are
+ * skipped. A drop begins when windows stay below min(ratio x baseline, floor_fps) for min_seconds,
+ * and ends when they stay at or above that threshold x recover_ratio / ratio for recover_seconds;
+ * another drop within cooldown_seconds of its end in the same phase continues it. Each episode
+ * records its pre_roll_seconds before and post_roll_seconds after, and the worst `keep` (by frames
+ * lost against the baseline) go into the summary. The MAG_FPS_DROP_* environment variables tune
+ * it; MAG_FPS_DROPS=0 turns it off. */
+struct DropConfig {
+    bool enabled = true;
+    double ratio = 0.6;             /* MAG_FPS_DROP_RATIO: below this share of the baseline... */
+    double floor_fps = 60;          /* MAG_FPS_DROP_FLOOR: ...and below this frame rate */
+    double min_seconds = 3;         /* MAG_FPS_DROP_SECONDS: for this long */
+    double recover_ratio = 0.8;     /* MAG_FPS_DROP_RECOVER: back above this share of the baseline... */
+    double recover_seconds = 3;     /* MAG_FPS_DROP_RECOVER_SECONDS: ...for this long */
+    double cooldown_seconds = 10;   /* MAG_FPS_DROP_COOLDOWN: a drop this soon after another continues it */
+    double pre_roll_seconds = 5;    /* MAG_FPS_DROP_CAPTURE "pre,post": recorded before... */
+    double post_roll_seconds = 5;   /* ...and after the drop */
+    double baseline_seconds = 180;  /* MAG_FPS_DROP_BASELINE: the baseline's span of in-phase windows */
+    double warmup_seconds = 30;     /* in-phase windows needed before a baseline is used */
+    double settle_seconds = 5;      /* skipped after a phase change */
+    double stall_ms = 1000;         /* a window holding a frame this long is skipped */
+    size_t keep = 8;                /* MAG_FPS_DROP_KEEP: episodes kept in the summary */
+};
+constexpr size_t drop_baseline_windows_max = 600;
+constexpr size_t drop_ring_windows = 34;  /* window starts kept for the pre-roll (at most 30 s) */
+constexpr size_t drop_keep_max = 32;
+/* The configuration from the environment (`get` is getenv in the engine, a table in the tests).
+ * Values that do not parse or fall outside their range keep the default. */
+DropConfig drop_config(const char *(*get)(const char *));
+
+struct Drop {
+    double start_s = 0, end_s = 0;  /* the drop itself, seconds since the monitor started */
+    int phase = 0;
+    double baseline_fps = 0;        /* at its start */
+    double mean_fps = 0, min_fps = 0;
+    uint64_t frames = 0;            /* presented during the drop */
+    double lost_frames = 0;         /* (baseline - mean) x length: how episodes are ranked */
+    unsigned skipped_windows = 0;   /* stall windows inside it */
+    /* The capture: pre-roll, the drop and post-roll. */
+    double capture_start_s = 0, capture_end_s = 0;
+    uint64_t capture_frames = 0;
+    double p50_ms = 0, p95_ms = 0, p99_ms = 0, max_ms = 0;
+    bool stall = false;             /* a match drop whose longest frame reached stall_frame_ms */
+    /* Context: network gaps over the drop (when the runtime reports sockets) and the audio
+     * counters' change over the capture (when it reports audio). */
+    bool network = false;
+    double network_gap_ms = 0;
+    const char *verdict = "frames";  /* "both" when network gaps cover both_cover_share of the drop */
+    bool audio = false;
+    uint64_t audio_delta[MAG_SESSION_AUDIO_COUNTER_COUNT] = {};
+    bool open = false;              /* still below the recovery threshold at the snapshot */
+};
+/* The engine log's line for an episode. */
+std::string drop_line(const Drop &);
+
 struct Snapshot {
     std::string role, ending;  /* ending: empty while running */
     int64_t started_unix = 0, updated_unix = 0;
@@ -161,6 +239,9 @@ struct Snapshot {
     double max_ms = 0;
     Histogram histogram{};
     uint64_t slow[4] = {0, 0, 0, 0};
+    uint64_t loading_slow[4] = {0, 0, 0, 0};  /* the slow frames of 50 ms or more that were loading */
+    double loading_seconds = 0;               /* their time */
+    double pending_ms = 0;  /* how long the next frame has been due: now minus the latest frame */
     std::array<double, MAG_SESSION_PHASE_COUNT> phase_seconds{};
     int phase = 0;
     std::vector<Hitch> hitches;  /* worst first */
@@ -173,12 +254,16 @@ struct Snapshot {
     uint32_t audio_rate = 48000;
     net::Snapshot network;
     std::vector<TimelineEvent> timeline;
+    DropConfig drop_config;
+    uint64_t drop_count = 0;   /* episodes this session, including one in progress */
+    std::vector<Drop> drops;   /* the worst drop_config.keep, oldest first, any in progress last */
 };
 
 /* The counters, separate from the process-wide instance and the clock so the tests drive them. */
 class Monitor {
 public:
-    explicit Monitor(uint64_t start_ns = 0) : start_ns_(start_ns), network_(start_ns) {}
+    explicit Monitor(uint64_t start_ns = 0)
+        : ring_(drop_ring_windows), ring_hist_(drop_ring_windows), start_ns_(start_ns), network_(start_ns) {}
     /* One presented frame at `now_ns` (a monotonic clock). The first frame only starts timing. */
     void frame(uint64_t now_ns);
     void set_phase(int phase, uint64_t now_ns);
@@ -195,9 +280,71 @@ public:
     void net_event(const net::Event &e, uint64_t now_ns) { network_.observe(e, now_ns, phase_.load(std::memory_order_relaxed)); }
     net::Network &network() { return network_; }
     uint64_t last_frame_ns() const { return last_ns_.load(std::memory_order_relaxed); }
+    double seconds(uint64_t now_ns) const { return now_ns > start_ns_ ? double(now_ns - start_ns_) / 1e9 : 0.0; }
     int phase() const { return phase_.load(std::memory_order_relaxed); }
+    void set_drop_config(const DropConfig &);
+    /* About once a second (the summary writer): closes the frame-rate window since the previous
+     * tick and runs the drop detector on it. Off the frame clock's path. */
+    void tick(uint64_t now_ns);
 
 private:
+    /* The drop detector's state, all under rare_ and touched only by tick() and snapshot(). */
+    struct Window {  /* a window's start: the cumulative counters at a tick */
+        uint64_t ns = 0, frames = 0;
+        uint64_t audio[MAG_SESSION_AUDIO_COUNTER_COUNT] = {};
+    };
+    struct Span {  /* frames and time of the windows judged in part of an episode */
+        uint64_t frames = 0;
+        double seconds = 0, min_fps = 0;
+        unsigned skipped = 0;
+        void add(uint64_t n, double dt) {
+            const double fps = double(n) / dt;
+            min_fps = seconds > 0 ? std::min(min_fps, fps) : fps;
+            frames += n;
+            seconds += dt;
+        }
+        void merge(const Span &o) {
+            if (o.seconds > 0) min_fps = seconds > 0 ? std::min(min_fps, o.min_fps) : o.min_fps;
+            frames += o.frames;
+            seconds += o.seconds;
+            skipped += o.skipped;
+        }
+    };
+    struct Baseline {
+        std::array<float, drop_baseline_windows_max> fps{};
+        size_t next = 0, count = 0;
+    };
+    enum class DropState { Normal, Candidate, Dip, Recovering, Cooldown };
+    const Window &ring_before(uint64_t ns, const Histogram *&hist) const;  /* the newest start at or before ns */
+    bool ring_after(uint64_t ns, Window &out, const Histogram *&hist) const;  /* the oldest at or after ns */
+    double baseline(int phase) const;
+    Drop build_drop(uint64_t end_ns, const Span &, const Window &capture_end, const Histogram &capture_hist, bool open,
+                    const net::Snapshot *network) const;
+    void finish_drop(uint64_t capture_end_ns, const Window *current, const Histogram *current_hist);
+    void current_window(Window &w, uint64_t now_ns) const;
+
+    DropConfig drop_cfg_;
+    size_t baseline_windows_ = 180, warmup_windows_ = 30;
+    bool ticked_ = false;
+    uint64_t phase_changes_ = 0, tick_phase_changes_ = 0;
+    std::vector<Window> ring_;          /* drop_ring_windows window starts, a ring */
+    std::vector<Histogram> ring_hist_;  /* their cumulative histograms */
+    size_t ring_next_ = 0, ring_count_ = 0;
+    std::array<Baseline, MAG_SESSION_PHASE_COUNT> baselines_{};
+    DropState drop_state_ = DropState::Normal;
+    bool resuming_ = false;            /* the candidate would continue the episode in its cooldown */
+    Span candidate_, dip_, recovering_, cooldown_;
+    uint64_t candidate_ns_ = 0, recovering_ns_ = 0;
+    double candidate_baseline_ = 0;    /* the baseline when the candidate began */
+    Window candidate_base_{};          /* a new episode's capture start */
+    Histogram candidate_base_hist_{};
+    Drop drop_{};                      /* the episode in progress: start, phase, baseline */
+    uint64_t drop_start_ns_ = 0, drop_end_ns_ = 0;
+    Window drop_base_{};
+    Histogram drop_base_hist_{};
+    uint64_t drops_total_ = 0;
+    std::vector<Drop> drops_;          /* finished, the worst drop_cfg_.keep, oldest first */
+
     uint64_t start_ns_;
     std::atomic<uint64_t> last_ns_{0};
     std::atomic<uint64_t> frames_{0}, frame_us_{0}, max_us_{0}, minute_max_us_{0};
@@ -220,6 +367,9 @@ private:
     Histogram minute_base_{};
     uint64_t minute_frames_base_ = 0, minute_us_base_ = 0, minute_slow_base_ = 0, minute_slow100_base_ = 0;
     std::vector<FrameDip> dips_;
+    uint64_t loading_until_ns_ = 0;  /* a loading screen's slow frames join until then */
+    uint64_t loading_slow_[4] = {};
+    double loading_seconds_ = 0;
     net::Network network_;
 };
 
