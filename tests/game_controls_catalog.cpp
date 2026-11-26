@@ -91,22 +91,9 @@ static void prompts() {
                 mag_game_controls_pad_layout_key(MagPadButton::Start) == 40 &&
                 mag_game_controls_pad_layout_key(MagPadButton::R3) == 10,
             "pad layout keys");
-    // Raw pad-button tokens, both spellings, as a census of a match shows them (2.3).
-    for (uint32_t token : {0xbf63ff06u /* padr1 */, 0xeb26f4a0u /* PadR1 */, 0x6b22c0d9u /* padl1 */,
-                           0xf22b9163u /* padl2 */, 0x266aaebcu /* padr2 */, 0x852ca1f5u /* padl3 */,
-                           0x1067db72u /* padcircle */, 0x9b06f9f3u /* padlstickup */, 0xb0bb4926u /* padrstickright */})
-        require(mag_game_controls_raw_pad_token(token), "a raw pad-button token is not recognized");
-    require(!mag_game_controls_raw_pad_token(0x58de09cf) && !mag_game_controls_raw_pad_token(0xc8a3e21d),
-            "a named action token is taken for a raw pad button");
-    // Look directions: the look tokens themselves and the right stick's raw tokens (7.5).
-    require(mag_game_controls_look_direction(0xc8a3e21d) == 0xc8a3e21d, "turnleft");
-    require(mag_game_controls_look_direction(0xd07dc0ee) == 0xc8a3e21d, "padrstickleft is turnleft");
-    require(mag_game_controls_look_direction(0xb0bb4926) == 0x941734a2, "padrstickright is turnright");
-    require(mag_game_controls_look_direction(0xf237daea) == 0x661cb595, "padrstickup is aimup");
-    require(mag_game_controls_look_direction(0xb6e5b7bd) == 0xc34f3a66, "padrstickdown is aimdown");
-    require(mag_game_controls_look_direction(0xd7e42a55) == 0x661cb595, "PadRStickUp is aimup");
-    require(mag_game_controls_look_direction(0x9b06f9f3) == 0 && mag_game_controls_look_direction(0x58de09cf) == 0,
-            "a left-stick or named token read as a look direction");
+    require(mag_game_controls_seat_alias(0x2c4380c4) == 0xc07aa75a, "a seat's R2 does not read Aim's keys");
+    require(mag_game_controls_seat_alias(0x58de09cf) == 0 && mag_game_controls_seat_alias(0xc07aa75a) == 0,
+            "a seat alias for an action other than Cycle weapons");
 }
 // A revision 2 profile: today's defaults with revision 2's keys (Confirm Return, Bleed out X,
 // Command screen M).

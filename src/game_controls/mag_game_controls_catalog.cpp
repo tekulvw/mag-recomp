@@ -40,25 +40,6 @@ constexpr MagGameControlsAction catalog[] = {
 constexpr ActionId retired[] = {CommandScreen};
 // turnleft, turnright, aimup, aimdown.
 constexpr uint32_t look_tokens[] = {0xc8a3e21d, 0x941734a2, 0x661cb595, 0xc34f3a66};
-// CRC-32 (the zlib polynomial) of a name exactly as written.
-constexpr uint32_t crc32(std::string_view text, bool lower) {
-    uint32_t crc = 0xFFFFFFFFu;
-    for (char c : text) {
-        crc ^= static_cast<unsigned char>(lower && c >= 'A' && c <= 'Z' ? c - 'A' + 'a' : c);
-        for (int bit = 0; bit < 8; ++bit) crc = (crc >> 1) ^ (0xEDB88320u & (0u - (crc & 1u)));
-    }
-    return ~crc;
-}
-// The game's names for the pad's own buttons, sticks and analog shoulders (docs/native-controls.md,
-// 2.3). It hashes each as written and lower-cased.
-constexpr std::string_view raw_pad_names[] = {
-    "PadUp", "PadDown", "PadLeft", "PadRight", "PadCross", "PadCircle", "PadSquare", "PadTriangle",
-    "PadL1", "PadR1", "PadL2", "PadR2", "PadL3", "PadR3", "PadStart", "PadSelect",
-    "PadLStickUp", "PadLStickDown", "PadLStickLeft", "PadLStickRight",
-    "PadRStickUp", "PadRStickDown", "PadRStickLeft", "PadRStickRight",
-    "PadL1Analog", "PadR1Analog", "PadL2Analog", "PadR2Analog"};
-// The right stick's raw directions, in the order of look_tokens.
-constexpr std::string_view raw_look_names[] = {"PadRStickLeft", "PadRStickRight", "PadRStickUp", "PadRStickDown"};
 // Contexts a binding may use: on foot for gameplay actions; on foot and menu for system buttons.
 constexpr uint32_t OnFoot = uint32_t(InputContext::OnFoot);
 constexpr uint32_t SystemContexts = OnFoot | uint32_t(InputContext::Menu);
@@ -92,6 +73,7 @@ ActionId mag_game_controls_token_action(uint32_t token) {
 }
 
 mag::ActionId mag_game_controls_downed_alias(ActionId action) { return action == Bleedout ? Confirm : 0; }
+mag::ActionId mag_game_controls_seat_alias(ActionId action) { return action == CycleWeapons ? Aim : 0; }
 
 uint32_t mag_game_controls_name_token(std::string_view name) {
     uint32_t crc = 0xFFFFFFFFu;
@@ -111,19 +93,6 @@ ActionId mag_game_controls_prompt_action(std::string_view name) {
 unsigned mag_game_controls_look_bit(uint32_t token) {
     for (unsigned i = 0; i < std::size(look_tokens); ++i)
         if (look_tokens[i] == token) return 1u << i;
-    return 0;
-}
-
-bool mag_game_controls_raw_pad_token(uint32_t token) {
-    for (auto name : raw_pad_names)
-        if (token == crc32(name, false) || token == crc32(name, true)) return true;
-    return false;
-}
-
-uint32_t mag_game_controls_look_direction(uint32_t token) {
-    for (size_t i = 0; i < std::size(look_tokens); ++i)
-        if (token == look_tokens[i] || token == crc32(raw_look_names[i], false) || token == crc32(raw_look_names[i], true))
-            return look_tokens[i];
     return 0;
 }
 

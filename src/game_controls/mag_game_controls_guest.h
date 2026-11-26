@@ -127,8 +127,9 @@ public:
     std::optional<bool> removal_pending(uint32_t handler) const;
     // 5.4: handlers that may receive host input while gameplay is allowed; nullopt when not allowed.
     std::optional<std::vector<uint32_t>> gameplay_routes() const;
-    // 5.5: handlers that may receive system buttons; nullopt when the routing contract fails.
-    std::optional<std::vector<uint32_t>> system_routes() const;
+    // 5.5: handlers that may receive system buttons; nullopt when the routing contract fails. With
+    // `registered`, also the enabled ones registered with the input manager (not UI elements).
+    std::optional<std::vector<uint32_t>> system_routes(std::vector<uint32_t>* registered = nullptr) const;
     // 5.6: whether all four look channels of the handler read exactly zero.
     std::optional<bool> neutral_look(uint32_t handler) const;
     // The handler's vtable update descriptor is the base one.

@@ -104,8 +104,11 @@ class GameControlsAdapterTests(unittest.TestCase):
     def test_prompt_queries_report_bindings_device_and_revision(self):
         self.run_scenario('prompt-queries')
 
-    def test_mounted_weapon_reads_the_mouse_as_the_pad(self):
+    def test_a_turret_aims_with_the_mouse_and_fires_with_the_mouse_buttons(self):
         self.run_scenario('mounted')
+
+    def test_a_registered_handler_reads_the_mouse_buttons_on_foot(self):
+        self.run_scenario('registered-on-foot')
 
     def test_controller_mode_leaves_a_mounted_weapon_to_the_controller(self):
         self.run_scenario('mounted-controller-mode')

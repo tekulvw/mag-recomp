@@ -38,6 +38,9 @@ constexpr const char* MapChanged = "native control map changed; waiting for fres
 // interval the conversion assumes is kept within these bounds (seconds).
 constexpr double FullStickRate = 3.0, MinStickInterval = 1.0 / 240, MaxStickInterval = 1.0 / 10, FirstStickInterval = 1.0 / 30;
 
+// Cycle weapons: the action on R2, a turret's secondary weapon (2.3).
+constexpr ActionId SeatSecondary = 0x2C4380C4;
+
 // Caller return addresses of the two angle-rate helpers (section 3).
 constexpr uint64_t BasicYawCaller = 0x0061E7B4, SprintYawCaller = 0x00675CF0, SprintPitchCaller = 0x00676D78;
 
@@ -266,6 +269,17 @@ struct MagGameControlsAdapter::State {
     uint64_t seal_ns{}, previous_seal_ns{};
     std::optional<InputContext> last_context;
     std::vector<uint32_t> system_routes;
+    // 7.2: handlers registered with the input manager other than the player's, and of those the seat
+    // handlers of this poll (watching every look channel: a mounted weapon's, a vehicle seat's), the
+    // channels seat handlers consumed in this poll, and the open seat handler update.
+    std::vector<uint32_t> registered_routes;
+    std::set<uint32_t> seat_handlers;
+    uint64_t seat_poll{};
+    uint32_t seat_consumed{};
+    struct SeatScope {
+        uint32_t pad{}, before{};
+    };
+    std::optional<SeatScope> seat_scope;
     std::optional<std::vector<uint32_t>> gameplay_routes;
     std::map<uint32_t, ActionId> channel_actions;
 
@@ -287,7 +301,7 @@ struct MagGameControlsAdapter::State {
         bool on = [] { const char* v = std::getenv("MAG_GAME_CONTROLS_TRACE"); return v && *v && std::strcmp(v, "0"); }();
         std::chrono::steady_clock::time_point next{};
         unsigned routes{}, eligible{}, look_held{}, held_by_menu{}, mouse_eligible{}, motion_frames{}, prepares{},
-            prepare_motion{}, latched{}, consumer_seams{}, consumed{}, capture_on{}, capture_off{}, stick{};
+            prepare_motion{}, latched{}, consumer_seams{}, consumed{}, capture_on{}, capture_off{}, stick{}, seated{};
         double dx{}, dy{};
     } look_trace;
     void trace_look() {
@@ -299,9 +313,10 @@ struct MagGameControlsAdapter::State {
             std::fprintf(stderr,
                          "[game-controls] trace look: routes=%u gameplay=%u look_held=%u held_by_menu=%u mouse_eligible=%u "
                          "motion_frames=%u (dx %.0f dy %.0f) prepared=%u with_motion=%u latched=%u consumer_seams=%u consumed=%u "
-                         "mouse lock requests on/off=%u/%u stick_look=%u\n",
+                         "mouse lock requests on/off=%u/%u stick_look=%u seated=%u\n",
                          t.routes, t.eligible, t.look_held, t.held_by_menu, t.mouse_eligible, t.motion_frames, t.dx, t.dy,
-                         t.prepares, t.prepare_motion, t.latched, t.consumer_seams, t.consumed, t.capture_on, t.capture_off, t.stick);
+                         t.prepares, t.prepare_motion, t.latched, t.consumer_seams, t.consumed, t.capture_on, t.capture_off, t.stick,
+                         t.seated);
         const bool on = t.on;
         t = LookTrace{};
         t.on = on;
@@ -580,6 +595,7 @@ struct MagGameControlsAdapter::State {
         retire();
         poll_number = ++poll_counter;
         poll_sealed = false;
+        seat_consumed = 0;
         if (!mag_input_capture_poll_begin(poll_number)) throw std::runtime_error("capture layer refused the input poll");
         capture_poll_open = true;
     }
@@ -686,6 +702,8 @@ struct MagGameControlsAdapter::State {
             auto r = guest.reads();
             const char* role = owner_handler(handler) ? "owner"
                 : gameplay_routes && contains(*gameplay_routes, handler) ? "gameplay-route"
+                : seat_handlers.count(handler) ? "seat"
+                : contains(registered_routes, handler) ? "registered"
                 : contains(system_routes, handler) ? "system-route" : "other";
             char head[160];
             std::snprintf(head, sizeof head, "census role=%s context=%s enabled=%d state=%u/%08X controls=", role,
@@ -715,8 +733,10 @@ struct MagGameControlsAdapter::State {
     }
     void update_handler(MagGameControlsCpu& cpu) {
         recognition_handler = 0;
+        seat_scope.reset();
         if (!sample_key || !sealed) return;
-        auto routes = guest.system_routes();
+        std::vector<uint32_t> registered;
+        auto routes = guest.system_routes(&registered);
         if (!routes) {
             cancel("native system input routing contract unavailable");
             return;
@@ -725,11 +745,39 @@ struct MagGameControlsAdapter::State {
         update_gameplay_available = gameplay.has_value();
         if (!frame && !attach(gameplay)) return;
         system_routes = std::move(*routes);
+        std::erase_if(registered, [&](uint32_t handler) { return owner_handler(handler); });
+        registered_routes = std::move(registered);
         if (!gameplay) revoke_gameplay();
-        route(address(cpu.gpr[3]), address(cpu.gpr[4]));
+        find_seat_handlers();
+        const uint32_t handler = address(cpu.gpr[3]), pad = address(cpu.gpr[4]);
+        // 7.2 step 5: remember what a seat handler's own update consumes.
+        if (seat_handlers.count(handler))
+            if (const auto before = guest.reads().u32(uint64_t(pad) + PadConsumed)) seat_scope = SeatScope{pad, *before};
+        route(handler, pad);
     }
+    // Once per poll: the registered handlers that watch every look channel of the player's contract.
+    void find_seat_handlers() {
+        if (seat_poll == poll_number) return;
+        seat_poll = poll_number;
+        seat_handlers.clear();
+        // Seats are looked for only outside the soldier's aim states (2.2): on foot the soldier aims.
+        if (!contract || !contract->look_mask || !owner || owner->mouse_supported) return;
+        for (uint32_t handler : registered_routes) {
+            const auto controls = guest.watched_controls(handler);
+            if (!controls) continue;
+            uint32_t channels = 0;
+            for (const auto& control : *controls) channels |= 1u << control.channel;
+            if ((channels & contract->look_mask) == contract->look_mask) seat_handlers.insert(handler);
+        }
+    }
+    bool seated() const { return !seat_handlers.empty(); }
     void handler_exit() {
         if (!handler_depth || --handler_depth) return;
+        if (seat_scope) {
+            if (const auto after = guest.reads().u32(uint64_t(seat_scope->pad) + PadConsumed))
+                seat_consumed |= *after & ~seat_scope->before;
+            seat_scope.reset();
+        }
         update_gameplay_available.reset();
         handler_owner.reset();
         recognition_handler = 0;
@@ -799,7 +847,7 @@ struct MagGameControlsAdapter::State {
     }
 
     // 7.5, mouse as the right stick: outside the soldier's aim states the mouse pushes the stick as
-    // far as it moves fast, for the player's look tokens and raw right-stick tokens.
+    // far as it moves fast. The mouse becomes the look device at once, so the first poll counts.
     void update_stick_look(const MagGuestOwner& local) {
         stick_look = gameplay_eligible && !local.mouse_supported && !look_held_by_menu && profile.mode != InputMode::Controller;
         stick_x = stick_y = 0;
@@ -810,6 +858,8 @@ struct MagGameControlsAdapter::State {
         const auto look = mag_controls_mouse_look(frame->mouse_dx, frame->mouse_dy, profile.mouse, AimMode::Hip);
         stick_x = std::clamp(look.yaw / interval / FullStickRate, -1.0, 1.0);
         stick_y = std::clamp(look.pitch / interval / FullStickRate, -1.0, 1.0);
+        mag_controls_accept_mouse(*sample_key);
+        frame->policy = mag_controls_current_policy();
     }
     // The deflection a look direction reads: turnleft, turnright, aimup, aimdown (look_tokens order).
     double stick_value(uint32_t look) const {
@@ -892,7 +942,8 @@ struct MagGameControlsAdapter::State {
         if (!consumed) throw std::runtime_error("pad record unreadable");
         // A menu or other UI that takes the look channels before the player's handler holds the
         // mouse: release the lock (the cursor is free) until look comes back.
-        const bool look_held = contract && (*consumed & contract->look_mask);
+        // Look channels a seat handler consumed in its own update are the seat's, not a menu's.
+        const bool look_held = contract && (*consumed & contract->look_mask & ~seat_consumed);
         mouse_eligible = gameplay_eligible && current->mouse_supported && contract && !look_held;
         if (look_held) stick_look = false;
         // Mouse look stops at once, but the lock follows the menu only once its hold on look has been
@@ -911,11 +962,12 @@ struct MagGameControlsAdapter::State {
         }
         const bool capture_mouse = gameplay_eligible && !look_held_by_menu && profile.mode != InputMode::Controller;
         if (mouse_capture) mouse_capture(capture_mouse);
-        if ((mouse_eligible || stick_look) && mouse_motion()) mag_controls_accept_mouse(*sample_key);
+        if (mouse_eligible && mouse_motion()) mag_controls_accept_mouse(*sample_key);
         if (look_trace.on) {
             auto& t = look_trace;
             ++t.routes; t.eligible += gameplay_eligible; t.look_held += look_held; t.held_by_menu += look_held_by_menu;
-            t.mouse_eligible += mouse_eligible; t.stick += stick_look; (capture_mouse ? t.capture_on : t.capture_off)++;
+            t.mouse_eligible += mouse_eligible; t.stick += stick_look; t.seated += seated();
+            (capture_mouse ? t.capture_on : t.capture_off)++;
             if (mouse_motion()) { ++t.motion_frames; t.dx += frame->mouse_dx; t.dy += frame->mouse_dy; }
             trace_look();
         }
@@ -966,7 +1018,7 @@ struct MagGameControlsAdapter::State {
         // A watched token that names a catalog action is that action wherever it is watched; any
         // other token takes the action of its channel.
         const ActionId named = mag_game_controls_token_action(*token);
-        ActionId action = mag_game_controls_action(named) ? named : mag_game_controls_look_direction(*token);
+        ActionId action = mag_game_controls_action(named) ? named : 0;
         if (!action) {
             const auto mapped = channel_actions.find(*channel);
             if (mapped == channel_actions.end()) return false;
@@ -977,6 +1029,7 @@ struct MagGameControlsAdapter::State {
         const auto* catalog = mag_game_controls_action(action);
         const bool system = catalog && catalog->system_channel >= 0;
         const bool gameplay = owner_handler(handler);
+        const bool registered = !gameplay && contains(registered_routes, handler);
         if (system) {
             if (!contains(system_routes, handler)) {
                 cancel("native system route changed");
@@ -995,22 +1048,28 @@ struct MagGameControlsAdapter::State {
             // While a menu holds look on foot the pad serves every handler but the player's (8.2).
             if (!gameplay && look_held_by_menu) return false;
             // Situational actions may be watched by any system route (a vehicle's or a menu's own
-            // handler); other actions only by the owner or a gameplay route.
-            // So may a raw pad-button token: a handler reading the pad itself gets what the player's
-            // handler takes on that channel, as a controller's button presses both (a mounted
-            // weapon's padr1 fires from the left mouse button).
+            // handler); other actions only by the owner, a gameplay route or a handler registered
+            // with the input manager (a mounted weapon's or a seat's, the pad-button reader), which
+            // gets what the player's handler takes on that channel, as a controller's button
+            // presses both.
             if (gameplay ? mag_game_controls_token_action(*token) != action
-                         : !(gameplay_routes && contains(*gameplay_routes, handler)) &&
-                               !((optional_action(action) || mag_game_controls_raw_pad_token(*token)) &&
-                                 contains(system_routes, handler)))
+                         : !(gameplay_routes && contains(*gameplay_routes, handler)) && !registered &&
+                               !(optional_action(action) && contains(system_routes, handler)))
                 return false;
+            // In a seat the right mouse button belongs to the seat (its R2, step 4): Aim's own
+            // controls, the player's and any other handler's, are left to the game.
+            if (seated() && action == mag_game_controls_seat_alias(SeatSecondary)) return false;
         }
 
         // Step 4. While the player is downed, the player's own Bleed out also reads Confirm's keys
         // (2.3). One action per press: its own keys first, then the alias's, otherwise the action the
         // record last used, so a press finishes on the action it began on.
-        if (gameplay && owner->downed)
-            if (const ActionId alias = mag_game_controls_downed_alias(action); alias && !mag_controls_offer(*sample_key, action)) {
+        // In a seat, a seat handler's control on R2 also reads Aim's keys (the right mouse button).
+        const ActionId alias = gameplay && owner->downed                           ? mag_game_controls_downed_alias(action)
+                             : registered && seat_handlers.count(handler) && !system ? mag_game_controls_seat_alias(action)
+                                                                                    : 0;
+        if (alias)
+            if (!mag_controls_offer(*sample_key, action)) {
                 const auto prior = entries.find(n);
                 if (mag_controls_offer(*sample_key, alias) || (prior != entries.end() && prior->second.action == alias))
                     action = alias;
@@ -1073,10 +1132,12 @@ struct MagGameControlsAdapter::State {
         } else if (gameplay) {
             host_caches[n] = {*owner, handler, *token, *binding, *tuning, tuple};
             if (offer) gameplay_receipts[action] = *offer;
-        } else if (optional_action(action) || mag_game_controls_raw_pad_token(*token)) {
-            // A situational action or a raw pad button on another handler: given back like a
-            // system button when the adapter lets go (6.5).
+        } else if (optional_action(action) || registered) {
+            // Given back like a system button when the adapter lets go (6.5). A press a registered
+            // handler used is completed with the player's, at the end of the actor update (7.5),
+            // so it never waits to act later on foot.
             system_caches[n] = {handler, *token, *binding, *tuning, tuple};
+            if (registered && offer) gameplay_receipts[action] = *offer;
         }
         if (accept) mag_controls_accept_action(*sample_key, action, *offer);
 

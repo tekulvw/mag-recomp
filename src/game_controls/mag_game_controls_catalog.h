@@ -42,15 +42,13 @@ mag::ActionId mag_game_controls_prompt_action(std::string_view name);
 // handler (docs/native-controls.md, 2.3): Confirm for Bleed out, as the console's Cross does both.
 // 0 for every other action.
 mag::ActionId mag_game_controls_downed_alias(mag::ActionId action);
+// On a mounted weapon's or vehicle seat's own handler (docs/native-controls.md, 2.3 and 7.3), the
+// second action whose keys also press `action` there: Aim (the right mouse button) for the control on
+// Cycle weapons' button, R2, which fires a turret's secondary weapon. 0 for every other action.
+mag::ActionId mag_game_controls_seat_alias(mag::ActionId action);
 // Bit 0..3 for the four look-axis tokens, 0 for any other token.
 unsigned mag_game_controls_look_bit(uint32_t token);
 inline bool mag_game_controls_look_token(uint32_t token) { return mag_game_controls_look_bit(token) != 0; }
-// The game's raw pad-button tokens (padr1, PadR1, padrstickleft, ...: the button or stick direction
-// itself, whatever it does), in both spellings the game hashes (docs/native-controls.md, 2.3).
-bool mag_game_controls_raw_pad_token(uint32_t token);
-// The look token (turnleft, turnright, aimup, aimdown) a token reads as a direction: a look token
-// itself, or the raw right-stick token of that direction; 0 for any other token (7.5).
-uint32_t mag_game_controls_look_direction(uint32_t token);
 
 // PlayStation buttons, and the key the SDK's keyboard pad uses for each (pad_keyboard_layout.h):
 // the key that presses a button while that pad is live (an in-match menu: docs/native-controls.md,
