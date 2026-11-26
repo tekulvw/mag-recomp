@@ -263,10 +263,27 @@ other handler sees Confirm, as above. Bleed out's own keys (Return) keep working
 are pressed. On foot a press of Confirm's or Back's keys that nothing took over is spent at the end
 of its poll (7.3), so an X pressed while alive cannot bleed out later, when the player goes down.
 
-**Vehicles** are not yet observed. The census saw no separate vehicle handler, and the local
-player's handler stays enabled in every movement state seen, so vehicles likely run on foot with
-it. Mouse look there is an open question: it is supported only in the movement states of 2.2, and
-the state a vehicle seat uses is unknown.
+**Mounted weapons and vehicles** (a bunker turret, a vehicle seat) do not use the soldier's aim:
+the soldier's look consumers (`BasicYaw` and the rest, section 3) do not run in their movement
+states, so mouse look through those seams (7.5) cannot turn them. Players reported that in a bunker
+turret, aiming and firing did nothing on keyboard and mouse, while leaving the turret worked. Two
+interface facts matter here (census, section 4):
+
+- A registered handler that is not a UI element watches the pad's own buttons for the whole match,
+  by *raw pad-button tokens*: CRC-32 of `padl1`, `padr1`, `padl2` and `padr2` (the census shows
+  `0x6B22C0D9`, `0xBF63FF06`, `0xF22B9163` and `0x266AAEBC` on the channels of L1, R1, L2 and R2).
+  The game hashes these names as written and lower-cased (`PadR1` and `padr1`), and has one for every
+  button, both sticks' directions and the analog shoulders (`mag_game_controls_raw_pad_token`). The
+  camel-case D-pad, Start and Select tokens are the catalog's system actions.
+- The look tokens are the soldier's named directions: `turnleft`, `turnright`, `aimup` and
+  `aimdown`. The right stick's raw tokens (`padrstickleft` and so on) name the same four
+  directions (`mag_game_controls_look_direction`).
+
+The adapter therefore treats keyboard and mouse as the pad wherever a gameplay handler reads the
+pad itself (7.3 step 3) and, outside the soldier's aim states, turns mouse motion into a right-stick
+deflection for those handlers (7.5, *mouse as the right stick*), as a controller's stick would
+drive them. Neither needs the mounted state to be named: both follow from what the handlers watch
+and which movement states have soldier aim seams.
 
 **Catalog revision 3** retires the command screen action (`0xC6DCD89F`, commandscreen): the game
 watches it on the Select button, so its token is an alias of Select and Tab presses it, as the
@@ -290,7 +307,8 @@ Token aliases (a watched token that stands for a catalog action): `0x68C3570D` i
 (scopeup, scopedown: scope zoom) are D-pad up and down. The census shows each watched on that
 button, so these aliases change no recognition; they let prompts such as `[Respawn]` name the key. Every other token stands for itself.
 
-Look tokens (the four look-axis channels): `0xC8A3E21D`, `0x941734A2`, `0x661CB595`, `0xC34F3A66`.
+Look tokens (the four look-axis channels): `0xC8A3E21D` (turnleft), `0x941734A2` (turnright),
+`0x661CB595` (aimup), `0xC34F3A66` (aimdown).
 
 The catalog, default bindings and profile validation live in `mag_game_controls_catalog.{h,cpp}`.
 
@@ -611,6 +629,9 @@ since last seen, reset system and host caches, clear receipts and cancel the mou
    - when the semantic context changed since the last attachment and controller tracking's
      generation equals the generation before attaching, move controller tracking to the new
      generation (a context change is not a device reset);
+   - compute *stick look* for this poll (7.5): on when gameplay is eligible, the owner's movement
+     state does not support mouse look (2.2), no menu holds look and the mode is not Controller;
+     then convert the frame's mouse motion into the stick deflection;
    - remember the context and the new capture generation; without gameplay eligibility reset host
      caches and clear gameplay receipts; request relative mouse capture only with gameplay
      eligibility outside Controller mode and while no menu holds look (the same request as step 5;
@@ -630,7 +651,8 @@ since last seen, reset system and host caches, clear receipts and cancel the mou
    (status "on-foot input attached; a menu holds look" while it does). Mouse look stops at once,
    but the lock and the status follow only after the menu's hold (or its release) has lasted three
    consecutive handler updates, about 100 ms, so a menu flickering the look channels while it
-   animates does not release and re-take the lock; with mouse eligibility and mouse
+   animates does not release and re-take the lock. A look channel consumed by a menu also turns
+   *stick look* (7.5) off for the rest of the poll. With mouse eligibility or stick look, and mouse
    motion in the frame, accept the mouse (`mag_controls_accept_mouse`); refresh the frame's policy
    from the engine.
 
@@ -655,24 +677,31 @@ Returns false (the game recognizes the control itself) unless every step below a
    - Other actions: gameplay must be eligible; the channel contract must still be current (7.4),
      otherwise revoke gameplay and mouse eligibility and return false; on the owner's handler the
      token (after aliases) must equal the action; on another handler it must be a gameplay route,
-     or, for a situational action, any system route (a vehicle's or a menu's own handler). While a
+     or, for a situational action or a raw pad-button token (2.3), any system route (a vehicle's,
+     a mounted weapon's or a menu's own handler). A handler that reads the pad's buttons itself
+     thus gets what the player's handler takes on that channel, as a controller's button presses
+     both: the left mouse button presses `padr1` where Fire is on R1. While a
      menu holds look on foot (8.2), no gameplay or situational action is taken over on a handler
      other than the player's: return false.
 4. While the player is downed (2.2), on the owner's handler, an action with a downed alias (Bleed
    out, whose alias is Confirm, 2.3) that has no offer of its own is recognized as its alias when
    the alias has an offer, or when the recognition entry of `n` last used the alias (so a press
    finishes on the action it began on). `mouse look` = gameplay, a look token, mouse eligible and
-   the frame's look owner is the mouse.
+   the frame's look owner is the mouse. `stick look` = stick look is on for this poll (7.2), the
+   action is a look token (a raw right-stick token takes the look token of its own direction, not
+   its channel's) and the frame's look owner is the mouse.
    Ask the engine for this action's offer (`mag_controls_offer`). `remapped` = the profile remaps
    the controller and the action allows controller remapping. `deny native` = (gameplay or system)
-   in KBM mode, or remapped. Without an offer, an existing recognition entry, mouse look or deny
-   native, return false.
+   in KBM mode, or remapped. Without an offer, an existing recognition entry, mouse look, stick
+   look or deny native, return false.
 5. Read tuning low, high, threshold, epsilon and curve kind. Low must be below high, threshold in
    [0,1], epsilon non-negative; otherwise it is an error.
 6. `preserve` = not remapped, not KBM mode, and a controller is connected. With preserve and no
    mouse look, the native contribution is f1 normalised into [0,1] over [low, high] and passed
    through the value curve (2.2); otherwise zero. `native contribution` = preserve and that value
    is above zero. An offer that is down (and no mouse look) makes the value 1. Mouse look makes it 0.
+   Stick look makes it the stick deflection of the token's direction (7.5), with no native
+   contribution.
 7. Recognition configuration: the five tuning durations converted to nanoseconds (rounded;
    negative or overflowing is an error), the threshold and epsilon.
 8. Read the current tuple (unreadable: return false). The recognition entry for `n` is renewed with
@@ -699,8 +728,9 @@ Returns false (the game recognizes the control itself) unless every step below a
 12. Non-system action on the owner's handler: record a host cache. With an offer, keep it as a
     gameplay receipt and, when not blocked and the value is above zero, accept the action. On a
     gameplay route handler (not the owner's) nothing is recorded: no host cache, no receipt, no
-    acceptance; the published tuple is the only effect. A situational action on another handler
-    is recorded as a system cache (6.5), so it is given back when the adapter lets go.
+    acceptance; the published tuple is the only effect. A situational action or a raw pad-button
+    token on another handler is recorded as a system cache (6.5), so it is given back when the
+    adapter lets go.
 13. Return true.
 
 At the end of the outermost poll, with gameplay eligible and a valid frame, every offer of Confirm
@@ -768,6 +798,27 @@ recognition was most of the adapter's per-frame cost, section 10.)
 - `ActorExit` back to depth zero: when the actor-scope owner exists, the frame is valid and the
   owner still matches, observe every gameplay receipt (`mag_controls_observe`). Then clear gameplay
   receipts, cancel the latch and drop the actor-scope owner.
+
+**Mouse as the right stick (stick look).** In a movement state without soldier aim seams (2.2:
+a bunker turret, a vehicle seat, any state outside the mouse look table) the mouse drives the
+right stick instead, so a mounted weapon turns as it would from a controller. Once per poll, when
+the sample attaches (7.2 step 3):
+
+- the frame's motion is converted as hip mouse look is (`mag_controls_mouse_look`, the player's
+  sensitivity, axis gains and Y inversion), giving a yaw (right-positive) and a pitch
+  (up-positive) in radians;
+- each is divided by the time since the previous poll's sample (clamped to 1/240 to 1/10 s) and
+  by the *full-stick rate*, 3 radians per second, and clamped to [-1, 1]: that is the stick
+  deflection, so the stick is pushed as far as the mouse moves fast, and a mouse at rest
+  centres it;
+- `turnright` reads the positive yaw deflection, `turnleft` the negative one (as a magnitude),
+  `aimup` the positive pitch and `aimdown` the negative pitch. A raw right-stick token reads the
+  direction it names.
+
+The deflection goes to the recognizer (7.3 step 9) as the control's value, so the game sees a stick
+pushed that far. It applies on the player's handler (its look tokens) and on any system route
+watching a raw right-stick token. The mouse lock is requested as on foot (7.2 step 5), and the
+mouse is accepted as the look device, so a controller's stick takes over again when it moves.
 
 ### 7.6 Aim assist (KBM)
 

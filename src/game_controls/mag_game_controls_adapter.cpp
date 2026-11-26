@@ -34,6 +34,10 @@ std::atomic<uint64_t> poll_counter{};
 constexpr const char* InvalidState = "rejected unavailable or invalid state";
 constexpr const char* MapChanged = "native control map changed; waiting for fresh input";
 
+// Mouse as the right stick (7.5): a mouse turning this fast pushes the stick fully, and the poll
+// interval the conversion assumes is kept within these bounds (seconds).
+constexpr double FullStickRate = 3.0, MinStickInterval = 1.0 / 240, MaxStickInterval = 1.0 / 10, FirstStickInterval = 1.0 / 30;
+
 // Caller return addresses of the two angle-rate helpers (section 3).
 constexpr uint64_t BasicYawCaller = 0x0061E7B4, SprintYawCaller = 0x00675CF0, SprintPitchCaller = 0x00676D78;
 
@@ -256,6 +260,10 @@ struct MagGameControlsAdapter::State {
     std::optional<MagGuestOwner> owner, handler_owner, actor_owner;
     std::optional<Contract> contract;
     bool gameplay_eligible{}, mouse_eligible{};
+    // 7.5: the mouse drives the right stick this poll, and the deflection it gives (x right, y up).
+    bool stick_look{};
+    double stick_x{}, stick_y{};
+    uint64_t seal_ns{}, previous_seal_ns{};
     std::optional<InputContext> last_context;
     std::vector<uint32_t> system_routes;
     std::optional<std::vector<uint32_t>> gameplay_routes;
@@ -279,7 +287,7 @@ struct MagGameControlsAdapter::State {
         bool on = [] { const char* v = std::getenv("MAG_GAME_CONTROLS_TRACE"); return v && *v && std::strcmp(v, "0"); }();
         std::chrono::steady_clock::time_point next{};
         unsigned routes{}, eligible{}, look_held{}, held_by_menu{}, mouse_eligible{}, motion_frames{}, prepares{},
-            prepare_motion{}, latched{}, consumer_seams{}, consumed{}, capture_on{}, capture_off{};
+            prepare_motion{}, latched{}, consumer_seams{}, consumed{}, capture_on{}, capture_off{}, stick{};
         double dx{}, dy{};
     } look_trace;
     void trace_look() {
@@ -291,9 +299,9 @@ struct MagGameControlsAdapter::State {
             std::fprintf(stderr,
                          "[game-controls] trace look: routes=%u gameplay=%u look_held=%u held_by_menu=%u mouse_eligible=%u "
                          "motion_frames=%u (dx %.0f dy %.0f) prepared=%u with_motion=%u latched=%u consumer_seams=%u consumed=%u "
-                         "mouse lock requests on/off=%u/%u\n",
+                         "mouse lock requests on/off=%u/%u stick_look=%u\n",
                          t.routes, t.eligible, t.look_held, t.held_by_menu, t.mouse_eligible, t.motion_frames, t.dx, t.dy,
-                         t.prepares, t.prepare_motion, t.latched, t.consumer_seams, t.consumed, t.capture_on, t.capture_off);
+                         t.prepares, t.prepare_motion, t.latched, t.consumer_seams, t.consumed, t.capture_on, t.capture_off, t.stick);
         const bool on = t.on;
         t = LookTrace{};
         t.on = on;
@@ -386,7 +394,7 @@ struct MagGameControlsAdapter::State {
         handler_owner.reset();
         frame.reset();
         contract.reset();
-        gameplay_eligible = mouse_eligible = false;
+        gameplay_eligible = mouse_eligible = stick_look = false;
         clear_receipts();
         // Releasing engine input discards the sealed sample; it cannot be attached in this poll.
         sealed = false;
@@ -411,6 +419,7 @@ struct MagGameControlsAdapter::State {
             clear_receipts();
         }
         latch_cancel();
+        stick_look = false;
         frame.reset();
         contract.reset();
         if (sample_key) mag_controls_retire_frame(*sample_key);
@@ -604,6 +613,8 @@ struct MagGameControlsAdapter::State {
         const bool complete = capture_poll_open && mag_input_capture_poll_complete(poll_number, &sample);
         capture_poll_open = false;
         if (complete) feed_controller(sample);
+        previous_seal_ns = seal_ns;
+        seal_ns = now_ns();
         const InputFrameKey key{session, poll_number, 0};
         mag_controls_seal_sample(key);
         sample_key = key;
@@ -724,7 +735,7 @@ struct MagGameControlsAdapter::State {
         recognition_handler = 0;
     }
     void revoke_gameplay() {
-        gameplay_eligible = mouse_eligible = false;
+        gameplay_eligible = mouse_eligible = stick_look = false;
         gameplay_routes.reset();
         reset_host_caches();
         gameplay_receipts.clear();
@@ -787,6 +798,30 @@ struct MagGameControlsAdapter::State {
         return true;
     }
 
+    // 7.5, mouse as the right stick: outside the soldier's aim states the mouse pushes the stick as
+    // far as it moves fast, for the player's look tokens and raw right-stick tokens.
+    void update_stick_look(const MagGuestOwner& local) {
+        stick_look = gameplay_eligible && !local.mouse_supported && !look_held_by_menu && profile.mode != InputMode::Controller;
+        stick_x = stick_y = 0;
+        if (!stick_look || !mouse_motion()) return;
+        const double interval = previous_seal_ns && seal_ns > previous_seal_ns
+                                    ? std::clamp(double(seal_ns - previous_seal_ns) / 1e9, MinStickInterval, MaxStickInterval)
+                                    : FirstStickInterval;
+        const auto look = mag_controls_mouse_look(frame->mouse_dx, frame->mouse_dy, profile.mouse, AimMode::Hip);
+        stick_x = std::clamp(look.yaw / interval / FullStickRate, -1.0, 1.0);
+        stick_y = std::clamp(look.pitch / interval / FullStickRate, -1.0, 1.0);
+    }
+    // The deflection a look direction reads: turnleft, turnright, aimup, aimdown (look_tokens order).
+    double stick_value(uint32_t look) const {
+        switch (mag_game_controls_look_bit(look)) {
+        case 1: return std::max(0.0, -stick_x);
+        case 2: return std::max(0.0, stick_x);
+        case 4: return std::max(0.0, stick_y);
+        case 8: return std::max(0.0, -stick_y);
+        default: return 0.0;
+        }
+    }
+
     // 7.2 step 3: attach the sealed sample for the local owner. False stops the handler update.
     bool attach(const std::optional<std::vector<uint32_t>>& gameplay) {
         const auto local = guest.local_owner();
@@ -826,6 +861,7 @@ struct MagGameControlsAdapter::State {
             controller.generation = frame->capture_generation;
         last_context = context;
         seen_generation = frame->capture_generation;
+        update_stick_look(*local);
         if (!gameplay_eligible) {
             reset_host_caches();
             gameplay_receipts.clear();
@@ -858,6 +894,7 @@ struct MagGameControlsAdapter::State {
         // mouse: release the lock (the cursor is free) until look comes back.
         const bool look_held = contract && (*consumed & contract->look_mask);
         mouse_eligible = gameplay_eligible && current->mouse_supported && contract && !look_held;
+        if (look_held) stick_look = false;
         // Mouse look stops at once, but the lock follows the menu only once its hold on look has been
         // stable for a few handler updates: menus flicker the look channels while they animate, and
         // each flicker would otherwise release and re-take the lock.
@@ -874,11 +911,11 @@ struct MagGameControlsAdapter::State {
         }
         const bool capture_mouse = gameplay_eligible && !look_held_by_menu && profile.mode != InputMode::Controller;
         if (mouse_capture) mouse_capture(capture_mouse);
-        if (mouse_eligible && mouse_motion()) mag_controls_accept_mouse(*sample_key);
+        if ((mouse_eligible || stick_look) && mouse_motion()) mag_controls_accept_mouse(*sample_key);
         if (look_trace.on) {
             auto& t = look_trace;
             ++t.routes; t.eligible += gameplay_eligible; t.look_held += look_held; t.held_by_menu += look_held_by_menu;
-            t.mouse_eligible += mouse_eligible; (capture_mouse ? t.capture_on : t.capture_off)++;
+            t.mouse_eligible += mouse_eligible; t.stick += stick_look; (capture_mouse ? t.capture_on : t.capture_off)++;
             if (mouse_motion()) { ++t.motion_frames; t.dx += frame->mouse_dx; t.dy += frame->mouse_dy; }
             trace_look();
         }
@@ -929,7 +966,7 @@ struct MagGameControlsAdapter::State {
         // A watched token that names a catalog action is that action wherever it is watched; any
         // other token takes the action of its channel.
         const ActionId named = mag_game_controls_token_action(*token);
-        ActionId action = mag_game_controls_action(named) ? named : 0;
+        ActionId action = mag_game_controls_action(named) ? named : mag_game_controls_look_direction(*token);
         if (!action) {
             const auto mapped = channel_actions.find(*channel);
             if (mapped == channel_actions.end()) return false;
@@ -959,9 +996,13 @@ struct MagGameControlsAdapter::State {
             if (!gameplay && look_held_by_menu) return false;
             // Situational actions may be watched by any system route (a vehicle's or a menu's own
             // handler); other actions only by the owner or a gameplay route.
+            // So may a raw pad-button token: a handler reading the pad itself gets what the player's
+            // handler takes on that channel, as a controller's button presses both (a mounted
+            // weapon's padr1 fires from the left mouse button).
             if (gameplay ? mag_game_controls_token_action(*token) != action
                          : !(gameplay_routes && contains(*gameplay_routes, handler)) &&
-                               !(optional_action(action) && contains(system_routes, handler)))
+                               !((optional_action(action) || mag_game_controls_raw_pad_token(*token)) &&
+                                 contains(system_routes, handler)))
                 return false;
         }
 
@@ -976,20 +1017,24 @@ struct MagGameControlsAdapter::State {
             }
         const bool mouse_look = gameplay && mag_game_controls_look_token(action) && mouse_eligible &&
                                 frame->policy.look_owner == LookOwner::Mouse;
+        // 7.5: outside the soldier's aim states the mouse is the right stick.
+        const bool stick = stick_look && !system && mag_game_controls_look_token(action) &&
+                           frame->policy.look_owner == LookOwner::Mouse;
         const auto offer = mag_controls_offer(*sample_key, action);
         const bool kbm = profile.mode == InputMode::KBM;
         const bool remapped = profile.controller_remap && catalog && catalog->digital_controller;
         const bool deny_native = ((gameplay || system) && kbm) || remapped;
         auto existing = entries.find(n);
-        if (!offer && existing == entries.end() && !mouse_look && !deny_native) return false;
+        if (!offer && existing == entries.end() && !mouse_look && !stick && !deny_native) return false;
 
         // Steps 5 to 7.
         const Tuning tune = read_tuning(*tuning);
         const bool preserve = !remapped && !kbm && frame->policy.controller_connected;
-        double value = preserve && !mouse_look ? native_value(tune, cpu.fpr[1]) : 0.0;
+        double value = preserve && !mouse_look && !stick ? native_value(tune, cpu.fpr[1]) : 0.0;
         const bool native_contribution = preserve && value > 0;
         if (offer && offer->down && !mouse_look) value = 1.0;
         if (mouse_look) value = 0.0;
+        if (stick) value = stick_value(action);
 
         // Step 8.
         MagGuestTuple current;
@@ -1028,8 +1073,9 @@ struct MagGameControlsAdapter::State {
         } else if (gameplay) {
             host_caches[n] = {*owner, handler, *token, *binding, *tuning, tuple};
             if (offer) gameplay_receipts[action] = *offer;
-        } else if (optional_action(action)) {
-            // Given back like a system button when the adapter lets go (6.5).
+        } else if (optional_action(action) || mag_game_controls_raw_pad_token(*token)) {
+            // A situational action or a raw pad button on another handler: given back like a
+            // system button when the adapter lets go (6.5).
             system_caches[n] = {handler, *token, *binding, *tuning, tuple};
         }
         if (accept) mag_controls_accept_action(*sample_key, action, *offer);
