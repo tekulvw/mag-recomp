@@ -94,6 +94,14 @@ void Monitor::frame(uint64_t now_ns) {
     // A hitch: rare, so a lock and a small sorted list are fine here.
     Hitch hitch{double(now_ns - start_ns_) / 1e9, double(us) / 1000.0, phase_.load(std::memory_order_relaxed)};
     std::lock_guard<std::mutex> lock(rare_);
+    // Loading: the boot, or outside a match a loading screen's long frame and the slow frames after it.
+    if (hitch.phase != MAG_SESSION_PHASE_MATCH && us >= load_frame_us) loading_until_ns_ = now_ns + load_join_us * 1000;
+    hitch.loading = now_ns - start_ns_ < boot_seconds * 1000000000ull ||
+                    (hitch.phase != MAG_SESSION_PHASE_MATCH && now_ns <= loading_until_ns_);
+    if (hitch.loading) {
+        for (size_t i = 0; i < 4 && us >= slow_thresholds_us[i]; ++i) ++loading_slow_[i];
+        loading_seconds_ += double(us) / 1e6;
+    }
     if (us >= frame_dip_us) {
         // A slow frame: it starts a frame-rate dip, or extends the latest one.
         const double end = hitch.at_s, start = end - double(us) / 1e6;
@@ -122,6 +130,7 @@ void Monitor::set_phase(int phase, uint64_t now_ns) {
     const uint64_t since = phase_since_ns_ ? phase_since_ns_ : start_ns_;
     if (now_ns > since) phase_seconds_[size_t(previous)] += double(now_ns - since) / 1e9;
     phase_since_ns_ = now_ns;
+    ++phase_changes_;
     phase_.store(phase, std::memory_order_relaxed);
 }
 
@@ -134,6 +143,317 @@ void Monitor::audio(const uint64_t (&counters)[MAG_SESSION_AUDIO_COUNTER_COUNT],
     audio_clock_seconds_ = clock_seconds;
     audio_rate_ = rate ? rate : 48000;
     audio_backend_ = backend;
+}
+
+// ---- Sustained frame-rate drops (the header's DropConfig says how) ----
+
+DropConfig drop_config(const char *(*get)(const char *)) {
+    DropConfig c;
+    auto value = [&](const char *name, double low, double high, double &target) {
+        const char *text = get ? get(name) : nullptr;
+        if (!text || !*text) return;
+        char *end = nullptr;
+        const double v = std::strtod(text, &end);
+        if (end && *end == '\0' && std::isfinite(v) && v >= low && v <= high) target = v;
+    };
+    if (const char *on = get ? get("MAG_FPS_DROPS") : nullptr; on && (!std::strcmp(on, "0") || !std::strcmp(on, "off"))) c.enabled = false;
+    value("MAG_FPS_DROP_RATIO", 0.1, 0.95, c.ratio);
+    value("MAG_FPS_DROP_FLOOR", 1, 1000, c.floor_fps);
+    value("MAG_FPS_DROP_SECONDS", 1, 600, c.min_seconds);
+    value("MAG_FPS_DROP_RECOVER", 0.1, 1.0, c.recover_ratio);
+    value("MAG_FPS_DROP_RECOVER_SECONDS", 1, 600, c.recover_seconds);
+    value("MAG_FPS_DROP_COOLDOWN", 0, 30, c.cooldown_seconds);
+    value("MAG_FPS_DROP_BASELINE", 30, double(drop_baseline_windows_max), c.baseline_seconds);
+    double keep = double(c.keep);
+    value("MAG_FPS_DROP_KEEP", 1, double(drop_keep_max), keep);
+    c.keep = size_t(keep);
+    // "pre,post" in seconds, or one number for both.
+    if (const char *text = get ? get("MAG_FPS_DROP_CAPTURE") : nullptr; text && *text) {
+        char *end = nullptr;
+        const double pre = std::strtod(text, &end);
+        double post = pre;
+        bool ok = end != text;
+        if (ok && *end == ',') {
+            const char *rest = end + 1;
+            post = std::strtod(rest, &end);
+            ok = end != rest;
+        }
+        ok = ok && *end == '\0' && std::isfinite(pre) && std::isfinite(post) && pre >= 0 && pre <= 30 && post >= 0 && post <= 30;
+        if (ok) { c.pre_roll_seconds = pre; c.post_roll_seconds = post; }
+    }
+    // Recovery must sit above the drop threshold, or every window would end a drop.
+    if (c.recover_ratio <= c.ratio) c.recover_ratio = std::min(1.0, c.ratio + 0.2);
+    return c;
+}
+
+void Monitor::set_drop_config(const DropConfig &config) {
+    std::lock_guard<std::mutex> lock(rare_);
+    drop_cfg_ = config;
+    drop_cfg_.keep = std::clamp<size_t>(config.keep, 1, drop_keep_max);
+    baseline_windows_ = std::clamp<size_t>(size_t(std::lround(config.baseline_seconds)), 1, drop_baseline_windows_max);
+    warmup_windows_ = std::clamp<size_t>(size_t(std::lround(config.warmup_seconds)), 1, baseline_windows_);
+}
+
+const Monitor::Window &Monitor::ring_before(uint64_t ns, const Histogram *&hist) const {
+    // Newest first: the newest start at or before ns, else the oldest kept.
+    size_t best = (ring_next_ + drop_ring_windows - ring_count_) % drop_ring_windows;
+    for (size_t i = 1; i <= ring_count_; ++i) {
+        const size_t at = (ring_next_ + drop_ring_windows - i) % drop_ring_windows;
+        if (ring_[at].ns <= ns) { best = at; break; }
+    }
+    hist = &ring_hist_[best];
+    return ring_[best];
+}
+
+bool Monitor::ring_after(uint64_t ns, Window &out, const Histogram *&hist) const {
+    // Oldest first: the oldest start at or after ns.
+    for (size_t i = ring_count_; i >= 1; --i) {
+        const size_t at = (ring_next_ + drop_ring_windows - i) % drop_ring_windows;
+        if (ring_[at].ns >= ns) { out = ring_[at]; hist = &ring_hist_[at]; return true; }
+    }
+    return false;
+}
+
+double Monitor::baseline(int phase) const {
+    const Baseline &b = baselines_[size_t(phase)];
+    if (b.count < warmup_windows_) return 0;
+    std::array<float, drop_baseline_windows_max> sorted{};
+    std::copy(b.fps.begin(), b.fps.begin() + std::ptrdiff_t(b.count), sorted.begin());
+    auto middle = sorted.begin() + std::ptrdiff_t(b.count / 2);
+    std::nth_element(sorted.begin(), middle, sorted.begin() + std::ptrdiff_t(b.count));
+    return double(*middle);
+}
+
+void Monitor::current_window(Window &w, uint64_t now_ns) const {
+    w.ns = now_ns;
+    w.frames = frames_.load(std::memory_order_relaxed);
+    std::copy(std::begin(audio_), std::end(audio_), std::begin(w.audio));
+}
+
+Drop Monitor::build_drop(uint64_t end_ns, const Span &span, const Window &capture_end, const Histogram &capture_hist, bool open,
+                         const net::Snapshot *network) const {
+    Drop d = drop_;
+    auto seconds = [&](uint64_t ns) { return ns > start_ns_ ? double(ns - start_ns_) / 1e9 : 0.0; };
+    d.end_s = seconds(end_ns);
+    d.frames = span.frames;
+    d.mean_fps = span.seconds > 0 ? double(span.frames) / span.seconds : 0;
+    d.min_fps = span.min_fps;
+    d.lost_frames = std::max(0.0, (d.baseline_fps - d.mean_fps) * span.seconds);
+    d.skipped_windows = span.skipped;
+    d.capture_start_s = seconds(drop_base_.ns);
+    d.capture_end_s = seconds(capture_end.ns);
+    Histogram delta{};
+    for (size_t b = 0; b < bucket_count; ++b) delta[b] = capture_hist[b] - drop_base_hist_[b];
+    d.capture_frames = capture_end.frames - drop_base_.frames;
+    d.p50_ms = percentile_ms(delta, 50);
+    d.p95_ms = percentile_ms(delta, 95);
+    d.p99_ms = percentile_ms(delta, 99);
+    d.max_ms = percentile_ms(delta, 100);
+    d.stall = d.phase == MAG_SESSION_PHASE_MATCH && d.max_ms >= stall_frame_ms;
+    d.audio = audio_seen_;
+    for (int c = 0; c < MAG_SESSION_AUDIO_COUNTER_COUNT; ++c)
+        d.audio_delta[c] = capture_end.audio[c] >= drop_base_.audio[c] ? capture_end.audio[c] - drop_base_.audio[c] : 0;
+    d.open = open;
+    if (network && network->available) {
+        d.network = true;
+        std::vector<std::pair<double, double>> gaps;
+        for (const net::Gap &g : network->gaps) gaps.emplace_back(g.at_s, g.at_s + g.ms / 1000.0);
+        const double length = d.end_s - d.start_s;
+        // How much of the drop network gaps cover (overlaps counted once).
+        std::sort(gaps.begin(), gaps.end());
+        double covered = 0, reach = d.start_s;
+        for (auto [a, b] : gaps) {
+            a = std::max(a, reach);
+            b = std::min(b, d.end_s);
+            if (b > a) { covered += b - a; reach = b; }
+        }
+        d.network_gap_ms = covered * 1000.0;
+        d.verdict = length > 0 && covered >= both_cover_share * length ? "both" : "frames";
+    }
+    return d;
+}
+
+std::string drop_line(const Drop &d) {
+    char text[512];
+    int n = std::snprintf(text, sizeof text,
+                          "[mag session] fps drop in %s at %.1f s: %.0f fps for %.1f s (%.0f%% of a %.0f fps baseline, lowest %.0f); "
+                          "capture %.1f-%.1f s p99 %.0f ms, longest %.0f ms",
+                          phase_name(d.phase), d.start_s, d.mean_fps, d.end_s - d.start_s,
+                          d.baseline_fps > 0 ? 100.0 * d.mean_fps / d.baseline_fps : 0.0, d.baseline_fps, d.min_fps, d.capture_start_s,
+                          d.capture_end_s, d.p99_ms, d.max_ms);
+    std::string line(text, size_t(std::max(0, std::min(n, int(sizeof text) - 1))));
+    if (d.skipped_windows) line += "; " + std::to_string(d.skipped_windows) + " stalled s skipped";
+    if (d.network) {
+        std::snprintf(text, sizeof text, "; network gaps %.0f ms (%s)", d.network_gap_ms, d.verdict);
+        line += text;
+    }
+    if (d.audio)
+        line += "; audio underruns +" + std::to_string(d.audio_delta[MAG_SESSION_AUDIO_UNDERRUNS]) + ", starved frames +" +
+                std::to_string(d.audio_delta[MAG_SESSION_AUDIO_STARVED_FRAMES]);
+    return line;
+}
+
+// Ends the episode in progress: its capture ends at the window start at or after capture_end_ns,
+// or at the current counters when none has come yet.
+void Monitor::finish_drop(uint64_t capture_end_ns, const Window *current, const Histogram *current_hist) {
+    Window end;
+    const Histogram *hist = nullptr;
+    if (!ring_after(capture_end_ns, end, hist)) {
+        if (!current) return;
+        end = *current;
+        hist = current_hist;
+    }
+    const net::Snapshot network = network_.snapshot(end.ns);
+    Drop d = build_drop(drop_end_ns_, dip_, end, *hist, false, &network);
+    std::fprintf(stderr, "%s\n", drop_line(d).c_str());
+    drops_.push_back(d);
+    if (drops_.size() > drop_cfg_.keep) {
+        // Keep the worst: drop the one that lost the fewest frames.
+        auto least = std::min_element(drops_.begin(), drops_.end(), [](const Drop &a, const Drop &b) { return a.lost_frames < b.lost_frames; });
+        drops_.erase(least);
+    }
+    drop_state_ = DropState::Normal;
+    resuming_ = false;
+    dip_ = recovering_ = cooldown_ = candidate_ = Span{};
+}
+
+void Monitor::tick(uint64_t now_ns) {
+    std::lock_guard<std::mutex> lock(rare_);
+    if (!drop_cfg_.enabled) return;
+    Window current;
+    current_window(current, now_ns);
+    Histogram cumulative{};
+    for (size_t b = 0; b < bucket_count; ++b) cumulative[b] = buckets_[b].load(std::memory_order_relaxed);
+    const bool first = !ticked_;
+    const Window previous = first ? Window{} : ring_[(ring_next_ + drop_ring_windows - 1) % drop_ring_windows];
+    if (!first && now_ns <= previous.ns) return;
+    auto record = [&] {
+        ring_[ring_next_] = current;
+        ring_hist_[ring_next_] = cumulative;
+        ring_next_ = (ring_next_ + 1) % drop_ring_windows;
+        ring_count_ = std::min(ring_count_ + 1, drop_ring_windows);
+        ticked_ = true;
+        tick_phase_changes_ = phase_changes_;
+    };
+    if (first) return record();
+
+    const double dt = double(now_ns - previous.ns) / 1e9;
+    const uint64_t n = current.frames - previous.frames;
+    const double fps = double(n) / dt;
+    const int phase = phase_.load(std::memory_order_relaxed);
+    const DropConfig &c = drop_cfg_;
+    const uint64_t cooldown_ns = uint64_t(std::max(c.cooldown_seconds, c.post_roll_seconds) * 1e9);
+
+    // A phase change ends whatever was going on, at the change; the window is not judged.
+    if (phase_changes_ != tick_phase_changes_) {
+        const uint64_t change = std::max(phase_since_ns_, previous.ns);
+        if (drop_state_ == DropState::Dip || drop_state_ == DropState::Recovering) {
+            drop_end_ns_ = drop_state_ == DropState::Recovering ? recovering_ns_ : change;
+            finish_drop(now_ns, &current, &cumulative);
+        } else if (drop_state_ == DropState::Cooldown || (drop_state_ == DropState::Candidate && resuming_)) {
+            finish_drop(std::min(now_ns, drop_end_ns_ + uint64_t(c.post_roll_seconds * 1e9)), &current, &cumulative);
+        }
+        drop_state_ = DropState::Normal;
+        resuming_ = false;
+        return record();
+    }
+
+    // Skipped windows: no frame in it, a frame of stall_ms or more (loading or a stall), a frame
+    // still late now, before the first frame, or just after a phase change.
+    size_t top = bucket_count;
+    for (size_t b = bucket_count; b-- > 0;)
+        if (cumulative[b] != ring_hist_[(ring_next_ + drop_ring_windows - 1) % drop_ring_windows][b]) { top = b; break; }
+    const uint64_t last = last_ns_.load(std::memory_order_relaxed);
+    const bool skipped = n == 0 || phase == MAG_SESSION_PHASE_STARTING || !last ||
+                         (top < bucket_count && double(bucket_low_us(top)) >= c.stall_ms * 1000.0) ||
+                         (now_ns > last && double(now_ns - last) >= c.stall_ms * 1e6) ||
+                         double(now_ns - std::max(phase_since_ns_, start_ns_)) < c.settle_seconds * 1e9 ||
+                         now_ns - start_ns_ < boot_seconds * 1000000000ull || previous.ns <= loading_until_ns_;
+    if (!skipped) {
+        const double base = baseline(phase);
+        const double enter = std::min(c.ratio * base, c.floor_fps), leave = enter * c.recover_ratio / c.ratio;
+        const bool low = base > 0 && fps < enter;
+        auto start_candidate = [&](bool resume) {
+            drop_state_ = DropState::Candidate;
+            resuming_ = resume;
+            candidate_ = Span{};
+            candidate_ns_ = previous.ns;
+            const Histogram *hist = nullptr;
+            candidate_base_ = ring_before(previous.ns - std::min(previous.ns, uint64_t(c.pre_roll_seconds * 1e9)), hist);
+            candidate_base_hist_ = *hist;
+            candidate_baseline_ = base;
+        };
+        switch (drop_state_) {
+        case DropState::Normal:
+            if (low) start_candidate(false);
+            break;
+        case DropState::Cooldown:
+            if (low) start_candidate(true);
+            else cooldown_.add(n, dt);
+            break;
+        case DropState::Candidate:
+            if (!low) {
+                // A blip: not long enough.
+                if (resuming_) { cooldown_.merge(candidate_); cooldown_.add(n, dt); drop_state_ = DropState::Cooldown; }
+                else drop_state_ = DropState::Normal;
+                candidate_ = Span{};
+            }
+            break;
+        case DropState::Dip:
+            if (fps >= leave) { drop_state_ = DropState::Recovering; recovering_ = Span{}; recovering_ns_ = previous.ns; }
+            break;
+        case DropState::Recovering:
+            if (fps < leave) { dip_.merge(recovering_); recovering_ = Span{}; drop_state_ = DropState::Dip; }
+            break;
+        }
+        if (drop_state_ == DropState::Candidate) {
+            candidate_.add(n, dt);
+            if (candidate_.seconds + 1e-9 >= c.min_seconds) {
+                if (resuming_) {
+                    // Within the cooldown: the same episode goes on, through the calm between.
+                    dip_.merge(cooldown_);
+                } else {
+                    drop_ = Drop{};
+                    drop_.start_s = candidate_ns_ > start_ns_ ? double(candidate_ns_ - start_ns_) / 1e9 : 0.0;
+                    drop_.phase = phase;
+                    drop_.baseline_fps = candidate_baseline_;
+                    drop_start_ns_ = candidate_ns_;
+                    drop_base_ = candidate_base_;
+                    drop_base_hist_ = candidate_base_hist_;
+                    dip_ = Span{};
+                    ++drops_total_;
+                }
+                dip_.merge(candidate_);
+                candidate_ = cooldown_ = recovering_ = Span{};
+                resuming_ = false;
+                drop_state_ = DropState::Dip;
+            }
+        } else if (drop_state_ == DropState::Dip) {
+            dip_.add(n, dt);
+        } else if (drop_state_ == DropState::Recovering) {
+            recovering_.add(n, dt);
+            if (recovering_.seconds + 1e-9 >= c.recover_seconds) {
+                drop_end_ns_ = recovering_ns_;
+                cooldown_ = recovering_;
+                recovering_ = Span{};
+                drop_state_ = DropState::Cooldown;
+            }
+        }
+        // Every judged window feeds its phase's baseline, the drop's too, so a drop that lasts
+        // longer than half the baseline's span becomes the new normal.
+        Baseline &b = baselines_[size_t(phase)];
+        b.fps[b.next] = float(fps);
+        b.next = (b.next + 1) % baseline_windows_;
+        b.count = std::min(b.count + 1, baseline_windows_);
+    } else {
+        Span *span = drop_state_ == DropState::Dip ? &dip_ : drop_state_ == DropState::Recovering ? &recovering_
+                     : drop_state_ == DropState::Candidate ? &candidate_ : nullptr;
+        if (span) ++span->skipped;
+    }
+    // The cooldown is over: the episode is final.
+    if (drop_state_ == DropState::Cooldown && now_ns >= drop_end_ns_ + cooldown_ns)
+        finish_drop(drop_end_ns_ + uint64_t(c.post_roll_seconds * 1e9), &current, &cumulative);
+    record();
 }
 
 Snapshot Monitor::snapshot(uint64_t now_ns) {
@@ -189,6 +509,8 @@ Snapshot Monitor::snapshot(uint64_t now_ns) {
     const uint64_t since = phase_since_ns_ ? phase_since_ns_ : start_ns_;
     if (now_ns > since) s.phase_seconds[size_t(s.phase)] += double(now_ns - since) / 1e9;
     s.hitches = hitches_;
+    std::copy(std::begin(loading_slow_), std::end(loading_slow_), std::begin(s.loading_slow));
+    s.loading_seconds = loading_seconds_;
     s.minutes = minutes_;
     s.audio_seen = audio_seen_;
     s.audio_backend = audio_backend_;
@@ -199,6 +521,7 @@ Snapshot Monitor::snapshot(uint64_t now_ns) {
     // The timeline: the frame-rate dips, with a frame that is late right now as an open one.
     std::vector<FrameDip> dips = dips_;
     const uint64_t last = last_ns_.load(std::memory_order_relaxed);
+    s.pending_ms = last && now_ns > last ? double(now_ns - last) / 1e6 : 0.0;
     if (last && now_ns > last && now_ns - last >= frame_dip_us * 1000) {
         const double end = double(now_ns - start_ns_) / 1e9, start = double(last - start_ns_) / 1e9;
         const double late_ms = double(now_ns - last) / 1e6;
@@ -212,6 +535,21 @@ Snapshot Monitor::snapshot(uint64_t now_ns) {
     }
     s.network = network_.snapshot(now_ns);
     s.timeline = build_timeline(dips, s.network);
+    // Sustained frame-rate drops: the finished ones kept, and the one in progress, so far.
+    s.drop_config = drop_cfg_;
+    s.drop_count = drops_total_;
+    s.drops = drops_;
+    const bool dropping = drop_state_ == DropState::Dip || drop_state_ == DropState::Recovering;
+    if (drop_cfg_.enabled && (dropping || drop_state_ == DropState::Cooldown || (drop_state_ == DropState::Candidate && resuming_))) {
+        Window now_window;
+        current_window(now_window, now_ns);
+        Span span = dip_;
+        if (drop_state_ == DropState::Recovering) span.merge(recovering_);
+        Window capture = now_window;
+        const Histogram *hist = &cumulative;
+        if (!dropping) ring_after(drop_end_ns_ + uint64_t(drop_cfg_.post_roll_seconds * 1e9), capture, hist);
+        s.drops.push_back(build_drop(dropping ? now_ns : drop_end_ns_, span, capture, *hist, dropping, &s.network));
+    }
     return s;
 }
 
@@ -335,6 +673,35 @@ static std::string network_json(const net::Snapshot &n, double uptime_s) {
     return j + "},\n";
 }
 
+static std::string drops_json(const Snapshot &s) {
+    const DropConfig &c = s.drop_config;
+    if (!c.enabled) return "  \"fps_drops\": {\"enabled\": false},\n";
+    std::string j = "  \"fps_drops\": {\"count\": " + number(s.drop_count) + ", \"ratio\": " + number(c.ratio) +
+                    ", \"floor_fps\": " + number(c.floor_fps, 0) + ", \"min_s\": " + number(c.min_seconds, 1) + ", \"episodes\": [";
+    for (size_t i = 0; i < s.drops.size(); ++i) {
+        const Drop &d = s.drops[i];
+        j += std::string(i ? ",\n    " : "\n    ") + "{\"at_s\": " + number(d.start_s, 2) + ", \"s\": " + number(d.end_s - d.start_s, 1) +
+             ", \"phase\": \"" + phase_name(d.phase) + "\", \"baseline_fps\": " + number(d.baseline_fps, 1) +
+             ", \"mean_fps\": " + number(d.mean_fps, 1) + ", \"min_fps\": " + number(d.min_fps, 1) + ", \"frames\": " + number(d.frames) +
+             ", \"lost_frames\": " + number(d.lost_frames, 0) + ", \"capture\": {\"from_s\": " + number(d.capture_start_s, 1) +
+             ", \"to_s\": " + number(d.capture_end_s, 1) + ", \"frames\": " + number(d.capture_frames) +
+             ", \"p50_ms\": " + number(d.p50_ms, 1) + ", \"p95_ms\": " + number(d.p95_ms, 1) + ", \"p99_ms\": " + number(d.p99_ms, 1) +
+             ", \"max_ms\": " + number(d.max_ms, 1) + "}";
+        if (d.skipped_windows) j += ", \"skipped_s\": " + std::to_string(d.skipped_windows);
+        if (d.stall) j += ", \"stall\": true";
+        if (d.network) j += ", \"network\": {\"gap_ms\": " + number(d.network_gap_ms, 0) + ", \"verdict\": \"" + d.verdict + "\"}";
+        if (d.audio) {
+            j += ", \"audio\": {";
+            for (int k = MAG_SESSION_AUDIO_UNDERRUNS; k < MAG_SESSION_AUDIO_COUNTER_COUNT; ++k)
+                j += std::string(k == MAG_SESSION_AUDIO_UNDERRUNS ? "" : ", ") + "\"" + audio_counter_name(k) + "\": " + number(d.audio_delta[k]);
+            j += "}";
+        }
+        if (d.open) j += ", \"open\": true";
+        j += "}";
+    }
+    return j + (s.drops.empty() ? "]},\n" : "\n  ]},\n");
+}
+
 std::string summary_json(const Snapshot &s) {
     std::string j = "{\n";
     j += "  \"schema_version\": 1,\n";
@@ -355,6 +722,11 @@ std::string summary_json(const Snapshot &s) {
     j += "    \"slow\": {";
     for (size_t i = 0; i < 4; ++i) j += std::string(i ? ", " : "") + "\"" + slow_names[i] + "\": " + number(s.slow[i]);
     j += "},\n";
+    // The slow frames that were loading (boot or a loading screen), which the report triggers leave out.
+    j += "    \"loading\": {";
+    for (size_t i = 1; i < 4; ++i) j += std::string(i > 1 ? ", " : "") + "\"" + slow_names[i] + "\": " + number(s.loading_slow[i]);
+    j += ", \"seconds\": " + number(s.loading_seconds, 1) + "},\n";
+    j += "    \"pending_ms\": " + number(s.pending_ms, 0) + ",\n";
     // Sparse: [bucket low edge in ms, count] for each non-empty bucket.
     j += "    \"histogram_ms\": [";
     bool first = true;
@@ -365,6 +737,10 @@ std::string summary_json(const Snapshot &s) {
     }
     j += "]\n  },\n";
     j += "  \"phase\": \"" + std::string(phase_name(s.phase)) + "\",\n";
+    // A freeze: no frame for frozen_seconds or more when the summary was written.
+    if (s.pending_ms >= frozen_seconds * 1000.0)
+        j += "  \"frozen\": {\"at_s\": " + number(s.uptime_s - s.pending_ms / 1000.0, 1) + ", \"s\": " + number(s.pending_ms / 1000.0, 1) +
+             ", \"phase\": \"" + phase_name(s.phase) + "\"},\n";
     j += "  \"phase_seconds\": {";
     for (int p = 0; p < MAG_SESSION_PHASE_COUNT; ++p)
         j += std::string(p ? ", " : "") + "\"" + phase_name(p) + "\": " + number(s.phase_seconds[size_t(p)], 1);
@@ -372,7 +748,7 @@ std::string summary_json(const Snapshot &s) {
     j += "  \"hitches\": [";
     for (size_t i = 0; i < s.hitches.size(); ++i)
         j += std::string(i ? ", " : "") + "{\"at_s\": " + number(s.hitches[i].at_s, 2) + ", \"ms\": " + number(s.hitches[i].ms, 1) +
-             ", \"phase\": \"" + phase_name(s.hitches[i].phase) + "\"}";
+             ", \"phase\": \"" + phase_name(s.hitches[i].phase) + "\"" + (s.hitches[i].loading ? ", \"loading\": true}" : "}");
     j += "],\n";
     j += network_json(s.network, s.uptime_s);
     j += "  \"timeline\": [";
@@ -387,6 +763,7 @@ std::string summary_json(const Snapshot &s) {
         j += std::string(", \"verdict\": \"") + e.verdict + "\"}";
     }
     j += s.timeline.empty() ? "],\n" : "\n  ],\n";
+    j += drops_json(s);
     j += "  \"minutes\": [";
     for (size_t i = 0; i < s.minutes.size(); ++i) {
         const Minute &m = s.minutes[i];
@@ -491,6 +868,8 @@ void write_summary(const char *ending) {
     if (ending) s.ending = ending;
     s.started_unix = g_started_unix;
     s.updated_unix = int64_t(std::time(nullptr));
+    if (ending && s.pending_ms >= frozen_seconds * 1000.0)
+        std::fprintf(stderr, "[mag session] no frame for %.1f s before the session ended (%s)\n", s.pending_ms / 1000.0, phase_name(s.phase));
     const std::string text = summary_json(s);
     std::filesystem::path temporary = g_file;
     temporary += ".tmp";
@@ -508,8 +887,12 @@ void writer() {
         std::this_thread::sleep_for(std::chrono::seconds(1));
         if (g_finished.load()) return;
         poll_network();
+        {
+            std::lock_guard<std::mutex> lock(g_write);
+            poll_audio();
+            g_monitor->tick(now_ns());  // the frame-rate window of this second, for the drop detector
+        }
         if (second % write_seconds == 0) write_summary(nullptr);
-        else { std::lock_guard<std::mutex> lock(g_write); poll_audio(); }
     }
 }
 
@@ -522,6 +905,7 @@ extern "C" void mag_session_monitor_start(const char *role) {
     g_role = role && *role ? role : "game";
     g_started_unix = int64_t(std::time(nullptr));
     g_monitor->set_default_phase(g_role == "launcher" ? MAG_SESSION_PHASE_FRONTEND : MAG_SESSION_PHASE_MENU);
+    g_monitor->set_drop_config(drop_config([](const char *name) -> const char * { return std::getenv(name); }));
     const char *dir = std::getenv("MAG_SESSION_DIR");
     if (!dir || !*dir) return;
     std::error_code error;
@@ -556,6 +940,11 @@ extern "C" void mag_session_monitor_finish(const char *ending) {
 }
 
 extern "C" uint64_t mag_session_now_ns(void) { return now_ns(); }
+
+extern "C" double mag_session_seconds(void) {
+    const Monitor *m = g_monitor;
+    return m ? m->seconds(now_ns()) : 0.0;
+}
 
 std::string mag::session::network_status() {
     Monitor *m = g_monitor;

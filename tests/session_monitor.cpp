@@ -8,6 +8,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <fstream>
 #include <sstream>
 #include <string>
@@ -339,6 +340,274 @@ static void network(const char *scratch) {
     std::ofstream(std::string(scratch) + "/network.json") << json;
 }
 
+// ---- Sustained frame-rate drops: generated frame-rate sequences, one second at a time, with the
+// summary writer's tick at the end of each second. ----
+namespace {
+struct Run {
+    Monitor m{0};
+    uint64_t t = 0;   // the latest tick, on a whole second
+    double carry = 0;
+    bool stream = false, silent = false;  // the game server's match stream (10 packets a second)
+    uint64_t audio[MAG_SESSION_AUDIO_COUNTER_COUNT] = {};
+    explicit Run(int phase = MAG_SESSION_PHASE_MATCH, DropConfig c = DropConfig{}) {
+        m.set_drop_config(c);
+        m.set_default_phase(phase);
+        m.frame(1);
+        m.tick(1);
+    }
+    // `seconds` whole seconds at `fps` (0: no frame at all, a stall).
+    Run &at(double fps, int seconds) {
+        for (int s = 0; s < seconds; ++s) {
+            carry += fps;
+            const int count = int(carry + 1e-9);
+            carry -= count;
+            for (int i = 1; i <= count; ++i) m.frame(t + uint64_t(1e9 * i / count));
+            if (stream && !silent)
+                for (int i = 1; i <= 10; ++i)
+                    m.net_event(socket_call(net::Kind::Recv, 4, net::Transport::Stream, none, 0, 120), t + uint64_t(1e8 * i) - 1);
+            t += 1000 * ms;
+            m.audio(audio, 0, 0, 48000, "synthetic");
+            m.tick(t);
+        }
+        return *this;
+    }
+    // A repeating pattern of rates, one second each.
+    Run &pattern(std::initializer_list<double> rates, int seconds) {
+        for (int s = 0; s < seconds; ++s) at(rates.begin()[size_t(s) % rates.size()], 1);
+        return *this;
+    }
+    Run &phase(int p) { m.set_phase(p, t); return *this; }
+    Snapshot snap() { return m.snapshot(t); }
+};
+
+const char *env_table(const char *name) {
+    static const std::pair<const char *, const char *> table[] = {
+        {"MAG_FPS_DROP_RATIO", "0.5"}, {"MAG_FPS_DROP_FLOOR", "45"}, {"MAG_FPS_DROP_SECONDS", "5"}, {"MAG_FPS_DROP_RECOVER", "0.4"},
+        {"MAG_FPS_DROP_CAPTURE", "2,8"}, {"MAG_FPS_DROP_KEEP", "99"}, {"MAG_FPS_DROP_COOLDOWN", "x"}, {"MAG_FPS_DROP_BASELINE", "120"}};
+    for (const auto &[key, value] : table)
+        if (!std::strcmp(key, name)) return value;
+    return nullptr;
+}
+const char *env_off(const char *name) { return !std::strcmp(name, "MAG_FPS_DROPS") ? "0" : nullptr; }
+}  // namespace
+
+// Loading frames (the boot, a loading screen and the slow frames just after it) are counted apart,
+// and a frame still not presented at the snapshot is pending, a freeze from frozen_seconds.
+static void loading_and_frozen() {
+    Monitor m(0);
+    m.set_default_phase(MAG_SESSION_PHASE_MENU);
+    uint64_t t = 1;
+    m.frame(t);
+    auto after = [&](uint64_t duration_ms) { t += duration_ms * ms; m.frame(t); };
+    auto steady = [&](uint64_t until_ms) { while (t < until_ms * ms) after(16); };
+    after(10000);  // the boot load
+    after(16);
+    after(400);    // still the boot
+    steady(100000);
+    after(1500);   // a loading screen in the menu
+    after(300);    // its slow frames just after
+    steady(t / ms + 20000);
+    after(300);    // a menu's slow frame long after the load: not loading
+    m.set_phase(MAG_SESSION_PHASE_MATCH, t);
+    after(1500);   // on foot: a stall in play, not loading
+    after(300);
+    Snapshot s = m.snapshot(t);
+    CHECK(s.slow[3] == 7 && s.slow[1] == 7);
+    CHECK(s.loading_slow[3] == 4 && s.loading_slow[1] == 4);
+    NEAR(s.loading_seconds, 12.2, 1e-6);
+    unsigned loading = 0;
+    for (const Hitch &h : s.hitches) loading += h.loading;
+    CHECK(loading == 4);
+    CHECK(s.pending_ms == 0);
+    CHECK(summary_json(s).find("\"frozen\"") == std::string::npos);
+    CHECK(summary_json(s).find("\"loading\": {\"over_50ms\": 4, \"over_100ms\": 4, \"over_250ms\": 4, \"seconds\": 12.2}") !=
+          std::string::npos);
+    // No frame for 12 s: frozen, in the summary with its phase.
+    s = m.snapshot(t + 12000 * ms);
+    NEAR(s.pending_ms, 12000, 1e-6);
+    const std::string json = summary_json(s);
+    CHECK(json.find("\"frozen\": {\"at_s\": " + std::to_string(t / 100000000 / 10) ) != std::string::npos);
+    CHECK(json.find(", \"s\": 12.0, \"phase\": \"match\"}") != std::string::npos);
+}
+
+static void drops(const char *scratch) {
+    // The environment's switches; bad values keep the defaults, recovery stays above the drop.
+    const DropConfig defaults = drop_config(nullptr), tuned = drop_config(env_table);
+    CHECK(defaults.enabled && defaults.ratio == 0.6 && defaults.floor_fps == 60 && defaults.min_seconds == 3 && defaults.keep == 8);
+    CHECK(tuned.ratio == 0.5 && tuned.floor_fps == 45 && tuned.min_seconds == 5 && tuned.baseline_seconds == 120);
+    NEAR(tuned.recover_ratio, 0.7, 1e-9);  // 0.4 is below the drop ratio: ratio + 0.2
+    CHECK(tuned.pre_roll_seconds == 2 && tuned.post_roll_seconds == 8);
+    CHECK(tuned.keep == 8 && tuned.cooldown_seconds == 10);  // 99 and "x" are out of range
+    CHECK(!drop_config(env_off).enabled);
+
+    // A steady match at about 100 fps, with ordinary jitter: no drop.
+    {
+        Run r;
+        r.pattern({92, 100, 108, 97, 85, 115}, 600);
+        const Snapshot s = r.snap();
+        CHECK(s.drop_count == 0 && s.drops.empty());
+    }
+    // A sustained drop: 100 fps, then 35 fps for 41 s, then back.
+    {
+        Run r;
+        r.at(100, 120).at(35, 41).at(100, 30);
+        const Snapshot s = r.snap();
+        CHECK(s.drop_count == 1 && s.drops.size() == 1);
+        if (s.drops.size() == 1) {
+            const Drop &d = s.drops[0];
+            NEAR(d.start_s, 120, 1e-6);
+            NEAR(d.end_s, 161, 1e-6);
+            CHECK(d.phase == MAG_SESSION_PHASE_MATCH && !d.open);
+            NEAR(d.baseline_fps, 100, 1e-3);
+            NEAR(d.mean_fps, 35, 1e-6);
+            NEAR(d.min_fps, 35, 1e-6);
+            CHECK(d.frames == 41 * 35);
+            NEAR(d.lost_frames, 65 * 41, 1e-6);
+            NEAR(d.capture_start_s, 115, 1e-6);  // 5 s before
+            NEAR(d.capture_end_s, 166, 1e-6);    // 5 s after
+            CHECK(d.capture_frames == 500 + 41 * 35 + 500);
+            NEAR(d.p50_ms, 28.6, 0.5);  // a 35 fps frame
+            NEAR(d.max_ms, 29, 0.6);
+            CHECK(!d.stall && !d.network && d.skipped_windows == 0);
+            CHECK(drop_line(d).find("fps drop in match at 120.0 s: 35 fps for 41.0 s (35% of a 100 fps baseline, lowest 35)") !=
+                  std::string::npos);
+        }
+        // While it lasts, the drop is in the summary as an open one.
+        Run open;
+        open.at(100, 120).at(30, 10);
+        const Snapshot o = open.snap();
+        CHECK(o.drop_count == 1 && o.drops.size() == 1 && o.drops[0].open);
+        if (o.drops.size() == 1) NEAR(o.drops[0].end_s, 130, 1e-6);
+        CHECK(summary_json(o).find("\"open\": true") != std::string::npos);
+    }
+    // A blip shorter than the minimum: none.
+    {
+        Run r;
+        r.at(100, 120).at(30, 2).at(100, 60).at(20, 1).at(100, 1).at(20, 2).at(100, 30);
+        CHECK(r.snap().drop_count == 0);
+    }
+    // Flapping around the thresholds is one episode: the band between 60% and 80% of the baseline
+    // stays in the drop, short recoveries do not end it, and a drop within the cooldown continues it.
+    {
+        Run r;
+        r.at(100, 120).at(40, 4).at(70, 1).at(40, 3).at(90, 2).at(40, 2).at(100, 5).at(40, 4).at(100, 30);
+        const Snapshot s = r.snap();
+        CHECK(s.drop_count == 1 && s.drops.size() == 1);
+        if (s.drops.size() == 1) {
+            NEAR(s.drops[0].start_s, 120, 1e-6);
+            NEAR(s.drops[0].end_s, 141, 1e-6);
+            CHECK(s.drops[0].frames == 4 * 40 + 70 + 3 * 40 + 2 * 90 + 2 * 40 + 5 * 100 + 4 * 40);
+            NEAR(s.drops[0].min_fps, 40, 1e-6);
+        }
+        // Rates just either side of the drop threshold: one episode, not one per crossing.
+        Run edge;
+        edge.at(100, 120).pattern({55, 58, 63, 57, 61, 56}, 60).at(100, 30);
+        CHECK(edge.snap().drop_count == 1);
+        // Past the cooldown, a second drop is a second episode.
+        Run two;
+        two.at(100, 120).at(40, 5).at(100, 20).at(40, 5).at(100, 30);
+        CHECK(two.snap().drop_count == 2);
+    }
+    // Phases have their own baselines: front-end menus at the 120 fps cap, matches at 55 fps, a
+    // loading screen (one long frame) between them. No drop.
+    {
+        Run r(MAG_SESSION_PHASE_MENU);
+        r.at(120, 200).phase(MAG_SESSION_PHASE_MATCH).at(0, 4).at(55, 120).phase(MAG_SESSION_PHASE_MENU).at(120, 60);
+        r.phase(MAG_SESSION_PHASE_MATCH).at(1, 2).at(55, 120);
+        CHECK(r.snap().drop_count == 0);
+        // A drop that a phase change interrupts ends at the change.
+        Run cut;
+        cut.at(100, 120).at(30, 10).phase(MAG_SESSION_PHASE_MENU).at(100, 30);
+        const Snapshot s = cut.snap();
+        CHECK(s.drop_count == 1 && s.drops.size() == 1 && !s.drops[0].open);
+        if (s.drops.size() == 1) { NEAR(s.drops[0].end_s, 130, 1e-6); CHECK(s.drops[0].phase == MAG_SESSION_PHASE_MATCH); }
+        // A stall or loading screen inside a match (no frames for 6 s) is not a drop: the stall
+        // reporter and the frame-rate dips cover those.
+        Run stall;
+        stall.at(100, 120).at(0, 6).at(100, 30);
+        CHECK(stall.snap().drop_count == 0);
+        // Nor is the stutter of a loading screen outside a match (a 1.5 s frame, then 20 fps), nor
+        // the boot: the first minute is never judged.
+        Run load(MAG_SESSION_PHASE_MENU);
+        load.at(120, 120).at(0, 1).at(0.67, 1).at(20, 12).at(120, 30);
+        CHECK(load.snap().drop_count == 0);
+        Run boot(MAG_SESSION_PHASE_MENU);
+        boot.at(5, 20).at(120, 30).at(20, 9).at(120, 60);
+        CHECK(boot.snap().drop_count == 0);
+    }
+    // The absolute floor: a machine at 240 fps that falls to 130 has not dropped; at 50 it has. A
+    // machine that runs at 40 fps with ordinary jitter has not dropped either.
+    {
+        Run high;
+        high.at(240, 120).at(130, 30).at(240, 30);
+        CHECK(high.snap().drop_count == 0);
+        high.at(50, 10).at(240, 30);
+        const Snapshot s = high.snap();
+        CHECK(s.drop_count == 1);
+        if (s.drops.size() == 1) NEAR(s.drops[0].baseline_fps, 240, 1e-3);
+        Run low;
+        low.pattern({38, 42, 31, 45, 40, 36}, 600);
+        CHECK(low.snap().drop_count == 0);
+        // ...but its collapse to 15 fps is a drop.
+        low.at(15, 10).at(40, 30);
+        CHECK(low.snap().drop_count == 1);
+    }
+    // The cap: six drops, the worst three kept, oldest first.
+    {
+        DropConfig c;
+        c.keep = 3;
+        Run r(MAG_SESSION_PHASE_MATCH, c);
+        r.at(100, 120);
+        const double rates[] = {50, 20, 45, 10, 55, 30};
+        for (double rate : rates) r.at(rate, 10).at(100, 60);
+        const Snapshot s = r.snap();
+        CHECK(s.drop_count == 6 && s.drops.size() == 3);
+        if (s.drops.size() == 3) {
+            NEAR(s.drops[0].mean_fps, 20, 1e-6);
+            NEAR(s.drops[1].mean_fps, 10, 1e-6);
+            NEAR(s.drops[2].mean_fps, 30, 1e-6);
+            CHECK(s.drops[0].start_s < s.drops[1].start_s && s.drops[1].start_s < s.drops[2].start_s);
+        }
+        CHECK(summary_json(s).find("\"count\": 6") != std::string::npos);
+    }
+    // Context: the server went silent through the drop (both), and audio underran during it.
+    {
+        Run r;
+        r.m.network().set_available();
+        r.m.net_event(socket_call(net::Kind::Connect, 4, net::Transport::Stream, server, 10473, 0), 1);
+        r.stream = true;
+        r.at(100, 120);
+        r.silent = true;
+        r.audio[MAG_SESSION_AUDIO_UNDERRUNS] = 7;
+        r.at(30, 20);
+        r.silent = false;
+        r.at(100, 30);
+        const Snapshot s = r.snap();
+        CHECK(s.drops.size() == 1);
+        if (s.drops.size() == 1) {
+            const Drop &d = s.drops[0];
+            CHECK(d.network && std::string(d.verdict) == "both");
+            NEAR(d.network_gap_ms, 20000, 150);
+            CHECK(d.audio && d.audio_delta[MAG_SESSION_AUDIO_UNDERRUNS] == 7);
+            CHECK(drop_line(d).find("network gaps") != std::string::npos && drop_line(d).find("underruns +7") != std::string::npos);
+        }
+    }
+    // Off: nothing is detected and the summary says so.
+    {
+        Run r(MAG_SESSION_PHASE_MATCH, drop_config(env_off));
+        r.at(100, 120).at(30, 20).at(100, 30);
+        const Snapshot s = r.snap();
+        CHECK(s.drop_count == 0 && summary_json(s).find("\"fps_drops\": {\"enabled\": false}") != std::string::npos);
+    }
+    // The summary the Python test reads: a drop of 34 fps from 98 for 41 s in a match.
+    Run r;
+    r.at(98, 180).at(34, 41).at(98, 30);
+    Snapshot s = r.snap();
+    s.role = "engine";
+    s.ending = "exit";
+    std::ofstream(std::string(scratch) + "/drops.json") << summary_json(s);
+}
+
 // The OS's round-trip time for a real loopback TCP connection (POSIX here; Windows' SIO_TCP_INFO is
 // checked on a Windows machine with the same function). Not a socket: no time.
 static void round_trip() {
@@ -423,6 +692,8 @@ int main(int argc, char **argv) {
     buckets();
     counters(argv[1]);
     network(argv[1]);
+    loading_and_frozen();
+    drops(argv[1]);
     round_trip();
     process_monitor(argv[1]);
     benchmark();

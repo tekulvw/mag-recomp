@@ -123,7 +123,7 @@ Existing schema-version-1 preferences without `render_scale` load at 100% and pr
 
 ## Reports
 
-MAG can send a performance and error report after a session. A report covers frame-rate dips, slow frames, network gaps, audio timing problems, crashes and failed launches, so the problems players meet can be found and fixed. Players feel a frame-rate dip and a network stall both as "lag"; a report tells them apart ([Frame-rate dips and network gaps](#frame-rate-dips-and-network-gaps)).
+MAG can send a performance and error report after a session. A report covers frame-rate dips, sustained frame-rate drops, freezes, slow frames, network gaps, audio timing problems, crashes and failed launches, so the problems players meet can be found and fixed. Players feel a frame-rate dip and a network stall both as "lag"; a report tells them apart ([Frame-rate dips and network gaps](#frame-rate-dips-and-network-gaps)).
 
 ### The setting
 
@@ -139,13 +139,15 @@ MAG can send a performance and error report after a session. A report covers fra
 
 - **Session summary:** the engine's own measurements for the launcher and the engine (`session-launcher.json`, `session-engine.json`, below). These are:
   - frame times as a histogram, with p50, p95 and p99, the longest frame and mean fps;
-  - counts of frames over 33, 50, 100 and 250 ms;
+  - counts of frames over 33, 50, 100 and 250 ms, and how many of those over 50 ms were loading (`frames.loading`: the boot and loading screens, [below](#loading-and-freezes));
+  - how long the next frame had been due when the summary was written (`frames.pending_ms`), and a `frozen` entry when that reached 10 s;
   - fps and percentiles for each minute of the last hour;
   - the 16 worst hitches, each with its time and phase (front end, menu or match);
   - time spent in each phase;
   - the audio path's counters, when the runtime provides them: mix periods, underruns, starved frames, late and dropped periods, device errors, and drift against the 48 kHz clock;
   - network health, when the runtime reports socket activity: for each game server endpoint, packets and bytes each way, the gaps between arriving packets, blocked and slow sends, socket errors and, for TCP, the round-trip time;
-  - a timeline of the latest frame-rate dips and network gaps, each with its time, length, phase and verdict, and a verdict for each minute ([below](#frame-rate-dips-and-network-gaps)).
+  - a timeline of the latest frame-rate dips and network gaps, each with its time, length, phase and verdict, and a verdict for each minute ([below](#frame-rate-dips-and-network-gaps));
+  - the worst sustained frame-rate drops (`fps_drops`), each with its baseline, its frame rate and a capture of the seconds around it ([below](#sustained-frame-rate-drops)).
 - **The session:** how the launcher and the engine exited, why the report was made, and the first line of a halt (an unresolved import or syscall). If the launch stopped with an error, its message is included.
 - **The client:** the MAG version and platform, operating system and version, CPU, thread count, memory, GPU, renderer, the game server's address, the display settings, whether the controls trace was on (`controls_trace`, see [Debug](#debug)), and the build identities from the package receipts (runtime revision and SHA-256 digests).
 - **Logs:** the ends of this launch's `launcher.log`, `engine.log`, `supervisor.log` and `settings.log`, gzip-compressed, at most 2 MiB compressed in total.
@@ -169,9 +171,9 @@ The packaged supervisor decides after each session. The thresholds are named con
 | `crash` | The launcher exited with anything but 0 or 90 (its handoff), or the engine exited non-zero. This includes a signal on macOS and Linux, and an exception status on Windows. |
 | `halt` | The runtime stopped on an unresolved import or syscall (exit 88 or 87, `UNRESOLVED` in the log). |
 | `launch_error` | The supervisor stopped the launch with an error, such as missing game files or a changed executable. A launch that only asks you for a player name is not an error. |
-| `slow_frames` | Judged after at least 120 s and 3,600 frames: more than 5% of frames took 50 ms or more, or 30 frames took 250 ms or more. |
+| `slow_frames` | Any of: the engine recorded a [sustained frame-rate drop](#sustained-frame-rate-drops) in a match; the engine presented no frame for 10 s or more before its summary was written (a [freeze](#loading-and-freezes)); or, judged after at least 120 s and 3,600 frames, more than 5% of frames took 50 ms or more, or 30 frames outside loading took 250 ms or more. |
 | `network` | The game server went silent for 2 s or more during a match while frames kept coming: a network gap of at least 2 s, in the match phase, with the verdict `network` (not `both`, which is a client stall). |
-| `audio` | At least 20 underruns plus one for every 30 s of audio, any audio device error, or drift of 2 s or more against the 48 kHz clock over at least 120 s. |
+| `audio` | At least 20 underruns plus one for every 30 s of audio, any audio device error, or drift of 2 s or more against the 48 kHz clock over at least 120 s. A stall puts the audio clock behind by the backlog it drops, so the periods dropped (256 frames each), up to the length of the session's stalls (frames of 1 s or more, and a freeze), are taken off a negative drift first. |
 | `manual` | You pressed **Send report**. |
 
 Each rolling 24 hours, MAG creates at most:
@@ -215,6 +217,50 @@ Each minute of the per-minute series adds the network's packets in and out, the 
 
 A minute with no streaming endpoint judges frames only.
 
+### Sustained frame-rate drops
+
+A long stretch at a low frame rate can pass the slow-frame counts: 40 s at 35 fps in a session averaging 100 fps has few frames over 50 ms. The engine watches for such drops while it runs.
+
+- **Windows.** Once a second the summary writer turns the frame counter's change into that second's frame rate. The frame clock's per-frame cost is unchanged.
+- **Baseline.** Each phase (front end, menu, match) has its own baseline: the median of its latest 180 one-second windows, so a menu at the frame cap and a match never mix. A phase needs 30 windows before its baseline is used. Every judged window feeds the baseline, so a drop that lasts longer than about half the span (90 s) becomes the new normal and ends.
+- **Not judged:** the first minute (the boot), a window holding a frame of 1 s or more or with no frame (loading, a stall: the [frame-rate dips](#frame-rate-dips-and-network-gaps), the [freeze](#loading-and-freezes) and the [stall reporter](stall-reporter.md) cover those), a window during a loading screen, the window in which the phase changed and the 5 s after.
+- **A drop** begins when windows stay below the drop threshold for 3 s. The threshold is 60% of the baseline, and never above 60 fps, so a machine at 240 fps that falls to 140 has not dropped. At a 98 fps baseline the threshold is 59 fps.
+- **Debounce.** A drop ends when windows stay at or above the threshold × 0.8 / 0.6 (80% of the baseline, or 80 fps when the 60 fps limit set the threshold) for 3 s; it ends at the first of those windows. Rates between the two thresholds keep it going. A new drop in the same phase within 10 s of the end continues the same episode. A phase change ends it.
+- **Capture.** Each episode records its start (`at_s`) and length (`s`), phase, the baseline when it began, its mean and lowest one-second frame rate, its frames, the frames it lost against the baseline (`lost_frames`), and a capture from 5 s before to 5 s after it: the frames, p50, p95, p99 and the longest frame (to the top of its histogram bucket). It adds the seconds of stalls skipped inside it, `stall` (a match drop whose longest frame reached 10 s), the network gaps covering it with a verdict (`both` when they cover half of it, else `frames`) when the runtime reports sockets, and the change in the audio counters over the capture when it reports audio. A drop still going when the summary is written is reported so far, with `"open": true`.
+- **Size.** The summary keeps the 8 episodes that lost the most frames, oldest first, and counts them all (`fps_drops.count`).
+- **The log.** Each finished episode writes one line to `engine.log`, such as `[mag session] fps drop in match at 512.3 s: 34 fps for 41.0 s (35% of a 98 fps baseline, lowest 22); capture 507.3-558.3 s p99 45 ms, longest 120 ms`, followed by the network gaps and audio changes when known.
+
+A drop in a match makes a `slow_frames` report, with a reason such as `engine: FPS fell to 34 (35% of 98) for 41 s in a match (2 drops)`, naming the episode that lost the most frames. Drops in menus are recorded but do not make a report, because spawn screens, vehicles, death and loading all count as menu.
+
+**Why these defaults.** In the reports so far, sessions average 90 to 120 fps, menus run at the 120 or 144 fps cap, and matches run at about 70 to 110 fps in a minute; p99 is 27 to 47 ms. A drop to 60% of a match's baseline (45 to 65 fps) is well below an ordinary busy minute and well above a loading screen. Three seconds is past the hitch clusters the slow-frame counts already catch, and the 60 fps limit keeps fast machines from reporting a fall that still plays smoothly.
+
+The switches, set in the game's environment (for testing; the defaults need none):
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `MAG_FPS_DROPS` | on | `0` or `off` turns the detector off; the summary then says `"fps_drops": {"enabled": false}`. |
+| `MAG_FPS_DROP_RATIO` | `0.6` | The drop threshold's share of the baseline (0.1 to 0.95). |
+| `MAG_FPS_DROP_FLOOR` | `60` | The highest the drop threshold goes, in fps (1 to 1000). |
+| `MAG_FPS_DROP_SECONDS` | `3` | How long windows stay below the threshold before a drop begins (1 to 600). |
+| `MAG_FPS_DROP_RECOVER` | `0.8` | The recovery threshold's share of the baseline; it must be above the ratio, or ratio + 0.2 is used. |
+| `MAG_FPS_DROP_RECOVER_SECONDS` | `3` | How long windows stay above the recovery threshold before a drop ends (1 to 600). |
+| `MAG_FPS_DROP_COOLDOWN` | `10` | A drop within this many seconds of the previous one's end continues it (0 to 30). |
+| `MAG_FPS_DROP_CAPTURE` | `5,5` | Seconds recorded before and after a drop (0 to 30 each; one number sets both). |
+| `MAG_FPS_DROP_BASELINE` | `180` | The baseline's span in one-second windows (30 to 600). |
+| `MAG_FPS_DROP_KEEP` | `8` | Episodes kept in the summary (1 to 32). |
+
+A value that does not parse or is out of range keeps the default. These are MAG's own variables, not runtime switches.
+
+### Loading and freezes
+
+**Loading.** Loading frames are long by design, and every session has them. The boot load alone is a frame of 7 to 10 s and a few of 0.3 to 1.3 s in the first minute, and each map load adds frames of 1 to 5 s. The engine counts the slow frames (50 ms or more) that were loading apart, in `frames.loading`, and marks their hitches `"loading": true`:
+- every slow frame in the first 60 s after the engine started;
+- outside a match, a frame of 1 s or more (a loading screen), and the slow frames that end within 15 s after one.
+
+A frame of 1 s or more on foot is a stall in play, not loading. The slow-frame trigger counts frames of 250 ms or more outside loading; a summary from before this count counts them all.
+
+**Freezes.** A frame that never arrives is not in the hitches or the longest frame. The summary records how long the next frame has been due when it is written (`frames.pending_ms`). From 10 s, it adds `"frozen": {"at_s": <the last frame>, "s": <seconds without one>, "phase": ...}`, and the engine's final summary writes `[mag session] no frame for 43.2 s before the session ended (menu)` to `engine.log`. A frozen engine makes a `slow_frames` report: `engine: no frame for 43 s before the session ended (frozen in a match)`.
+
 ### Sending
 
 Sending never delays play and never shows an error.
@@ -233,7 +279,7 @@ A report still queued 7 days after it was made is dropped unsent. The next launc
 
 ### Where the measurements come from
 
-The engine's frame clock calls the session monitor (`src/mag_session_monitor.h`) once per presented guest frame. That call reads the clock and updates a few relaxed counters, about 20 ns. Nothing is logged per frame.
+The engine's frame clock calls the session monitor (`src/mag_session_monitor.h`) once per presented guest frame. That call reads the clock and updates a few relaxed counters, about 20 ns. Nothing is logged per frame. The frame clock's marker every 120 frames, `[mag] guest frame presented N t=<s>`, carries the monitor's clock (seconds since the engine started), the one the summary's times use, so `engine.log` lines up with a report.
 
 A background thread writes `session-<role>.json` in the folder named by `MAG_SESSION_DIR`. The supervisors set that variable to the launch's log folder. The thread writes the file every 10 s and again at exit, including when the window is closed. A crash leaves the latest periodic summary, with `"state": "running"`. The audio counters come from the runtime's `ps3emu/audio_host_stats.h` when the pinned runtime has it; until then the summary says `"audio": {"available": false}`.
 
@@ -250,9 +296,9 @@ The settings window's **Send report** writes `report-requested` in the launch fo
 - Service accounts send reports like person accounts. The portal allows 200 a day for a service account and 20 for a person account.
 
 Tests:
-- `tests.test_session_monitor`: the monitor's counters, percentiles and per-minute series, the summary JSON, and its overhead; and, from a synthetic socket stream with injected silences and a frame stream with injected hitches, the network counters, the timeline and the verdicts (`frames`, `network`, `both`).
+- `tests.test_session_monitor`: the monitor's counters, percentiles and per-minute series, the summary JSON, and its overhead; from a synthetic socket stream with injected silences and a frame stream with injected hitches, the network counters, the timeline and the verdicts (`frames`, `network`, `both`); loading and frozen frames; and, from generated frame-rate sequences, the drop detector: a steady session, a sustained drop and its capture, a blip, flapping, phase changes, loading and stalls, fast and slow machines, the cap, its context and its switches.
 - `tests.test_stall_reporter`: when a frozen match is reported, what the report says, and the reporter's thread against a synthetic clock.
-- `tests.test_player_reports`: the triggers and thresholds, redaction, payload caps, the queue and retries, and an upload through the platform transport to a fake portal that checks the portal's rules.
+- `tests.test_player_reports`: the triggers and thresholds (drops, freezes, loading, audio drift after stalls), redaction, payload caps, the queue and retries, and an upload through the platform transport to a fake portal that checks the portal's rules.
 - `installer/tests/test_native_package.py` and `installer/tests/test_native_package_linux.py`: the real macOS and Linux supervisors send a crash report end to end.
 
 ## Debug

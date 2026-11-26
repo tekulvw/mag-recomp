@@ -235,6 +235,109 @@ static void network_reports(const fs::path &root) {
     CHECK(finish_session(s).trigger == Trigger::SlowFrames);  // the performance limit is separate
 }
 
+// A summary with more members (src/mag_session_monitor.h): fps_drops, frozen, frames.loading.
+static std::string with(const std::string &summary_text, const std::string &members) {
+    const size_t end = summary_text.rfind('}');
+    return summary_text.substr(0, end) + ", " + members + "}\n";
+}
+static std::string drop(const char *phase, double at, double seconds, double baseline, double mean) {
+    return "{\"at_s\": " + std::to_string(at) + ", \"s\": " + std::to_string(seconds) + ", \"phase\": \"" + phase +
+           "\", \"baseline_fps\": " + std::to_string(baseline) + ", \"mean_fps\": " + std::to_string(mean) + ", \"min_fps\": " +
+           std::to_string(mean - 5) + ", \"frames\": " + std::to_string((long long)(mean * seconds)) + ", \"lost_frames\": " +
+           std::to_string((baseline - mean) * seconds) + ", \"capture\": {\"from_s\": 0, \"to_s\": 0, \"frames\": 0}}";
+}
+static std::string drops(const std::string &episodes) {
+    return "\"fps_drops\": {\"count\": 9, \"ratio\": 0.6, \"floor_fps\": 60, \"min_s\": 3, \"episodes\": [" + episodes + "]}";
+}
+
+static void drop_freeze_and_loading_reports(const fs::path &root) {
+    const std::string calm = summary("engine", 36000, 600, 10, 0);
+    auto judge = [](const std::string &text, std::vector<std::string> &reasons) {
+        Json j;
+        reasons.clear();
+        CHECK(parse_json(text, j));
+        return judge_summary(j, reasons);
+    };
+    std::vector<std::string> reasons;
+    // A sustained drop in a match: slow frames, with the reason the report shows.
+    CHECK(judge(with(calm, drops(drop("match", 512, 41, 98, 34))), reasons) == Trigger::SlowFrames);
+    CHECK(reasons.size() == 1 && reasons[0] == "engine: FPS fell to 34 (35% of 98) for 41 s in a match");
+    // The worst of several (most frames lost) is named, with the count.
+    CHECK(judge(with(calm, drops(drop("match", 300, 5, 100, 50) + ", " + drop("menu", 400, 60, 120, 20) + ", " +
+                                 drop("match", 700, 20, 90, 30))),
+                reasons) == Trigger::SlowFrames);
+    CHECK(reasons.size() == 1 && reasons[0] == "engine: FPS fell to 30 (33% of 90) for 20 s in a match (2 drops)");
+    // Drops outside a match (menus, spawn screens, loading) are recorded but do not report.
+    CHECK(judge(with(calm, drops(drop("menu", 400, 60, 120, 20))), reasons) == Trigger::None);
+    CHECK(judge(with(calm, drops("")), reasons) == Trigger::None);
+    // The existing triggers stay: frames over 50 ms and the drop are both named.
+    CHECK(judge(with(summary("engine", 36000, 600, 3000, 0), drops(drop("match", 512, 41, 98, 34))), reasons) == Trigger::SlowFrames);
+    CHECK(reasons.size() == 2);
+
+    // Frames of 250 ms or more count outside loading only (the summary's frames.loading).
+    auto loading = [](long long over_250, long long loading_250) {
+        std::string s = summary("engine", 36000, 600, 100, over_250);
+        const std::string key = "\"histogram_ms\"";
+        return s.insert(s.find(key), "\"loading\": {\"over_50ms\": " + std::to_string(loading_250) + ", \"over_100ms\": " +
+                                         std::to_string(loading_250) + ", \"over_250ms\": " + std::to_string(loading_250) +
+                                         ", \"seconds\": 30.0}, ");
+    };
+    CHECK(judge(loading(40, 15), reasons) == Trigger::None);  // 25 in play
+    CHECK(judge(loading(40, 10), reasons) == Trigger::SlowFrames);
+    CHECK(reasons.size() == 1 && reasons[0] == "engine: 30 frames took 250 ms or more outside loading");
+
+    // A freeze before the end: the engine's, from frozen_report_seconds.
+    CHECK(judge(with(calm, "\"frozen\": {\"at_s\": 900.0, \"s\": 43.2, \"phase\": \"menu\"}"), reasons) == Trigger::SlowFrames);
+    CHECK(reasons.size() == 1 && reasons[0] == "engine: no frame for 43 s before the session ended (frozen in the menu)");
+    CHECK(judge(with(calm, "\"frozen\": {\"at_s\": 900.0, \"s\": 116.5, \"phase\": \"match\"}"), reasons) == Trigger::SlowFrames);
+    CHECK(reasons.size() == 1 && reasons[0] == "engine: no frame for 117 s before the session ended (frozen in a match)");
+    CHECK(judge(with(calm, "\"frozen\": {\"at_s\": 900.0, \"s\": 9.9, \"phase\": \"menu\"}"), reasons) == Trigger::None);
+    CHECK(judge(with(summary("launcher", 36000, 600, 10, 0), "\"frozen\": {\"at_s\": 900.0, \"s\": 60, \"phase\": \"frontend\"}"), reasons) ==
+          Trigger::None);
+
+    // Audio drift that stalls explain (periods dropped after them, up to the stalls' length) is
+    // the stalls', not the audio path's.
+    auto drifted = [](double drift, long long dropped) {
+        return "{\"available\": true, \"underruns\": 0, \"device_errors\": 0, \"dropped_periods\": " + std::to_string(dropped) +
+               ", \"clock_seconds\": 6000, \"drift_ms\": " + std::to_string(drift) + "}";
+    };
+    const std::string stalls = "\"hitches\": [{\"at_s\": 5810, \"ms\": 13299.8, \"phase\": \"match\"}, {\"at_s\": 6110, \"ms\": 12866.6, \"phase\": \"match\"}, "
+                               "{\"at_s\": 100, \"ms\": 600, \"phase\": \"match\"}]";
+    auto session = [&](const std::string &audio, const std::string &extra) {
+        std::string s = summary("engine", 360000, 6000, 10, 0, audio);
+        const std::string empty = "\"hitches\": []";
+        if (!extra.empty()) s.replace(s.find(empty), empty.size(), extra);
+        return s;
+    };
+    CHECK(judge(session(drifted(-26246, 4900), stalls), reasons) == Trigger::None);  // 4900 x 5.33 ms = 26.1 s, within 26.2 s of stalls
+    CHECK(judge(session(drifted(-26246, 4900), ""), reasons) == Trigger::Audio);   // no stall to explain it
+    CHECK(reasons.size() == 1 && reasons[0] == "engine: audio clock drifted -26246 ms");
+    CHECK(judge(session(drifted(-26246, 100), stalls), reasons) == Trigger::Audio);  // 533 ms explained
+    CHECK(reasons.size() == 1 && reasons[0] == "engine: audio clock drifted -25712 ms beyond its stalls (-26246 ms in all)");
+    CHECK(judge(session(drifted(2500, 4900), stalls), reasons) == Trigger::Audio);  // ahead: not a stall's
+    // A freeze explains drift too.
+    CHECK(judge(with(session(drifted(-15045, 2819), ""), "\"frozen\": {\"at_s\": 250.0, \"s\": 205.0, \"phase\": \"menu\"}"), reasons) ==
+          Trigger::SlowFrames);
+    CHECK(reasons.size() == 1 && reasons[0].find("no frame for 205 s") != std::string::npos);
+
+    // A drop report is queued as slow_frames, its episodes in the metrics.
+    Session s = launch(root / "drops");
+    s.launcher_exit = 90; s.engine_exit = 0;
+    write(s.logs / "session-engine.json", with(calm, drops(drop("match", 512, 41, 98, 34))));
+    const Finished f = finish_session(s);
+    CHECK(f.trigger == Trigger::SlowFrames && !f.report_id.empty());
+    if (!f.report_id.empty()) {
+        Json report;
+        CHECK(parse_json(read(s.queue / (f.report_id + ".json")), report, 8u << 20));
+        CHECK(report.get("trigger") && report.get("trigger")->text == "slow_frames");
+        const Json *engine = report.get("metrics") ? report.get("metrics")->get("engine") : nullptr;
+        CHECK(engine && engine->get("fps_drops") && engine->get("fps_drops")->get("episodes")->items.size() == 1);
+        const Json *session_part = report.get("session");
+        CHECK(session_part && session_part->get("reasons") && session_part->get("reasons")->items.size() == 1 &&
+              session_part->get("reasons")->items[0].text == "engine: FPS fell to 34 (35% of 98) for 41 s in a match");
+    }
+}
+
 static void finishing(const fs::path &root) {
     // Reports on (no field): a slow session is queued; the body follows the portal's contract.
     Session s = launch(root / "on");
@@ -488,6 +591,7 @@ int main(int argc, char **argv) {
         decisions(root);
         finishing(root);
         network_reports(root);
+        drop_freeze_and_loading_reports(root);
         sending(root);
         comments(root);
         CHECK(gpu_from_log("a\n[RSX vulkan] using device 1: Some GPU (x)\r\nb") == "Some GPU (x)");
