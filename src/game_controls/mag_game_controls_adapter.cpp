@@ -1004,7 +1004,13 @@ struct MagGameControlsAdapter::State {
             static std::map<uint32_t, int> roles;
             const int role = contains(system_routes, handler) ? 2 : (gameplay_routes && contains(*gameplay_routes, handler)) ? 1 : 0;
             auto [it, fresh] = roles.emplace(handler, role);
-            if (fresh || it->second != role) { it->second = role; std::fprintf(stderr, "[lab-rx] t=%lld role handler=%08X %s ctx=%s\n", lab_ms(), handler, role == 2 ? "system" : role == 1 ? "gameplay" : "other", gameplay_eligible ? "OnFoot" : "Menu"); }
+            if (fresh || it->second != role) {
+                it->second = role;
+                std::string toks;
+                if (const auto cs = guest.watched_controls(handler))
+                    for (const auto& c : *cs) { char b[24]; std::snprintf(b, sizeof b, "%08X:%u,", c.token, c.channel); toks += b; }
+                std::fprintf(stderr, "[lab-rx] t=%lld role handler=%08X %s ctx=%s controls=%s\n", lab_ms(), handler, role == 2 ? "system" : role == 1 ? "gameplay" : "other", gameplay_eligible ? "OnFoot" : "Menu", toks.c_str());
+            }
         }
         if (!owner_handler(handler)) return;
         const auto current = guest.resolve_owner(handler, true);
@@ -1077,6 +1083,24 @@ struct MagGameControlsAdapter::State {
     bool recognize(MagGameControlsCpu& cpu) {
         // Step 1.
         const uint32_t handler = address(cpu.gpr[23]);
+        {   // LAB: every D-pad record the game recognizes while a D-pad key or button is down.
+            const uint32_t rec = address(cpu.gpr[29]);
+            auto rr = guest.reads();
+            const auto tok = rec ? rr.u32(rec) : std::nullopt;
+            const auto bind = rec ? rr.u32(uint64_t(rec) + RecordBinding) : std::nullopt;
+            const auto chan = bind && *bind ? rr.u32(uint64_t(*bind) + 8) : std::nullopt;
+            static bool any_down = false;
+            if (chan && *chan <= 3 && sample_key && frame_valid()) {
+                bool down = cpu.fpr[1] > 0;
+                for (ActionId dp : {0xa5bc1361u, 0x8c2adba2u, 0xeab2acf1u, 0x3d898bbfu})
+                    if (const auto o = mag_controls_offer(*sample_key, dp)) down = true;
+                if (down || any_down)
+                    std::fprintf(stderr, "[lab-rx] t=%lld seen handler=%08X token=%08X ch=%u raw=%.2f r5=%d routed=%d sys=%d gp=%d\n", lab_ms(), handler,
+                                 tok.value_or(0), *chan, cpu.fpr[1], int(cpu.gpr[5] != 0), int(recognition_handler == handler),
+                                 int(contains(system_routes, handler)), int(gameplay_routes && contains(*gameplay_routes, handler)));
+                any_down = down;
+            }
+        }
         if (!recognition_handler || recognition_handler != handler || handler_depth != 1 || !owner || !frame_valid())
             return false;
         if (!guest.owner_matches(*owner)) {
