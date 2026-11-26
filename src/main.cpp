@@ -61,7 +61,7 @@
 #include <string.h>
 
 #if defined(_WIN32) && defined(PS3RECOMP_RSX_VULKAN)
-#include <filesystem>   /* the shader cache folder (src/mag_shader_cache.h) */
+#include <filesystem>   /* the shader and pipeline cache folders (src/mag_shader_cache.h) */
 #include <string>
 #endif
 
@@ -476,17 +476,23 @@ int main(int argc, char** argv)
             if (!getenv(d[0])) _putenv_s(d[0], d[1]);
     }
     {
-        /* Shader translations kept on disk between sessions (src/mag_shader_cache.h): the
-         * Windows A/B removed about 1.75 s of glslang per map load (docs/ps3recomp-flags.md). */
+        /* Shader translations and Vulkan pipelines kept on disk between sessions
+         * (src/mag_shader_cache.h): the Windows A/B removed about 1.75 s of glslang per map
+         * load; the pipeline cache is for drivers that do not keep their own, such as AMD's
+         * (docs/ps3recomp-flags.md). */
+        const auto make_dir = [](const std::string &dir) {
+            std::error_code error;
+            std::filesystem::create_directories(dir, error);
+            return std::filesystem::is_directory(dir, error);
+        };
         const mag::ShaderCacheChoice cache = mag::choose_shader_cache(
-            getenv("PS3RECOMP_SPIRV_CACHE"), getenv("MAG_SHADER_CACHE"), getenv("LOCALAPPDATA"),
-            [](const std::string &dir) {
-                std::error_code error;
-                std::filesystem::create_directories(dir, error);
-                return std::filesystem::is_directory(dir, error);
-            });
+            getenv("PS3RECOMP_SPIRV_CACHE"), getenv("MAG_SHADER_CACHE"), getenv("LOCALAPPDATA"), make_dir);
         if (!cache.dir.empty()) _putenv_s("PS3RECOMP_SPIRV_CACHE", cache.dir.c_str());
         printf("[mag] %s\n", cache.why.c_str());
+        const mag::ShaderCacheChoice pipelines = mag::choose_pipeline_cache(
+            getenv("PS3RECOMP_VK_PIPELINE_CACHE"), getenv("MAG_PIPELINE_CACHE"), getenv("LOCALAPPDATA"), make_dir);
+        if (!pipelines.dir.empty()) _putenv_s("PS3RECOMP_VK_PIPELINE_CACHE", pipelines.dir.c_str());
+        printf("[mag] %s\n", pipelines.why.c_str());
     }
 #endif
 
