@@ -88,14 +88,21 @@ int main(int argc, char** argv) {
         CHECK(call("cellVoiceInit", 0) == 0x80310805u);
         put32(init, 0), put32(init + 4, 100), put32(init + 8, 1u << 29);
         CHECK(call("cellVoiceInit", init) == 0);
+        // The id goes to the first argument and the parameter block (second) is only read.
+        params(param, 4, 7300);
+        put32(id, 0xDEADBEEF);
+        CHECK(call("cellVoiceCreatePort", id, param) == 0);
+        CHECK(get32(id) != 0xDEADBEEF && get32(id) != 0);
+        CHECK(get32(param) == 4 && get16(param + 4) == 100 && get32(param + 12) == 7300);
+        CHECK(call("cellVoiceDeletePort", get32(id)) == 0);
         params(param, 0, 0);  // microphone
-        CHECK(call("cellVoiceCreatePort", param, id) == 0);
+        CHECK(call("cellVoiceCreatePort", id, param) == 0);
         const uint32_t mic = get32(id);
         params(param, 4, 7300);  // encoded output
-        CHECK(call("cellVoiceCreatePort", param, id) == 0);
+        CHECK(call("cellVoiceCreatePort", id, param) == 0);
         const uint32_t out = get32(id);
         params(param, 2, 7300);  // encoded input
-        CHECK(call("cellVoiceCreatePort", param, id) == 0);
+        CHECK(call("cellVoiceCreatePort", id, param) == 0);
         const uint32_t in = get32(id);
         CHECK(mic != out && out != in);
         CHECK(call("cellVoiceConnectIPortToOPort", mic, out) == 0);
@@ -122,8 +129,8 @@ int main(int argc, char** argv) {
         params(param, 2, 14400);
         put16(param + 6, 1);
         CHECK(call("cellVoiceUpdatePort", in, param) == 0);
-        put32(id, 0);
-        CHECK(call("cellVoiceGetMuteFlag", in, id) == 0 && get32(id) == 1);
+        put32(id, 0xAAAAAAAA);
+        CHECK(call("cellVoiceGetMuteFlag", in, id) == 0 && get16(id) == 1 && get16(id + 2) == 0xAAAA);  // 16-bit flag
         CHECK(call("cellVoiceSetVolume", in, 0, 0, 0.5) == 0);
         CHECK(call("cellVoiceGetVolume", in, id) == 0 && get32(id) == 0x3F000000u);
         CHECK(call("cellVoiceResetPort", 0x9999) == 0x80310807u);

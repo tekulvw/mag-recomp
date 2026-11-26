@@ -118,8 +118,9 @@ void voice_stop(ppu_context* c) {
     trace("stop", "\"status\":%u", r);
     ret(c, r);
 }
+// The public signatures put the port-id out-pointer first: CreatePort(portId*, param*).
 void voice_create_port(ppu_context* c) {
-    const uint32_t param = arg(c, 0), out = arg(c, 1);
+    const uint32_t out = arg(c, 0), param = arg(c, 1);
     if (!param || !out) return ret(c, status::ArgumentInvalid);
     const PortParams p = read_params(param);
     uint32_t id = 0;
@@ -167,7 +168,7 @@ void voice_set_mute(ppu_context* c) {
 void voice_get_mute(ppu_context* c) {
     bool muted = false;
     const uint32_t r = g_service->mute(arg(c, 0), muted);
-    if (r == status::Ok && arg(c, 1)) store32(arg(c, 1), muted ? 1 : 0);
+    if (r == status::Ok && arg(c, 1)) store16(arg(c, 1), muted ? 1 : 0);  // a 16-bit flag
     ret(c, r);
 }
 void voice_set_volume(ppu_context* c) {
