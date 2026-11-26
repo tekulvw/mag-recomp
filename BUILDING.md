@@ -394,6 +394,10 @@ the configure options and `installer/mag_installer/managed_tools.py` for the pin
   files and its ELF argument through narrow-character APIs, and long build paths exceed Windows'
   length limit. The installer refuses an installation path with non-ASCII characters or more than
   83 characters, which keeps its deepest build folder (`MAG-build\build-work`) within 100.
+- **Shader warm-up.** After the engine is built, `cmake --build build-engine --target MagShaderWarm`
+  builds a tool that translates the game's shaders into the shader cache before the first session.
+  Run it as `MagShaderWarm --game <PS3_GAME>`. The installer does both and never fails on them; see
+  [docs/shader-warm.md](docs/shader-warm.md).
 
 ## Extending a build
 
