@@ -153,17 +153,20 @@ any way the game splits or joins the stream keeps them decodable:
 | 1 | marker: high nibble `0xA`, low nibble format version (1) |
 | 1 | sequence number, wrapping, one per frame |
 | 1 | payload length *n* |
+| 1 | check: CRC-8 (polynomial x^8 + x^2 + x + 1) of the sequence, the length and the payload |
 | *n* | one Opus packet |
 | rest | zero padding to the block size |
 
 - **Frame duration** 40 ms. **Block size** follows the port's bitrate so that the byte rate matches what
-  retail sent: at the game's 7300 bps rate, 37 bytes per 40 ms block (34 bytes of Opus). The encoder
+  retail sent: at the game's 7300 bps rate, 37 bytes per 40 ms block (33 bytes of Opus, 6.6 kbps). The encoder
   runs constant bitrate at the payload size, so the padding is normally empty.
 - **Opus settings:** 16 kHz input, mono, VoIP application, constant bitrate, in-band FEC off (the block
   size has no room), DTX handled by the gate. If the capture shows the game's buffers take more (U2), a
   higher rate (for example 12-16 kbps) becomes a setting of the service, never of the wire format.
-- A block with an unknown marker or a length beyond the block is discarded; the parser then looks for the
-  next marker. The version nibble lets a later format coexist.
+- A candidate block with an unknown marker, a length beyond the block, a wrong check byte or nonzero
+  padding is not a block; the parser moves on one byte and looks again. The check matters because a
+  full Opus payload leaves no padding, so a truncated block would otherwise pass. The version nibble lets
+  a later format coexist.
 
 ### Push to talk
 
