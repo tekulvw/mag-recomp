@@ -43,6 +43,7 @@
 #include "mag_extension.h"
 #include "mag_frame_clock.h"
 #include "mag_session_monitor.h"
+#include "mag_shader_cache.h"
 #include "mag_stall_reporter.h"
 #if defined(MAG_SOCIAL_BRIDGE)
 #include "mag_social_bridge.h"
@@ -58,6 +59,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#if defined(_WIN32) && defined(PS3RECOMP_RSX_VULKAN)
+#include <filesystem>   /* the shader cache folder (src/mag_shader_cache.h) */
+#include <string>
+#endif
 
 #ifdef _WIN32
 /* timeBeginPeriod: <windows.h> arrives with WIN32_LEAN_AND_MEAN set, which
@@ -468,6 +474,19 @@ int main(int argc, char** argv)
         };
         for (const auto &d : defaults)
             if (!getenv(d[0])) _putenv_s(d[0], d[1]);
+    }
+    {
+        /* Shader translations kept on disk between sessions (src/mag_shader_cache.h): the
+         * Windows A/B removed about 1.75 s of glslang per map load (docs/ps3recomp-flags.md). */
+        const mag::ShaderCacheChoice cache = mag::choose_shader_cache(
+            getenv("PS3RECOMP_SPIRV_CACHE"), getenv("MAG_SHADER_CACHE"), getenv("LOCALAPPDATA"),
+            [](const std::string &dir) {
+                std::error_code error;
+                std::filesystem::create_directories(dir, error);
+                return std::filesystem::is_directory(dir, error);
+            });
+        if (!cache.dir.empty()) _putenv_s("PS3RECOMP_SPIRV_CACHE", cache.dir.c_str());
+        printf("[mag] %s\n", cache.why.c_str());
     }
 #endif
 
