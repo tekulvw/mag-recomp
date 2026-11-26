@@ -76,6 +76,7 @@ struct MagGuestOwner {
     // The movement state is a spawn screen's: before the first spawn (lobby, first deploy) or awaiting
     // a respawn after a death (the respawn bar, spawn map and loadout picker). Those screens are menus.
     bool pre_spawn{};
+    bool downed{};  // LAB
     MagMouseAimState aim = MagMouseAimState::Basic;
     uint32_t handle() const { return generation << 16 | index; }
     friend bool operator==(const MagGuestOwner&, const MagGuestOwner&) = default;

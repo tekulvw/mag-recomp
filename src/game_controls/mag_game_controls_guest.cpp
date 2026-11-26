@@ -1,4 +1,6 @@
 #include "mag_game_controls_guest.h"
+#include <cstdlib>
+#include <cstring>
 #include "mag_game_controls_catalog.h"
 #include <algorithm>
 #include <bit>
@@ -169,6 +171,11 @@ std::optional<MagGuestOwner> resolve_owner(MagGuestReads& r, uint32_t handler, b
     owner.state_id = *state_id;
     owner.pre_spawn = (*state_id == PreSpawnStateId && *state_vtable == PreSpawnStateVtable) ||
                       (*state_id == AwaitingSpawnStateId && *state_vtable == AwaitingSpawnStateVtable);
+    owner.downed = *state_id == 7 && *state_vtable == 0x01A6D5B8;  // LAB
+    {
+        static const char* lab = std::getenv("MAG_LAB_DOWNED");
+        if (owner.downed && lab && std::strcmp(lab, "menu") == 0) owner.pre_spawn = true;
+    }
     for (const auto& supported : MouseStates)
         if (supported.id == *state_id && supported.vtable == *state_vtable) {
             owner.mouse_supported = true;
