@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.10.3](https://github.com/tekulvw/mag-recomp/compare/v0.10.2...v0.10.3) (2026-11-26)
+
+
+### Bug Fixes
+
+* **controls:** aim and fire bunker turrets and seats with keyboard and mouse ([#311](https://github.com/tekulvw/mag-recomp/issues/311)) ([99f26cf](https://github.com/tekulvw/mag-recomp/commit/99f26cf49bbcee818df1f62f316ce92316f47330))
+* **controls:** spend presses nothing read, so old arrows no longer flip the respawn bar ([#313](https://github.com/tekulvw/mag-recomp/issues/313)) ([45d1209](https://github.com/tekulvw/mag-recomp/commit/45d12093f3342df67399706307fd90eaed0f8488))
+
 ## [0.10.2](https://github.com/tekulvw/mag-recomp/compare/v0.10.1...v0.10.2) (2026-11-26)
 
 
