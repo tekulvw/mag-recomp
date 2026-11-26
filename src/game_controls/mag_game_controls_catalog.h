@@ -38,6 +38,10 @@ uint32_t mag_game_controls_name_token(std::string_view name);
 // The catalog action a prompt placeholder names ("Action" in "[Action]"), aliases resolved; 0 when
 // the name is no catalog action.
 mag::ActionId mag_game_controls_prompt_action(std::string_view name);
+// While the player is downed, the second action whose keys also press `action` on the player's own
+// handler (docs/native-controls.md, 2.3): Confirm for Bleed out, as the console's Cross does both.
+// 0 for every other action.
+mag::ActionId mag_game_controls_downed_alias(mag::ActionId action);
 // Bit 0..3 for the four look-axis tokens, 0 for any other token.
 unsigned mag_game_controls_look_bit(uint32_t token);
 inline bool mag_game_controls_look_token(uint32_t token) { return mag_game_controls_look_bit(token) != 0; }

@@ -95,6 +95,9 @@ class GameControlsAdapterTests(unittest.TestCase):
     def test_a_closed_menu_never_sees_confirm_or_back_from_the_keyboard_on_foot(self):
         self.run_scenario('closed-menu-confirm')
 
+    def test_x_bleeds_out_while_downed_and_presses_nothing_else(self):
+        self.run_scenario('downed-x')
+
     def test_census_reports_each_handler_description_once(self):
         self.run_scenario('census')
 

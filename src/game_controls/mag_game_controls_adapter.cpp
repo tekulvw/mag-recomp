@@ -202,6 +202,7 @@ struct RecognitionEntry {
     MagGuestTuple tuple{};
     uint64_t id{};
     bool start_blocked{};
+    ActionId action{};  // The action the engine recognizes for this record (7.3 step 4).
 };
 
 // Fields of a tuning record (2.2) the recognizer uses.
@@ -641,10 +642,23 @@ struct MagGameControlsAdapter::State {
     }
     void poll_exit() {
         if (!poll) return;
-        if (poll == 1) observe(system_receipts);
+        if (poll == 1) {
+            observe(system_receipts);
+            drain_menu_prompts();
+        }
         if (--poll) return;
         abort_capture_poll();
         if (sealed && !frame) cancel("no supported local gameplay handler");
+    }
+    // 7.3: on foot nothing takes Confirm or Back over, except Bleed out's alias while downed, which
+    // receipts its press. Every other press of their keys is consumed here, so none waits in the
+    // engine to act later (a press of X while alive must not bleed out when the player goes down).
+    void drain_menu_prompts() {
+        if (!gameplay_eligible || !frame_valid()) return;
+        for (const auto& action : mag_game_controls_actions()) {
+            if (!action.menu_prompt || gameplay_receipts.count(action.id)) continue;
+            if (const auto offer = mag_controls_offer(*sample_key, action.id)) mag_controls_observe(*sample_key, action.id, *offer);
+        }
     }
     void observe(std::map<ActionId, ControlOffer>& receipts) {
         if (frame_valid())
@@ -951,7 +965,15 @@ struct MagGameControlsAdapter::State {
                 return false;
         }
 
-        // Step 4.
+        // Step 4. While the player is downed, the player's own Bleed out also reads Confirm's keys
+        // (2.3). One action per press: its own keys first, then the alias's, otherwise the action the
+        // record last used, so a press finishes on the action it began on.
+        if (gameplay && owner->downed)
+            if (const ActionId alias = mag_game_controls_downed_alias(action); alias && !mag_controls_offer(*sample_key, action)) {
+                const auto prior = entries.find(n);
+                if (mag_controls_offer(*sample_key, alias) || (prior != entries.end() && prior->second.action == alias))
+                    action = alias;
+            }
         const bool mouse_look = gameplay && mag_game_controls_look_token(action) && mouse_eligible &&
                                 frame->policy.look_owner == LookOwner::Mouse;
         const auto offer = mag_controls_offer(*sample_key, action);
@@ -1024,11 +1046,12 @@ struct MagGameControlsAdapter::State {
                                   const Tuning& tune) {
         auto it = entries.find(n);
         if (it != entries.end() && it->second.handler == handler && it->second.token == token &&
-            it->second.binding == binding && it->second.tuning == tuning && it->second.tuple == current)
+            it->second.binding == binding && it->second.tuning == tuning && it->second.tuple == current &&
+            it->second.action == action)
             return it->second;
         if (it == entries.end() && entries.size() >= MaxRecognitionEntries)
             throw std::runtime_error("recognition entry capacity exhausted");
-        RecognitionEntry entry{handler, token, binding, tuning, current, ++next_control_id, false};
+        RecognitionEntry entry{handler, token, binding, tuning, current, ++next_control_id, false, action};
         const uint32_t phase = mag_guest_tuple_phase(current);
         const float held = mag_guest_tuple_value(current), seconds = mag_guest_tuple_seconds(current);
         // A system button the game still considers held must be released before it acts.

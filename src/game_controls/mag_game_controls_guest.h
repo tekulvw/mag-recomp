@@ -24,6 +24,10 @@ constexpr uint32_t PreSpawnStateVtable = 0x01A6CE38;
 // The respawn screens after a death (docs/native-controls.md, 2.2): menus like the pre-spawn screens.
 constexpr uint8_t AwaitingSpawnStateId = 20;
 constexpr uint32_t AwaitingSpawnStateVtable = 0x01A6C2F8;
+// The downed state after a death, until the respawn screens start (docs/native-controls.md, 2.2):
+// the player's handler reads Bleed out there.
+constexpr uint8_t DownedStateId = 7;
+constexpr uint32_t DownedStateVtable = 0x01A6D5B8;
 constexpr uint32_t BaseUpdateEntry = 0x003A2C84, SharedToc = 0x01B35B20;
 constexpr uint32_t CameraVtable = 0x01A644E0;
 constexpr uint32_t CameraTarget = 0x22C, CameraAssistRecord = 0x1A0;
@@ -76,6 +80,8 @@ struct MagGuestOwner {
     // The movement state is a spawn screen's: before the first spawn (lobby, first deploy) or awaiting
     // a respawn after a death (the respawn bar, spawn map and loadout picker). Those screens are menus.
     bool pre_spawn{};
+    // The movement state is the downed one (after a death, before the respawn screens).
+    bool downed{};
     MagMouseAimState aim = MagMouseAimState::Basic;
     uint32_t handle() const { return generation << 16 | index; }
     friend bool operator==(const MagGuestOwner&, const MagGuestOwner&) = default;

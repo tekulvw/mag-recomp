@@ -71,6 +71,8 @@ ActionId mag_game_controls_token_action(uint32_t token) {
     }
 }
 
+mag::ActionId mag_game_controls_downed_alias(ActionId action) { return action == Bleedout ? Confirm : 0; }
+
 uint32_t mag_game_controls_name_token(std::string_view name) {
     uint32_t crc = 0xFFFFFFFFu;
     for (char c : name) {

@@ -1226,6 +1226,85 @@ void situational_actions() {
     h.end_tick();
 }
 
+// After a death the player is downed (movement state 7) until the respawn screens start, and the
+// player's handler reads Bleed out on Cross's channel. On the console Cross bleeds out there; the
+// keyboard's X is the key a player presses for Cross, but it is bound to Confirm, which the adapter
+// never takes over, and the legacy pad is muted on foot: X did nothing, and players pressed X until
+// the downed time ran out. While downed, Confirm's keys also press the player's own Bleed out;
+// Return still does, and X presses nothing else (no closed menu's Confirm, no Jump).
+void downed_x_bleeds_out() {
+    Harness h;
+    const auto pad_muted = [] { return mag_input_capture_keyboard_pad_muted() != 0; };
+    const uint32_t bleed = watch(h.m, Handler, 0, Bleedout, 10);  // Cross's channel, with Jump.
+    uint32_t record = 0;
+    const uint32_t menu = route_handler(h.m, record);
+    h.m.put32(record, Confirm);  // The closed pause menu's Confirm, still routed on foot.
+    require(h.idle_tick() == Attached, "first tick did not attach on foot");
+    const auto press = [&](uint32_t key, bool down) { mag_controls_push_event({{InputSource::Keyboard, key}, down, time_ns()}); };
+    // One tick reading the player's Bleed out, Jump and the closed menu's Confirm.
+    const auto tick = [&](const char* when) {
+        h.begin_tick();
+        h.enter_handler(menu);
+        const auto before = h.tuple_at(record);
+        require(!h.recognize_record(record, menu) && h.tuple_at(record) == before,
+                (std::string("X pressed a closed menu's Confirm ") + when).c_str());
+        h.fire(Hook::HandlerExit);
+        h.enter_handler();
+        require(!h.recognize(Jump), (std::string("X pressed Jump ") + when).c_str());
+        const bool taken = h.recognize_record(bleed, Handler);
+        const float value = mag_guest_tuple_value(h.tuple_at(bleed));
+        h.end_poll();
+        h.enter_actor();
+        h.end_tick();
+        return taken ? value : -1.0f;
+    };
+
+    // Alive (a basic movement state), X does not bleed out: Bleed out stays the game's.
+    press(27, true);
+    require(tick("alive") <= 0.0f, "X pressed Bleed out while alive");
+    press(27, false);
+    h.idle_tick();
+
+    // Presses of X while alive are spent, never kept for later: going down does not bleed out.
+    for (int i = 0; i < 3; ++i) {
+        press(27, true);
+        tick("alive, repeated");
+        press(27, false);
+        tick("alive, repeated, released");
+    }
+    // Downed: the player is still on foot (the pad stays muted), and X bleeds out.
+    h.m.put32(State, 0x01A6D5B8);
+    h.m.put8(State + 0x10, 7);
+    require(h.idle_tick() == Attached && pad_muted(), "the downed state did not attach on foot");
+    require(tick("downed, nothing pressed") <= 0.0f, "an X pressed while alive bled out when the player went down");
+    press(27, true);
+    require(tick("downed") == 1.0f, "X did not bleed out while downed");
+    require(tick("downed, held") == 1.0f, "a held X let go of Bleed out");
+    press(27, false);
+    require(tick("downed, released") == 0.0f, "releasing X did not release Bleed out");
+    h.idle_tick();
+    // Return still bleeds out there.
+    press(40, true);
+    require(tick("downed, Return") == 1.0f, "Return did not bleed out while downed");
+    press(40, false);
+    require(tick("downed, Return released") == 0.0f, "releasing Return did not release Bleed out");
+    h.idle_tick();
+    // X again after Return: the alias takes the record back.
+    press(27, true);
+    require(tick("downed, X after Return") == 1.0f, "X did not bleed out after Return");
+    press(27, false);
+    tick("downed, X after Return released");
+    h.idle_tick();
+
+    // Only that exact state: id 7 under another vtable is not the downed state.
+    h.m.put32(State, BasicStateVtable);
+    h.idle_tick();
+    press(27, true);
+    require(tick("in id 7 of another state") <= 0.0f, "X bled out in id 7 of another state");
+    press(27, false);
+    h.idle_tick();
+}
+
 std::vector<std::string> census_lines;
 // The closed pause menu stays routed on foot: its controller element watches Start (which opens it),
 // Confirm and Back. X on foot pressed its Confirm, so the menu opened with the player card already
@@ -1391,7 +1470,7 @@ int main(int argc, char** argv) {
         {"mouse", mouse_look},       {"assist", aim_assist},     {"lifecycle", lifecycle},
         {"threads", threads_and_errors}, {"snapshot", update_snapshot}, {"menu", menu_holds_look},
         {"withdrawn", withdrawn_frame},
-        {"menu-pad", menu_keyboard_pad}, {"menu-look-pad", menu_holding_look_gets_the_pad}, {"situational", situational_actions}, {"closed-menu-confirm", closed_menu_never_sees_confirm}, {"census", census},
+        {"menu-pad", menu_keyboard_pad}, {"menu-look-pad", menu_holding_look_gets_the_pad}, {"situational", situational_actions}, {"closed-menu-confirm", closed_menu_never_sees_confirm}, {"downed-x", downed_x_bleeds_out}, {"census", census},
         {"prompt-queries", prompt_queries}};
     try {
         if (argc != 2 || !scenarios.count(argv[1])) throw std::runtime_error("usage: game_controls_adapter <scenario>");
