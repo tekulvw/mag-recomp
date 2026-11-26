@@ -200,6 +200,8 @@ The engine's frame clock calls the session monitor (`src/mag_session_monitor.h`)
 
 A background thread writes `session-<role>.json` in the folder named by `MAG_SESSION_DIR`. The supervisors set that variable to the launch's log folder. The thread writes the file every 10 s and again at exit, including when the window is closed. A crash leaves the latest periodic summary, with `"state": "running"`. The audio counters come from the runtime's `ps3emu/audio_host_stats.h` when the pinned runtime has it; until then the summary says `"audio": {"available": false}`.
 
+If a match stops presenting frames for 10 s, the engine writes what each guest thread is doing into `engine.log` (lines starting `[mag-stall]`), so a frozen session's report shows the wait. See [stall-reporter.md](stall-reporter.md).
+
 The settings window's **Send report** writes `report-requested` in the launch folder, at the path the supervisor passes as `MAG_REPORT_REQUEST`. The file holds `{"requested_at":<unix seconds>,"report_id":"<uuid>","comment":"<text>"}`. The supervisor sends the report under that id, the one the window showed.
 
 ### For automation and tests
@@ -210,6 +212,7 @@ The settings window's **Send report** writes `report-requested` in the launch fo
 
 Tests:
 - `tests.test_session_monitor`: the monitor's counters, percentiles and per-minute series, the summary JSON, and its overhead.
+- `tests.test_stall_reporter`: when a frozen match is reported, what the report says, and the reporter's thread against a synthetic clock.
 - `tests.test_player_reports`: the triggers and thresholds, redaction, payload caps, the queue and retries, and an upload through the platform transport to a fake portal that checks the portal's rules.
 - `installer/tests/test_native_package.py` and `installer/tests/test_native_package_linux.py`: the real macOS and Linux supervisors send a crash report end to end.
 

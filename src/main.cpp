@@ -43,6 +43,7 @@
 #include "mag_extension.h"
 #include "mag_frame_clock.h"
 #include "mag_session_monitor.h"
+#include "mag_stall_reporter.h"
 #if defined(MAG_SOCIAL_BRIDGE)
 #include "mag_social_bridge.h"
 #endif
@@ -495,6 +496,9 @@ int main(int argc, char** argv)
     /* The session performance monitor: the launcher image (EBOOT) is the front end, mage_g the
      * engine. It writes its summary only where the supervisor's MAG_SESSION_DIR says. */
     mag_session_monitor_start(strstr(argv[1], "mage_g") ? "engine" : "launcher");
+    /* A match that stops presenting frames names what each guest thread is inside
+     * (src/mag_stall_reporter.h); silent while the game draws. */
+    if (strstr(argv[1], "mage_g")) mag_stall_reporter_start();
     derive_vfs_root(argv[1]);
     printf("[boot] VFS root: %s\n", ppu_vfs_root);
     /* Our runner always uses a private disc-layout overlay. */
