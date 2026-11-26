@@ -19,15 +19,17 @@ class SessionMonitorTests(unittest.TestCase):
             binary = pathlib.Path(tmp) / 'session_monitor'
             build = subprocess.run([COMPILER, '-std=c++17', '-O2', '-Wall', '-Wextra', '-Werror', '-I' + str(ROOT / 'src'),
                                     str(ROOT / 'tests/session_monitor.cpp'), str(ROOT / 'src/mag_session_monitor.cpp'),
+                                    str(ROOT / 'src/mag_session_network.cpp'),
                                     '-o', str(binary), '-pthread'], capture_output=True, text=True, timeout=120)
             self.assertEqual(build.returncode, 0, build.stderr)
             scratch = pathlib.Path(tmp) / 'scratch'; scratch.mkdir()
             result = subprocess.run([str(binary), str(scratch)], capture_output=True, text=True, timeout=120)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn('[session_monitor] PASS', result.stdout)
-            bench = re.search(r'frame_ns=([\d.]+) presented_ns=([\d.]+)', result.stdout)
+            bench = re.search(r'frame_ns=([\d.]+) presented_ns=([\d.]+) socket_ns=([\d.]+)', result.stdout)
             self.assertIsNotNone(bench)
-            print(f'\nsession monitor hot path: {bench[1]} ns per frame, {bench[2]} ns with the clock read')
+            print(f'\nsession monitor hot path: {bench[1]} ns per frame, {bench[2]} ns with the clock read, '
+                  f'{bench[3]} ns per socket call')
 
             model = json.loads((scratch / 'model.json').read_text())
             self.assertEqual(model['schema_version'], 1)
@@ -45,6 +47,26 @@ class SessionMonitorTests(unittest.TestCase):
             self.assertTrue(model['audio']['available'])
             self.assertEqual(model['audio']['drift_ms'], 2.0)
             self.assertLess(len(json.dumps(model)), 16 * 1024)
+
+            # Network health: a synthetic socket stream with injected silences beside a frame stream
+            # with injected hitches, classified (tests/session_monitor.cpp, network()).
+            network = json.loads((scratch / 'network.json').read_text())
+            self.assertTrue(network['network']['available'])
+            stream = next(e for e in network['network']['endpoints'] if e['address'] == '192.0.2.10:10473')
+            self.assertEqual((stream['transport'], stream['open'], stream['streamed'], stream['gap_events']), ('tcp', True, True, 2))
+            self.assertEqual(sum(count for _, count in stream['gaps_ms']), stream['in']['packets'] - 1)
+            self.assertEqual(stream['rtt_ms']['samples'], 2)
+            self.assertEqual(network['network']['other_endpoints']['count'], 1)
+            self.assertNotIn('198.51.100.7', json.dumps(network))
+            self.assertEqual([(e['kind'], e['verdict']) for e in network['timeline']],
+                             [('frames', 'frames'), ('network', 'network'), ('network', 'both'), ('frames', 'both'),
+                              ('network', 'network')])
+            self.assertTrue(network['timeline'][-1]['open'])
+            self.assertTrue(all(e['phase'] == 'match' for e in network['timeline']))
+            self.assertEqual([m['verdict'] for m in network['minutes']], ['ok', 'frames', 'network', 'both'])
+            self.assertTrue(all(m['net']['stream'] for m in network['minutes']))
+            self.assertLess(len(json.dumps(network)), 16 * 1024)
+            self.assertFalse(model['network']['available'])
 
             live = json.loads((scratch / 'session-engine.json').read_text())
             self.assertEqual((live['role'], live['state'], live['ending']), ('engine', 'ended', 'window_closed'))

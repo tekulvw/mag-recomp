@@ -53,11 +53,13 @@ struct Probe {
     std::function<std::vector<GuestThread>()> threads;
     std::function<double()> cpu_seconds;          /* process CPU time so far */
     std::function<std::string()> audio;           /* the host audio counters, one line */
+    std::function<std::string()> network;         /* the server connections' last packets, one line */
     std::function<void()> guest_link_registers;   /* the runtime's per-thread lr listing (stdio) */
 };
 
 /* The report text (without the runtime's lr listing): lines prefixed "[mag-stall] ". */
-std::string format_report(const Action &, const std::vector<GuestThread> &, double cpu_used_s, const std::string &audio);
+std::string format_report(const Action &, const std::vector<GuestThread> &, double cpu_used_s, const std::string &audio,
+                          const std::string &network = std::string());
 std::string format_resumed(const Action &);
 /* A name for the lv2 syscalls a stalled thread is most likely inside, else "". */
 const char *syscall_name(unsigned number);

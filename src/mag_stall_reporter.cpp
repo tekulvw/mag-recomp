@@ -100,7 +100,7 @@ static std::string fixed(double v, int digits) {
 }
 
 std::string format_report(const Action &a, const std::vector<GuestThread> &threads, double cpu_used_s,
-                          const std::string &audio) {
+                          const std::string &audio, const std::string &network) {
     const std::string p = "[mag-stall] ";
     std::string s = p + "no guest frame for " + fixed(a.stalled_s, 1) + " s in a match (report " +
                     std::to_string(a.number) + "); process CPU over the stall " + fixed(cpu_used_s, 1) + " s\n";
@@ -119,6 +119,8 @@ std::string format_report(const Action &a, const std::vector<GuestThread> &threa
     }
     if (!busy) s += p + "no guest thread is inside a firmware call or syscall (running guest code)\n";
     if (!audio.empty()) s += p + "audio " + audio + "\n";
+    // Whether the server was still talking: a frozen client with a live server, or both silent.
+    if (!network.empty()) s += p + "network " + network + "\n";
     s += p + "guest link registers follow ([WATCHDOG] guest-tid lr r3 sp)\n";
     return s;
 }
@@ -164,7 +166,8 @@ void start(Probe probe, std::function<uint64_t()> now_ns, std::function<uint64_t
             if (a.kind != Action::Report) continue;
             const double cpu = probe.cpu_seconds ? probe.cpu_seconds() - cpu_at_frame : 0;
             raw_write(fd, format_report(a, probe.threads ? probe.threads() : std::vector<GuestThread>{}, cpu,
-                                        probe.audio ? probe.audio() : std::string()));
+                                        probe.audio ? probe.audio() : std::string(),
+                                        probe.network ? probe.network() : std::string()));
             if (probe.guest_link_registers) probe.guest_link_registers();  // stdio: may wait on a held lock
         }
     }).detach();

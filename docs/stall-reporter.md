@@ -25,6 +25,10 @@ same log, what every guest thread was doing when the frames stopped. A frozen se
     Two reports 20 s apart tell them apart;
   - the host audio counters, when the runtime provides them, which show whether the audio path
     still runs;
+  - the network, when the session monitor has network counters ([player-settings.md](player-settings.md#frame-rate-dips-and-network-gaps)):
+    `[mag-stall] network tcp 192.0.2.10:10473 last received 10.2 s ago (was streaming)` for each open
+    server connection. A server that kept talking points at the client; a silent one at the server or
+    the network. The line never waits for the counters' lock (`busy` when a socket call holds it);
   - the runtime's per-thread guest link register listing, `[WATCHDOG] guest-tid N lr=… r3=… sp=…`.
     The `lr` value is the last direct guest call site. For a thread inside a wait, `r3` is the
     object it waits on.

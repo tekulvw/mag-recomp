@@ -417,6 +417,7 @@ const char *trigger_name(Trigger t) {
     case Trigger::Halt: return "halt";
     case Trigger::SlowFrames: return "slow_frames";
     case Trigger::Audio: return "audio";
+    case Trigger::Network: return "network";
     case Trigger::Manual: return "manual";
     case Trigger::None: break;
     }
@@ -497,6 +498,7 @@ Settings load_settings(const fs::path &path) {
 std::string category(Trigger t) {
     if (t == Trigger::Manual) return "manual";
     if (t == Trigger::SlowFrames || t == Trigger::Audio) return "performance";
+    if (t == Trigger::Network) return "network";
     return "error";
 }
 }  // namespace
@@ -514,6 +516,32 @@ Trigger judge_summary(const Json &summary, std::vector<std::string> &reasons) {
         if (over_250 >= double(long_frame_count)) {
             reasons.push_back(role + ": " + std::to_string((long long)over_250) + " frames took 250 ms or more");
             result = Trigger::SlowFrames;
+        }
+    }
+    // Network gaps: the server went silent during a match while frames kept coming. A silence still
+    // open when the summary was written counts only if the session was still in a match then.
+    if (const Json *timeline = summary.get("timeline"); timeline && timeline->kind == Json::Kind::Array) {
+        auto text = [](const Json &object, const char *key) {
+            const Json *v = object.get(key);
+            return v && v->kind == Json::Kind::String ? v->text : std::string();
+        };
+        const bool still_in_match = text(summary, "phase") == "match";
+        int gaps = 0;
+        double longest = 0;
+        for (const Json &event : timeline->items) {
+            if (event.kind != Json::Kind::Object || text(event, "kind") != "network" || text(event, "verdict") != "network" ||
+                text(event, "phase") != "match")
+                continue;
+            const double length = field(event, {"ms"});
+            const Json *open = event.get("open");
+            if (length < network_gap_report_ms || (open && open->boolean && !still_in_match)) continue;
+            ++gaps;
+            longest = std::max(longest, length);
+        }
+        if (gaps) {
+            reasons.push_back(role + ": the game server went silent for " + std::to_string((long long)(longest / 1000)) + " s during a match (" +
+                              std::to_string(gaps) + (gaps == 1 ? " gap" : " gaps") + " of 2 s or more while frames kept coming)");
+            if (result == Trigger::None) result = Trigger::Network;
         }
     }
     const Json *audio = summary.get("audio");
@@ -569,7 +597,9 @@ Decision decide(const Session &s) {
             Json summary;
             if (!load_summary(s.logs / (std::string("session-") + role + ".json"), summary)) continue;
             const Trigger t = judge_summary(summary, d.reasons);
-            if (t == Trigger::SlowFrames || (t == Trigger::Audio && d.trigger == Trigger::None)) d.trigger = t;
+            // Slow frames, then network gaps, then audio.
+            auto rank = [](Trigger x) { return x == Trigger::SlowFrames ? 3 : x == Trigger::Network ? 2 : x == Trigger::Audio ? 1 : 0; };
+            if (rank(t) > rank(d.trigger)) d.trigger = t;
         }
         if (d.trigger == Trigger::None && d.manual) d.trigger = Trigger::Manual;
     }
@@ -665,11 +695,20 @@ std::string receipt(const fs::path &path) {
     return to_json(out);
 }
 
-// A summary without its bulkier series, for when the metrics would be too large.
+// A summary without its bulkier series, for when the metrics would be too large: the per-minute
+// series and the histograms go; the timeline and the endpoints' totals stay.
 Json slim(Json summary) {
     summary.members.erase(std::remove_if(summary.members.begin(), summary.members.end(),
                                          [](const auto &m) { return m.first == "minutes"; }),
                           summary.members.end());
+    for (auto &m : summary.members)
+        if (m.first == "network")
+            for (auto &n : m.second.members)
+                if (n.first == "endpoints")
+                    for (auto &endpoint : n.second.items)
+                        endpoint.members.erase(std::remove_if(endpoint.members.begin(), endpoint.members.end(),
+                                                              [](const auto &f) { return f.first == "gaps_ms"; }),
+                                               endpoint.members.end());
     for (auto &m : summary.members)
         if (m.first == "frames")
             m.second.members.erase(std::remove_if(m.second.members.begin(), m.second.members.end(),
@@ -967,7 +1006,10 @@ Finished finish_session(const Session &s) {
     if (!settings.send_reports && d.manual) trigger = Trigger::Manual;
     const long long now = (long long)current(s.now);
     const std::string kind = category(trigger);
-    const int limit = kind == "manual" ? daily_manual_reports : kind == "performance" ? daily_performance_reports : daily_error_reports;
+    const int limit = kind == "manual" ? daily_manual_reports
+                      : kind == "performance" ? daily_performance_reports
+                      : kind == "network" ? daily_network_reports
+                                          : daily_error_reports;
     if (created_since(s.queue, kind, now - 86400) >= limit) {
         f.line = std::string("reports: the daily limit for ") + kind + " reports is reached (a " + trigger_name(trigger) + " report was not created)";
         return f;
