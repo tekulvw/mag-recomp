@@ -1349,6 +1349,54 @@ void closed_menu_never_sees_confirm() {
     mag_controls_push_event({{InputSource::Keyboard, 41}, false, time_ns()});
 }
 
+// The input engine offers a press until it is observed. A press no handler read in its poll is
+// spent at the end of that poll, as a pad press nobody reads is gone: on foot nothing watches D-pad
+// Left, and Left presses made there used to wait and act together much later, when the respawn bar
+// started reading D-pad Left, flipping its tabs on their own. A press still held stays held.
+void unread_presses_are_spent() {
+    Harness h;
+    uint32_t record = 0;
+    const uint32_t bar = route_handler(h.m, record);  // a routed UI element, as the respawn bar is
+    require(h.idle_tick() == Attached, "first tick did not attach on foot");
+    const auto press = [&](uint32_t key, bool down) { mag_controls_push_event({{InputSource::Keyboard, key}, down, time_ns()}); };
+    // Three taps of Left (the arrow key) while nothing reads D-pad Left.
+    for (int i = 0; i < 3; ++i) {
+        press(80, true);
+        h.idle_tick();
+        press(80, false);
+        h.idle_tick();
+    }
+    // The element starts reading D-pad Left: none of those taps reaches it.
+    const uint32_t left = watch(h.m, bar, 1, 0x853D3A53, 2);
+    const auto tick = [&](const char* why) {
+        h.begin_tick();
+        h.enter_handler(bar);
+        const bool taken = h.recognize_record(left, bar);
+        const float value = mag_guest_tuple_value(h.tuple_at(left));
+        h.fire(Hook::HandlerExit);
+        h.enter_handler();
+        h.end_poll();
+        h.enter_actor();
+        h.end_tick();
+        (void)why;
+        return taken ? value : -1.0f;
+    };
+    for (int i = 0; i < 6; ++i) require(tick("old taps") <= 0.0f, "a Left tap made while nothing read it acted later");
+    // A fresh tap acts, once.
+    press(80, true);
+    require(tick("fresh tap") == 1.0f, "a fresh Left tap did not press D-pad Left");
+    press(80, false);
+    require(tick("fresh tap released") == 0.0f, "releasing Left did not release D-pad Left");
+    for (int i = 0; i < 3; ++i) require(tick("after the fresh tap") <= 0.0f, "a Left tap acted twice");
+    // A press held while nothing reads it reads as held once something does.
+    press(80, true);
+    h.idle_tick();
+    h.idle_tick();
+    require(tick("held") == 1.0f, "a held Left was dropped while nothing read it");
+    press(80, false);
+    require(tick("held released") == 0.0f, "releasing a held Left did not release D-pad Left");
+}
+
 void census_line(const char* line) { census_lines.push_back(line); }
 
 // The census describes each distinct handler update once, and changes nothing.
@@ -1664,7 +1712,7 @@ int main(int argc, char** argv) {
         {"mouse", mouse_look},       {"assist", aim_assist},     {"lifecycle", lifecycle},
         {"threads", threads_and_errors}, {"snapshot", update_snapshot}, {"menu", menu_holds_look},
         {"withdrawn", withdrawn_frame},
-        {"menu-pad", menu_keyboard_pad}, {"menu-look-pad", menu_holding_look_gets_the_pad}, {"situational", situational_actions}, {"closed-menu-confirm", closed_menu_never_sees_confirm}, {"downed-x", downed_x_bleeds_out}, {"census", census},
+        {"menu-pad", menu_keyboard_pad}, {"menu-look-pad", menu_holding_look_gets_the_pad}, {"situational", situational_actions}, {"closed-menu-confirm", closed_menu_never_sees_confirm}, {"downed-x", downed_x_bleeds_out}, {"unread-presses", unread_presses_are_spent}, {"census", census},
         {"prompt-queries", prompt_queries}, {"mounted", mounted_weapon},
         {"registered-on-foot", registered_handler_on_foot}, {"mounted-controller-mode", mounted_weapon_controller_mode}};
     try {
