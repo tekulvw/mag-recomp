@@ -1744,6 +1744,12 @@ void vehicle_driver() {
     poll({20}, true);  // Q, Cycle weapons' own key, still accelerates
     require(value(throttle) == 1.0f, "R2's own key stopped accelerating");
     poll({20}, false);
+    // The right mouse button is a seat's R2 alias on a turret, never a driver's throttle.
+    mag_controls_push_event({{InputSource::Mouse, 1}, true, time_ns()});
+    poll({}, true);
+    require(value(throttle) == 0.0f, "the right mouse button opened the throttle");
+    mag_controls_push_event({{InputSource::Mouse, 1}, false, time_ns()});
+    poll({}, false);
     poll({5}, true);  // B: smoke screen, by its own token
     require(value(smoke) == 1.0f, "B did not fire the smoke screen");
     poll({5}, false);
