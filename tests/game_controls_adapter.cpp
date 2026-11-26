@@ -1618,6 +1618,11 @@ void mounted_weapon() {
     require(read.rockets == 1.0f, "Cycle weapons' key did not fire the secondary weapon");
     mag_controls_push_event({{InputSource::Keyboard, 20}, false, time_ns()});
     poll();
+    mag_controls_push_event({{InputSource::Keyboard, 26}, true, time_ns()});  // W: no throttle on a turret
+    read = poll();
+    require(read.rockets == 0.0f, "W fired the turret's secondary weapon");
+    mag_controls_push_event({{InputSource::Keyboard, 26}, false, time_ns()});
+    poll();
 
     // A cancel gives the held stick and buttons back.
     mag_controls_push_relative_mouse(1000, 0);
@@ -1686,6 +1691,74 @@ void registered_handler_on_foot() {
     mag_controls_push_event({{InputSource::Mouse, 1}, false, time_ns()});
 }
 
+// A vehicle driver's own handler (registered, updated before the player's) watches the triggers for
+// throttle and brake (R2 accelerates, L2 brakes and reverses) and the left stick's horizontal for
+// steering, with tokens of its own. On keyboard and mouse W and S drive it, as do the triggers' own keys.
+void vehicle_driver() {
+    Harness h;
+    const uint32_t driver = 0x100D8000, vtable = 0x01A70100;
+    handler_base(h.m, driver, vtable, true);
+    h.m.put32(vtable + 8, BaseDescriptor);
+    // In this world Cycle weapons is on 17 (R2), Cycle equipment on 18 (L2), Strafe left and right on 6, 7.
+    const uint32_t throttle = watch(h.m, driver, 1, 0x0D00F001, 17), brake = watch(h.m, driver, 2, 0x0D00F002, 18),
+                   left = watch(h.m, driver, 3, 0x0D00F003, 6), right = watch(h.m, driver, 4, 0x0D00F004, 7),
+                   smoke = watch(h.m, driver, 5, 0xE3DD5118, 8);  // vsmoke on R1
+    h.m.map(Registered + 0x20, 0x10);
+    h.m.put32(Registered + 0x28, driver);
+    h.m.link(InputManager + 0x2C, {Registered, Registered + 0x10, Registered + 0x20});
+    const auto value = [&](uint32_t record) { return mag_guest_tuple_value(h.tuple_at(record)); };
+    const auto poll = [&](std::initializer_list<uint32_t> keys, bool down) {
+        for (uint32_t key : keys) mag_controls_push_event({{InputSource::Keyboard, key}, down, time_ns()});
+        h.begin_tick();
+        h.enter_handler(driver);
+        for (uint32_t record : {throttle, brake, left, right, smoke}) h.recognize_record(record, driver);
+        h.fire(Hook::HandlerExit);
+        // The player's handler reads its own movement and trigger controls too, as the game runs it.
+        h.enter_handler();
+        for (uint32_t token : {Forward, Backward, Left, Right, CycleWeapons, CycleEquipment}) h.recognize(token);
+        h.end_poll();
+        h.enter_actor();
+        h.end_tick();
+    };
+    // On foot W is no throttle: the registered handler's R2 reads only Cycle weapons' key there.
+    require(h.idle_tick() == Attached, "a registered driver handler blocked attachment");
+    poll({26}, true);
+    require(value(throttle) == 0.0f, "W pressed a registered handler's R2 on foot");
+    poll({26}, false);
+
+    seat_state(h.m);
+    require(h.idle_tick() == Attached, "the driver's seat did not attach on foot");
+    poll({26}, true);  // W
+    require(value(throttle) == 1.0f && value(brake) == 0.0f, "W did not accelerate");
+    poll({26}, false);
+    require(value(throttle) == 0.0f, "the throttle stayed open after W was released");
+    poll({22}, true);  // S
+    require(value(brake) == 1.0f && value(throttle) == 0.0f, "S did not brake");
+    poll({22}, false);
+    poll({4}, true);  // A
+    require(value(left) == 1.0f && value(right) == 0.0f, "A did not steer left");
+    poll({4}, false);
+    poll({7}, true);  // D
+    require(value(right) == 1.0f, "D did not steer right");
+    poll({7}, false);
+    poll({20}, true);  // Q, Cycle weapons' own key, still accelerates
+    require(value(throttle) == 1.0f, "R2's own key stopped accelerating");
+    poll({20}, false);
+    // The right mouse button is a seat's R2 alias on a turret, never a driver's throttle.
+    mag_controls_push_event({{InputSource::Mouse, 1}, true, time_ns()});
+    poll({}, true);
+    require(value(throttle) == 0.0f, "the right mouse button opened the throttle");
+    mag_controls_push_event({{InputSource::Mouse, 1}, false, time_ns()});
+    poll({}, false);
+    poll({5}, true);  // B: smoke screen, by its own token
+    require(value(smoke) == 1.0f, "B did not fire the smoke screen");
+    poll({5}, false);
+    // W and S together: each trigger reads its own key.
+    poll({26, 22}, true);
+    require(value(throttle) == 1.0f && value(brake) == 1.0f, "W and S together did not press both triggers");
+    poll({26, 22}, false);
+}
+
 // Controller mode leaves a seat to the controller: the mouse pushes no stick.
 void mounted_weapon_controller_mode() {
     ControlsProfile profile = mag_game_controls_default_profile();
@@ -1714,7 +1787,8 @@ int main(int argc, char** argv) {
         {"withdrawn", withdrawn_frame},
         {"menu-pad", menu_keyboard_pad}, {"menu-look-pad", menu_holding_look_gets_the_pad}, {"situational", situational_actions}, {"closed-menu-confirm", closed_menu_never_sees_confirm}, {"downed-x", downed_x_bleeds_out}, {"unread-presses", unread_presses_are_spent}, {"census", census},
         {"prompt-queries", prompt_queries}, {"mounted", mounted_weapon},
-        {"registered-on-foot", registered_handler_on_foot}, {"mounted-controller-mode", mounted_weapon_controller_mode}};
+        {"registered-on-foot", registered_handler_on_foot}, {"mounted-controller-mode", mounted_weapon_controller_mode},
+        {"vehicle-driver", vehicle_driver}};
     try {
         if (argc != 2 || !scenarios.count(argv[1])) throw std::runtime_error("usage: game_controls_adapter <scenario>");
         scenarios.at(argv[1])();

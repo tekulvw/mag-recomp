@@ -198,10 +198,10 @@ whether a controller button may be remapped to it, system channel for system but
 
 | Token | Label | Controller | System channel |
 | --- | --- | --- | --- |
-| `0xB164D156` | Move forward | no | |
-| `0x93115EC5` | Move backward | no | |
-| `0x44533986` | Strafe left | no | |
-| `0xF3468EB5` | Strafe right | no | |
+| `0xB164D156` | Move forward (vehicles: accelerate) | no | |
+| `0x93115EC5` | Move backward (vehicles: brake / reverse) | no | |
+| `0x44533986` | Strafe left (vehicles: steer left) | no | |
+| `0xF3468EB5` | Strafe right (vehicles: steer right) | no | |
 | `0x58DE09CF` | Fire / use equipment | yes | |
 | `0xC07AA75A` | Aim / scope | yes | |
 | `0xA7B30616` | Jump | yes | |
@@ -285,10 +285,22 @@ and firing did nothing on keyboard and mouse, while leaving it worked. A handler
 the input manager is also present on foot for the whole match: it watches the pad's shoulder
 buttons by the pad's own names (CRC-32 of `padl1`, `padr1`, `padl2`, `padr2`).
 
+A ground vehicle (a lab trace of an APC on hosted Domination, Canal, 2026-11-26) uses the same
+seat state and handlers: its passenger seats the free look above, its turret seat (seat 1, a
+machine gun on R1) the same turret handler as the bunker's, and its driver's seat (seat 0) a
+handler of its own (a static object at `0x01FD3D08`, vtable `0x01A70728`) that watches R2
+(accelerate), L2 (brake and reverse), the left stick's left and right (steering), R1 (smoke
+screen, by the `vsmoke` token) and L1. It does not watch the look channels; the passenger free
+look stays registered, so the mouse turns the driver's camera. Change seats (V) steps through the
+seats in order: from the turret to a passenger seat, then to the driver's.
+
 The adapter calls a handler registered with the input manager, other than the player's and the UI
 manager's, a *registered handler*, and in a movement state outside the mouse look table a
 registered handler that watches every look channel of the player's contract a *seat handler*.
-The player is *seated* while a seat handler is registered. 7.2 to 7.5 give their rules: keyboard
+The player is *seated* while a seat handler is registered. In such a state a registered handler
+that watches the buttons of both triggers and of the left stick's horizontal (the channels the
+player's contract gives Cycle weapons, Cycle equipment, Strafe left and Strafe right) is a
+*drive handler*: a driver's. 7.2 to 7.5 give their rules: keyboard
 and mouse stand in for the pad there, as a controller's buttons and stick reach them.
 
 **Catalog revision 3** retires the command screen action (`0xC6DCD89F`, commandscreen): the game
@@ -701,6 +713,11 @@ Returns false (the game recognizes the control itself) unless every step below a
    finishes on the action it began on). On a seat handler a non-system action with a *seat alias*
    is treated the same way: Cycle weapons, on R2 (a turret's secondary weapon), has the alias Aim
    (`mag_game_controls_seat_alias`), so the right mouse button fires it as well as R2's own keys.
+   On a drive handler a non-system action with a *drive alias* is treated the same way: Cycle
+   weapons (R2, accelerate) has the alias Move forward and Cycle equipment (L2, brake and reverse)
+   has Move backward (`mag_game_controls_drive_alias`), so W and S drive, as well as the triggers'
+   own keys; A and D steer through the left stick's channels (step 3). A drive handler is not a
+   seat handler, so the right mouse button stays off its R2.
    `mouse look` = gameplay, a look token, mouse eligible and the frame's look owner is the mouse.
    `stick look` = stick look is on for this poll, the action is not a system action and is a look
    token (a seat's own look controls take it from their channel), and the frame's look owner is

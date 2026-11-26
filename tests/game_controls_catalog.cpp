@@ -94,6 +94,9 @@ static void prompts() {
     require(mag_game_controls_seat_alias(0x2c4380c4) == 0xc07aa75a, "a seat's R2 does not read Aim's keys");
     require(mag_game_controls_seat_alias(0x58de09cf) == 0 && mag_game_controls_seat_alias(0xc07aa75a) == 0,
             "a seat alias for an action other than Cycle weapons");
+    require(mag_game_controls_drive_alias(0x2c4380c4) == 0xb164d156 && mag_game_controls_drive_alias(0xcb535315) == 0x93115ec5,
+            "a driver's triggers do not read Move forward's and Move backward's keys");
+    require(mag_game_controls_drive_alias(0x58de09cf) == 0, "a drive alias for an action other than the triggers");
 }
 // A revision 2 profile: today's defaults with revision 2's keys (Confirm Return, Bleed out X,
 // Command screen M).

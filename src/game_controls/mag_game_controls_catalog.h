@@ -46,6 +46,10 @@ mag::ActionId mag_game_controls_downed_alias(mag::ActionId action);
 // second action whose keys also press `action` there: Aim (the right mouse button) for the control on
 // Cycle weapons' button, R2, which fires a turret's secondary weapon. 0 for every other action.
 mag::ActionId mag_game_controls_seat_alias(mag::ActionId action);
+// On a vehicle driver's own handler (docs/native-controls.md, 2.3 and 7.3), the second action whose keys
+// also press `action` there: Move forward (W) for the control on Cycle weapons' button, R2, which
+// accelerates, and Move backward (S) for Cycle equipment's, L2, which brakes and reverses. 0 otherwise.
+mag::ActionId mag_game_controls_drive_alias(mag::ActionId action);
 // Bit 0..3 for the four look-axis tokens, 0 for any other token.
 unsigned mag_game_controls_look_bit(uint32_t token);
 inline bool mag_game_controls_look_token(uint32_t token) { return mag_game_controls_look_bit(token) != 0; }
