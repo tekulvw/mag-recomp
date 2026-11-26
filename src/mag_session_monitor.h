@@ -299,12 +299,12 @@ private:
         unsigned skipped = 0;
         void add(uint64_t n, double dt) {
             const double fps = double(n) / dt;
-            min_fps = seconds > 0 ? std::min(min_fps, fps) : fps;
+            min_fps = seconds > 0 ? (std::min)(min_fps, fps) : fps;
             frames += n;
             seconds += dt;
         }
         void merge(const Span &o) {
-            if (o.seconds > 0) min_fps = seconds > 0 ? std::min(min_fps, o.min_fps) : o.min_fps;
+            if (o.seconds > 0) min_fps = seconds > 0 ? (std::min)(min_fps, o.min_fps) : o.min_fps;
             frames += o.frames;
             seconds += o.seconds;
             skipped += o.skipped;
