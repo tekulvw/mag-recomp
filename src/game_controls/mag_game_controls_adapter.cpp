@@ -671,19 +671,22 @@ struct MagGameControlsAdapter::State {
         if (!poll) return;
         if (poll == 1) {
             observe(system_receipts);
-            drain_menu_prompts();
+            spend_unread_presses();
         }
         if (--poll) return;
         abort_capture_poll();
         if (sealed && !frame) cancel("no supported local gameplay handler");
     }
-    // 7.3: on foot nothing takes Confirm or Back over, except Bleed out's alias while downed, which
-    // receipts its press. Every other press of their keys is consumed here, so none waits in the
-    // engine to act later (a press of X while alive must not bleed out when the player goes down).
-    void drain_menu_prompts() {
-        if (!gameplay_eligible || !frame_valid()) return;
+    // 7.3, end of the poll: the engine offers a press until it is observed, so a press that no
+    // handler read in its poll would wait and act much later, wherever an action's control is next
+    // read (D-pad Left on foot, which nothing watches there, replayed on the respawn bar; X on foot,
+    // bleeding out when the player goes down). Every press no recognition kept as a receipt is spent
+    // here, as a pad press nobody reads is gone; a press still held stays held. Gameplay receipts
+    // are completed at the end of the actor update (7.5).
+    void spend_unread_presses() {
+        if (!frame_valid()) return;
         for (const auto& action : mag_game_controls_actions()) {
-            if (!action.menu_prompt || gameplay_receipts.count(action.id)) continue;
+            if (gameplay_receipts.count(action.id)) continue;
             if (const auto offer = mag_controls_offer(*sample_key, action.id)) mag_controls_observe(*sample_key, action.id, *offer);
         }
     }
