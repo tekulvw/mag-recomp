@@ -618,6 +618,10 @@ struct MagGameControlsAdapter::State {
     }
     // 8.3. An incomplete sample (not called) neither releases nor connects.
     void feed_controller(const MagInputControllerSample& sample) {
+        {   // LAB: MAG_LAB_FORCE_CONTROLLER=1 reports a connected controller with nothing pressed.
+            static const bool force = [] { const char* v = std::getenv("MAG_LAB_FORCE_CONTROLLER"); return v && *v == '1'; }();
+            if (force && !sample.connected) { mag_controls_set_controller_connection(true); return; }
+        }
         mag_controls_set_controller_connection(sample.connected != 0);
         if (!sample.connected) {
             if (controller.seen) mag_controls_release_source(InputSource::Controller);
@@ -859,6 +863,12 @@ struct MagGameControlsAdapter::State {
     void route(uint32_t handler, uint32_t pad) {
         if (!owner || !frame_valid()) return;
         if (contains(system_routes, handler)) recognition_handler = handler;
+        {   // LAB: role changes per handler.
+            static std::map<uint32_t, int> roles;
+            const int role = contains(system_routes, handler) ? 2 : (gameplay_routes && contains(*gameplay_routes, handler)) ? 1 : 0;
+            auto [it, fresh] = roles.emplace(handler, role);
+            if (fresh || it->second != role) { it->second = role; std::fprintf(stderr, "[lab-rx] t=%lld role handler=%08X %s ctx=%s\n", lab_ms(), handler, role == 2 ? "system" : role == 1 ? "gameplay" : "other", gameplay_eligible ? "OnFoot" : "Menu"); }
+        }
         if (!owner_handler(handler)) return;
         const auto current = guest.resolve_owner(handler, true);
         if (!current || !mag_guest_same_owner(*current, *owner)) {
@@ -1026,6 +1036,10 @@ struct MagGameControlsAdapter::State {
 
         // Step 10.
         const uint32_t bits = game_event_bits(result.events);
+        if (system && *channel <= 3 && (offer || cpu.fpr[1] > 0 || bits || blocked))
+            std::fprintf(stderr, "[lab-rx] t=%lld dpad handler=%08X token=%08X ch=%u offer=%d raw=%.2f value=%.2f native=%d r5=%d startblk=%d id=%llu out=%.2f phase=%u bits=%04X conn=%d\n",
+                         lab_ms(), handler, *token, *channel, offer ? int(offer->down) + 1 : 0, cpu.fpr[1], value, int(native_contribution), int(cpu.gpr[5] != 0),
+                         int(blocked && cpu.gpr[5] == 0), (unsigned long long)entry.id, result.value, unsigned(result.phase), bits, int(frame->policy.controller_connected));
         if (gameplay && (*channel == 5 || *channel == 12) && (bits || value > 0))
             std::fprintf(stderr, "[lab-rx] t=%lld rec token=%08X ch=%u action=%08X value=%.2f offer=%d bits=%04X state=%u\n", lab_ms(), *token, *channel,
                          action, value, offer ? int(offer->down) + 1 : 0, bits, unsigned(owner->state_id));
