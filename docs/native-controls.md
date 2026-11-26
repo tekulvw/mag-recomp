@@ -263,6 +263,22 @@ other handler sees Confirm, as above. Bleed out's own keys (Return) keep working
 are pressed. A press that nothing read is spent at the end of its poll (7.3, "Unread presses are
 spent"), so an X pressed while alive cannot bleed out later, when the player goes down.
 
+**Kill Self: Melee's keys press R3 in the pause menu.** The game's way out of a stuck spawn is Kill
+Self in the in-match pause menu: on its first tab (SQUAD) the menu binds R3 to an item that asks the
+game to kill the player, and its footer shows R3 beside "Kill Self". The menu checks nothing else, so
+the item is there in every state; the other tabs and the exit dialog bind R3 to nothing. The pause
+menu holds look on foot (8.2), so its buttons read the keyboard pad, where R3 is G (also Cycle
+equipment on foot), and the R3 picture is the movie's own (12.5), so no prompt names the key. F, the
+key players press for R3 (Melee), is the pad's L3 there and did nothing: players reported that no key
+killed the player. While a menu holds look on foot, the keys of Melee therefore also press R3 on the
+menu's own handlers (`mag_game_controls_menu_button`), and the pad's own R3 (G, or a controller's)
+still reaches them (7.3 steps 3 and 6). No other button of such a menu reads the player's keys. On
+keyboard and mouse, Kill Self is Escape, then F (Melee) or G. Lab runs (macOS, hosted Sabotage,
+2026-11-26) showed Escape then F, and Escape then the pad's R3, each killing the player (the downed
+state, then the respawn screens) and the server handling the request; before this rule F did nothing.
+In a seat the menu's handlers are updated before the seat's (a census of an APC seat), so the pause
+menu holds look there too and the same keys apply.
+
 **Seats: mounted weapons and vehicle seats.** A lab trace (macOS, hosted Domination, a defenders'
 bunker, 2026-11-26) shows how a seat reads input. The forward spawn seats the player in the
 bunker's passenger seat; leaving it and entering again takes the turret seat (a minigun on R1,
@@ -706,7 +722,8 @@ Returns false (the game recognizes the control itself) unless every step below a
      seated, Aim is not taken over on any handler (the right mouse button is the seat's, step 4):
      return false. While a
      menu holds look on foot (8.2), no gameplay or situational action is taken over on a handler
-     other than the player's: return false.
+     other than the player's, except Melee (a *menu button*, `mag_game_controls_menu_button`: the
+     pause menu's Kill Self on R3, 2.3): return false.
 4. While the player is downed (2.2), on the owner's handler, an action with a downed alias (Bleed
    out, whose alias is Confirm, 2.3) that has no offer of its own is recognized as its alias when
    the alias has an offer, or when the recognition entry of `n` last used the alias (so a press
@@ -728,7 +745,8 @@ Returns false (the game recognizes the control itself) unless every step below a
    look or deny native, return false.
 5. Read tuning low, high, threshold, epsilon and curve kind. Low must be below high, threshold in
    [0,1], epsilon non-negative; otherwise it is an error.
-6. `preserve` = not remapped, not KBM mode, and a controller is connected. With preserve and no
+6. `preserve` = not remapped, not KBM mode, and a controller is connected; or a menu button taken
+   over on a menu's handler while a menu holds look (step 3), so the pad's own press still counts. With preserve and no
    mouse look, the native contribution is f1 normalised into [0,1] over [low, high] and passed
    through the value curve (2.2); otherwise zero. `native contribution` = preserve and that value
    is above zero. An offer that is down (and no mouse look) makes the value 1. Mouse look makes it 0.
@@ -1107,7 +1125,8 @@ stable for three handler updates). While a menu holds look on foot the pad is li
 menu, so the menu's face buttons, shoulders and stick clicks work from the pad's keys (Z Square
 for EXIT GAME, X Cross, C Circle, V Triangle, Q/E, F/G). The adapter then takes over no
 gameplay or situational action on any handler other than the player's own (7.3 step 3): the menu's
-controls read the pad. Confirm and Back are never taken over at all (2.3): a closed menu that stays
+controls read the pad. The one exception is R3: Melee's keys (F) also press it there, beside the pad's
+G, for the pause menu's Kill Self (2.3). Confirm and Back are never taken over at all (2.3): a closed menu that stays
 routed on foot must not see X or Backspace. The player's handler keeps its keys, and the channels the menu consumes reach
 it blocked, as a controller's would. System buttons (Escape, Tab, the arrows) stay with the adapter
 on every route. A seat's own hold on the look channels (2.3) is not a menu's: in a turret or a vehicle seat the
@@ -1433,7 +1452,7 @@ The key for a button (`mag_game_prompts_button_key`), for the face-button pictur
 
 A box holds about five characters: a longer name keeps its first four (`RSHIFT` becomes `RSHI`).
 The "R3" beside the pause menu's Kill Self ring is not one of these texts: the movie draws it itself
-(12.5), so it stays "R3" while G presses it from the keyboard pad.
+(12.5), so it stays "R3" while F (Melee's keys) and the keyboard pad's G press it (2.3).
 
 Some of these texts are fetched when a movie is built (the pause menu's with the HUD), so they show
 the key of the context at that moment, the same limit as 12.2.

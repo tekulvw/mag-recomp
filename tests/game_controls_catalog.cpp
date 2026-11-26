@@ -97,6 +97,9 @@ static void prompts() {
     require(mag_game_controls_drive_alias(0x2c4380c4) == 0xb164d156 && mag_game_controls_drive_alias(0xcb535315) == 0x93115ec5,
             "a driver's triggers do not read Move forward's and Move backward's keys");
     require(mag_game_controls_drive_alias(0x58de09cf) == 0, "a drive alias for an action other than the triggers");
+    require(mag_game_controls_menu_button(0xdb59e9a9), "Melee's keys do not press a menu's R3");
+    require(!mag_game_controls_menu_button(0xa7b30616) && !mag_game_controls_menu_button(0xcb535315),
+            "a menu button other than R3 reads the player's keys");
 }
 // A revision 2 profile: today's defaults with revision 2's keys (Confirm Return, Bleed out X,
 // Command screen M).

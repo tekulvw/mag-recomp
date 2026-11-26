@@ -89,6 +89,9 @@ class GameControlsAdapterTests(unittest.TestCase):
     def test_a_menu_holding_look_on_foot_gets_the_keyboard_pad(self):
         self.run_scenario('menu-look-pad')
 
+    def test_melee_keys_press_r3_kill_self_in_a_menu_holding_look(self):
+        self.run_scenario('menu-r3')
+
     def test_situational_actions_are_optional_and_recognized_by_their_own_token(self):
         self.run_scenario('situational')
 
