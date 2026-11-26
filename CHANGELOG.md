@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.2](https://github.com/tekulvw/mag-recomp/compare/v0.10.1...v0.10.2) (2026-11-26)
+
+
+### Bug Fixes
+
+* **controls:** let X bleed out while downed, as Cross does on the console ([#309](https://github.com/tekulvw/mag-recomp/issues/309)) ([d009b0a](https://github.com/tekulvw/mag-recomp/commit/d009b0a53919d38d923c4b0e28cf24b57f1b5828))
+
 ## [0.10.1](https://github.com/tekulvw/mag-recomp/compare/v0.10.0...v0.10.1) (2026-11-25)
 
 
