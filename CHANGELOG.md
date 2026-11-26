@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.12.0](https://github.com/tekulvw/mag-recomp/compare/v0.11.0...v0.12.0) (2026-11-26)
+
+
+### Features
+
+* **reports:** tell frame-rate dips from network gaps ([#324](https://github.com/tekulvw/mag-recomp/issues/324)) ([2f00988](https://github.com/tekulvw/mag-recomp/commit/2f00988655f02f70bfc0b1255efd8c9f4126be1d))
+* **sdk:** pin runtime-2026.11.26-netobserver so sessions measure network health ([#328](https://github.com/tekulvw/mag-recomp/issues/328)) ([f01bd12](https://github.com/tekulvw/mag-recomp/commit/f01bd12e63c262127d252e5101f2fdc05bca62fe))
+
+
+### Bug Fixes
+
+* **controls:** spend unread presses on menus again, so spawn-map arrows no longer move the respawn bar ([#327](https://github.com/tekulvw/mag-recomp/issues/327)) ([2352422](https://github.com/tekulvw/mag-recomp/commit/23524221c2f42d15e0438bddc3eab6423ec17760))
+* **sdk:** pin runtime-2026.11.26-udpicmp so a stray ICMP no longer drops a Windows player from the match ([#325](https://github.com/tekulvw/mag-recomp/issues/325)) ([9394018](https://github.com/tekulvw/mag-recomp/commit/93940180fd1c169e0aa8ac112ea74466c5ad0a52))
+
 ## [0.11.0](https://github.com/tekulvw/mag-recomp/compare/v0.10.3...v0.11.0) (2026-11-26)
 
 
