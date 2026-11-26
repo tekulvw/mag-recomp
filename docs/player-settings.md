@@ -313,6 +313,14 @@ Tests:
 - `tests.test_player_reports`: the triggers and thresholds (drops, freezes, loading, audio drift after stalls), redaction, payload caps, the queue and retries, and an upload through the platform transport to a fake portal that checks the portal's rules.
 - `installer/tests/test_native_package.py` and `installer/tests/test_native_package_linux.py`: the real macOS and Linux supervisors send a crash report end to end.
 
+## Kill Self
+
+Kill Self is the way out when a spawn leaves you stuck, such as a parachute that never lands. As on
+the console, it is in the in-match pause menu: press **Escape**, stay on the first tab (SQUAD), then
+press **F** (your Melee key) or **G**. The menu's footer shows the PlayStation R3 button beside "Kill
+Self", because the game draws that picture itself. On a controller, press Start, then R3. If you have
+rebound Melee, its keys press Kill Self instead of F ([native-controls.md](native-controls.md), 2.3).
+
 ## Debug
 
 The **Debug** page (beside General and Controls, on macOS, Windows and Linux) holds switches and actions that help with bug reports. Its switches act at once: they are files the game reads when it starts, not settings, so **Apply** and **Cancel** do not concern them, and they take effect at the next launch.
