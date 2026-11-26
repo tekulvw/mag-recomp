@@ -114,6 +114,15 @@ static PortParams voice_port(PortType type) {
     return p;
 }
 
+static void many_ports() {
+    Clock clock;
+    Service service = make(clock, false);
+    service.init();
+    uint32_t id = 0;
+    for (int i = 0; i < 40; ++i) CHECK(service.create_port(voice_port(i % 2 ? PortType::InVoice : PortType::OutPcm), id) == status::Ok);
+    CHECK(id <= 0xFFFFu);
+}
+
 static void lifecycle_and_topology() {
     Clock clock;
     Service service = make(clock);
@@ -146,7 +155,7 @@ static void lifecycle_and_topology() {
     CHECK(info.state == uint32_t(PortState::Idle));
     CHECK(info.edges == std::vector<uint32_t>{mic});
     CHECK(info.frame_bytes == 37);
-    CHECK(info.queued_bytes == 0);
+    CHECK(info.bytes == 0);
     CHECK(service.port_info(0x7777, info) == status::Topology);
     CHECK(service.disconnect(mic, out) == status::Ok);
     CHECK(service.port_info(out, info) == status::Ok && info.edges.empty());
@@ -179,7 +188,7 @@ static void encoded_output_follows_gate() {
     service.start();
     clock.ms += 200;  // five frames
     PortInfo info;
-    CHECK(service.port_info(out, info) == status::Ok && info.queued_bytes == 5 * 37 && info.state == uint32_t(PortState::Running));
+    CHECK(service.port_info(out, info) == status::Ok && info.bytes == 5 * 37 && info.state == uint32_t(PortState::Running));
     // Whole blocks only: room for two and a half blocks returns two.
     CHECK(service.read(out, buffer, 37 * 2 + 18, copied) == status::Ok && copied == 74);
     CHECK(service.read(out, buffer, 10, copied) == status::Ok && copied == 0);
@@ -209,12 +218,12 @@ static void encoded_output_follows_gate() {
     service.set_mute(mic, false);
     // After a long stall at most max_catch_up frames are produced and the queue stays bounded.
     clock.ms += 60000;
-    CHECK(service.port_info(out, info) == status::Ok && info.queued_bytes <= 12 * 37);
+    CHECK(service.port_info(out, info) == status::Ok && info.bytes <= 12 * 37);
     // Stop halts production; reset clears the queue.
     service.stop();
     service.reset_port(out);
     clock.ms += 400;
-    CHECK(service.port_info(out, info) == status::Ok && info.queued_bytes == 0);
+    CHECK(service.port_info(out, info) == status::Ok && info.bytes == 0);
     const SendStats sent = service.send_stats();
     CHECK(sent.blocks > 0 && sent.frames > 0);
 }
@@ -267,6 +276,11 @@ static void update_port_rules() {
     CHECK(service.update_port(in, change) == status::Ok);
     PortInfo info;
     CHECK(service.port_info(in, info) == status::Ok && info.type == uint32_t(PortType::InVoice) && info.frame_bytes == 72);
+    CHECK(info.bytes == 4096);  // an input port reports the bytes it can take
+    std::vector<uint8_t> partial(50, 0x11);
+    size_t accepted = 0;
+    service.write(in, partial.data(), partial.size(), accepted);
+    CHECK(service.port_info(in, info) == status::Ok && info.bytes < 4096);
     bool muted = false;
     CHECK(service.mute(in, muted) == status::Ok && muted);
 }
@@ -295,6 +309,7 @@ int main() {
     parser_every_split();
     parser_recovers();
     test_tone();
+    many_ports();
     lifecycle_and_topology();
     encoded_output_follows_gate();
     encoded_input_counts_blocks();

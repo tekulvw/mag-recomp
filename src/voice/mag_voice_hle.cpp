@@ -182,7 +182,7 @@ void voice_get_volume(ppu_context* c) {
     if (r == status::Ok && arg(c, 1)) storef(arg(c, 1), volume);
     ret(c, r);
 }
-// The public port info block: type, state, edge count (u16), edge array pointer, queued bytes,
+// The public port info block: type, state, edge count (u16), edge array pointer, byte count,
 // frame size. Edges are written only when the caller supplied an array and room for them.
 void voice_get_port_info(ppu_context* c) {
     const uint32_t out = arg(c, 1);
@@ -197,11 +197,11 @@ void voice_get_port_info(ppu_context* c) {
         store16(out + 8, static_cast<uint16_t>(info.edges.size()));
         if (edges && room >= info.edges.size())
             for (size_t i = 0; i < info.edges.size(); ++i) store32(edges + uint32_t(4 * i), info.edges[i]);
-        store32(out + 16, info.queued_bytes);
+        store32(out + 16, info.bytes);
         store32(out + 20, info.frame_bytes);
     }
-    trace("port_info", "\"port\":%u,\"edge_room\":%u,\"edge_array\":%u,\"edges\":%zu,\"queued\":%u,\"frame\":%u,\"status\":%u",
-          arg(c, 0), room, edges ? 1u : 0u, info.edges.size(), info.queued_bytes, info.frame_bytes, r);
+    trace("port_info", "\"port\":%u,\"edge_room\":%u,\"edge_array\":%u,\"edges\":%zu,\"bytes\":%u,\"frame\":%u,\"status\":%u",
+          arg(c, 0), room, edges ? 1u : 0u, info.edges.size(), info.bytes, info.frame_bytes, r);
     ret(c, r);
 }
 void voice_read(ppu_context* c) {

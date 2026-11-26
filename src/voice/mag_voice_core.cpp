@@ -6,7 +6,8 @@
 
 namespace mag::voice {
 
-constexpr size_t MaxPorts = 32;
+// The interface allows 128 ports; the game creates a pair per remote talker slot plus its own.
+constexpr size_t MaxPorts = 128;
 
 size_t block_size_for_bitrate(uint32_t bitrate) {
     const size_t bytes = (static_cast<size_t>(bitrate) * FrameMs + 7999) / 8000;
@@ -315,13 +316,18 @@ uint32_t Service::port_info(uint32_t id, PortInfo& info) {
     info.edges = port->edges;
     if (voice_type(port->params.type)) {
         info.frame_bytes = static_cast<uint32_t>(block_size_for_bitrate(port->params.bitrate));
-        info.queued_bytes = static_cast<uint32_t>(port->parser ? port->parser->pending() : port->queue.size());
+        if (port->parser) {
+            const size_t pending = port->parser->pending();
+            info.bytes = static_cast<uint32_t>(options_.input_capacity > pending ? options_.input_capacity - pending : 0);
+        } else {
+            info.bytes = static_cast<uint32_t>(port->queue.size());
+        }
     } else if (port->params.type == uint32_t(PortType::InPcm) || port->params.type == uint32_t(PortType::OutPcm)) {
         info.frame_bytes = pcm_frame_bytes(port->params);
-        info.queued_bytes = 0;
+        info.bytes = 0;
     } else {
         info.frame_bytes = 0;
-        info.queued_bytes = 0;
+        info.bytes = 0;
     }
     return status::Ok;
 }

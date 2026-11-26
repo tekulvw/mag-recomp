@@ -48,7 +48,9 @@ struct PortInfo {
     uint32_t type = 0;
     uint32_t state = 0;
     std::vector<uint32_t> edges;
-    uint32_t queued_bytes = 0;
+    // Output ports: bytes ready to read. Input ports: bytes that can be written now (the game checks
+    // this, and whole frames, before writing a talker's data).
+    uint32_t bytes = 0;
     uint32_t frame_bytes = 0;
 };
 
