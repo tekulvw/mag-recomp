@@ -293,6 +293,10 @@ struct MagGameControlsAdapter::State {
     std::map<uint32_t, HostCache> host_caches;
     std::map<uint32_t, SystemCache> system_caches;
     std::map<ActionId, ControlOffer> gameplay_receipts, system_receipts;
+    // 7.3: presses made on a menu screen that no handler has read yet, by action: the press
+    // (its pulse) and when it was first left unread.
+    struct MenuUnread { uint64_t pulse_id, since_ns; };
+    std::map<ActionId, MenuUnread> menu_unread;
 
     MagGameControlsMouseAim latch;
     std::optional<MagMouseAimIdentity> latch_identity;
@@ -683,15 +687,42 @@ struct MagGameControlsAdapter::State {
     // 7.3, end of the poll: the engine offers a press until it is observed, so a press that no
     // handler read in its poll would wait and act much later, wherever an action's control is next
     // read (D-pad Left on foot, which nothing watches there, replayed on the respawn bar; X on foot,
-    // bleeding out when the player goes down). Every press no recognition kept as a receipt is spent
-    // here, as a pad press nobody reads is gone; a press still held stays held. Gameplay receipts
-    // are completed at the end of the actor update (7.5).
+    // bleeding out when the player goes down). On foot every press no recognition kept as a receipt
+    // is spent here; a press still held stays held. Gameplay receipts are completed at the end of the
+    // actor update (7.5). A menu screen starts reading some buttons only after it appears (the respawn
+    // bar reads the D-pad about 1.5 s after the awaiting-spawn state begins), so a press made on a menu
+    // screen waits for its reader, for at most MenuPressWaitNs.
+    static constexpr uint64_t MenuPressWaitNs = 3'000'000'000;
     void spend_unread_presses() {
         if (!frame_valid()) return;
+        const bool menu = !gameplay_eligible;
+        const uint64_t now = now_ns();
+        std::map<ActionId, MenuUnread> waiting;
         for (const auto& action : mag_game_controls_actions()) {
             if (gameplay_receipts.count(action.id)) continue;
-            if (const auto offer = mag_controls_offer(*sample_key, action.id)) mag_controls_observe(*sample_key, action.id, *offer);
+            const auto offer = mag_controls_offer(*sample_key, action.id);
+            if (!offer) continue;
+            if (menu) {
+                const auto it = menu_unread.find(action.id);
+                const uint64_t since = it != menu_unread.end() && it->second.pulse_id == offer->pulse_id ? it->second.since_ns : now;
+                if (now - since < MenuPressWaitNs) {
+                    waiting.emplace(action.id, MenuUnread{offer->pulse_id, since});
+                    continue;
+                }
+            }
+            mag_controls_observe(*sample_key, action.id, *offer);
         }
+        menu_unread = std::move(waiting);
+    }
+    // 7.3, leaving a menu screen for gameplay: a press made there that no menu handler read is
+    // spent before the first on-foot handler update, so it never acts on foot. Only those presses:
+    // one made after the last menu poll is a press on foot.
+    void spend_menu_presses() {
+        if (!frame_valid()) return;
+        for (const auto& [action, unread] : menu_unread)
+            if (const auto offer = mag_controls_offer(*sample_key, action); offer && offer->pulse_id == unread.pulse_id)
+                mag_controls_observe(*sample_key, action, *offer);
+        menu_unread.clear();
     }
     void observe(std::map<ActionId, ControlOffer>& receipts) {
         if (frame_valid())
@@ -933,6 +964,8 @@ struct MagGameControlsAdapter::State {
         if (!gameplay_eligible) {
             reset_host_caches();
             gameplay_receipts.clear();
+        } else if (!menu_unread.empty()) {
+            spend_menu_presses();
         }
         // The same request as each handler update makes (route): attaching happens every poll, and
         // asking for the lock here while a menu holds look would take it back every poll for the

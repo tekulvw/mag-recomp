@@ -260,8 +260,8 @@ when the player is downed (2.2). The keyboard splits Cross into Space (Jump), X 
 in the downed state, the keys bound to Confirm therefore also press the player's own Bleed out
 (`mag_game_controls_downed_alias`). Only that one control of the player's handler reads them; no
 other handler sees Confirm, as above. Bleed out's own keys (Return) keep working and win when both
-are pressed. A press that nothing read is spent at the end of its poll (7.3, "Unread presses are
-spent"), so an X pressed while alive cannot bleed out later, when the player goes down.
+are pressed. A press that nothing read on foot is spent at the end of its poll (7.3, "Unread presses
+are spent on foot"), so an X pressed while alive cannot bleed out later, when the player goes down.
 
 **Seats: mounted weapons and vehicle seats.** A lab trace (macOS, hosted Domination, a defenders'
 bunker, 2026-11-26) shows how a seat reads input. The forward spawn seats the player in the
@@ -767,13 +767,14 @@ Returns false (the game recognizes the control itself) unless every step below a
     button pressed in a turret must not aim once the player is back on foot).
 13. Return true.
 
-**Unread presses are spent.** The engine offers a press until it is observed, so a press that no
-handler read would wait and act much later, wherever its action is next read. At the end of the
-outermost poll, with a valid frame, every catalog action's offer that is not a gameplay receipt is
-observed (`mag_controls_observe`). System receipts were observed just before. Gameplay receipts are
-completed at the end of the actor update (7.5). A press nobody read in its poll is therefore gone, as
-a pad press nobody reads is. A press still held stays held: an observed press is offered again,
-still down, until its release. Two cases this prevents:
+**Unread presses are spent on foot.** The engine offers a press until it is observed, so a press
+that no handler read would wait and act much later, wherever its action is next read. At the end of
+the outermost poll, with a valid frame and the on-foot context, every catalog action's offer that is
+not a gameplay receipt is observed (`mag_controls_observe`). System receipts were observed just
+before. Gameplay receipts are completed at the end of the actor update (7.5). A press nobody read in
+its poll on foot (alive or downed) is therefore gone, as a pad press nobody reads is. A press still
+held stays held: an observed press is offered again, still down, until its release. Two cases this
+prevents:
 
 - D-pad Left on foot. In a lab trace nothing read it there; the HUD's routed element read Up, Down
   and Right. Every Left press, from the arrow key or a controller's D-pad, stayed queued (up to 256). When the
@@ -784,6 +785,19 @@ still down, until its release. Two cases this prevents:
   Right tap reached the bar together with an old Left and an old Right press.
 - X on foot. Confirm is never taken over there (2.3), and an unread X would bleed out later, as the
   downed alias of step 4.
+
+**Menu presses wait for their reader.** A menu screen starts reading some buttons only after it
+appears. In a Windows lab trace the respawn bar first read the D-pad about 1.5 s after the
+awaiting-spawn state began; until then only an element reading Up and Down was routed. In the menu
+context, a press no handler read stays offered at the end of the poll, so the first handler that
+reads its action receives it: a Right tapped half a second into the respawn screen switches the
+bar's tab. Two bounds keep it from acting late:
+
+- It waits at most 3 s from the end of the first poll that left it unread. After that it is spent
+  as on foot.
+- When the context changes from the menu to on foot, every press still waiting from the menu (the
+  same press, by its pulse) is spent when the sample is attached, before any on-foot handler
+  update. A press made after the last menu poll is a press on foot and is kept.
 
 `ControlCallback`: when the current control is r29 and the frame is no longer valid, write the
 neutral tuple to it, forget its host cache, set r0 to zero and clear the current control.
