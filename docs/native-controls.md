@@ -89,6 +89,16 @@ pressing Confirm on foot), and the adapter took over the player's own controls o
 too (8.2), exactly as the pre-spawn state: on the respawn screens X is the pad's Cross and a
 controller's Cross reaches the game natively, as on the console.
 
+The **downed state** is id 7 with vtable `0x01A6D5B8`: the local player has it from a death until
+the respawn screens start (state 20); when the game starts `UI_SpawnHud` it hides its
+`hud_incapacitated` clip and the state changes to 20. The player's handler reads Bleed out on Cross's
+channel there (it watches Bleed out in every state). Lab traces show state 7 before state 20 after
+Kill Self; a user's trace shows it before state 20 around real deaths. It is not a menu:
+the adapter attaches on foot, and the keyboard pad stays muted. While the player is downed, X (the
+keys of Confirm) also bleeds out (2.3, 7.3 step 4), as the console's Cross does. Without that rule
+X did nothing there, and players pressed X again and again until the downed time ran out and the
+respawn bar appeared.
+
 **Input handler** (base layout shared by every handler): `+0` vtable; watched-control list head at
 `+4` (nodes described below); `+0x38` u32 priority; `+0x3C` u32 slot; `+0x40` u8 enabled; `+0x44`
 u32 fixed channel mask; `+0x48` u32 mapped channel mask. The base handler vtable is `0x01A57350`.
@@ -219,7 +229,7 @@ for the channel contract, 7.4) and recognized by their own token wherever the ga
 | --- | --- | --- | --- |
 | `0x33E32A99` | os_enter | Confirm (on-screen prompts) | X |
 | `0x75453127` | os_cancel | Back (on-screen prompts) | Backspace |
-| `0x40FEEC35` | bleedout | Bleed out (when downed) | Return |
+| `0x40FEEC35` | bleedout | Bleed out (when downed) | Return; also X while downed (below) |
 | `0xA79B7198` | tcm_abilities | Tactical menu: abilities | 1 |
 | `0x6B7B7C6C` | tcm_frago | Tactical menu: FRAGO | 2 |
 | `0xF69D4193` | tcm_voicechat | Tactical menu: voice chat | 3 |
@@ -243,6 +253,15 @@ pressed Confirm there from X on foot, the closed menu acted on it: Escape then o
 with the player card already open, and Kill Self did nothing until C closed the card. With the
 adapter off, the same X (the pad's Cross, a jump) leaves the card closed. Backspace, the default
 for Back, therefore does nothing on foot.
+
+**X bleeds out while downed.** On the console Cross does both: it confirms in menus and bleeds out
+when the player is downed (2.2). The keyboard splits Cross into Space (Jump), X (Confirm) and Return
+(Bleed out), so X, the key players press for Cross, did nothing while downed. While the player is
+in the downed state, the keys bound to Confirm therefore also press the player's own Bleed out
+(`mag_game_controls_downed_alias`). Only that one control of the player's handler reads them; no
+other handler sees Confirm, as above. Bleed out's own keys (Return) keep working and win when both
+are pressed. On foot a press of Confirm's or Back's keys that nothing took over is spent at the end
+of its poll (7.3), so an X pressed while alive cannot bleed out later, when the player goes down.
 
 **Vehicles** are not yet observed. The census saw no separate vehicle handler, and the local
 player's handler stays enabled in every movement state seen, so vehicles likely run on foot with
@@ -639,7 +658,11 @@ Returns false (the game recognizes the control itself) unless every step below a
      or, for a situational action, any system route (a vehicle's or a menu's own handler). While a
      menu holds look on foot (8.2), no gameplay or situational action is taken over on a handler
      other than the player's: return false.
-4. `mouse look` = gameplay, a look token, mouse eligible and the frame's look owner is the mouse.
+4. While the player is downed (2.2), on the owner's handler, an action with a downed alias (Bleed
+   out, whose alias is Confirm, 2.3) that has no offer of its own is recognized as its alias when
+   the alias has an offer, or when the recognition entry of `n` last used the alias (so a press
+   finishes on the action it began on). `mouse look` = gameplay, a look token, mouse eligible and
+   the frame's look owner is the mouse.
    Ask the engine for this action's offer (`mag_controls_offer`). `remapped` = the profile remaps
    the controller and the action allows controller remapping. `deny native` = (gameplay or system)
    in KBM mode, or remapped. Without an offer, an existing recognition entry, mouse look or deny
@@ -654,7 +677,7 @@ Returns false (the game recognizes the control itself) unless every step below a
    negative or overflowing is an error), the threshold and epsilon.
 8. Read the current tuple (unreadable: return false). The recognition entry for `n` is renewed with
    a fresh control id (at most 1024 entries) when missing or when its handler, token, binding,
-   tuning or last published tuple differ. On renewal:
+   tuning, action (step 4) or last published tuple differ. On renewal:
    - a system action whose current phase is 6 or 7 and whose value is above zero starts blocked
      (it must be released first);
    - with preserve and a current phase of 2 to 5, the hold already recognised by the game is
@@ -679,6 +702,11 @@ Returns false (the game recognizes the control itself) unless every step below a
     acceptance; the published tuple is the only effect. A situational action on another handler
     is recorded as a system cache (6.5), so it is given back when the adapter lets go.
 13. Return true.
+
+At the end of the outermost poll, with gameplay eligible and a valid frame, every offer of Confirm
+and Back that no recognition kept as a gameplay receipt is observed (`mag_controls_observe`): on
+foot nothing else takes them over, and an unobserved press would wait in the engine and act later,
+for example as the downed alias of step 4.
 
 `ControlCallback`: when the current control is r29 and the frame is no longer valid, write the
 neutral tuple to it, forget its host cache, set r0 to zero and clear the current control.

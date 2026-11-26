@@ -169,6 +169,7 @@ std::optional<MagGuestOwner> resolve_owner(MagGuestReads& r, uint32_t handler, b
     owner.state_id = *state_id;
     owner.pre_spawn = (*state_id == PreSpawnStateId && *state_vtable == PreSpawnStateVtable) ||
                       (*state_id == AwaitingSpawnStateId && *state_vtable == AwaitingSpawnStateVtable);
+    owner.downed = *state_id == DownedStateId && *state_vtable == DownedStateVtable;
     for (const auto& supported : MouseStates)
         if (supported.id == *state_id && supported.vtable == *state_vtable) {
             owner.mouse_supported = true;
