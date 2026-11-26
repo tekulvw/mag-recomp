@@ -101,8 +101,8 @@ class GameControlsAdapterTests(unittest.TestCase):
     def test_a_press_nothing_read_in_its_poll_never_acts_later(self):
         self.run_scenario('unread-presses')
 
-    def test_a_press_made_on_the_respawn_screen_waits_for_the_bar_to_read_it(self):
-        self.run_scenario('menu-press-waits')
+    def test_an_arrow_nothing_on_a_menu_read_never_acts_later(self):
+        self.run_scenario('menu-unread-presses')
 
     def test_census_reports_each_handler_description_once(self):
         self.run_scenario('census')
