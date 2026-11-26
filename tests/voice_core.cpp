@@ -123,6 +123,128 @@ static void many_ports() {
     CHECK(id <= 0xFFFFu);
 }
 
+
+// A stand-in decoder: a block decodes to a constant frame of its first payload byte times 100;
+// concealment yields -7.
+class FakeDecoder final : public FrameDecoder {
+public:
+    bool decode(const uint8_t* data, size_t bytes, int16_t* samples) override {
+        if (data && bytes == 1 && data[0] == 0xEE) return false;  // undecodable
+        const int16_t value = data ? int16_t(data[0] * 100) : int16_t(-7);
+        for (unsigned i = 0; i < FrameSamples; ++i) samples[i] = value;
+        return true;
+    }
+};
+
+static std::vector<uint8_t> one_block(uint8_t sequence, uint8_t value) {
+    std::vector<uint8_t> block(37);
+    write_block(sequence, &value, 1, 37, block.data());
+    return block;
+}
+
+static int16_t be16(const uint8_t* p) { return int16_t((p[0] << 8) | p[1]); }
+
+static void playout_to_pcm_port() {
+    Clock clock;
+    ServiceOptions options;
+    options.now_ms = [&clock] { return clock.ms; };
+    options.decoder = [] { return std::unique_ptr<FrameDecoder>(std::make_unique<FakeDecoder>()); };
+    options.voice_gain = 1.0f;
+    Service service(std::move(options));
+    service.init();
+    uint32_t in = 0, pcm = 0, stereo = 0;
+    service.create_port(voice_port(PortType::InVoice), in);
+    PortParams pcm_params;
+    pcm_params.type = uint32_t(PortType::OutPcm);
+    pcm_params.pcm_type = 2;  // 16-bit big-endian
+    pcm_params.pcm_channels = 1;
+    pcm_params.pcm_buffer = 3200;
+    service.create_port(pcm_params, pcm);
+    PortParams stereo_params = pcm_params;
+    stereo_params.pcm_type = 1;  // float little-endian
+    stereo_params.pcm_channels = 2;
+    service.create_port(stereo_params, stereo);
+    CHECK(service.connect(in, pcm) == status::Ok);
+    service.start();
+    PortInfo info;
+    CHECK(service.port_info(pcm, info) == status::Ok && info.frame_bytes == 640 * 2 && info.bytes == 0);
+    size_t accepted = 0, copied = 0;
+    std::vector<uint8_t> out(8192);
+    // One block (40 ms) is less than the 60 ms hold: nothing plays yet.
+    auto b0 = one_block(0, 1);
+    service.write(in, b0.data(), b0.size(), accepted);
+    clock.ms += 20;
+    CHECK(service.read(pcm, out.data(), out.size(), copied) == status::Ok && copied == 0);
+    // A second block reaches the hold; playout starts as it arrives and releases in real time.
+    auto b1 = one_block(1, 2);
+    service.write(in, b1.data(), b1.size(), accepted);
+    clock.ms += 1;
+    CHECK(service.read(pcm, out.data(), out.size(), copied) == status::Ok && copied == 32);
+    clock.ms += 20;  // 20 ms more due: 320 samples
+    CHECK(service.port_info(pcm, info) == status::Ok && info.bytes == 320 * 2);
+    CHECK(service.read(pcm, out.data(), out.size(), copied) == status::Ok && copied == 640);
+    CHECK(be16(out.data()) == 100 && be16(out.data() + 638) == 100);
+    // Whole samples only, up to the capacity.
+    clock.ms += 10;
+    CHECK(service.read(pcm, out.data(), 101, copied) == status::Ok && copied == 100);
+    // A gap of two blocks is concealed (two frames of -7) before block 4 plays.
+    auto b4 = one_block(4, 3);
+    service.write(in, b4.data(), b4.size(), accepted);
+    ReceiveStats got = service.receive_stats();
+    CHECK(got.frames_concealed == 2 && got.sequence_gaps == 1 && got.frames_decoded == 3);
+    // An undecodable payload is counted and skipped.
+    std::vector<uint8_t> bad(37);
+    uint8_t ee = 0xEE;
+    write_block(5, &ee, 1, 37, bad.data());
+    service.write(in, bad.data(), bad.size(), accepted);
+    CHECK(service.receive_stats().decode_errors == 1);
+    // Play everything out: 4 frames of audio plus the two concealed, minus what was read.
+    clock.ms += 1000;
+    size_t total = 0;
+    int concealed = 0;
+    while (service.read(pcm, out.data(), out.size(), copied) == status::Ok && copied) {
+        for (size_t i = 0; i < copied; i += 2) concealed += be16(out.data() + i) == -7;
+        total += copied / 2;
+    }
+    CHECK(total == 5 * 640 - 16 - 320 - 50);
+    CHECK(concealed == 2 * 640);
+    CHECK(service.receive_stats().underruns >= 1);
+    // Mute and volume: the input's volume and the output's mute apply.
+    service.reset_port(in);
+    service.set_volume(in, 0.5f);
+    auto c0 = one_block(9, 4), c1 = one_block(10, 4);
+    service.write(in, c0.data(), c0.size(), accepted);
+    service.write(in, c1.data(), c1.size(), accepted);
+    clock.ms += 10;
+    CHECK(service.read(pcm, out.data(), out.size(), copied) == status::Ok && copied == 320);
+    CHECK(be16(out.data()) == 200);
+    service.set_mute(pcm, true);
+    clock.ms += 10;
+    CHECK(service.read(pcm, out.data(), out.size(), copied) == status::Ok && copied == 320 && be16(out.data()) == 0);
+    service.set_mute(pcm, false);
+    // A float stereo output gets the same audio on both channels, little-endian.
+    service.disconnect(in, pcm);
+    service.connect(in, stereo);
+    clock.ms += 10;
+    CHECK(service.read(stereo, out.data(), out.size(), copied) == status::Ok && copied == 160 * 8);
+    float left, right;
+    std::memcpy(&left, out.data(), 4);
+    std::memcpy(&right, out.data() + 4, 4);
+    CHECK(left == right && left > 0.0060f && left < 0.0062f);  // 400 / 32768 * 0.5
+    // Reset forgets a talker's audio.
+    service.reset_port(in);
+    clock.ms += 100;
+    CHECK(service.read(stereo, out.data(), out.size(), copied) == status::Ok && copied == 0);
+    // Nobody reading: a talker's ready audio stays bounded.
+    for (uint8_t i = 0; i < 40; ++i) {
+        auto b = one_block(i, 1);
+        service.write(in, b.data(), b.size(), accepted);
+        clock.ms += 40;
+    }
+    clock.ms += 2000;
+    CHECK(service.port_info(stereo, info) == status::Ok && info.bytes <= 300 * 16 * 8);
+}
+
 static void lifecycle_and_topology() {
     Clock clock;
     Service service = make(clock);
@@ -314,6 +436,7 @@ int main() {
     encoded_output_follows_gate();
     encoded_input_counts_blocks();
     update_port_rules();
+    playout_to_pcm_port();
     trace_has_no_payload();
     if (failures) {
         std::printf("%d failures\n", failures);

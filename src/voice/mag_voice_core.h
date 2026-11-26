@@ -121,6 +121,15 @@ class PatternEncoder final : public FrameEncoder {
 public:
     size_t encode(uint64_t index, const int16_t* samples, uint8_t* out, size_t capacity) override;
 };
+class FrameDecoder {
+public:
+    virtual ~FrameDecoder() = default;
+    // Decodes one frame into FrameSamples samples; null `data` asks for loss concealment.
+    // Returns false (and leaves `samples` unspecified) when the payload is not decodable.
+    virtual bool decode(const uint8_t* data, size_t bytes, int16_t* samples) = 0;
+};
+using DecoderFactory = std::function<std::unique_ptr<FrameDecoder>()>;
+
 // True when `payload` is exactly what PatternEncoder writes for its own frame index.
 bool pattern_payload_valid(const std::vector<uint8_t>& payload);
 
@@ -145,7 +154,8 @@ private:
 // --- Service ------------------------------------------------------------------------------------
 struct ReceiveStats {
     uint64_t write_calls = 0, bytes_written = 0, blocks = 0, pattern_ok = 0, pattern_bad = 0, sequence_gaps = 0,
-             skipped_bytes = 0;
+             skipped_bytes = 0, frames_decoded = 0, frames_concealed = 0, decode_errors = 0, samples_played = 0,
+             samples_dropped = 0, underruns = 0;
 };
 struct SendStats {
     uint64_t frames = 0, blocks = 0, blocks_dropped = 0, read_calls = 0, bytes_read = 0;
@@ -155,7 +165,12 @@ struct ServiceOptions {
     std::function<uint64_t()> now_ms;  // monotonic milliseconds
     std::unique_ptr<FrameSource> source;
     std::unique_ptr<FrameEncoder> encoder;
+    DecoderFactory decoder;  // null: received blocks are counted, not played
     std::unique_ptr<Trace> trace;
+    float voice_gain = 1.0f;       // the player's voice volume
+    unsigned jitter_ms = 60;       // decoded audio held before a talker starts playing
+    unsigned playout_cap_ms = 300; // decoded audio kept per talker before the oldest is dropped
+    unsigned max_concealed = 3;    // lost frames concealed per gap; longer gaps restart the talker
     unsigned queue_ms = 480;       // encoded output kept before the oldest blocks are dropped
     unsigned max_catch_up = 12;    // frames produced at most per pump after a stall
     size_t input_capacity = 4096;  // bytes an encoded input port holds unparsed
@@ -180,7 +195,8 @@ public:
     uint32_t set_volume(uint32_t id, float volume);
     uint32_t volume(uint32_t id, float& volume);
     uint32_t port_info(uint32_t id, PortInfo& info);
-    // Copies whole blocks, at most `capacity` bytes; `copied` receives the count.
+    // Encoded output: copies whole blocks. PCM output: copies whole samples of the talker audio that
+    // is due by now, in the port's format. At most `capacity` bytes; `copied` receives the count.
     uint32_t read(uint32_t id, uint8_t* out, size_t capacity, size_t& copied);
     // Accepts up to the port's free space; `accepted` receives the count.
     uint32_t write(uint32_t id, const uint8_t* data, size_t bytes, size_t& accepted);
@@ -202,9 +218,18 @@ private:
         std::unique_ptr<BlockParser> parser;
         bool have_sequence = false;
         uint8_t last_sequence = 0;
+        uint8_t next_sequence = 0;  // encoded output: one per block sent, so a gap means a lost block
+        // Encoded input: decoded audio waiting for its playout time, and audio already due.
+        std::unique_ptr<FrameDecoder> decoder;
+        std::vector<int16_t> pending, ready;
+        bool playing = false;
+        uint64_t play_start = 0, released = 0, last_write = 0;
     };
+    void decode_block(Port& port, const Block& block);
+    void advance_playout(uint64_t t);
+    size_t pcm_ready(const Port& output);
     Port* find(uint32_t id);
-    void pump();          // produce the frames due since the last call
+    void pump();          // produce the frames due since the last call and advance playout
     void summary(uint64_t now, bool force = false);
     uint64_t now() const { return options_.now_ms ? options_.now_ms() : 0; }
     uint64_t trace_ms() const { return now() - epoch_; }

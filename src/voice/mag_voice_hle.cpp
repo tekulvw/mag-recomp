@@ -7,8 +7,12 @@
  *
  * MAG_VOICE_TEST_TONE=pattern  lab mode: no microphone; one second on, one second off, each frame a
  *                              block of counting bytes (docs/voice-chat.md)
+ * MAG_VOICE_TEST_TONE=tone     lab mode: the same cadence carrying an Opus-coded 440 Hz tone; received
+ *                              talkers are decoded and played through the game's PCM ports
+ * MAG_VOICE_VOLUME=<0..200>    voice playback volume in percent (default 100)
  * MAG_VOICE_TRACE=<path>       JSON lines of the calls: sizes, counts and times, never audio */
 #include "mag_voice_core.h"
+#include "mag_voice_opus.h"
 #include "mag_extension.h"
 #include "ppu/ppu_context.h"
 #include "ps3emu/nid.h"
@@ -247,16 +251,28 @@ void voice_prepare(const char*) {
     const char* tone = std::getenv("MAG_VOICE_TEST_TONE");
     const char* mode = std::getenv("MAG_VOICE_MODE");
     const bool pattern = tone && std::strcmp(tone, "pattern") == 0;
-    if (!pattern) {
+    const bool coded = tone && std::strcmp(tone, "tone") == 0;
+    if (!pattern && !coded) {
         if ((tone && *tone && std::strcmp(tone, "0") != 0) || (mode && *mode && std::strcmp(mode, "off") != 0))
-            std::fprintf(stderr, "[voice] this build has only the lab pattern mode (MAG_VOICE_TEST_TONE=pattern); "
+            std::fprintf(stderr, "[voice] this build has only the lab modes (MAG_VOICE_TEST_TONE=pattern or tone); "
                                  "voice stays off\n");
         return;
     }
     ServiceOptions options;
     options.now_ms = monotonic_ms;
     options.source = std::make_unique<TestToneSource>();
-    options.encoder = std::make_unique<PatternEncoder>();
+    if (coded) {
+        options.encoder = make_opus_encoder();
+        options.decoder = opus_decoder_factory();
+    } else {
+        options.encoder = std::make_unique<PatternEncoder>();
+    }
+    if (const char* volume = std::getenv("MAG_VOICE_VOLUME")) {
+        char* end = nullptr;
+        const long percent = std::strtol(volume, &end, 10);
+        if (end != volume && *end == 0 && percent >= 0 && percent <= 200) options.voice_gain = float(percent) / 100.0f;
+        else std::fprintf(stderr, "[voice] MAG_VOICE_VOLUME=%s is not 0..200; using 100\n", volume);
+    }
     options.trace = Trace::open(std::getenv("MAG_VOICE_TRACE"));
     g_service = std::make_unique<Service>(std::move(options));
     struct Entry { const char* name; void (*fn)(ppu_context*); };
@@ -271,7 +287,7 @@ void voice_prepare(const char*) {
         {"cellVoiceGetPortInfo", voice_get_port_info}, {"cellVoiceReadFromOPort", voice_read},
         {"cellVoiceWriteToIPort", voice_write}, {"cellVoiceGetSignalState", voice_signal_state}};
     for (const auto& entry : entries) ps3_hle_register_ctx(ps3_compute_nid(entry.name), entry.name, entry.fn);
-    std::fprintf(stderr, "[voice] lab pattern mode: %zu voice-library handlers registered\n",
+    std::fprintf(stderr, "[voice] lab %s mode: %zu voice-library handlers registered\n", coded ? "tone" : "pattern",
                  sizeof entries / sizeof entries[0]);
 }
 
