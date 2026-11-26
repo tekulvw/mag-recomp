@@ -38,6 +38,7 @@ constexpr MagGameControlsAction catalog[] = {
     {SeatNext, "Change seats", false, -1, true, 2, Vehicles},
     {Smoke, "Smoke screen", false, -1, true, 2, Vehicles}};
 constexpr ActionId retired[] = {CommandScreen};
+// turnleft, turnright, aimup, aimdown.
 constexpr uint32_t look_tokens[] = {0xc8a3e21d, 0x941734a2, 0x661cb595, 0xc34f3a66};
 // Contexts a binding may use: on foot for gameplay actions; on foot and menu for system buttons.
 constexpr uint32_t OnFoot = uint32_t(InputContext::OnFoot);
@@ -72,6 +73,7 @@ ActionId mag_game_controls_token_action(uint32_t token) {
 }
 
 mag::ActionId mag_game_controls_downed_alias(ActionId action) { return action == Bleedout ? Confirm : 0; }
+mag::ActionId mag_game_controls_seat_alias(ActionId action) { return action == CycleWeapons ? Aim : 0; }
 
 uint32_t mag_game_controls_name_token(std::string_view name) {
     uint32_t crc = 0xFFFFFFFFu;

@@ -1463,6 +1463,200 @@ void withdrawn_frame() {
     require(capture_on, "desktop capture was dropped");
 }
 
+// A mounted weapon (a bunker turret) has its own handler, registered with the input manager like the
+// player's: it watches the right stick's four look channels and the fire buttons with its own tokens,
+// and the game updates it before the player's handler, so it consumes the look channels first. The
+// soldier's look consumers do not run in the seat's movement state. Players found that in a bunker
+// turret the mouse did not aim and the left button did not fire on keyboard and mouse: the adapter
+// left the turret's controls native and read the turret's hold on look as a menu's.
+constexpr uint32_t SeatState = 0x01A6C938;  // a vehicle seat's movement state: no soldier aim seams
+struct Seat {
+    uint32_t handler, fire, rockets, left, right, up, down;
+};
+// A registered seat handler with tokens of its own: fire on Fire's button (8), rockets on Cycle weapons'
+// (17, R2 in this world) and the four look directions on the look channels.
+Seat add_seat(Memory& m) {
+    const uint32_t handler = 0x100D0000, vtable = 0x01A70000;
+    handler_base(m, handler, vtable, true);
+    m.put32(vtable + 8, BaseDescriptor);
+    Seat seat{handler, watch(m, handler, 1, 0x0B00F001, 8), watch(m, handler, 2, 0x0B00F002, 17),
+              watch(m, handler, 3, 0x0B00F003, 20), watch(m, handler, 4, 0x0B00F004, 21),
+              watch(m, handler, 5, 0x0B00F005, 22), watch(m, handler, 6, 0x0B00F006, 23)};
+    m.map(Registered + 0x20, 0x10);
+    m.put32(Registered + 0x28, handler);
+    m.link(InputManager + 0x2C, {Registered, Registered + 0x10, Registered + 0x20});
+    return seat;
+}
+void seat_state(Memory& m) {
+    m.put32(State, SeatState);
+    m.put8(State + 0x10, 14);
+}
+constexpr uint32_t Look = 0xFu << 20;  // the look channels, 20..23, as the pad record's consumed mask
+
+void mounted_weapon() {
+    Harness h;
+    const Seat seat = add_seat(h.m);
+    seat_state(h.m);
+    require(h.idle_tick() == Attached, "a seat did not attach on foot");
+    mag_controls_set_window_capture(true, true);
+    const auto value = [&](uint32_t record) { return mag_guest_tuple_value(h.tuple_at(record)); };
+    struct Read {
+        bool fire_taken, aim_taken;
+        float fire, rockets, left, right, up, down, owner_fire;
+    };
+    // One poll as the game runs it: the seat's handler first (it consumes the look channels), then
+    // the player's.
+    const auto poll = [&]() {
+        Read out{};
+        h.m.put32(Pad + 0x80, 0);
+        h.begin_tick();
+        h.enter_handler(seat.handler);
+        out.fire_taken = h.recognize_record(seat.fire, seat.handler);
+        h.recognize_record(seat.rockets, seat.handler);
+        for (uint32_t record : {seat.left, seat.right, seat.up, seat.down}) h.recognize_record(record, seat.handler);
+        h.m.put32(Pad + 0x80, Look);
+        h.fire(Hook::HandlerExit);
+        h.enter_handler();
+        h.recognize(Fire);
+        out.aim_taken = h.recognize(AimAlias);
+        out.fire = value(seat.fire), out.rockets = value(seat.rockets), out.left = value(seat.left);
+        out.right = value(seat.right), out.up = value(seat.up), out.down = value(seat.down);
+        out.owner_fire = mag_guest_tuple_value(h.tuple(Fire));
+        h.end_poll();
+        h.enter_actor();
+        h.end_tick();
+        return out;
+    };
+
+    // The left mouse button fires the seat's own weapon (and the player's Fire, as R1 would).
+    mag_controls_push_event({{InputSource::Mouse, 0}, true, time_ns()});
+    auto read = poll();
+    require(read.fire_taken && read.fire == 1.0f, "the left mouse button did not fire the turret");
+    require(read.owner_fire == 1.0f, "the player's Fire stopped following the left mouse button");
+    mag_controls_push_event({{InputSource::Mouse, 0}, false, time_ns()});
+    read = poll();
+    require(read.fire == 0.0f, "the turret kept firing after the release");
+    // Its hold on the look channels is the seat's, not a menu's: the mouse stays locked.
+    for (int i = 0; i < 4; ++i) read = poll();
+    require(capture_on && mouse_on, "the seat's look channels released the mouse lock");
+    require(h.status() == std::string(Attached), "the seat was reported as a menu holding look");
+
+    // The mouse drives the right stick: fast to the right pushes it fully, slowly up part way.
+    mag_controls_push_relative_mouse(1000, 0);
+    read = poll();
+    require(read.right == 1.0f && read.left == 0.0f && read.up == 0.0f && read.down == 0.0f,
+            "fast mouse motion to the right did not push the turret's stick right");
+    mag_controls_push_relative_mouse(0, -5);  // counts are down-positive
+    read = poll();
+    require(read.up > 0.0f && read.up < 1.0f && read.down == 0.0f && read.right == 0.0f,
+            "slow upward motion did not push the turret's stick part way up");
+    read = poll();
+    require(read.up == 0.0f && read.right == 0.0f, "a mouse at rest did not centre the stick");
+    mag_controls_push_relative_mouse(-1000, 0);
+    read = poll();
+    require(read.left == 1.0f && read.right == 0.0f, "leftward motion did not push the stick left");
+
+    // The right mouse button fires the secondary weapon (R2) and is no Aim press in the seat; the
+    // key bound to R2's action fires it too.
+    mag_controls_push_event({{InputSource::Mouse, 1}, true, time_ns()});
+    read = poll();
+    require(read.rockets == 1.0f, "the right mouse button did not fire the turret's secondary weapon");
+    require(!read.aim_taken, "the right mouse button pressed the player's Aim in a seat");
+    mag_controls_push_event({{InputSource::Mouse, 1}, false, time_ns()});
+    read = poll();
+    require(read.rockets == 0.0f, "the secondary weapon kept firing after the release");
+    mag_controls_push_event({{InputSource::Keyboard, 20}, true, time_ns()});  // Q: Cycle weapons
+    read = poll();
+    require(read.rockets == 1.0f, "Cycle weapons' key did not fire the secondary weapon");
+    mag_controls_push_event({{InputSource::Keyboard, 20}, false, time_ns()});
+    poll();
+
+    // A cancel gives the held stick and buttons back.
+    mag_controls_push_relative_mouse(1000, 0);
+    h.m.put32(Pad + 0x80, 0);
+    h.begin_tick();
+    h.enter_handler(seat.handler);
+    h.recognize_record(seat.right, seat.handler);
+    require(value(seat.right) == 1.0f, "stick not pushed before the cancel");
+    h.cpu.gpr[3] = Handler;
+    h.fire(Hook::HandlerRefresh);
+    h.fire(Hook::HandlerRefreshed);
+    require(h.tuple_at(seat.right) == mag_guest_neutral_tuple(), "a cancel kept the turret's stick pushed");
+    h.fire(Hook::HandlerExit);
+    h.fire(Hook::PollExit);
+    h.end_tick();
+
+    // A menu that takes the look channels before the seat still holds look: the seat consumed
+    // nothing of its own, so the lock follows the menu.
+    for (int i = 0; i < 4; ++i) {
+        h.m.put32(Pad + 0x80, Look);
+        h.begin_tick();
+        h.enter_handler(seat.handler);
+        h.fire(Hook::HandlerExit);
+        h.enter_handler();
+        h.end_poll();
+        h.enter_actor();
+        h.end_tick();
+    }
+    require(capture_on && !mouse_on, "a menu holding look before the seat did not release the mouse");
+    // A paused game is a menu: nothing is taken over.
+    h.m.put32(Pad + 0x80, 0);
+    h.m.put32(Pause + 0x9C0, 1);
+    require(h.idle_tick() == "native menu buttons attached", "paused game attached on foot");
+    mag_controls_push_event({{InputSource::Mouse, 0}, true, time_ns()});
+    h.begin_tick();
+    h.enter_handler(seat.handler);
+    require(!h.recognize_record(seat.fire, seat.handler), "a menu let the left mouse button fire the turret");
+    h.fire(Hook::HandlerExit);
+    h.fire(Hook::PollExit);
+    h.end_tick();
+    mag_controls_push_event({{InputSource::Mouse, 0}, false, time_ns()});
+}
+
+// On foot (a soldier aim state) the mouse aims the soldier and the right button aims: no stick, and
+// a registered handler reading the fire buttons gets the left button as R1 would press it.
+void registered_handler_on_foot() {
+    Harness h;
+    const Seat seat = add_seat(h.m);
+    require(h.idle_tick() == Attached, "a registered handler blocked attachment");
+    mag_controls_set_window_capture(true, true);
+    mag_controls_push_event({{InputSource::Mouse, 0}, true, time_ns()});
+    mag_controls_push_event({{InputSource::Mouse, 1}, true, time_ns()});
+    mag_controls_push_relative_mouse(1000, 0);
+    h.begin_tick();
+    h.enter_handler(seat.handler);
+    require(h.recognize_record(seat.fire, seat.handler) && mag_guest_tuple_value(h.tuple_at(seat.fire)) == 1.0f,
+            "the left mouse button did not press a registered handler's R1");
+    require(!h.recognize_record(seat.right, seat.handler), "the mouse pushed the stick in a soldier aim state");
+    h.fire(Hook::HandlerExit);
+    h.enter_handler();
+    require(h.recognize(AimAlias) && mag_guest_tuple_value(h.tuple(AimAlias)) == 1.0f, "the right button stopped aiming on foot");
+    h.end_poll();
+    h.enter_actor();
+    h.end_tick();
+    mag_controls_push_event({{InputSource::Mouse, 0}, false, time_ns()});
+    mag_controls_push_event({{InputSource::Mouse, 1}, false, time_ns()});
+}
+
+// Controller mode leaves a seat to the controller: the mouse pushes no stick.
+void mounted_weapon_controller_mode() {
+    ControlsProfile profile = mag_game_controls_default_profile();
+    profile.mode = InputMode::Controller;
+    Harness h(profile);
+    const Seat seat = add_seat(h.m);
+    seat_state(h.m);
+    require(h.idle_tick() == Attached, "a seat did not attach on foot");
+    mag_controls_set_window_capture(true, true);
+    mag_controls_push_relative_mouse(1000, 0);
+    h.begin_tick();
+    h.enter_handler(seat.handler);
+    require(!h.recognize_record(seat.right, seat.handler), "Controller mode let the mouse push the stick");
+    h.fire(Hook::HandlerExit);
+    h.end_poll();
+    h.enter_actor();
+    h.end_tick();
+}
+
 int main(int argc, char** argv) {
     const std::map<std::string, void (*)()> scenarios = {
         {"owner", owner_resolution}, {"lists", malformed_lists}, {"routes", routes}, {"tick", full_tick},
@@ -1471,7 +1665,8 @@ int main(int argc, char** argv) {
         {"threads", threads_and_errors}, {"snapshot", update_snapshot}, {"menu", menu_holds_look},
         {"withdrawn", withdrawn_frame},
         {"menu-pad", menu_keyboard_pad}, {"menu-look-pad", menu_holding_look_gets_the_pad}, {"situational", situational_actions}, {"closed-menu-confirm", closed_menu_never_sees_confirm}, {"downed-x", downed_x_bleeds_out}, {"census", census},
-        {"prompt-queries", prompt_queries}};
+        {"prompt-queries", prompt_queries}, {"mounted", mounted_weapon},
+        {"registered-on-foot", registered_handler_on_foot}, {"mounted-controller-mode", mounted_weapon_controller_mode}};
     try {
         if (argc != 2 || !scenarios.count(argv[1])) throw std::runtime_error("usage: game_controls_adapter <scenario>");
         scenarios.at(argv[1])();

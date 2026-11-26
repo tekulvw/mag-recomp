@@ -386,7 +386,7 @@ std::optional<std::vector<uint32_t>> MagGameControlsGuest::gameplay_routes() con
     return routes;
 }
 
-std::optional<std::vector<uint32_t>> MagGameControlsGuest::system_routes() const {
+std::optional<std::vector<uint32_t>> MagGameControlsGuest::system_routes(std::vector<uint32_t>* registered) const {
     auto r = reads();
     const auto nodes = list_nodes(r, InputManager + 0x2C);
     if (!nodes) return {};
@@ -406,6 +406,8 @@ std::optional<std::vector<uint32_t>> MagGameControlsGuest::system_routes() const
     if (ui_registrations != 1 || !equals(r.u32(UiHandler), UiHandlerVtable) ||
         !descriptor_is(r, uint64_t(UiHandlerVtable) + 8, UiUpdateEntry, SharedToc, UiUpdateDescriptor))
         return {};
+    // The routes listed so far are the enabled handlers registered with the input manager.
+    if (registered) registered->assign(listed.begin(), listed.end());
     if (!visit_active_elements(r, 0xFFFFFFAB, [&](uint32_t element) { return base_route(r, element + 4, listed); }))
         return {};
     return listed;

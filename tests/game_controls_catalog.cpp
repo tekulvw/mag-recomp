@@ -91,6 +91,9 @@ static void prompts() {
                 mag_game_controls_pad_layout_key(MagPadButton::Start) == 40 &&
                 mag_game_controls_pad_layout_key(MagPadButton::R3) == 10,
             "pad layout keys");
+    require(mag_game_controls_seat_alias(0x2c4380c4) == 0xc07aa75a, "a seat's R2 does not read Aim's keys");
+    require(mag_game_controls_seat_alias(0x58de09cf) == 0 && mag_game_controls_seat_alias(0xc07aa75a) == 0,
+            "a seat alias for an action other than Cycle weapons");
 }
 // A revision 2 profile: today's defaults with revision 2's keys (Confirm Return, Bleed out X,
 // Command screen M).
