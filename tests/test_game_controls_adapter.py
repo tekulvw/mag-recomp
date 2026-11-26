@@ -110,6 +110,9 @@ class GameControlsAdapterTests(unittest.TestCase):
     def test_a_registered_handler_reads_the_mouse_buttons_on_foot(self):
         self.run_scenario('registered-on-foot')
 
+    def test_w_and_s_drive_a_vehicle_from_the_drivers_seat(self):
+        self.run_scenario('vehicle-driver')
+
     def test_controller_mode_leaves_a_mounted_weapon_to_the_controller(self):
         self.run_scenario('mounted-controller-mode')
 

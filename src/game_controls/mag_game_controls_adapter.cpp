@@ -40,6 +40,9 @@ constexpr double FullStickRate = 3.0, MinStickInterval = 1.0 / 240, MaxStickInte
 
 // Cycle weapons: the action on R2, a turret's secondary weapon (2.3).
 constexpr ActionId SeatSecondary = 0x2C4380C4;
+// The actions whose buttons a vehicle driver's handler watches (2.3): both triggers (Cycle weapons and
+// Cycle equipment) and the left stick's horizontal (Strafe left and right).
+constexpr ActionId DriveActions[] = {0x2C4380C4, 0xCB535315, 0x44533986, 0xF3468EB5};
 
 // Caller return addresses of the two angle-rate helpers (section 3).
 constexpr uint64_t BasicYawCaller = 0x0061E7B4, SprintYawCaller = 0x00675CF0, SprintPitchCaller = 0x00676D78;
@@ -273,7 +276,7 @@ struct MagGameControlsAdapter::State {
     // handlers of this poll (watching every look channel: a mounted weapon's, a vehicle seat's), the
     // channels seat handlers consumed in this poll, and the open seat handler update.
     std::vector<uint32_t> registered_routes;
-    std::set<uint32_t> seat_handlers;
+    std::set<uint32_t> seat_handlers, drive_handlers;
     uint64_t seat_poll{};
     uint32_t seat_consumed{};
     struct SeatScope {
@@ -703,6 +706,7 @@ struct MagGameControlsAdapter::State {
             const char* role = owner_handler(handler) ? "owner"
                 : gameplay_routes && contains(*gameplay_routes, handler) ? "gameplay-route"
                 : seat_handlers.count(handler) ? "seat"
+                : drive_handlers.count(handler) ? "drive"
                 : contains(registered_routes, handler) ? "registered"
                 : contains(system_routes, handler) ? "system-route" : "other";
             char head[160];
@@ -760,14 +764,25 @@ struct MagGameControlsAdapter::State {
         if (seat_poll == poll_number) return;
         seat_poll = poll_number;
         seat_handlers.clear();
+        drive_handlers.clear();
         // Seats are looked for only outside the soldier's aim states (2.2): on foot the soldier aims.
         if (!contract || !contract->look_mask || !owner || owner->mouse_supported) return;
+        // The channels of the driving buttons, as the player's handler takes them (7.4).
+        uint32_t drive_mask = 0;
+        unsigned drive_found = 0;
+        for (const auto& [channel, action] : channel_actions)
+            if (std::find(std::begin(DriveActions), std::end(DriveActions), action) != std::end(DriveActions)) {
+                drive_mask |= 1u << channel;
+                ++drive_found;
+            }
         for (uint32_t handler : registered_routes) {
             const auto controls = guest.watched_controls(handler);
             if (!controls) continue;
             uint32_t channels = 0;
             for (const auto& control : *controls) channels |= 1u << control.channel;
             if ((channels & contract->look_mask) == contract->look_mask) seat_handlers.insert(handler);
+            if (drive_found == std::size(DriveActions) && (channels & drive_mask) == drive_mask)
+                drive_handlers.insert(handler);
         }
     }
     bool seated() const { return !seat_handlers.empty(); }
@@ -1064,8 +1079,10 @@ struct MagGameControlsAdapter::State {
         // Step 4. While the player is downed, the player's own Bleed out also reads Confirm's keys
         // (2.3). One action per press: its own keys first, then the alias's, otherwise the action the
         // record last used, so a press finishes on the action it began on.
-        // In a seat, a seat handler's control on R2 also reads Aim's keys (the right mouse button).
+        // A driver's handler reads Move forward's and Move backward's keys (W, S) on its triggers; a
+        // seat handler's control on R2 also reads Aim's keys (the right mouse button).
         const ActionId alias = gameplay && owner->downed                           ? mag_game_controls_downed_alias(action)
+                             : registered && drive_handlers.count(handler) && !system ? mag_game_controls_drive_alias(action)
                              : registered && seat_handlers.count(handler) && !system ? mag_game_controls_seat_alias(action)
                                                                                     : 0;
         if (alias)
