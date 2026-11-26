@@ -101,6 +101,9 @@ static void text() {
     CHECK(r.find("[mag-stall] audio periods 5,") != std::string::npos);
     CHECK(r.find("[mag-stall] guest link registers follow") != std::string::npos);
     const std::string idle = format_report(a, {}, 9.9, "");
+    CHECK(idle.find("[mag-stall] network") == std::string::npos);
+    const std::string net = format_report(a, {}, 9.9, "", "tcp 192.0.2.10:10473 last received 10.2 s ago (was streaming)");
+    CHECK(net.find("[mag-stall] network tcp 192.0.2.10:10473 last received 10.2 s ago (was streaming)\n") != std::string::npos);
     CHECK(idle.find("no guest thread is inside a firmware call or syscall") != std::string::npos);
     CHECK(idle.find("[mag-stall] audio") == std::string::npos);
     Action back;

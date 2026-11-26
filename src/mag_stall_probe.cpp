@@ -73,6 +73,7 @@ extern "C" void mag_stall_reporter_start(void) {
     probe.threads = threads;
     probe.cpu_seconds = cpu_seconds;
     probe.audio = audio;
+    probe.network = mag::session::network_status;
     probe.guest_link_registers = ppu_report_guest_lrs;
     mag::stall::start(probe, mag_session_now_ns, mag_session_last_frame_ns, [] { return mag_session_in_match() != 0; });
 }

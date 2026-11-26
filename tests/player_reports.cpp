@@ -170,6 +170,71 @@ static void decisions(const fs::path &root) {
     }
 }
 
+// A summary with a phase and a timeline (src/mag_session_monitor.h).
+static std::string with_timeline(const std::string &summary_text, const std::string &phase, const std::string &events) {
+    const size_t end = summary_text.rfind('}');
+    return summary_text.substr(0, end) + ", \"phase\": \"" + phase + "\", \"timeline\": [" + events + "]}\n";
+}
+static std::string gap(double ms, const char *verdict, const char *phase = "match", bool open = false) {
+    return std::string("{\"at_s\": 300.0, \"kind\": \"network\", \"ms\": ") + std::to_string(ms) + ", \"phase\": \"" + phase +
+           "\", \"endpoint\": \"tcp 192.0.2.10:10473\"" + (open ? ", \"open\": true" : "") + ", \"verdict\": \"" + verdict + "\"}";
+}
+
+static void network_reports(const fs::path &root) {
+    const std::string calm = summary("engine", 36000, 600, 10, 0);
+    const std::string dip = "{\"at_s\": 100.0, \"kind\": \"frames\", \"ms\": 900, \"phase\": \"match\", \"frames\": 1, \"worst_ms\": 900, \"verdict\": \"frames\"}";
+    struct Case { std::string phase, events; Trigger want; };
+    const std::vector<Case> cases = {
+        {"match", gap(3000, "network"), Trigger::Network},
+        {"menu", dip + ", " + gap(2000, "network"), Trigger::Network},     // a closed gap: the phase it began in counts
+        {"match", gap(1999, "network"), Trigger::None},                     // shorter than 2 s
+        {"match", gap(5000, "both"), Trigger::None},                        // a client stall, not the network
+        {"match", gap(5000, "network", "menu"), Trigger::None},             // not in a match
+        {"match", dip, Trigger::None},
+        {"match", gap(4000, "network", "match", true), Trigger::Network},   // still silent at the end of a match
+        {"menu", gap(4000, "network", "match", true), Trigger::None},       // open, but the match was over
+    };
+    for (const Case &c : cases) {
+        Json j;
+        std::vector<std::string> reasons;
+        CHECK(parse_json(with_timeline(calm, c.phase, c.events), j));
+        const Trigger got = judge_summary(j, reasons);
+        if (got != c.want) std::fprintf(stderr, "network case %s / %s: got %s\n", c.phase.c_str(), c.events.c_str(), trigger_name(got));
+        CHECK(got == c.want);
+        CHECK((got == Trigger::Network) == (!reasons.empty() && reasons[0].find("went silent") != std::string::npos));
+    }
+    CHECK(std::string(trigger_name(Trigger::Network)) == "network");
+
+    // Slow frames come before network gaps, which come before audio; the reasons name them all.
+    Session s = launch(root / "network");
+    s.launcher_exit = 90; s.engine_exit = 0;
+    write(s.logs / "session-engine.json", with_timeline(summary("engine", 36000, 600, 3000, 2), "menu", gap(3000, "network")));
+    Decision d = decide(s);
+    CHECK(d.trigger == Trigger::SlowFrames && d.reasons.size() == 2);
+    const std::string bad_audio = "{\"available\": true, \"underruns\": 41, \"device_errors\": 0, \"clock_seconds\": 600, \"drift_ms\": 1.0}";
+    write(s.logs / "session-engine.json", with_timeline(summary("engine", 36000, 600, 10, 0, bad_audio), "menu", gap(3000, "network")));
+    d = decide(s);
+    CHECK(d.trigger == Trigger::Network && d.reasons.size() == 2);
+
+    // A network report is queued under its own daily limit, beside the performance one.
+    write(s.logs / "session-engine.json", with_timeline(calm, "menu", gap(3000, "network")));
+    for (int i = 0; i < daily_network_reports; ++i) {
+        const Finished f = finish_session(s);
+        CHECK(f.trigger == Trigger::Network && !f.report_id.empty());
+        if (i == 0) {
+            Json report;
+            CHECK(parse_json(read(s.queue / (f.report_id + ".json")), report, 8u << 20));
+            CHECK(report.get("trigger") && report.get("trigger")->text == "network");
+            const Json *timeline = report.get("metrics") ? report.get("metrics")->get("engine") : nullptr;
+            CHECK(timeline && timeline->get("timeline") && timeline->get("timeline")->items.size() == 1);
+        }
+    }
+    Finished f = finish_session(s);
+    CHECK(f.trigger == Trigger::None && f.line.find("daily limit for network") != std::string::npos);
+    write(s.logs / "session-engine.json", summary("engine", 36000, 600, 3000, 2));
+    CHECK(finish_session(s).trigger == Trigger::SlowFrames);  // the performance limit is separate
+}
+
 static void finishing(const fs::path &root) {
     // Reports on (no field): a slow session is queued; the body follows the portal's contract.
     Session s = launch(root / "on");
@@ -422,6 +487,7 @@ int main(int argc, char **argv) {
         redaction();
         decisions(root);
         finishing(root);
+        network_reports(root);
         sending(root);
         comments(root);
         CHECK(gpu_from_log("a\n[RSX vulkan] using device 1: Some GPU (x)\r\nb") == "Some GPU (x)");

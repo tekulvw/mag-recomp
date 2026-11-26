@@ -11,7 +11,12 @@
  *
  * The packaged supervisor reads the summary after the session (for a performance and error
  * report). The schema is versioned by "schema_version". A crash leaves the latest periodic
- * summary, with "state": "running". */
+ * summary, with "state": "running".
+ *
+ * Network health (src/mag_session_network.h): while it writes a summary, the monitor also listens
+ * to the runtime's socket observer (ps3emu/net_host_observer.h, when the pinned runtime has it;
+ * MAG_SESSION_NETWORK=0 leaves it off). Frame-rate dips and network gaps go into one timeline on
+ * one clock, each with a verdict (docs/player-settings.md, "Frame-rate dips and network gaps"). */
 #include <stddef.h>
 #include <stdint.h>
 
@@ -64,6 +69,8 @@ int mag_session_in_match(void);
 #include <string>
 #include <vector>
 
+#include "mag_session_network.h"
+
 namespace mag::session {
 
 /* Thresholds, in microseconds. A frame "over 33 ms" missed 30 fps. */
@@ -73,6 +80,23 @@ constexpr const char *slow_names[4] = {"over_33ms", "over_50ms", "over_100ms", "
 constexpr uint64_t hitch_threshold_us = 50000;
 constexpr size_t worst_hitches = 16;
 constexpr size_t recent_minutes = 120;  /* the per-minute series keeps the latest two hours */
+/* A frame of at least this long is a slow frame of a frame-rate dip; slow frames that start within
+ * frame_dip_join_us of the previous one's end join its dip. */
+constexpr uint64_t frame_dip_us = 100000;
+constexpr uint64_t frame_dip_join_us = 500000;
+constexpr size_t frame_dips_kept = 64;
+constexpr size_t timeline_events = 64;  /* the timeline keeps the latest */
+/* An event is "both" when events of the other kind cover at least this share of it. */
+constexpr double both_cover_share = 0.5;
+/* A minute's frames are slow when its longest frame took this long, or when this share of its
+ * frames took frame_dip_us or more; its network had a gap when its longest streaming silence took
+ * minute_gap_ms. */
+constexpr double minute_slow_frame_ms = 250;
+constexpr double minute_slow_share = 0.05;
+constexpr double minute_gap_ms = 1000;
+/* A frame-rate dip in a match whose worst frame reached this long is a stall: the stall reporter
+ * (src/mag_stall_reporter.h, first threshold by default) wrote [mag-stall] lines for it. */
+constexpr double stall_frame_ms = 10000;
 
 /* The fixed histogram: 0.5 ms buckets to 50 ms, 2 ms to 100 ms, 10 ms to 500 ms, 100 ms to 2 s, and
  * one bucket for anything longer. */
@@ -96,8 +120,37 @@ struct Minute {
     uint64_t frames = 0;
     double seconds = 0;  /* presented time covered: the sum of the minute's frame times */
     double p50_ms = 0, p95_ms = 0, p99_ms = 0, max_ms = 0;
-    uint64_t over_50ms = 0;
+    uint64_t over_50ms = 0, over_100ms = 0;
+    net::Minute net;
 };
+/* "ok", "frames" (frame time high, network fine), "network" (frames fine, network gap) or "both". */
+const char *minute_verdict(const Minute &);
+
+/* A frame-rate dip: a run of slow frames (frame_dip_us or more each). */
+struct FrameDip {
+    double start_s = 0, end_s = 0;  /* seconds since the monitor started */
+    uint64_t frames = 0;            /* slow frames in it */
+    double worst_ms = 0;
+    int phase = 0;                  /* when it began */
+    bool open = false;              /* the frame was still not presented at the snapshot */
+};
+
+/* One entry of the timeline: a frame-rate dip or a network gap, with its verdict. */
+struct TimelineEvent {
+    bool network = false;  /* a network gap; otherwise a frame-rate dip */
+    double at_s = 0, ms = 0;
+    int phase = 0;
+    bool open = false;
+    uint64_t frames = 0;  /* a dip's slow frames */
+    double worst_ms = 0;  /* a dip's worst frame */
+    bool stall = false;   /* a dip that was a match stall (stall_frame_ms) */
+    std::string endpoint; /* a gap's endpoint, "tcp 192.0.2.1:10073" */
+    const char *verdict = "frames";  /* "frames", "network" or "both" */
+};
+/* The dips and gaps in one timeline, oldest first (the latest timeline_events), with verdicts:
+ * a gap is "both" when dips cover both_cover_share of it, else "network"; a dip is "both" when
+ * gaps cover that share of it, else "frames". */
+std::vector<TimelineEvent> build_timeline(const std::vector<FrameDip> &, const net::Snapshot &);
 
 struct Snapshot {
     std::string role, ending;  /* ending: empty while running */
@@ -118,12 +171,14 @@ struct Snapshot {
     uint64_t audio_clock_frames = 0;
     double audio_clock_seconds = 0;
     uint32_t audio_rate = 48000;
+    net::Snapshot network;
+    std::vector<TimelineEvent> timeline;
 };
 
 /* The counters, separate from the process-wide instance and the clock so the tests drive them. */
 class Monitor {
 public:
-    explicit Monitor(uint64_t start_ns = 0) : start_ns_(start_ns) {}
+    explicit Monitor(uint64_t start_ns = 0) : start_ns_(start_ns), network_(start_ns) {}
     /* One presented frame at `now_ns` (a monotonic clock). The first frame only starts timing. */
     void frame(uint64_t now_ns);
     void set_phase(int phase, uint64_t now_ns);
@@ -136,6 +191,9 @@ public:
     /* The counters at `now_ns`. Also closes any whole minutes that have passed since the last
      * snapshot into the per-minute series, so take one at least once a minute. */
     Snapshot snapshot(uint64_t now_ns);
+    /* One socket call (the runtime's observer), in the current phase. */
+    void net_event(const net::Event &e, uint64_t now_ns) { network_.observe(e, now_ns, phase_.load(std::memory_order_relaxed)); }
+    net::Network &network() { return network_; }
     uint64_t last_frame_ns() const { return last_ns_.load(std::memory_order_relaxed); }
     int phase() const { return phase_.load(std::memory_order_relaxed); }
 
@@ -160,8 +218,13 @@ private:
     std::vector<Minute> minutes_;
     uint64_t minute_index_ = 0;  /* the minute the counters below started */
     Histogram minute_base_{};
-    uint64_t minute_frames_base_ = 0, minute_us_base_ = 0, minute_slow_base_ = 0;
+    uint64_t minute_frames_base_ = 0, minute_us_base_ = 0, minute_slow_base_ = 0, minute_slow100_base_ = 0;
+    std::vector<FrameDip> dips_;
+    net::Network network_;
 };
+
+/* For the stall reporter: the network's state now (Network::status), "" without network counters. */
+std::string network_status();
 
 /* The summary file's JSON (schema_version 1). */
 std::string summary_json(const Snapshot &);

@@ -123,7 +123,7 @@ Existing schema-version-1 preferences without `render_scale` load at 100% and pr
 
 ## Reports
 
-MAG can send a performance and error report after a session. A report covers frame-rate dips, slow frames, audio timing problems, crashes and failed launches, so the problems players meet can be found and fixed.
+MAG can send a performance and error report after a session. A report covers frame-rate dips, slow frames, network gaps, audio timing problems, crashes and failed launches, so the problems players meet can be found and fixed. Players feel a frame-rate dip and a network stall both as "lag"; a report tells them apart ([Frame-rate dips and network gaps](#frame-rate-dips-and-network-gaps)).
 
 ### The setting
 
@@ -143,7 +143,9 @@ MAG can send a performance and error report after a session. A report covers fra
   - fps and percentiles for each minute of the last hour;
   - the 16 worst hitches, each with its time and phase (front end, menu or match);
   - time spent in each phase;
-  - the audio path's counters, when the runtime provides them: mix periods, underruns, starved frames, late and dropped periods, device errors, and drift against the 48 kHz clock.
+  - the audio path's counters, when the runtime provides them: mix periods, underruns, starved frames, late and dropped periods, device errors, and drift against the 48 kHz clock;
+  - network health, when the runtime reports socket activity: for each game server endpoint, packets and bytes each way, the gaps between arriving packets, blocked and slow sends, socket errors and, for TCP, the round-trip time;
+  - a timeline of the latest frame-rate dips and network gaps, each with its time, length, phase and verdict, and a verdict for each minute ([below](#frame-rate-dips-and-network-gaps)).
 - **The session:** how the launcher and the engine exited, why the report was made, and the first line of a halt (an unresolved import or syscall). If the launch stopped with an error, its message is included.
 - **The client:** the MAG version and platform, operating system and version, CPU, thread count, memory, GPU, renderer, the game server's address, the display settings, whether the controls trace was on (`controls_trace`, see [Debug](#debug)), and the build identities from the package receipts (runtime revision and SHA-256 digests).
 - **Logs:** the ends of this launch's `launcher.log`, `engine.log`, `supervisor.log` and `settings.log`, gzip-compressed, at most 2 MiB compressed in total.
@@ -168,15 +170,50 @@ The packaged supervisor decides after each session. The thresholds are named con
 | `halt` | The runtime stopped on an unresolved import or syscall (exit 88 or 87, `UNRESOLVED` in the log). |
 | `launch_error` | The supervisor stopped the launch with an error, such as missing game files or a changed executable. A launch that only asks you for a player name is not an error. |
 | `slow_frames` | Judged after at least 120 s and 3,600 frames: more than 5% of frames took 50 ms or more, or 30 frames took 250 ms or more. |
+| `network` | The game server went silent for 2 s or more during a match while frames kept coming: a network gap of at least 2 s, in the match phase, with the verdict `network` (not `both`, which is a client stall). |
 | `audio` | At least 20 underruns plus one for every 30 s of audio, any audio device error, or drift of 2 s or more against the 48 kHz clock over at least 120 s. |
 | `manual` | You pressed **Send report**. |
 
 Each rolling 24 hours, MAG creates at most:
 - 6 crash, halt and launch-error reports;
 - 2 slow-frame and audio reports;
+- 2 network reports;
 - 10 requested reports.
 
 Further reports are not created.
+
+When several automatic triggers apply, the report is made for the first of `slow_frames`, `network` and `audio`, and its reasons list them all.
+
+### Frame-rate dips and network gaps
+
+The engine measures its frames and its network traffic on one clock, so a report can say which one a player felt. The thresholds are named constants in `src/mag_session_network.h`.
+
+**Network measurements.** The runtime tells the session monitor about each socket call the game makes (connect, accept, send, receive, close) with the peer, the bytes moved, the error and how long a send took (`ps3emu/net_host_observer.h`). The monitor keeps counters and histograms only; it logs nothing per packet. It needs no knowledge of the game's protocol. Per remote endpoint (transport, address and port), the summary holds:
+- packets and bytes in and out, and their mean rate per second over the endpoint's open time;
+- the gaps between arriving packets, as a histogram (under 50, 100, 200, 500 ms, 1, 2 and 5 s, and longer);
+- whether the endpoint was **streaming**: its last 10 packets arrived within 5 s (2 or more a second), as the game server's match traffic does;
+- the longest silence that began while the endpoint was streaming;
+- blocked sends (the socket's buffer was full: the peer stopped reading), slow sends (a send call that took 50 ms or more) and socket errors by name (connection reset, refused, timed out and so on; "would block" on a receive is not an error);
+- for TCP, the round-trip time the operating system measures for the connection, sampled once a second (`TCP_INFO` on Linux, `TCP_CONNECTION_INFO` on macOS, `SIO_TCP_INFO` on Windows): the latest, lowest, highest and mean.
+
+**Which endpoints are named.** Any address the game opened a TCP connection to is a server it chose; its endpoints, and UDP endpoints at the same address, are reported with their address and port. Any other peer is counted under `other_endpoints` without its address, so a report never names another player's IP. At most 16 endpoints are kept; more are counted under `other_endpoints`.
+
+**Events.** Two kinds of event go into one timeline, each with its start (`at_s`, seconds since the engine started), its length, and the phase it started in:
+- a **frame-rate dip** (`"kind": "frames"`): one or more frames of 100 ms or more; slow frames that start within 500 ms of the previous one's end join the same dip, which records its span, how many slow frames it had and the worst one. A frame still not presented when the summary is written counts as an open dip. A dip in a match whose worst frame reached 10 s is marked `"stall": true`: the [stall reporter](stall-reporter.md) wrote `[mag-stall]` lines for it in `engine.log`, and its `[mag-stall] network` line says how long ago each open server connection last received a packet, so a frozen client with a live server and a client waiting on a silent server read differently.
+- a **network gap** (`"kind": "network"`): a silence of 500 ms or more on a streaming server endpoint, from its last packet to the next one. A silence that has not ended when the summary is written is reported as open (`"open": true`) with its length so far.
+
+The timeline keeps the latest 64 events, oldest first.
+
+**Verdicts.** Each event gets a verdict from the events of the other kind that overlap it:
+- a network gap is `both` when frame-rate dips cover at least half of it (the client itself stalled, so it did not read what the server sent), and `network` otherwise (frames kept coming; the server or the network went quiet);
+- a frame-rate dip is `both` when network gaps cover at least half of it, and `frames` otherwise (rendering or CPU; the network was fine).
+
+Each minute of the per-minute series adds the network's packets in and out, the longest silence of a streaming server endpoint that ended in that minute (or was still open at its end), the highest TCP round-trip time sampled in it, and a verdict:
+- frames are slow in a minute whose longest frame took 250 ms or more, or in which 5% or more of the frames took 100 ms or more;
+- the network had a gap in a minute whose longest silence reached 1 s;
+- the verdict is `ok`, `frames` (frame time high, network fine), `network` (frames fine, network gap) or `both` (for example a client hang, which stops both).
+
+A minute with no streaming endpoint judges frames only.
 
 ### Sending
 
@@ -200,6 +237,8 @@ The engine's frame clock calls the session monitor (`src/mag_session_monitor.h`)
 
 A background thread writes `session-<role>.json` in the folder named by `MAG_SESSION_DIR`. The supervisors set that variable to the launch's log folder. The thread writes the file every 10 s and again at exit, including when the window is closed. A crash leaves the latest periodic summary, with `"state": "running"`. The audio counters come from the runtime's `ps3emu/audio_host_stats.h` when the pinned runtime has it; until then the summary says `"audio": {"available": false}`.
 
+The network counters come from the runtime's socket observer, `ps3emu/net_host_observer.h`, when the pinned runtime has it; until then, or with `MAG_SESSION_NETWORK=0` in the game's environment, the summary says `"network": {"available": false}` and the timeline holds frame-rate dips only. The monitor installs the observer only while it writes a summary (`MAG_SESSION_DIR` is set). Each socket call then costs a clock read and a short locked update; empty polls of a socket are not reported to it. The summary writer samples the TCP round-trip times once a second.
+
 If a match stops presenting frames for 10 s, the engine writes what each guest thread is doing into `engine.log` (lines starting `[mag-stall]`), so a frozen session's report shows the wait. See [stall-reporter.md](stall-reporter.md).
 
 The settings window's **Send report** writes `report-requested` in the launch folder, at the path the supervisor passes as `MAG_REPORT_REQUEST`. The file holds `{"requested_at":<unix seconds>,"report_id":"<uuid>","comment":"<text>"}`. The supervisor sends the report under that id, the one the window showed.
@@ -211,7 +250,7 @@ The settings window's **Send report** writes `report-requested` in the launch fo
 - Service accounts send reports like person accounts. The portal allows 200 a day for a service account and 20 for a person account.
 
 Tests:
-- `tests.test_session_monitor`: the monitor's counters, percentiles and per-minute series, the summary JSON, and its overhead.
+- `tests.test_session_monitor`: the monitor's counters, percentiles and per-minute series, the summary JSON, and its overhead; and, from a synthetic socket stream with injected silences and a frame stream with injected hitches, the network counters, the timeline and the verdicts (`frames`, `network`, `both`).
 - `tests.test_stall_reporter`: when a frozen match is reported, what the report says, and the reporter's thread against a synthetic clock.
 - `tests.test_player_reports`: the triggers and thresholds, redaction, payload caps, the queue and retries, and an upload through the platform transport to a fake portal that checks the portal's rules.
 - `installer/tests/test_native_package.py` and `installer/tests/test_native_package_linux.py`: the real macOS and Linux supervisors send a crash report end to end.
