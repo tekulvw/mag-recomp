@@ -21,6 +21,10 @@
 #include "ps3emu/net_host_observer.h"
 #define MAG_SESSION_NET_OBSERVER 1
 #endif
+#if __has_include("ps3emu/rsx_build_stats.h")
+#include "ps3emu/rsx_build_stats.h"
+#define MAG_SESSION_RSX_BUILD_STATS 1
+#endif
 #endif
 
 namespace mag::session {
@@ -72,9 +76,29 @@ const char *audio_counter_name(int counter) {
     return counter >= 0 && counter < MAG_SESSION_AUDIO_COUNTER_COUNT ? names[counter] : "unknown";
 }
 
-void Monitor::frame(uint64_t now_ns) {
+Builds Builds::since(const Builds &e) const {
+    Builds d;
+    d.programs = programs - e.programs; d.program_ns = program_ns - e.program_ns;
+    d.translations = translations - e.translations; d.translation_ns = translation_ns - e.translation_ns;
+    d.pipelines = pipelines - e.pipelines; d.pipeline_ns = pipeline_ns - e.pipeline_ns;
+    d.cache_saves = cache_saves - e.cache_saves; d.cache_save_ns = cache_save_ns - e.cache_save_ns;
+    d.uploads = uploads - e.uploads; d.upload_ns = upload_ns - e.upload_ns;
+    d.upload_bytes = upload_bytes - e.upload_bytes; d.slow_uploads = slow_uploads - e.slow_uploads;
+    d.shader_memory_hits = shader_memory_hits - e.shader_memory_hits;
+    d.shader_disk_hits = shader_disk_hits - e.shader_disk_hits;
+    return d;
+}
+
+void Monitor::frame(uint64_t now_ns, const Builds *builds) {
     // One producer (the frame clock thread): plain relaxed loads and stores, no read-modify-write
     // on the previous time or the maxima. Readers only ever see slightly stale counters.
+    // What the renderer built since the previous present: the work this frame waited for.
+    Builds during;
+    if (builds) {
+        if (builds_seen_) during = builds->since(previous_builds_);
+        previous_builds_ = *builds;
+        builds_seen_ = true;
+    }
     const uint64_t previous = last_ns_.load(std::memory_order_relaxed);
     last_ns_.store(now_ns, std::memory_order_relaxed);
     if (!previous || now_ns <= previous) {
@@ -92,7 +116,7 @@ void Monitor::frame(uint64_t now_ns) {
     for (size_t i = 0; i < 4 && us >= slow_thresholds_us[i]; ++i) slow_[i].fetch_add(1, std::memory_order_relaxed);
     if (us < hitch_threshold_us) return;
     // A hitch: rare, so a lock and a small sorted list are fine here.
-    Hitch hitch{double(now_ns - start_ns_) / 1e9, double(us) / 1000.0, phase_.load(std::memory_order_relaxed)};
+    Hitch hitch{double(now_ns - start_ns_) / 1e9, double(us) / 1000.0, phase_.load(std::memory_order_relaxed), during};
     std::lock_guard<std::mutex> lock(rare_);
     // Loading: the boot, or outside a match a loading screen's long frame and the slow frames after it.
     if (hitch.phase != MAG_SESSION_PHASE_MATCH && us >= load_frame_us) loading_until_ns_ = now_ns + load_join_us * 1000;
@@ -102,6 +126,19 @@ void Monitor::frame(uint64_t now_ns) {
         for (size_t i = 0; i < 4 && us >= slow_thresholds_us[i]; ++i) ++loading_slow_[i];
         loading_seconds_ += double(us) / 1e6;
     }
+    for (size_t i = 0; i < 3 && us >= slow_build_thresholds_us[i]; ++i) {
+        SlowBuilds &b = slow_builds_[i];
+        ++b.frames;
+        b.frame_ms += hitch.ms;
+        if (during.built()) { ++b.with_builds; b.build_ms += during.build_ms(); }
+        if (during.uploads) { ++b.with_uploads; b.upload_ms += during.upload_ms(); }
+    }
+    if (builds && us >= build_log_us && (during.built() || during.uploads))
+        std::fprintf(stderr, "[mag session] slow frame %.0f ms: built %.0f ms (%llu programs, %llu shaders, %llu pipelines, "
+                     "%llu cache writes), uploaded %.0f ms (%llu textures, %.1f MB)\n",
+                     hitch.ms, during.build_ms(), (unsigned long long)during.programs, (unsigned long long)during.translations,
+                     (unsigned long long)during.pipelines, (unsigned long long)during.cache_saves, during.upload_ms(),
+                     (unsigned long long)during.uploads, double(during.upload_bytes) / 1048576.0);
     if (us >= frame_dip_us) {
         // A slow frame: it starts a frame-rate dip, or extends the latest one.
         const double end = hitch.at_s, start = end - double(us) / 1e6;
@@ -110,8 +147,10 @@ void Monitor::frame(uint64_t now_ns) {
             dip.end_s = end;
             ++dip.frames;
             dip.worst_ms = std::max(dip.worst_ms, hitch.ms);
+            dip.build_ms += during.build_ms();
+            dip.upload_ms += during.upload_ms();
         } else {
-            dips_.push_back(FrameDip{start, end, 1, hitch.ms, hitch.phase, false});
+            dips_.push_back(FrameDip{start, end, 1, hitch.ms, hitch.phase, false, during.build_ms(), during.upload_ms()});
             if (dips_.size() > frame_dips_kept) dips_.erase(dips_.begin());
         }
     }
@@ -119,6 +158,11 @@ void Monitor::frame(uint64_t now_ns) {
     else if (hitches_.back().ms < hitch.ms) hitches_.back() = hitch;
     else return;
     std::stable_sort(hitches_.begin(), hitches_.end(), [](const Hitch &a, const Hitch &b) { return a.ms > b.ms; });
+}
+
+void Monitor::build_info(const BuildInfo &info) {
+    std::lock_guard<std::mutex> lock(rare_);
+    build_info_ = info;
 }
 
 void Monitor::set_default_phase(int phase) { default_phase_.store(phase, std::memory_order_relaxed); }
@@ -480,6 +524,10 @@ Snapshot Monitor::snapshot(uint64_t now_ns) {
         m.over_50ms = s.slow[1] - minute_slow_base_;
         m.over_100ms = s.slow[2] - minute_slow100_base_;
         m.net = network_.close_minute(now_ns);
+        m.builds = build_info_.totals.since(minute_builds_base_);
+        m.slow_with_builds = slow_builds_[0].with_builds - minute_slow_builds_base_;
+        minute_builds_base_ = build_info_.totals;
+        minute_slow_builds_base_ = slow_builds_[0].with_builds;
         minutes_.push_back(m);
         if (minutes_.size() > recent_minutes) minutes_.erase(minutes_.begin());
         minute_index_ = minute;
@@ -497,6 +545,13 @@ Snapshot Monitor::snapshot(uint64_t now_ns) {
             std::fprintf(stderr, "; network in %llu out %llu packets, longest gap %.0f ms, rtt %.0f ms",
                          (unsigned long long)closed.net.in.packets, (unsigned long long)closed.net.out.packets,
                          closed.net.longest_gap_ms, closed.net.rtt_ms);
+        if (build_info_.available && (closed.builds.built() || closed.builds.uploads))
+            std::fprintf(stderr, "; built %llu programs, %llu shaders, %llu pipelines in %.0f ms (%llu slow frames with builds); "
+                         "uploaded %llu textures in %.0f ms",
+                         (unsigned long long)closed.builds.programs, (unsigned long long)closed.builds.translations,
+                         (unsigned long long)closed.builds.pipelines, closed.builds.build_ms(),
+                         (unsigned long long)closed.slow_with_builds, (unsigned long long)closed.builds.uploads,
+                         closed.builds.upload_ms());
         std::fprintf(stderr, "; verdict %s\n", minute_verdict(closed));
     }
     s.uptime_s = double(elapsed) / 1e9;
@@ -518,6 +573,8 @@ Snapshot Monitor::snapshot(uint64_t now_ns) {
     s.audio_clock_frames = audio_clock_frames_;
     s.audio_clock_seconds = audio_clock_seconds_;
     s.audio_rate = audio_rate_;
+    s.builds = build_info_;
+    std::copy(std::begin(slow_builds_), std::end(slow_builds_), std::begin(s.slow_builds));
     // The timeline: the frame-rate dips, with a frame that is late right now as an open one.
     std::vector<FrameDip> dips = dips_;
     const uint64_t last = last_ns_.load(std::memory_order_relaxed);
@@ -588,6 +645,8 @@ std::vector<TimelineEvent> build_timeline(const std::vector<FrameDip> &dips, con
         e.frames = d.frames;
         e.worst_ms = d.worst_ms;
         e.stall = d.phase == MAG_SESSION_PHASE_MATCH && d.worst_ms >= stall_frame_ms;
+        e.build_ms = d.build_ms;
+        e.upload_ms = d.upload_ms;
         const double length = d.end_s - d.start_s;
         e.verdict = length > 0 && covered(d.start_s, d.end_s, gap_spans) >= both_cover_share * length ? "both" : "frames";
         events.push_back(e);
@@ -702,6 +761,41 @@ static std::string drops_json(const Snapshot &s) {
     return j + (s.drops.empty() ? "]},\n" : "\n  ]},\n");
 }
 
+static std::string builds_json(const Builds &b) {
+    return "{\"build_ms\": " + number(b.build_ms(), 1) + ", \"programs\": " + number(b.programs) +
+           ", \"shaders\": " + number(b.translations) + ", \"pipelines\": " + number(b.pipelines) +
+           ", \"cache_writes\": " + number(b.cache_saves) + ", \"upload_ms\": " + number(b.upload_ms(), 1) +
+           ", \"uploads\": " + number(b.uploads) + ", \"upload_mb\": " + number(double(b.upload_bytes) / 1048576.0, 2) + "}";
+}
+
+static std::string build_section_json(const Snapshot &s) {
+    const BuildInfo &i = s.builds;
+    std::string j = "  \"builds\": {\"available\": " + std::string(i.available ? "true" : "false");
+    if (!i.available) return j + "},\n";
+    const Builds &t = i.totals;
+    j += ", \"backend\": " + word(i.backend) + ", \"spirv_disk_cache\": " + (i.spirv_disk_cache ? "true" : "false") +
+         ", \"vk_pipeline_cache\": " + (i.vk_pipeline_cache ? "true" : "false") +
+         ", \"pipeline_cache_loaded_bytes\": " + number(i.pipeline_cache_loaded_bytes) +
+         ",\n    \"programs\": " + number(t.programs) + ", \"program_ms\": " + number(double(t.program_ns) / 1e6, 1) +
+         ", \"shaders\": " + number(t.translations) + ", \"shader_ms\": " + number(double(t.translation_ns) / 1e6, 1) +
+         ", \"shader_memory_hits\": " + number(t.shader_memory_hits) + ", \"shader_disk_hits\": " + number(t.shader_disk_hits) +
+         ", \"pipelines\": " + number(t.pipelines) + ", \"pipeline_ms\": " + number(double(t.pipeline_ns) / 1e6, 1) +
+         ", \"pipeline_worst_ms\": " + number(double(i.pipeline_worst_ns) / 1e6, 1) +
+         ", \"cache_writes\": " + number(t.cache_saves) + ", \"cache_write_ms\": " + number(double(t.cache_save_ns) / 1e6, 1) +
+         ",\n    \"uploads\": " + number(t.uploads) + ", \"upload_ms\": " + number(t.upload_ms(), 1) +
+         ", \"upload_mb\": " + number(double(t.upload_bytes) / 1048576.0, 1) + ", \"slow_uploads\": " + number(t.slow_uploads) +
+         ",\n    \"slow_frames\": {";
+    static const char *names[3] = {"over_50ms", "over_100ms", "over_250ms"};
+    for (size_t k = 0; k < 3; ++k) {
+        const SlowBuilds &b = s.slow_builds[k];
+        j += std::string(k ? ", " : "") + "\"" + names[k] + "\": {\"frames\": " + number(b.frames) +
+             ", \"frame_ms\": " + number(b.frame_ms, 0) + ", \"with_builds\": " + number(b.with_builds) +
+             ", \"build_ms\": " + number(b.build_ms, 0) + ", \"with_uploads\": " + number(b.with_uploads) +
+             ", \"upload_ms\": " + number(b.upload_ms, 0) + "}";
+    }
+    return j + "}},\n";
+}
+
 std::string summary_json(const Snapshot &s) {
     std::string j = "{\n";
     j += "  \"schema_version\": 1,\n";
@@ -748,9 +842,11 @@ std::string summary_json(const Snapshot &s) {
     j += "  \"hitches\": [";
     for (size_t i = 0; i < s.hitches.size(); ++i)
         j += std::string(i ? ", " : "") + "{\"at_s\": " + number(s.hitches[i].at_s, 2) + ", \"ms\": " + number(s.hitches[i].ms, 1) +
-             ", \"phase\": \"" + phase_name(s.hitches[i].phase) + "\"" + (s.hitches[i].loading ? ", \"loading\": true}" : "}");
+             ", \"phase\": \"" + phase_name(s.hitches[i].phase) + "\"" + (s.hitches[i].loading ? ", \"loading\": true" : "") +
+             (s.builds.available ? ", \"builds\": " + builds_json(s.hitches[i].builds) : std::string()) + "}";
     j += "],\n";
     j += network_json(s.network, s.uptime_s);
+    j += build_section_json(s);
     j += "  \"timeline\": [";
     for (size_t i = 0; i < s.timeline.size(); ++i) {
         const TimelineEvent &e = s.timeline[i];
@@ -759,6 +855,8 @@ std::string summary_json(const Snapshot &s) {
         if (e.network) j += ", \"endpoint\": \"" + e.endpoint + "\"";
         else j += ", \"frames\": " + number(e.frames) + ", \"worst_ms\": " + number(e.worst_ms, 0);
         if (e.stall) j += ", \"stall\": true";
+        if (!e.network && s.builds.available)
+            j += ", \"build_ms\": " + number(e.build_ms, 0) + ", \"upload_ms\": " + number(e.upload_ms, 0);
         if (e.open) j += ", \"open\": true";
         j += std::string(", \"verdict\": \"") + e.verdict + "\"}";
     }
@@ -782,6 +880,12 @@ std::string summary_json(const Snapshot &s) {
             if (m.net.send_blocked) j += ", \"send_blocked\": " + number(m.net.send_blocked);
             j += "}";
         }
+        // Compact, and only for a minute that built or uploaded something: the series must stay
+        // within the report's metrics budget (player_reports.h).
+        if (s.builds.available && (m.builds.built() || m.builds.uploads))
+            j += ", \"builds\": {\"build_ms\": " + number(m.builds.build_ms(), 0) + ", \"shaders\": " + number(m.builds.translations) +
+                 ", \"pipelines\": " + number(m.builds.pipelines) + ", \"upload_ms\": " + number(m.builds.upload_ms(), 0) +
+                 ", \"uploads\": " + number(m.builds.uploads) + ", \"slow_with_builds\": " + number(m.slow_with_builds) + "}";
         j += std::string(", \"verdict\": \"") + minute_verdict(m) + "\"}";
     }
     j += s.minutes.empty() ? "],\n" : "\n  ],\n";
@@ -831,6 +935,38 @@ void poll_audio() {
 #endif
 }
 
+#ifdef MAG_SESSION_RSX_BUILD_STATS
+Builds read_builds(struct ps3recomp_rsx_build_stats &st) {
+    std::memset(&st, 0, sizeof st);
+    ps3recomp_rsx_build_stats(&st);
+    Builds b;
+    b.programs = st.programs; b.program_ns = st.program_ns;
+    b.translations = st.shader_translations; b.translation_ns = st.shader_translation_ns;
+    b.pipelines = st.pipelines; b.pipeline_ns = st.pipeline_ns;
+    b.cache_saves = st.pipeline_cache_saves; b.cache_save_ns = st.pipeline_cache_save_ns;
+    b.uploads = st.texture_uploads; b.upload_ns = st.texture_upload_ns;
+    b.upload_bytes = st.texture_upload_bytes; b.slow_uploads = st.slow_texture_uploads;
+    b.shader_memory_hits = st.shader_memory_hits; b.shader_disk_hits = st.shader_disk_hits;
+    return b;
+}
+#endif
+
+// The runtime's build counters and facts, with the audio counters.
+void poll_builds() {
+#ifdef MAG_SESSION_RSX_BUILD_STATS
+    struct ps3recomp_rsx_build_stats st;
+    BuildInfo info;
+    info.totals = read_builds(st);
+    info.available = st.version >= 1;
+    info.backend.assign(st.backend, strnlen(st.backend, sizeof st.backend));
+    info.spirv_disk_cache = (st.flags & RSX_BUILD_FLAG_SPIRV_DISK_CACHE) != 0;
+    info.vk_pipeline_cache = (st.flags & RSX_BUILD_FLAG_VK_PIPELINE_CACHE) != 0;
+    info.pipeline_cache_loaded_bytes = st.pipeline_cache_loaded_bytes;
+    info.pipeline_worst_ns = st.pipeline_worst_ns;
+    g_monitor->build_info(info);
+#endif
+}
+
 #ifdef MAG_SESSION_NET_OBSERVER
 // The runtime's socket observer: runs on the guest thread that made the call, so it only copies
 // the event into the monitor's counters.
@@ -863,6 +999,7 @@ void write_summary(const char *ending) {
     if (g_file.empty()) return;
     std::lock_guard<std::mutex> lock(g_write);
     poll_audio();
+    poll_builds();
     Snapshot s = g_monitor->snapshot(now_ns());
     s.role = g_role;
     if (ending) s.ending = ending;
@@ -927,7 +1064,16 @@ extern "C" void mag_session_monitor_start(const char *role) {
 }
 
 extern "C" void mag_session_frame_presented(void) {
-    if (Monitor *m = g_monitor) m->frame(now_ns());
+    Monitor *m = g_monitor;
+    if (!m) return;
+#ifdef MAG_SESSION_RSX_BUILD_STATS
+    // A few relaxed loads: what the renderer built while this frame was being made.
+    struct ps3recomp_rsx_build_stats st;
+    const Builds builds = read_builds(st);
+    m->frame(now_ns(), &builds);
+#else
+    m->frame(now_ns());
+#endif
 }
 
 extern "C" void mag_session_set_phase(enum MagSessionPhase phase) {
