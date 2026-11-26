@@ -260,8 +260,8 @@ when the player is downed (2.2). The keyboard splits Cross into Space (Jump), X 
 in the downed state, the keys bound to Confirm therefore also press the player's own Bleed out
 (`mag_game_controls_downed_alias`). Only that one control of the player's handler reads them; no
 other handler sees Confirm, as above. Bleed out's own keys (Return) keep working and win when both
-are pressed. On foot a press of Confirm's or Back's keys that nothing took over is spent at the end
-of its poll (7.3), so an X pressed while alive cannot bleed out later, when the player goes down.
+are pressed. A press that nothing read is spent at the end of its poll (7.3, "Unread presses are
+spent"), so an X pressed while alive cannot bleed out later, when the player goes down.
 
 **Seats: mounted weapons and vehicle seats.** A lab trace (macOS, hosted Domination, a defenders'
 bunker, 2026-11-26) shows how a seat reads input. The forward spawn seats the player in the
@@ -767,10 +767,23 @@ Returns false (the game recognizes the control itself) unless every step below a
     button pressed in a turret must not aim once the player is back on foot).
 13. Return true.
 
-At the end of the outermost poll, with gameplay eligible and a valid frame, every offer of Confirm
-and Back that no recognition kept as a gameplay receipt is observed (`mag_controls_observe`): on
-foot nothing else takes them over, and an unobserved press would wait in the engine and act later,
-for example as the downed alias of step 4.
+**Unread presses are spent.** The engine offers a press until it is observed, so a press that no
+handler read would wait and act much later, wherever its action is next read. At the end of the
+outermost poll, with a valid frame, every catalog action's offer that is not a gameplay receipt is
+observed (`mag_controls_observe`). System receipts were observed just before. Gameplay receipts are
+completed at the end of the actor update (7.5). A press nobody read in its poll is therefore gone, as
+a pad press nobody reads is. A press still held stays held: an observed press is offered again,
+still down, until its release. Two cases this prevents:
+
+- D-pad Left on foot. In a lab trace nothing read it there; the HUD's routed element read Up, Down
+  and Right. Every Left press, from the arrow key or a controller's D-pad, stayed queued (up to 256). When the
+  respawn bar started reading D-pad Left after a death, the queue acted on it one press after
+  another. The bar flipped between its spawn and loadout tabs by itself. With the loadout picker
+  open, the picker stayed drawn but stopped responding, because the bar's arrows drive the picker.
+  Seen on Windows with a controller connected and in a lab trace after a real death, where a single
+  Right tap reached the bar together with an old Left and an old Right press.
+- X on foot. Confirm is never taken over there (2.3), and an unread X would bleed out later, as the
+  downed alias of step 4.
 
 `ControlCallback`: when the current control is r29 and the frame is no longer valid, write the
 neutral tuple to it, forget its host cache, set r0 to zero and clear the current control.

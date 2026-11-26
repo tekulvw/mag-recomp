@@ -98,6 +98,9 @@ class GameControlsAdapterTests(unittest.TestCase):
     def test_x_bleeds_out_while_downed_and_presses_nothing_else(self):
         self.run_scenario('downed-x')
 
+    def test_a_press_nothing_read_in_its_poll_never_acts_later(self):
+        self.run_scenario('unread-presses')
+
     def test_census_reports_each_handler_description_once(self):
         self.run_scenario('census')
 
