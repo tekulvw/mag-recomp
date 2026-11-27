@@ -33,27 +33,66 @@ Need help installing? Ask in the [MAG Recomp Discord](https://discord.gg/HBB95hU
 
 ## Using it
 
-1. Prepare one folder holding the complete `PS3_GAME` tree of your disc copy, with the decrypted
-   `USRDIR/EBOOT.elf` and `USRDIR/bin/mage_g.elf` beside their originals (see BUILDING.md step 3),
-   and the decrypted queue firmware at `firmware/libsre.prx` next to `PS3_GAME`. Selecting the
-   `PS3_GAME` folder itself also works. Every identity is checked before anything is downloaded. A
-   file that fails the check is reported as still encrypted (an `.sprx`/`.self` container renamed),
-   not an ELF, a decrypted module from a known but unreviewed system software release, or a
-   decrypted ELF from a different release, with its SHA-256 and size.
-
-   `firmware/libsre.prx` is `dev_flash/sys/external/libsre.sprx` from PS3 system software 4.93,
-   decrypted with RPCS3 (`rpcs3 --installfw PS3UPDAT.PUP`, then `rpcs3 --decrypt libsre.sprx`; see
-   BUILDING.md step 3). RPCS3 installs `libsre.sprx` under `~/Library/Application Support/rpcs3/` on
-   macOS, `~/.config/rpcs3/` on Linux, and in its own folder on Windows (then `dev_flash/sys/external/`). What is checked is the module's SHA-256, not the release; the 4.93 and 4.86
-   modules are accepted, and the 4.93 steps are verified end to end. Sony only hosts the latest release. The installer shows the same steps when
-   the file is missing or refused.
-2. Start the installer, choose that folder and where to install (**Install inside**), then click
-   **Build MAG**. **Compile jobs** sets how many compiles run at once; the default suits your
-   computer (see [Compile jobs](#compile-jobs)).
+1. Prepare your files with your own RPCS3. The installer never downloads RPCS3 or firmware and never
+   decrypts anything; it finds what RPCS3 already has and shows the exact commands to run (see
+   [Getting your files ready](#getting-your-files-ready)). You need:
+   - the complete `PS3_GAME` tree of your BCUS98110 v1.0 disc copy, with the decrypted
+     `USRDIR/EBOOT.elf` and `USRDIR/bin/mage_g.elf` beside their originals (BUILDING.md step 3);
+   - the decrypted queue firmware module `libsre.prx`: `dev_flash/sys/external/libsre.sprx` from PS3
+     system software 4.93, decrypted with RPCS3 (`rpcs3 --installfw PS3UPDAT.PUP`, then
+     `rpcs3 --decrypt libsre.sprx`, which writes `libsre.prx` beside it). Choose it as **Firmware
+     file** (`build --firmware`), or place it at `firmware/libsre.prx` next to `PS3_GAME`. What is
+     checked is the module's SHA-256, not the release; the 4.93 and 4.86 modules are accepted, and the
+     4.93 steps are verified end to end. Sony only hosts the latest release.
+2. Start the installer. It looks for RPCS3's files, fills in **Game folder** and **Firmware file**
+   when it finds them, and checks each file the moment it is chosen. Choose where to install
+   (**Install inside**), then click **Build MAG**. Every identity is checked again before anything is
+   downloaded. **Compile jobs** sets how many compiles run at once; the default suits your computer
+   (see [Compile jobs](#compile-jobs)).
 3. Play from the new `MAG` folder. It is self-contained: the app, the game files it reads (`game/`),
    and, once you play, your saves and trophies (`home/gamedata`) and launch logs (`logs/`). Nothing
    in it refers to anything outside it, so you can move or copy the whole folder elsewhere. Back up
    `home/gamedata`, and keep it when you rebuild MAG.
+
+### Getting your files ready
+
+The installer window opens with a checklist, **Getting your files ready**, and `guide` prints the same
+text in a terminal (`guide --json` for scripts; `--source` and `--firmware` check other files than the
+ones found). Each step is marked **Done**, **To do** or **Problem**:
+
+1. Install RPCS3: a link to <https://rpcs3.net/download>.
+2. Get PS3 system software: a link to Sony's official
+   [PS3 system software page](https://www.playstation.com/en-us/get-help/ps3-system-software/) and
+   the 4.93 `PS3UPDAT.PUP` SHA-256.
+3. Install it in RPCS3: `rpcs3 --installfw <PS3UPDAT.PUP>` (or RPCS3's File > Install Firmware).
+4. Decrypt the firmware module: `rpcs3 --decrypt <dev_flash/sys/external/libsre.sprx>`.
+5. Copy your MAG disc's `PS3_GAME` folder.
+6. Decrypt the game's two executables: one `rpcs3 --decrypt` per file, for `USRDIR/EBOOT.BIN` and
+   `USRDIR/bin/mage_g.self`.
+7. Choose the files and build.
+
+Commands use the RPCS3 and the paths the installer found, quoted for this computer's terminal
+(Terminal on macOS, a terminal on Linux, Command Prompt on Windows); **Copy commands** copies them.
+You run them yourself. A file that fails its check gets a fix in plain words: a folder without
+`PS3_GAME`, a different game or release (from `PARAM.SFO`), an update RPCS3 installed instead of the
+disc, a missing file, an original that is not the retail v1.0 file or was already decrypted, a
+decrypted file that is still encrypted (a renamed `.self`/`.sprx`), not an ELF or from a different
+release, a firmware module from a known but unreviewed system software release, or a changed settings
+archive. Build MAG still checks everything, with each file's SHA-256 and size in its errors.
+
+Where it looks, read-only, for at most 3 seconds and 20,000 folder entries (the guide says when it
+stopped early). It reads RPCS3's `vfs.yml` (moved `dev_flash`, `dev_hdd0` and games folders) and
+`games.yml` (the folder RPCS3 has for BCUS98110), and lists MAG folders in `dev_hdd0/disc`, the games
+folder and `dev_hdd0/game` by their `PARAM.SFO`:
+
+| Host | RPCS3 data and program |
+| --- | --- |
+| macOS | `~/Library/Application Support/rpcs3`; `RPCS3.app` in `/Applications` or `~/Applications` (and its `portable` folder). Downloads, Desktop and Documents are not searched, because macOS would ask for permission. |
+| Linux | `$XDG_CONFIG_HOME/rpcs3` or `~/.config/rpcs3`; Flatpak `~/.var/app/net.rpcs3.RPCS3/config/rpcs3`; `rpcs3` on `PATH`; `rpcs3*.AppImage` in `~`, `~/Applications`, `~/Downloads`, `~/Desktop`, `~/.local/bin`, `~/bin` and `/opt`, with their `.config` and `portable` folders. `PS3UPDAT.PUP` in Downloads or Desktop. |
+| Windows | RPCS3 keeps its data next to `rpcs3.exe` (or in `RPCS3_CONFIG_DIR`, or a `portable` folder), so `rpcs3.exe` is looked for two folders deep in your user folder, Downloads, Desktop, Documents, `%LOCALAPPDATA%\Programs`, WinGet and Scoop packages, Program Files and each fixed drive (`C:\RPCS3` and the like), never in `AppData`, `Windows` or linked folders. The folders RPCS3's file dialogs last used (`GuiConfigs/CurrentSettings.ini`), Downloads and Desktop are checked for `PS3UPDAT.PUP`. |
+
+Found paths fill only empty fields and never replace a file you chose; nothing is copied, moved or
+written. Build MAG links or copies the chosen files into `MAG-build`, as before.
 
 ### What goes where
 
@@ -303,6 +342,9 @@ Python 3.11+ with Tk runs the same wizard from source (`python3 -m mag_installer
 ```sh
 cd installer && python3 -m unittest discover -s tests
 ```
+
+The test that opens the wizard window runs only with `MAG_INSTALLER_WINDOW_TESTS=1`; CI sets it (on
+Linux under `xvfb-run`), so a developer's run opens no window.
 
 Design and safety rules are in [docs/design.md](docs/design.md); the profile and tool contract is in
 [docs/profile-format.md](docs/profile-format.md); developer builds against existing tools are in

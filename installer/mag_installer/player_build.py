@@ -67,8 +67,11 @@ def readiness(root):
         return {'ready': False, 'reason': str(exc)}
 
 
-def locate_inputs(source):
-    """Accept a prepared input folder or its PS3_GAME child, without searching the disk."""
+def locate_inputs(source, firmware=None):
+    """Accept a prepared input folder or its PS3_GAME child, without searching the disk.
+
+    firmware: the decrypted firmware module the player chose (for example the libsre.prx RPCS3's
+    --decrypt wrote in its own dev_flash); without it, firmware/libsre.prx next to PS3_GAME."""
     source = Path(source).expanduser().resolve()
     if not source.is_dir():
         raise InstallerError('Choose the folder containing your MAG game files.')
@@ -78,16 +81,22 @@ def locate_inputs(source):
         'disc_root': disc,
         'eboot_elf': disc / 'USRDIR/EBOOT.elf',
         'engine_elf': disc / 'USRDIR/bin/mage_g.elf',
-        'firmware': base / 'firmware/libsre.prx',
+        # Its folder is resolved like the game folder's; the file itself must not be a link.
+        'firmware': (Path(firmware).expanduser().absolute().parent.resolve() / Path(firmware).name if firmware
+                     else base / 'firmware/libsre.prx'),
     }
+    if firmware and selected['firmware'].is_dir():
+        raise InstallerError(f'The firmware file you chose is a folder: {selected["firmware"]}. Choose the decrypted libsre.prx.')
     required = [disc / 'PARAM.SFO', disc / 'USRDIR/EBOOT.BIN', disc / 'USRDIR/bin/mage_g.self',
                 selected['eboot_elf'], selected['engine_elf'], selected['firmware']]
-    missing = [path.relative_to(base).as_posix() if path.is_relative_to(base) else str(path)
-               for path in required if not path.is_file() or path.is_symlink()]
+    absent = [path for path in required if not path.is_file() or path.is_symlink()]
+    missing = [path.relative_to(base).as_posix() if path.is_relative_to(base) else str(path) for path in absent]
     if missing:
         raise InstallerError('Your game folder is missing required prepared files: ' + ', '.join(missing) +
-                             '. The installer needs the original game plus separately decrypted executables and firmware; it cannot decrypt retail files yet.' +
-                             ('\n' + FIRMWARE_SOURCE_STEPS if 'firmware/libsre.prx' in missing else ''))
+                             '. The installer needs the original game plus the executables and firmware you decrypted with '
+                             'your own RPCS3; it never decrypts files itself. The guide command (or the installer window) '
+                             'finds RPCS3\'s files and shows the exact commands.' +
+                             ('\n' + FIRMWARE_SOURCE_STEPS if selected['firmware'] in absent else ''))
     return {key: str(value) for key, value in selected.items()}
 
 
@@ -385,8 +394,9 @@ def _publish(output, build, status, name):
     _write_json(build / 'build.json', status)
 
 
-def install(root, source, output, cache, token=None, events=None, retry=False, jobs=None, voice=None):
-    """jobs: the compile job count the player chose (a number, or 'auto' for this computer's
+def install(root, source, output, cache, token=None, events=None, retry=False, jobs=None, voice=None, firmware=None):
+    """firmware: the decrypted firmware module the player chose, else firmware/libsre.prx next to PS3_GAME.
+    jobs: the compile job count the player chose (a number, or 'auto' for this computer's
     default); None uses the remembered choice or the default (build_jobs.py). Checked first.
     voice: True or False to build with or without voice chat; None uses MAG_VOICE, else the
     remembered choice, else off (voice_option.py). Also checked first."""
@@ -446,7 +456,7 @@ def install(root, source, output, cache, token=None, events=None, retry=False, j
             raise InstallerError('Output and cache must be separate directories')
     token.check()
     events({'event': 'stage-start', 'stage': 'validate', 'message': 'Checking your game files'})
-    inputs = locate_inputs(source)
+    inputs = locate_inputs(source, firmware)
     record = _manifest(root)
     host = record.get('host', host_key())
     windows = host == 'windows-x86_64'

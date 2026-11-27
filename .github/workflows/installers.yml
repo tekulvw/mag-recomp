@@ -165,6 +165,9 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
       - name: Unit tests
         working-directory: installer
+        # Includes the wizard window test, which opens a real installer window.
+        env:
+          MAG_INSTALLER_WINDOW_TESTS: '1'
         run: python -m unittest discover -s tests
       - name: Check out the pinned runtime and PPU lifter
         run: python tools/fetch_ps3recomp.py --role runtime --role lifter-ppu
@@ -203,6 +206,9 @@ jobs:
           unzip -q "$GITHUB_WORKSPACE"/installer-out/*.zip
           ./*/mag-installer.exe status > status.json
           python -c "import json,sys; s=json.load(open('status.json')); print(json.dumps(s['player_build'])); sys.exit(0 if s['player_build'].get('ready') else 1)"
+          # The kit manifest carries the reviewed identities the wizard checks chosen files against.
+          ./*/mag-installer.exe guide --json --time-limit 2 > guide.json
+          python -c "import json,sys; g=json.load(open('guide.json')); print(g['detection']); sys.exit(0 if g['reviewed_identities'] else 1)"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: mag-installer-windows-x86_64
@@ -237,6 +243,9 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
       - name: Unit tests
         working-directory: installer
+        # Includes the wizard window test, which opens a real installer window.
+        env:
+          MAG_INSTALLER_WINDOW_TESTS: '1'
         run: python -m unittest discover -s tests
       - name: Replace the source placeholder with the generated kit manifest
         run: rm installer/release/player-build.json
@@ -265,6 +274,9 @@ jobs:
           codesign --verify --deep --strict --verbose=2 ./*/"MAG Installer.app"
           ./*/"MAG Installer.app/Contents/MacOS/mag-installer" status > status.json
           python -c "import json,sys; s=json.load(open('status.json')); print(json.dumps(s['player_build'])); sys.exit(0 if s['player_build'].get('ready') else 1)"
+          # The kit manifest carries the reviewed identities the wizard checks chosen files against.
+          ./*/"MAG Installer.app/Contents/MacOS/mag-installer" guide --json --time-limit 2 > guide.json
+          python -c "import json,sys; g=json.load(open('guide.json')); print(g['detection']); sys.exit(0 if g['reviewed_identities'] else 1)"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: mag-installer-macos-arm64
@@ -307,7 +319,10 @@ jobs:
           exit 1
       - name: Unit tests
         working-directory: installer
-        run: python -m unittest discover -s tests
+        # Includes the wizard window test, which opens a real installer window on a virtual display.
+        env:
+          MAG_INSTALLER_WINDOW_TESTS: '1'
+        run: xvfb-run -a python -m unittest discover -s tests
       - name: Pinned runtime and PPU lifter
         run: python tools/fetch_ps3recomp.py --role runtime --role lifter-ppu
       - name: Managed Linux downloads, dependency builds and Vulkan runtime (no game data)
@@ -346,6 +361,9 @@ jobs:
           tar -xzf "$GITHUB_WORKSPACE"/installer-out/*.tar.gz
           ./*/mag-installer status > status.json
           python -c "import json,sys; s=json.load(open('status.json')); print(json.dumps(s['player_build'])); sys.exit(0 if s['player_build'].get('ready') else 1)"
+          # The kit manifest carries the reviewed identities the wizard checks chosen files against.
+          ./*/mag-installer guide --json --time-limit 2 > guide.json
+          python -c "import json,sys; g=json.load(open('guide.json')); print(g['detection']); sys.exit(0 if g['reviewed_identities'] else 1)"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: mag-installer-linux-x86_64

@@ -6,7 +6,8 @@ checkout on which tools/fetch_ps3recomp.py has run (--source). Writes
 release/native-kit.tar.gz and release/player-build.json under --root. The kit
 holds this repository's tooling source and the four pinned ps3recomp checkouts;
 it never reads game inputs or builds MAG. The kit is host-neutral; the manifest
-names the single host whose installer will carry it.
+names the single host whose installer will carry it, and carries a copy of the kit's reviewed input
+identities (SHA-256 values only) for the wizard's immediate checks.
 """
 import argparse
 import json
@@ -17,6 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from mag_installer.model import InstallerError
+from mag_installer.native_build import reviewed_identities
 from mag_installer.native_kit import pinned_sdks, prepare
 from mag_installer.player_build import PLAYER_HOSTS
 
@@ -37,6 +39,9 @@ def main(argv=None):
         record = {'schema_version': 1, 'host': args.host, 'distribution': 'source-kit',
                   'kit': {key: descriptor[key] for key in ('sha256', 'size', 'format', 'max_expanded_size', 'max_entries')}
                          | {'embedded': 'release/native-kit.tar.gz'},
+                  # A copy of the kit's reviewed input identities, so the wizard can check each file the moment
+                  # the player chooses it; builds still check against the kit's own.
+                  'reviewed_inputs': reviewed_identities(args.source),
                   'native_build_verified': False}
         manifest.write_text(json.dumps(record, indent=2) + '\n', encoding='utf-8')
         print(json.dumps({'kit': archive.name, 'manifest': record}, indent=2))
