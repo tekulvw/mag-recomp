@@ -18,7 +18,7 @@ VOICE_LINE = voice_option.describe(True, 'chosen')
 def cp1252_stream():
     """A stream like Windows' redirected stdout: cp1252, strict errors, over bytes we can inspect."""
     raw = io.BytesIO()
-    return io.TextIOWrapper(raw, encoding='cp1252', errors='strict', write_through=True), raw
+    return io.TextIOWrapper(raw, encoding='cp1252', errors='strict', newline='\n', write_through=True), raw
 
 
 class WriteLineTests(unittest.TestCase):
