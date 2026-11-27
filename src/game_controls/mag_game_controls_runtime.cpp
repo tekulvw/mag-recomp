@@ -175,9 +175,12 @@ bool hook_owned(MagControlsHook event, ppu_context* ctx) noexcept {
         if (last_status != visible) {
             std::fprintf(stderr, "[game-controls] %s\n", visible);
             last_status = visible;
-            // The session summary's phase: on foot is a match; the native menu buttons are menus.
+            // The session summary's phase: on foot is a match; the native menu buttons are menus. The
+            // local player's handler going away is the match's teardown (the level unloads), which
+            // ends the match at once rather than when the menu's buttons attach seconds later.
             if (attached) mag_session_set_phase(MAG_SESSION_PHASE_MATCH);
             else if (!std::strcmp(status, "native menu buttons attached")) mag_session_set_phase(MAG_SESSION_PHASE_MENU);
+            else if (!std::strcmp(status, "owned input handler removed")) mag_session_match_ended();
         }
     }
     return handled;

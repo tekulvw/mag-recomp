@@ -159,8 +159,8 @@ MAG can send a performance and error report after a session. A report covers fra
   - counts of frames over 33, 50, 100 and 250 ms, and how many of those over 50 ms were loading (`frames.loading`: the boot and loading screens, [below](#loading-and-freezes));
   - how long the next frame had been due when the summary was written (`frames.pending_ms`), and a `frozen` entry when that reached 10 s;
   - fps and percentiles for each minute of the last hour;
-  - the 16 worst hitches, each with its time and phase (front end, menu or match);
-  - time spent in each phase;
+  - the 16 worst hitches, each with its time and phase (front end, menu or match: on foot in a match, from the local player's controls attaching to the match's teardown or the next menu);
+  - time spent in each phase, and when the local player's matches were torn down (`match_ends_s`);
   - the audio path's counters, when the runtime provides them: mix periods, underruns, starved frames, late and dropped periods, device errors, and drift against the 48 kHz clock;
   - network health, when the runtime reports socket activity: for each game server endpoint, packets and bytes each way, the gaps between arriving packets, blocked and slow sends, socket errors and, for TCP, the round-trip time;
   - a timeline of the latest frame-rate dips and network gaps, each with its time, length, phase and verdict, and a verdict for each minute ([below](#frame-rate-dips-and-network-gaps));
@@ -189,7 +189,7 @@ The packaged supervisor decides after each session. The thresholds are named con
 | `halt` | The runtime stopped on an unresolved import or syscall (exit 88 or 87, `UNRESOLVED` in the log). |
 | `launch_error` | The supervisor stopped the launch with an error, such as missing game files or a changed executable. A launch that only asks you for a player name is not an error. |
 | `slow_frames` | Any of: the engine recorded a [sustained frame-rate drop](#sustained-frame-rate-drops) in a match; the engine presented no frame for 10 s or more before its summary was written (a [freeze](#loading-and-freezes)); or, judged after at least 120 s and 3,600 frames, more than 5% of frames took 50 ms or more, or 30 frames outside loading took 250 ms or more. |
-| `network` | The game server went silent for 2 s or more during a match while frames kept coming: a network gap of at least 2 s, in the match phase, with the verdict `network` (not `both`, which is a client stall). |
+| `network` | The game server went silent for 2 s or more during a match while frames kept coming: a network gap of at least 2 s, in the match phase, with the verdict `network` (not `both`, which is a client stall), on the game's data flow (not `"flow": "side"`) and not the server's silence at the match's end (`"match_end": true`). |
 | `audio` | At least 20 underruns plus one for every 30 s of audio, any audio device error, or drift of 2 s or more against the 48 kHz clock over at least 120 s. A stall puts the audio clock behind by the backlog it drops, so the periods dropped (256 frames each), up to the length of the session's stalls (frames of 1 s or more, and a freeze), are taken off a negative drift first. |
 | `manual` | You pressed **Send report**. |
 
@@ -217,17 +217,19 @@ The engine measures its frames and its network traffic on one clock, so a report
 
 **Which endpoints are named.** Any address the game opened a TCP connection to is a server it chose; its endpoints, and UDP endpoints at the same address, are reported with their address and port. Any other peer is counted under `other_endpoints` without its address, so a report never names another player's IP. At most 16 endpoints are kept; more are counted under `other_endpoints`.
 
+**The game's data flow.** A session talks to several server endpoints: sign-in, the lobby and the game server, whose connection carries the match. An endpoint is part of the game's data flow (`"game": true`) when it receives at least a quarter of the packet rate of the busiest endpoint, each rate taken over the endpoint's own span or 60 s, whichever is longer. The others are side flows. In the reports so far the game server's connection received 8.4 packets a second and the lobby connection 0.27: a burst of lobby packets made it "streaming", and its next pause, 6.7 s long, read as a server silence. The rate comes from packet counts alone, so it needs no port numbers or protocol knowledge.
+
 **Events.** Two kinds of event go into one timeline, each with its start (`at_s`, seconds since the engine started), its length, and the phase it started in:
 - a **frame-rate dip** (`"kind": "frames"`): one or more frames of 100 ms or more; slow frames that start within 500 ms of the previous one's end join the same dip, which records its span, how many slow frames it had and the worst one. A frame still not presented when the summary is written counts as an open dip. A dip in a match whose worst frame reached 10 s is marked `"stall": true`: the [stall reporter](stall-reporter.md) wrote `[mag-stall]` lines for it in `engine.log`, and its `[mag-stall] network` line says how long ago each open server connection last received a packet, so a frozen client with a live server and a client waiting on a silent server read differently.
-- a **network gap** (`"kind": "network"`): a silence of 500 ms or more on a streaming server endpoint, from its last packet to the next one. A silence that has not ended when the summary is written is reported as open (`"open": true`) with its length so far.
+- a **network gap** (`"kind": "network"`): a silence of 500 ms or more on a streaming server endpoint, from its last packet to the next one. A silence that has not ended when the summary is written is reported as open (`"open": true`) with its length so far. Each gap says whether it was on the game's data flow (`"flow": "game"`) or a side flow (`"side"`). A gap in a match that began 60 s or less before the local player's match was torn down is marked `"match_end": true`: the server goes quiet while it ends a match (both clients in one lobby saw the same 3.0 s silence in the same second, 16 to 19 s before the teardown at the win screen, which followed the victory music by 44 s).
 
 The timeline keeps the latest 64 events, oldest first.
 
 **Verdicts.** Each event gets a verdict from the events of the other kind that overlap it:
 - a network gap is `both` when frame-rate dips cover at least half of it (the client itself stalled, so it did not read what the server sent), and `network` otherwise (frames kept coming; the server or the network went quiet);
-- a frame-rate dip is `both` when network gaps cover at least half of it, and `frames` otherwise (rendering or CPU; the network was fine).
+- a frame-rate dip is `both` when gaps of the game's data flow cover at least half of it, and `frames` otherwise (rendering or CPU; the network was fine).
 
-Each minute of the per-minute series adds the network's packets in and out, the longest silence of a streaming server endpoint that ended in that minute (or was still open at its end), the highest TCP round-trip time sampled in it, and a verdict:
+Each minute of the per-minute series adds the network's packets in and out, the longest silence of the game's data flow, streaming, that ended in that minute (or was still open at its end), a side flow's longest such silence when it reached 1 s (`side_gap_ms`), the highest TCP round-trip time sampled in it, and a verdict:
 - frames are slow in a minute whose longest frame took 250 ms or more, or in which 5% or more of the frames took 100 ms or more;
 - the network had a gap in a minute whose longest silence reached 1 s;
 - the verdict is `ok`, `frames` (frame time high, network fine), `network` (frames fine, network gap) or `both` (for example a client hang, which stops both).
@@ -239,8 +241,9 @@ A minute with no streaming endpoint judges frames only.
 A long stretch at a low frame rate can pass the slow-frame counts: 40 s at 35 fps in a session averaging 100 fps has few frames over 50 ms. The engine watches for such drops while it runs.
 
 - **Windows.** Once a second the summary writer turns the frame counter's change into that second's frame rate. The frame clock's per-frame cost is unchanged.
-- **Baseline.** Each phase (front end, menu, match) has its own baseline: the median of its latest 180 one-second windows, so a menu at the frame cap and a match never mix. A phase needs 30 windows before its baseline is used. Every judged window feeds the baseline, so a drop that lasts longer than about half the span (90 s) becomes the new normal and ends.
-- **Not judged:** the first minute (the boot), a window holding a frame of 1 s or more or with no frame (loading, a stall: the [frame-rate dips](#frame-rate-dips-and-network-gaps), the [freeze](#loading-and-freezes) and the [stall reporter](stall-reporter.md) cover those), a window during a loading screen, the window in which the phase changed and the 5 s after.
+- **Baseline.** Each phase (front end, menu, match) has its own baseline: the median of its latest 600 one-second windows (ten minutes of that phase), so a menu at the frame cap and a match never mix. A phase needs 60 windows before its baseline is used. Every judged window feeds the baseline, so a drop that lasts longer than about half the span (5 minutes) becomes the new normal and ends.
+- **Not judged:** the first minute (the boot), a window holding a frame of 1 s or more or with no frame (loading, a stall: the [frame-rate dips](#frame-rate-dips-and-network-gaps), the [freeze](#loading-and-freezes) and the [stall reporter](stall-reporter.md) cover those), a window during [loading](#loading-and-freezes), the window in which the phase changed and the 5 s after.
+- **Loading is not a drop.** A map load stutters before its loading screen: frames of 0.3 to 0.9 s for a few seconds, then frames of 1 s or more. By the loading screen the stutter has often begun a drop. An episode outside a match that a loading span overlaps, including its lead (below), is discarded, as it goes or after it ended, and `engine.log` says `[mag session] fps drop in menu at 1524.8 s was loading; discarded` for one already logged. The drop detector and the slow-frame trigger use the same loading spans.
 - **A drop** begins when windows stay below the drop threshold for 3 s. The threshold is 60% of the baseline, and never above 60 fps, so a machine at 240 fps that falls to 140 has not dropped. At a 98 fps baseline the threshold is 59 fps.
 - **Debounce.** A drop ends when windows stay at or above the threshold × 0.8 / 0.6 (80% of the baseline, or 80 fps when the 60 fps limit set the threshold) for 3 s; it ends at the first of those windows. Rates between the two thresholds keep it going. A new drop in the same phase within 10 s of the end continues the same episode. A phase change ends it.
 - **Capture.** Each episode records its start (`at_s`) and length (`s`), phase, the baseline when it began, its mean and lowest one-second frame rate, its frames, the frames it lost against the baseline (`lost_frames`), and a capture from 5 s before to 5 s after it: the frames, p50, p95, p99 and the longest frame (to the top of its histogram bucket). It adds the seconds of stalls skipped inside it, `stall` (a match drop whose longest frame reached 10 s), the network gaps covering it with a verdict (`both` when they cover half of it, else `frames`) when the runtime reports sockets, and the change in the audio counters over the capture when it reports audio. A drop still going when the summary is written is reported so far, with `"open": true`.
@@ -250,6 +253,8 @@ A long stretch at a low frame rate can pass the slow-frame counts: 40 s at 35 fp
 A drop in a match makes a `slow_frames` report, with a reason such as `engine: FPS fell to 34 (35% of 98) for 41 s in a match (2 drops)`, naming the episode that lost the most frames. Drops in menus are recorded but do not make a report, because spawn screens, vehicles, death and loading all count as menu.
 
 **Why these defaults.** In the reports so far, sessions average 90 to 120 fps, menus run at the 120 or 144 fps cap, and matches run at about 70 to 110 fps in a minute; p99 is 27 to 47 ms. A drop to 60% of a match's baseline (45 to 65 fps) is well below an ordinary busy minute and well above a loading screen. Three seconds is past the hitch clusters the slow-frame counts already catch, and the 60 fps limit keeps fast machines from reporting a fall that still plays smoothly.
+
+**Why ten minutes.** A match opens quietly: in one report the second match ran at 110 to 120 fps for its first two minutes on foot, then at 45 to 60 fps once the fighting started, after a first match that ran at 45 to 66 fps for 20 minutes. A 180 s baseline was then mostly those two quiet minutes, 120 fps, and the first busy minute read as "53 fps, 44% of 120", against about 56 fps for the session's other busy-match minutes. Over 600 windows a two-minute opening is at most a fifth of the span and cannot move the median. Ignoring each match's first minutes instead would also hide the first match's real drops, which come in those minutes, when shaders and pipelines are first built. A session's first match still sets its baseline from its first 60 s on foot.
 
 The switches, set in the game's environment (for testing; the defaults need none):
 
@@ -263,7 +268,7 @@ The switches, set in the game's environment (for testing; the defaults need none
 | `MAG_FPS_DROP_RECOVER_SECONDS` | `3` | How long windows stay above the recovery threshold before a drop ends (1 to 600). |
 | `MAG_FPS_DROP_COOLDOWN` | `10` | A drop within this many seconds of the previous one's end continues it (0 to 30). |
 | `MAG_FPS_DROP_CAPTURE` | `5,5` | Seconds recorded before and after a drop (0 to 30 each; one number sets both). |
-| `MAG_FPS_DROP_BASELINE` | `180` | The baseline's span in one-second windows (30 to 600). |
+| `MAG_FPS_DROP_BASELINE` | `600` | The baseline's span in one-second windows (30 to 1200). |
 | `MAG_FPS_DROP_KEEP` | `8` | Episodes kept in the summary (1 to 32). |
 
 A value that does not parse or is out of range keeps the default. These are MAG's own variables, not runtime switches.
@@ -272,7 +277,8 @@ A value that does not parse or is out of range keeps the default. These are MAG'
 
 **Loading.** Loading frames are long by design, and every session has them. The boot load alone is a frame of 7 to 10 s and a few of 0.3 to 1.3 s in the first minute, and each map load adds frames of 1 to 5 s. The engine counts the slow frames (50 ms or more) that were loading apart, in `frames.loading`, and marks their hitches `"loading": true`:
 - every slow frame in the first 60 s after the engine started;
-- outside a match, a frame of 1 s or more (a loading screen), and the slow frames that end within 15 s after one.
+- outside a match, a frame of 1 s or more (a loading screen), the slow frames that end within 10 s before it starts (a map load stutters for 3 to 5 s before its first frame of a second), and the slow frames that end within 15 s after one;
+- the 15 s after the local player's match is torn down (the level unloads): the match phase ends there, at once, rather than when the menu's buttons attach 10 to 12 s later.
 
 A frame of 1 s or more on foot is a stall in play, not loading. The slow-frame trigger counts frames of 250 ms or more outside loading; a summary from before this count counts them all.
 

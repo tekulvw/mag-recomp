@@ -175,9 +175,9 @@ static std::string with_timeline(const std::string &summary_text, const std::str
     const size_t end = summary_text.rfind('}');
     return summary_text.substr(0, end) + ", \"phase\": \"" + phase + "\", \"timeline\": [" + events + "]}\n";
 }
-static std::string gap(double ms, const char *verdict, const char *phase = "match", bool open = false) {
+static std::string gap(double ms, const char *verdict, const char *phase = "match", bool open = false, const std::string &extra = "") {
     return std::string("{\"at_s\": 300.0, \"kind\": \"network\", \"ms\": ") + std::to_string(ms) + ", \"phase\": \"" + phase +
-           "\", \"endpoint\": \"tcp 192.0.2.10:10473\"" + (open ? ", \"open\": true" : "") + ", \"verdict\": \"" + verdict + "\"}";
+           "\", \"endpoint\": \"tcp 192.0.2.10:10473\"" + extra + (open ? ", \"open\": true" : "") + ", \"verdict\": \"" + verdict + "\"}";
 }
 
 static void network_reports(const fs::path &root) {
@@ -193,6 +193,10 @@ static void network_reports(const fs::path &root) {
         {"match", dip, Trigger::None},
         {"match", gap(4000, "network", "match", true), Trigger::Network},   // still silent at the end of a match
         {"menu", gap(4000, "network", "match", true), Trigger::None},       // open, but the match was over
+        {"match", gap(3000, "network", "match", false, ", \"flow\": \"game\""), Trigger::Network},
+        {"match", gap(7000, "network", "match", false, ", \"flow\": \"side\""), Trigger::None},  // a lobby connection's silence
+        {"match", gap(3000, "network", "match", false, ", \"flow\": \"game\", \"match_end\": true"), Trigger::None},  // the server's end-of-match silence
+        {"match", gap(3000, "network", "match", false, ", \"match_end\": false"), Trigger::Network},
     };
     for (const Case &c : cases) {
         Json j;
