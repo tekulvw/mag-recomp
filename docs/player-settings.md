@@ -136,7 +136,7 @@ The microphone opens only while voice chat is on and you are in a match, and clo
 
 The settings file holds `voice_chat` (`"off"` or `"ptt"`), `voice_volume` (a whole percentage, 0 to 200) and `voice_input`, the name of the input device to use (at most 256 bytes, no control characters; no field means the system's default input). The window has no row for `voice_input`: set it in the file. Each field is written only when it is not the default (`off`, 100, the system default), and files without them load as those defaults and are not rewritten until you save.
 
-A build without the voice service shows the rows disabled with "Not in this build yet" and keeps what the file holds. The game build defines `MAG_PLAYER_VOICE_SUPPORTED` for the settings sources when it includes the service.
+A build without the voice service shows the rows disabled with "Not in this build yet" and keeps what the file holds. The installer builds the service only when you ask for it ([Voice chat](../installer/README.md#voice-chat): tick **Voice chat: Include** before **Build MAG**). The game build defines `MAG_PLAYER_VOICE_SUPPORTED` for the settings sources when it includes the service.
 
 ## Reports
 

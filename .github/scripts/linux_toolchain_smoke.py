@@ -2,8 +2,9 @@
 
 Uses the same Linux prerequisite probe, verified Python/CMake/Ninja downloads,
 Python wheel closure, source dependency build plan, build environment and runtime
-options as Build MAG. CI must provision LINUX_PACKAGES before this check: it
-never offers an interactive package installation or reads player assets.
+options as Build MAG, and the pinned static Opus that voice builds link. CI must
+provision LINUX_PACKAGES before this check: it never offers an interactive
+package installation or reads player assets.
 """
 import argparse
 import json
@@ -20,6 +21,26 @@ from mag_installer.safety import Cancellation  # noqa: E402
 import compile_cache_check  # noqa: E402
 
 SEEN = []
+# Voice builds link the pinned static Opus; a 40 ms frame through its encoder and decoder.
+OPUS_CHECK = r"""#include <opus/opus.h>
+#include <math.h>
+#include <stdio.h>
+int main(void) {
+    int error;
+    OpusEncoder *encoder = opus_encoder_create(16000, 1, OPUS_APPLICATION_VOIP, &error);
+    if (error != OPUS_OK) return 1;
+    OpusDecoder *decoder = opus_decoder_create(16000, 1, &error);
+    if (error != OPUS_OK) return 2;
+    opus_int16 pcm[640], decoded[640];
+    for (int i = 0; i < 640; i++) pcm[i] = (opus_int16)(8000.0 * sin(i * 0.17));
+    unsigned char packet[400];
+    int bytes = opus_encode(encoder, pcm, 640, packet, sizeof packet);
+    if (bytes <= 0) return 3;
+    if (opus_decode(decoder, packet, bytes, decoded, 640, 0) != 640) return 4;
+    printf("%s: a 40 ms frame round trip in %d bytes\n", opus_get_version_string(), bytes);
+    return 0;
+}
+"""
 
 
 def events(event):
@@ -93,6 +114,13 @@ def main():
         if define not in command_text:
             raise InstallerError('Pinned runtime did not enable ' + define)
     step('build pinned runtime', [managed['cmake'], '--build', build, '--target', 'ps3recomp_runtime', '--parallel', '2'])
+    opus = Path(managed_tools.opus_prefix(managed, cache=work / 'cache', token=token, events=events, build_cache=store,
+                                          toolchain=toolchain))
+    voice = work / 'opus-check'; voice.mkdir(exist_ok=True)
+    (voice / 'opus_check.c').write_text(OPUS_CHECK)
+    step('link the pinned static Opus', [toolchain['cc'], '-O2', '-I' + str(opus / 'include'), voice / 'opus_check.c',
+                                         opus / 'lib/libopus.a', '-lm', '-o', voice / 'opus_check'])
+    step('Opus round trip', [voice / 'opus_check'])
     # Assert the dependency receipts exist; bootstrap rechecks their exact file
     # inventory on every later invocation, including a retry.
     if not (prefix / 'MANAGED-DEPENDENCIES.json').is_file():

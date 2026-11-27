@@ -1,8 +1,21 @@
 # Voice chat (in development)
 
 In-match voice chat is being built in stages; the design is
-[the voice-comms specification](superpowers/specs/2026-11-25-voice-comms-design.md). Players cannot use
-it yet. This page lists what exists now and how to switch it on in a lab.
+[the voice-comms specification](superpowers/specs/2026-11-25-voice-comms-design.md). It is compiled
+out unless a build asks for it. Players who want to test it build MAG with it through the installer
+(below); this page also lists what exists now and how to switch it on in a lab.
+
+## Building with voice chat (players)
+
+The installer builds voice chat only when the player asks: tick **Voice chat: Include** in the
+wizard, run `build --voice`, or start the installer with `MAG_VOICE=1` in its environment
+(Windows PowerShell `$env:MAG_VOICE = "1"`, then `.\mag-installer.exe`; macOS
+`MAG_VOICE=1 "./MAG Installer.app/Contents/MacOS/mag-installer"`; Linux `MAG_VOICE=1 ./mag-installer`).
+The choice is remembered for later builds; see the installer's
+[Voice chat](../installer/README.md#voice-chat) section. Such a build passes `-DMAG_VOICE=ON` and the
+pinned static Opus 1.5.2 the installer builds (`MAG_OPUS_ROOT`). Then turn on **Voice chat: Push to
+talk** in MAG Settings → General → Voice ([player-settings.md](player-settings.md#voice)) and hold K
+in a match. Unchosen, the installer passes neither, and builds, outputs and receipts are unchanged.
 
 ## What exists
 

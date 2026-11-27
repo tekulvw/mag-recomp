@@ -310,5 +310,32 @@ class NativeRecipeTests(unittest.TestCase):
                 with self.subTest(bad=bad), self.assertRaises(InstallerError):
                     self.load(root, dict(data, cmake_args=[bad]))
 
+    def test_voice_cmake_arg_is_allowed_on_or_off_and_nothing_broader(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); data = self.config(root)
+            for value in ('ON', 'OFF'):
+                self.assertEqual(self.load(root, dict(data, cmake_args=['-DMAG_VOICE=' + value]))['cmake_args'], ['-DMAG_VOICE=' + value])
+            for bad in ('-DMAG_VOICE=on', '-DMAG_VOICE=1', '-DMAG_VOICE=', '-DMAG_VOICE=ON -DCMAKE_C_FLAGS=x',
+                        '-DMAG_VOICES=ON', '-DMAG_OPUS_ROOT=/opus', '-DMAG_VOICE_MODE=ptt', '-DMAG_GAME_CONTROLS=ON'):
+                with self.subTest(bad=bad), self.assertRaises(InstallerError):
+                    self.load(root, dict(data, cmake_args=[bad]))
+
+    def test_voice_build_passes_the_switch_and_the_pinned_opus_to_both_configures(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); data = self.config(root); workspace = self.workspace(root)
+            plan = build_plan(self.load(root, data), workspace)
+            self.assertFalse(any('MAG_VOICE' in a or 'MAG_OPUS' in a for stage in plan for a in stage['argv']))
+            (root / 'opus').mkdir()
+            with self.assertRaisesRegex(InstallerError, 'opus'):
+                self.load(root, dict(data, opus={'root': 'opus', 'library': 'x'}))
+            with self.assertRaisesRegex(InstallerError, 'opus.root'):
+                self.load(root, dict(data, opus={'root': 'missing'}))
+            config = self.load(root, dict(data, cmake_args=['-DMAG_VOICE=ON'], opus={'root': 'opus'}))
+            self.assertEqual(config['opus'], {'root': str((root / 'opus').resolve())})
+            plan = {stage['id']: stage['argv'] for stage in build_plan(config, workspace)}
+            for name in ('configure-launcher', 'configure-engine'):
+                self.assertIn('-DMAG_VOICE=ON', plan[name])
+                self.assertIn('-DMAG_OPUS_ROOT=' + str((root / 'opus').resolve()), plan[name])
+
 
 if __name__ == '__main__': unittest.main()
