@@ -26,7 +26,11 @@
  * First-use builds (the runtime's ps3emu/rsx_build_stats.h, when the pinned runtime has it): each
  * presented frame reads the runtime's cumulative pipeline, shader and texture-upload counters, so
  * every hitch carries what the renderer built or uploaded while it lasted, and the summary says
- * how many slow frames had builds in them (docs/player-settings.md, "What a slow frame built"). */
+ * how many slow frames had builds in them (docs/player-settings.md, "What a slow frame built").
+ *
+ * Host CPU (src/mag_session_host.h): once a second the summary writer also reads the computer's
+ * CPU use, MAG's own and the threads ready to run, which each minute and each drop's capture
+ * report as shares (docs/player-settings.md, "Host CPU"). */
 #include <stddef.h>
 #include <stdint.h>
 
@@ -86,6 +90,7 @@ double mag_session_seconds(void);
 #include <string>
 #include <vector>
 
+#include "mag_session_host.h"
 #include "mag_session_network.h"
 
 namespace mag::session {
@@ -183,6 +188,18 @@ using Histogram = std::array<uint64_t, bucket_count>;
 /* A percentile (0 to 100) of a histogram, in milliseconds, interpolated within its bucket. */
 double percentile_ms(const Histogram &, double percent);
 
+/* The host's CPU over a span (a minute, a drop's capture), from two cumulative readings: the whole
+ * computer's busy share of all its CPUs, MAG's own share of them, and the mean threads ready to
+ * run (when the system reports them). Shares are percentages of every logical CPU together. */
+struct HostShare {
+    bool seen = false;
+    double cpu_pct = 0, mag_pct = 0;
+    double other_max_pct = 0;  /* a minute's busiest second for everything but MAG */
+    bool runnable_known = false;
+    double runnable = 0;
+    double other_pct() const { return cpu_pct > mag_pct ? cpu_pct - mag_pct : 0; }
+};
+
 struct Minute {
     uint64_t index = 0;  /* minutes since the monitor started */
     uint64_t frames = 0;
@@ -192,6 +209,7 @@ struct Minute {
     net::Minute net;
     Builds builds;                 /* the minute's first-use work (when build counters are available) */
     uint64_t slow_with_builds = 0; /* its frames of 50 ms or more that had builds in them */
+    HostShare host;                /* the computer's CPU over the minute */
 };
 /* "ok", "frames" (frame time high, network fine), "network" (frames fine, network gap) or "both". */
 const char *minute_verdict(const Minute &);
@@ -285,6 +303,7 @@ struct Drop {
     const char *verdict = "frames";  /* "both" when network gaps cover both_cover_share of the drop */
     bool audio = false;
     uint64_t audio_delta[MAG_SESSION_AUDIO_COUNTER_COUNT] = {};
+    HostShare host;                 /* the computer's CPU over the capture */
     bool open = false;              /* still below the recovery threshold at the snapshot */
 };
 /* The engine log's line for an episode. */
@@ -318,6 +337,9 @@ struct Snapshot {
     uint64_t drop_count = 0;   /* episodes this session, including one in progress */
     std::vector<Drop> drops;   /* the worst drop_config.keep, oldest first, any in progress last */
     std::vector<double> match_ends;  /* when the local player's matches were torn down (the latest) */
+    bool host_seen = false;          /* the host's CPU counters were read */
+    unsigned host_cpus = 0;
+    bool host_runnable = false;      /* the system reports threads ready to run */
     BuildInfo builds;
     SlowBuilds slow_builds[3];  /* slow_build_thresholds_us */
 };
@@ -333,6 +355,8 @@ public:
     void frame(uint64_t now_ns, const Builds *builds = nullptr);
     /* The runtime's build facts and totals, polled with the audio counters. */
     void build_info(const BuildInfo &info);
+    /* The host's cumulative CPU readings at `now_ns`, once a second (the summary writer). */
+    void host_cpu(const machine::Sample &sample, uint64_t now_ns);
     void set_phase(int phase, uint64_t now_ns);
     /* The local player's match was torn down: the phase becomes menu, the load_join_us after it
      * are loading, and network gaps shortly before it are the match's end. */
@@ -359,9 +383,16 @@ public:
 
 private:
     /* The drop detector's state, all under rare_ and touched only by tick() and snapshot(). */
+    /* The host's cumulative CPU readings and the time they were taken. */
+    struct HostTotals {
+        uint64_t ns = 0, busy_ns = 0, total_ns = 0, process_ns = 0;
+        uint64_t runnable_sum = 0, runnable_count = 0;
+    };
+    HostShare host_share(const HostTotals &from, const HostTotals &to) const;
     struct Window {  /* a window's start: the cumulative counters at a tick */
         uint64_t ns = 0, frames = 0;
         uint64_t audio[MAG_SESSION_AUDIO_COUNTER_COUNT] = {};
+        HostTotals host;
     };
     struct Span {  /* frames and time of the windows judged in part of an episode */
         uint64_t frames = 0;
@@ -463,6 +494,10 @@ private:
     SlowBuilds slow_builds_[3];
     Builds minute_builds_base_;
     uint64_t minute_slow_builds_base_ = 0;
+    bool host_seen_ = false, host_runnable_ = false;
+    unsigned host_cpus_ = 0;
+    HostTotals host_{}, minute_host_base_{};
+    double minute_other_max_pct_ = 0;
 };
 
 /* For the stall reporter: the network's state now (Network::status), "" without network counters. */

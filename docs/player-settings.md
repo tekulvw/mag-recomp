@@ -164,7 +164,10 @@ MAG can send a performance and error report after a session. A report covers fra
   - the audio path's counters, when the runtime provides them: mix periods, underruns, starved frames, late and dropped periods, device errors, and drift against the 48 kHz clock;
   - network health, when the runtime reports socket activity: for each game server endpoint, packets and bytes each way, the gaps between arriving packets, blocked and slow sends, socket errors and, for TCP, the round-trip time;
   - a timeline of the latest frame-rate dips and network gaps, each with its time, length, phase and verdict, and a verdict for each minute ([below](#frame-rate-dips-and-network-gaps));
-  - the worst sustained frame-rate drops (`fps_drops`), each with its baseline, its frame rate and a capture of the seconds around it ([below](#sustained-frame-rate-drops)).
+  - the worst sustained frame-rate drops (`fps_drops`), each with its baseline, its frame rate and a capture of the seconds around it ([below](#sustained-frame-rate-drops));
+  - the computer's CPU use, MAG's own and, on Linux, the threads ready to run, for each minute and each drop's capture ([below](#host-cpu)).
+
+  When the summaries would make the report's metrics larger than 64 KiB, the oldest minutes go first, ten at a time (`minutes_trimmed` counts them). Only if that is not enough do the per-minute series and the histograms go.
 - **The session:** how the launcher and the engine exited, why the report was made, and the first line of a halt (an unresolved import or syscall). If the launch stopped with an error, its message is included.
 - **The client:** the MAG version and platform, operating system and version, CPU, thread count, memory, GPU, renderer, the game server's address, the display settings, whether the controls trace was on (`controls_trace`, see [Debug](#debug)), and the build identities from the package receipts (runtime revision and SHA-256 digests).
 - **Logs:** the ends of this launch's `launcher.log`, `engine.log`, `supervisor.log` and `settings.log`, gzip-compressed, at most 2 MiB compressed in total.
@@ -293,6 +296,18 @@ A frame can be slow because the renderer met something new: a program and render
 - a `builds` section: the backend, which disk caches are on (`spirv_disk_cache`, `vk_pipeline_cache`, and the pipeline-cache bytes loaded at start), the session's totals, and for frames of 50, 100 and 250 ms or more, how many there were, how many had builds or uploads in them, and the time those took.
 
 A frame of 250 ms or more that built or uploaded something also writes one `[mag session] slow frame` line to `engine.log`. Without the runtime's counters the summary says `"builds": {"available": false}`.
+
+### Host CPU
+
+A game can be slow because the computer is busy with something else. Once a second the summary writer reads the whole computer's CPU counters and MAG's own CPU time, so each minute and each drop says how busy the computer was and how much of that was MAG:
+- `cpu`: the whole computer's busy share of all its logical CPUs together, in percent (100 is every CPU busy);
+- `mag`: MAG's own CPU time over the same span, as a share of all the CPUs (on 16 CPUs, 25 is four CPUs' worth);
+- in a minute, `other_max`: its busiest second for everything but MAG (`cpu` minus `mag`); in a drop's capture, `other`: the same over the capture;
+- `run`: the mean number of threads ready to run, system-wide, on Linux only (`procs_running` in `/proc/stat`, read once a second). macOS and Windows have no cheap count of them, so they leave it out.
+
+The summary's `host` section says whether the counters were read (`available`), the number of logical CPUs (`cpus`) and whether `run` is known (`runnable`). Each minute's line in `engine.log` adds `host cpu 63% (MAG 41%, others up to 30%)`, and each drop's line adds `host cpu 72% (MAG 22%)`.
+
+The counters are cumulative, so a late second loses nothing, and they are read on the summary writer's thread, never per frame. The sources are `/proc/stat` and `CLOCK_PROCESS_CPUTIME_ID` on Linux, `host_statistics(HOST_CPU_LOAD_INFO)` and `CLOCK_PROCESS_CPUTIME_ID` on macOS, and `GetSystemTimes` and `GetProcessTimes` on Windows (`src/mag_session_host.h`). MAG's share is taken against wall time on every CPU, so it does not depend on the system's tick.
 
 ### Sending
 
