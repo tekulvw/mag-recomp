@@ -22,7 +22,7 @@ from .safety import Cancellation, contained, file_digest
 
 def _run_tool(argv, token):
     token.check()
-    process = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    process = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors='replace')
     try:
         while True:
             token.check()
@@ -331,7 +331,7 @@ def package(config, workspace, destination, token=None, events=None):
     for role, folder_name, image in [('launcher', 'build', 'EBOOT'), ('engine', 'build-engine', 'mage_g')]:
         binary = _ordinary(contained(workspace, folder_name + '/MagRecomp'))
         receipt = _ordinary(binary.with_suffix('.receipt.json'))
-        record = json.loads(receipt.read_text()); expected = manifest['images'][image]
+        record = json.loads(receipt.read_text(encoding='utf-8')); expected = manifest['images'][image]
         if (record.get('binary_sha256') != _digest(binary, token) or record.get('elf_sha256') != expected['elf_sha256'] or record.get('image_name') != image):
             raise InstallerError(f'Native source receipt mismatch: {receipt}')
         if record.get('sdk_revision') not in set(framework['strict_runtime_revisions']) & set(framework['strict_hle_runtime_revisions']):
@@ -398,12 +398,12 @@ def package(config, workspace, destination, token=None, events=None):
             # A distinct package receipt binds transformed bytes and the build's
             # immutable source receipt; it does not rewrite the source build.
             record = package_receipt(records[role], macos/name, originals[role][1], token)
-            (package_receipts/(role+'.json')).write_text(json.dumps(record,indent=2)+'\n')
-        (resources/'runtime.json').write_text(json.dumps(runtime,indent=2)+'\n')
+            (package_receipts/(role+'.json')).write_text(json.dumps(record,indent=2)+'\n',encoding='utf-8')
+        (resources/'runtime.json').write_text(json.dumps(runtime,indent=2)+'\n',encoding='utf-8')
         # The supervisor and the report, portal and gzip sources it builds with, from the
         # workspace's own source (removed again: the app carries only the binary).
         scratch=resources/'supervisor-build'; scratch.mkdir()
-        source=scratch/'launcher.mm'; source.write_text(_LAUNCHER)
+        source=scratch/'launcher.mm'; source.write_text(_LAUNCHER,encoding='utf-8')
         for name in SUPERVISOR_SOURCES:
             shutil.copyfile(_ordinary(contained(workspace,'src/'+name)),scratch/name)
         supervisor=macos/'MAG'

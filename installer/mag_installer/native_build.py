@@ -66,7 +66,7 @@ def _source_files(root, token=None):
 def _probe(argv, env):
     try:
         return subprocess.run([str(x) for x in argv], env=env, stdin=subprocess.DEVNULL,
-                              capture_output=True, text=True, check=True, timeout=30).stdout.strip()
+                              capture_output=True, text=True, errors='replace', check=True, timeout=30).stdout.strip()
     except (OSError, subprocess.SubprocessError) as exc:
         raise InstallerError(f'Prerequisite command failed: {argv[0]} {argv[1:]}; {str(getattr(exc, "stderr", ""))[-1500:]}') from exc
 
@@ -346,7 +346,7 @@ def preflight(config_path, output, token=None):
     _probe([config['python'], '-c', 'import sys,json,hashlib,struct,concurrent.futures,Crypto,capstone,construct,tabulate,tqdm; assert sys.version_info >= (3,11), "Python 3.11+ required"'], env)
     for tool in ('cmake', 'ninja', 'git'): _probe([config[tool], '--version'], env)
     if config.get('game_controls'):
-        channel = re.search(r'channel\s*=\s*"([0-9]+\.[0-9]+\.[0-9]+)"', (source / 'rust-toolchain.toml').read_text())
+        channel = re.search(r'channel\s*=\s*"([0-9]+\.[0-9]+\.[0-9]+)"', (source / 'rust-toolchain.toml').read_text(encoding='utf-8'))
         for tool in ('cargo', 'rustc'):
             inputs.append(_ordinary(config['game_controls'][tool], False))
             version = _probe([config['game_controls'][tool], '--version'], env)

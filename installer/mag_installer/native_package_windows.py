@@ -503,7 +503,7 @@ def _compile(clang_cl, environment, source_dir, output, token):
         token.check()
         try:
             result = subprocess.run(argv, cwd=source_dir, env=environment, stdin=subprocess.DEVNULL,
-                                    capture_output=True, text=True, timeout=300)
+                                    capture_output=True, text=True, errors='replace', timeout=300)
         except (OSError, subprocess.SubprocessError) as exc:
             raise InstallerError(f'Cannot compile the MAG supervisor: {exc}') from exc
         if result.returncode:

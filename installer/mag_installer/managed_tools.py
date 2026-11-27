@@ -343,7 +343,7 @@ def rust_toolchain(root, cache=None, token=None, events=None, host=None):
     if combined.exists() or combined.is_symlink():
         receipt = combined / 'MANAGED-INVENTORY.json'
         if combined.is_symlink() or receipt.is_symlink() or not receipt.is_file() or \
-                json.loads(receipt.read_text()) != _inventory(combined, token):
+                json.loads(receipt.read_text(encoding='utf-8')) != _inventory(combined, token):
             raise InstallerError('Managed Rust toolchain changed; choose fresh storage')
     else:
         with tempfile.TemporaryDirectory(prefix='.managed-', dir=root / 'artifacts') as scratch:
@@ -618,7 +618,7 @@ def materialize(spec, root, cache, token, events):
     if final.exists():
         receipt=final/'MANAGED-INVENTORY.json'
         if final.is_symlink() or receipt.is_symlink() or not receipt.is_file(): raise InstallerError('Managed tool has no verified inventory; choose fresh storage')
-        recorded=json.loads(receipt.read_text())
+        recorded=json.loads(receipt.read_text(encoding='utf-8'))
         _discard_stray_bytecode(final,recorded,token)
         current=_inventory(final,token)
         # A recorded bytecode file that was rewritten is gone now; nothing else may differ.
@@ -798,7 +798,7 @@ def _dependency_prefix(prefix, identity, stages, required, run_stages, token, ev
     marker = prefix/'MANAGED-DEPENDENCIES.json'
     if marker.exists():
         inventory = prefix/'MANAGED-INVENTORY.json'
-        if json.loads(marker.read_text()) != identity or not inventory.is_file() or json.loads(inventory.read_text()) != _inventory(prefix, token):
+        if json.loads(marker.read_text(encoding='utf-8')) != identity or not inventory.is_file() or json.loads(inventory.read_text(encoding='utf-8')) != _inventory(prefix, token):
             raise InstallerError('Managed dependency identity changed; use fresh managed storage')
         return None
     key = None
@@ -1226,7 +1226,7 @@ def linux_platform_probe():
     import platform
     try:
         release = {}
-        for line in Path('/etc/os-release').read_text().splitlines():
+        for line in Path('/etc/os-release').read_text(encoding='utf-8', errors='replace').splitlines():
             key, separator, value = line.partition('=')
             if separator: release[key] = value.strip('"\'')
         version = tuple(int(n) for n in release.get('VERSION_ID', '').split('.'))

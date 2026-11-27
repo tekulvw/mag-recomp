@@ -71,7 +71,7 @@ def ccache_tool(root, host, cache=None, token=None, events=None):
 def _run(argv, env):
     try:
         result = subprocess.run([str(a) for a in argv], env=env, stdin=subprocess.DEVNULL, capture_output=True,
-                                text=True, timeout=60)
+                                text=True, errors='replace', timeout=60)
     except (OSError, subprocess.SubprocessError) as exc:
         raise InstallerError(f'Cannot identify the compiler for the compile cache: {argv[0]}: {exc}') from exc
     if result.returncode:

@@ -47,7 +47,8 @@
     "mag_installer/build_jobs.py",
     "mag_installer/voice_option.py",
     "mag_installer/rpcs3_detect.py",
-    "mag_installer/input_guide.py"
+    "mag_installer/input_guide.py",
+    "mag_installer/console.py"
   ],
   "excludes": [
     "original game and firmware files",
