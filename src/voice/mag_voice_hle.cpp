@@ -1,21 +1,32 @@
 /* The game's voice-library calls, answered by the MAG voice service (src/voice/mag_voice_core.h).
  *
- * Inert unless switched on: a prepare callback reads the environment, and only when it selects a
+ * Inert unless switched on: a start callback reads the environment, and only when it selects a
  * voice mode are context handlers registered for the library's functions. The runtime dispatches
  * context handlers before its own table, so with voice off its cellVoice stub answers every call as
  * before and nothing here runs.
  *
+ * MAG_VOICE_MODE=ptt           the player mode: the microphone, gated by the controls' Push to talk
+ *                              action (K by default), coded with Opus; talkers play on a host
+ *                              stream (the game's headset output). The player setting "Voice chat"
+ *                              sets it.
+ * MAG_VOICE_INPUT=<name>       the host capture device (blank: the system default)
  * MAG_VOICE_TEST_TONE=pattern  lab mode: no microphone; one second on, one second off, each frame a
  *                              block of counting bytes (docs/voice-chat.md)
  * MAG_VOICE_TEST_TONE=tone     lab mode: the same cadence carrying an Opus-coded 440 Hz tone; received
  *                              talkers are decoded and played on a host stream (the game's headset
  *                              output; PS3_MUTE keeps it silent)
  * MAG_VOICE_VOLUME=<0..200>    voice playback volume in percent (default 100)
- * MAG_VOICE_TRACE=<path>       JSON lines of the calls: sizes, counts and times, never audio */
+ * MAG_VOICE_TRACE=<path>       JSON lines of the calls: sizes, counts and times, never audio
+ *
+ * A lab mode wins over MAG_VOICE_MODE: it never opens the microphone. */
 #include "mag_voice_core.h"
+#include "mag_voice_capture.h"
 #include "mag_voice_opus.h"
 #include "mag_voice_output.h"
 #include "mag_extension.h"
+#if MAG_VOICE_PUSH_TO_TALK
+#include "mag_game_controls_push_to_talk.h"
+#endif
 #include "ppu/ppu_context.h"
 #include "ps3emu/nid.h"
 
@@ -266,25 +277,69 @@ uint64_t monotonic_ms() {
     return static_cast<uint64_t>(duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count());
 }
 
-void voice_prepare(const char*) {
+// Push to talk as the controls adapter reports it (mag_game_controls_push_to_talk.h).
+PttInput push_to_talk() {
+    PttInput input;
+#if MAG_VOICE_PUSH_TO_TALK
+    int held = 0, focused = 0;
+    input.available = mag_game_controls_push_to_talk(&held, &focused) != 0;
+    input.held = held != 0;
+    input.focused = focused != 0;
+#endif
+    return input;
+}
+
+// Whether push to talk can work in this process; if not, why (voice is then receive-only and the
+// microphone is never opened).
+const char* push_to_talk_missing() {
+#if MAG_VOICE_PUSH_TO_TALK
+    const char* controls = std::getenv("MAG_GAME_CONTROLS");
+    if (controls && std::strcmp(controls, "0") == 0) return "the controls adapter is off (MAG_GAME_CONTROLS=0)";
+    return nullptr;
+#else
+    return "this build has no controls adapter (MAG_GAME_CONTROLS)";
+#endif
+}
+
+// At the extension's start, after the ELF is loaded and before the guest runs: the player settings
+// have put MAG_VOICE_* into the environment by then (mag_player_settings_prepare runs after the
+// extensions' prepare), and the runtime resolves context handlers at call time.
+void voice_start(const char*) {
     const char* tone = std::getenv("MAG_VOICE_TEST_TONE");
     const char* mode = std::getenv("MAG_VOICE_MODE");
     const bool pattern = tone && std::strcmp(tone, "pattern") == 0;
     const bool coded = tone && std::strcmp(tone, "tone") == 0;
-    if (!pattern && !coded) {
-        if ((tone && *tone && std::strcmp(tone, "0") != 0) || (mode && *mode && std::strcmp(mode, "off") != 0))
-            std::fprintf(stderr, "[voice] this build has only the lab modes (MAG_VOICE_TEST_TONE=pattern or tone); "
-                                 "voice stays off\n");
+    const bool ptt = !pattern && !coded && mode && std::strcmp(mode, "ptt") == 0;
+    if (!pattern && !coded && !ptt) {
+        if (tone && *tone && std::strcmp(tone, "0") != 0)
+            std::fprintf(stderr, "[voice] MAG_VOICE_TEST_TONE=%s is not a lab mode (pattern or tone); voice stays off\n", tone);
+        else if (mode && *mode && std::strcmp(mode, "off") != 0)
+            std::fprintf(stderr, "[voice] MAG_VOICE_MODE=%s is not a voice mode (off or ptt); voice stays off\n", mode);
         return;
     }
     ServiceOptions options;
     options.now_ms = monotonic_ms;
-    options.source = std::make_unique<TestToneSource>();
-    if (coded) {
+    const char* label = coded ? "lab tone" : pattern ? "lab pattern" : "push to talk";
+    if (ptt) {
+        if (const char* missing = push_to_talk_missing()) {
+            // No way to talk: never open the microphone, but still play the other players.
+            std::fprintf(stderr, "[voice] no push to talk: %s; voice is receive-only\n", missing);
+            label = "receive-only";
+        } else {
+            const char* input = std::getenv("MAG_VOICE_INPUT");
+            options.source = std::make_unique<PttGate>(
+                std::make_unique<MicSource>(host_capture_devices(), input ? input : ""), push_to_talk);
+        }
+        options.encoder = make_opus_encoder();
+        options.decoder = opus_decoder_factory();
+        g_plays = true;
+    } else if (coded) {
+        options.source = std::make_unique<TestToneSource>();
         options.encoder = make_opus_encoder();
         options.decoder = opus_decoder_factory();
         g_plays = true;
     } else {
+        options.source = std::make_unique<TestToneSource>();
         options.encoder = std::make_unique<PatternEncoder>();
     }
     if (const char* volume = std::getenv("MAG_VOICE_VOLUME")) {
@@ -307,15 +362,15 @@ void voice_prepare(const char*) {
         {"cellVoiceGetPortInfo", voice_get_port_info}, {"cellVoiceReadFromOPort", voice_read},
         {"cellVoiceWriteToIPort", voice_write}, {"cellVoiceGetSignalState", voice_signal_state}};
     for (const auto& entry : entries) ps3_hle_register_ctx(ps3_compute_nid(entry.name), entry.name, entry.fn);
-    std::fprintf(stderr, "[voice] lab %s mode: %zu voice-library handlers registered\n", coded ? "tone" : "pattern",
+    std::fprintf(stderr, "[voice] %s mode: %zu voice-library handlers registered\n", label,
                  sizeof entries / sizeof entries[0]);
 }
 
 struct Registration {
     Registration() {
         MagExtensionCallbacks callbacks{};
-        callbacks.prepare = voice_prepare;
-        if (mag_extension_register(&callbacks) != 0) std::fprintf(stderr, "[voice] could not register its prepare callback\n");
+        callbacks.start = voice_start;
+        if (mag_extension_register(&callbacks) != 0) std::fprintf(stderr, "[voice] could not register its start callback\n");
     }
 } registration;
 }  // namespace

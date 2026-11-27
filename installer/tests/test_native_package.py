@@ -92,6 +92,28 @@ class NativePackageTests(unittest.TestCase):
             self.assertFalse((folder/'MAG.app').exists());self.assertFalse((folder/'game').exists())
 
     @unittest.skipUnless(platform.system() == 'Darwin' and Path('/usr/bin/xcrun').is_file(), 'macOS signing/toolchain fixture')
+    def test_info_plist_asks_for_the_microphone_without_an_entitlement(self):
+        import plistlib
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp).resolve();workspace=self.fixture(root/'build');calls=[]
+            def tool(argv,token):
+                calls.append(argv);return self.tool(argv,token)
+            with patch('mag_installer.native_package._run_tool',side_effect=tool):
+                app=package({'python':'/usr/bin/python3'},workspace,self.mag_folder(root)/'MAG.app')
+            with (app/'Contents/Info.plist').open('rb') as stream:info=plistlib.load(stream)
+            # Voice chat: macOS shows this the first time MAG opens the microphone.
+            self.assertEqual(info['NSMicrophoneUsageDescription'],
+                             'MAG uses the microphone for in-match voice chat while you hold push to talk.')
+            self.assertEqual(info['CFBundleExecutable'],'MAG')
+            # Ad hoc signed without the hardened runtime: no audio-input entitlement is needed or given.
+            signing=[argv for argv in calls if argv[0].endswith('codesign')]
+            self.assertTrue(signing)
+            for argv in signing:
+                self.assertEqual(argv[1:4],['--force','--sign','-'])
+                self.assertFalse({'--options','--entitlements','runtime'} & set(argv),argv)
+            self.assertFalse(list(app.rglob('*.entitlements')))
+
+    @unittest.skipUnless(platform.system() == 'Darwin' and Path('/usr/bin/xcrun').is_file(), 'macOS signing/toolchain fixture')
     def test_real_macos_packaging_signs_synthetic_dylib_closure_without_launch(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp).resolve();workspace=self.fixture(root)

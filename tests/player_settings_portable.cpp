@@ -1,5 +1,6 @@
 // Synthetic driver for the portable player settings, overlay, decoder and digest.
 #include "player_inflate.h"
+#include "player_settings_form.h"
 #include "player_settings_portable.h"
 #include "player_settings_runtime.h"
 #include "player_server_overlay_portable.h"
@@ -60,11 +61,38 @@ int main(int argc, char **argv) {
         for (const auto &[name, value] : mag::server_sign_in_environment(argv[2], argv[3])) std::cout << name << '=' << value << '\n';
         return 0;
     }
+    if (mode == "voice-environment" && argc == 3) {  // voice-environment <settings file>: what the engine gets
+        auto in = load(argv[2]); mag::PortableSettings settings; std::string error;
+        if (!mag::parse_portable_settings(std::string(in.begin(), in.end()), settings, error)) { std::cerr << error << '\n'; return 1; }
+        for (const auto &[name, value] : mag::voice_environment(settings)) std::cout << name << '=' << value << '\n';
+        return 0;
+    }
+    if (mode == "form" && (argc == 3 || argc == 6)) {
+        // form <settings file> [voice_chat index, voice_volume step or "keep", voice_input]: the window's
+        // form loads the file and shows the voice fields; with edits, its Apply writes the draft.
+        mag::SettingsForm form; std::string error;
+        const bool loaded = mag::settings_form_load(argv[2], form, error);
+        std::cout << "loaded=" << loaded << " voice_chat=" << form.voice_chat << " voice_volume=" << form.voice_volume
+                  << " step=" << mag::settings_form_voice_volume_step(form) << " voice_input=" << form.voice_input
+                  << " dirty=" << mag::settings_form_general_dirty(form) << '\n';
+        if (argc == 3) return loaded ? 0 : 1;
+        form.voice_chat = std::atoi(argv[3]);
+        if (std::string(argv[4]) != "keep") mag::settings_form_set_voice_volume_step(form, std::atoi(argv[4]));
+        form.voice_input = argv[5];
+        mag::PortableSettings draft;
+        if (!mag::settings_form_general_draft(form, draft, error)) { std::cerr << error << '\n'; return 3; }
+        std::cout << "dirty=" << mag::settings_form_general_dirty(form) << '\n';
+        if (!mag::settings_form_apply_general(argv[2], form, draft, error)) { std::cerr << error << '\n'; return 4; }
+        std::cout << "voice_chat=" << form.voice_chat << " voice_volume=" << form.voice_volume << " voice_input=" << form.voice_input
+                  << " dirty=" << mag::settings_form_general_dirty(form) << '\n';
+        return 0;
+    }
     if (mode == "prepare") {
         int result = mag_player_settings_prepare();
         for (const char *name : {"PS3_VFS_ROOT", "PS3_VFS_OVERLAY", "PS3_NET_ONLINE", "MAG_LOCAL_NO_TICKET", "PS3_NP_ONLINE_ID", "PS3RECOMP_OSK_INITIAL_TEXT", "MAG_LOCAL_ACCOUNT_NAME",
                                  "PS3RECOMP_NP_LOCAL_TICKET", "PS3RECOMP_NP_TICKET_FILE", "PS3RECOMP_VK_FULLSCREEN",
-                                 "MAG_PLAYER_OUTPUT_SIZE", "MAG_PLAYER_RENDER_SCALE"}) {
+                                 "MAG_PLAYER_OUTPUT_SIZE", "MAG_PLAYER_RENDER_SCALE", "MAG_VOICE_MODE", "MAG_VOICE_VOLUME",
+                                 "MAG_VOICE_INPUT", "MAG_VOICE_TEST_TONE", "MAG_VOICE_TRACE"}) {
             const char *value = std::getenv(name);
             std::cout << name << '=' << (value ? value : "") << '\n';
         }

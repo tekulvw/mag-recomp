@@ -105,6 +105,7 @@ static void prompts() {
 // Command screen M).
 static ControlsProfile revision_2() {
     auto p = mag_game_controls_default_profile();
+    std::erase_if(p.bindings, [](const auto& b) { return mag_game_controls_action(b.action)->revision >= 5; });
     for (auto& b : p.bindings) {
         if (b.action == 0x33e32a99) b.control.code = 40;
         else if (b.action == 0x40feec35) b.control.code = 27;
@@ -176,7 +177,10 @@ static void upgrade_from_3() {
     const PhysicalControl up{InputSource::Mouse, MouseWheelUp}, down{InputSource::Mouse, MouseWheelDown};
     const auto revision_3 = [] {
         auto p = mag_game_controls_default_profile();
-        std::erase_if(p.bindings, [](const auto& b) { return b.control.source == InputSource::Mouse && b.control.code >= 8; });
+        std::erase_if(p.bindings, [](const auto& b) {
+            return (b.control.source == InputSource::Mouse && b.control.code >= 8) ||
+                   mag_game_controls_action(b.action)->revision >= 5;
+        });
         p.catalog_revision = 3;
         return p;
     };
@@ -206,6 +210,7 @@ static void upgrade_from_3() {
         mag_game_controls_upgrade_profile(p);
         mag_game_controls_validate_profile(p);
         require(!bound(p, down, DpadDown) && bound(p, up, DpadUp), "D-pad down took a third key");
+        require(!count_of(p, MagGameControlsPushToTalk), "Push to talk took K from D-pad down");
     }
     {   // An older profile (revision 1) gains the wheel too.
         auto p = revision_3();
@@ -215,6 +220,78 @@ static void upgrade_from_3() {
         mag_game_controls_validate_profile(p);
         require(bound(p, up, DpadUp) && bound(p, down, DpadDown), "revision 1 missed the scope wheel");
     }
+}
+// Revision 4 to 5: K for Push to talk once, never a key the player uses on foot, never a
+// controller button, and a player's own wheel choices from revision 4 stay as they are.
+static void upgrade_from_4() {
+    constexpr ActionId Talk = MagGameControlsPushToTalk, Melee = 0xdb59e9a9, DpadUp = 0xa5bc1361;
+    const auto revision_4 = [] {
+        auto p = mag_game_controls_default_profile();
+        std::erase_if(p.bindings, [](const auto& b) { return b.action == MagGameControlsPushToTalk; });
+        p.catalog_revision = 4;
+        return p;
+    };
+    const auto talk_bindings = [&](const ControlsProfile& p) {
+        std::vector<ControlBinding> out;
+        for (const auto& b : p.bindings)
+            if (b.action == Talk) out.push_back(b);
+        return out;
+    };
+    {
+        auto p = revision_4();
+        mag_game_controls_upgrade_profile(p);
+        mag_game_controls_validate_profile(p);
+        const auto talk = talk_bindings(p);
+        require(p.catalog_revision == 5 && talk.size() == 1 && talk[0].control == PhysicalControl{InputSource::Keyboard, 14} &&
+                    talk[0].contexts == 1,
+                "revision 4 gains K for Push to talk");
+        require(p.bindings.size() == mag_game_controls_default_profile().bindings.size(), "and nothing else");
+        mag_game_controls_upgrade_profile(p);
+        require(talk_bindings(p).size() == 1, "upgrade adds it once");
+    }
+    {   // The player melees with K: it stays, and Push to talk waits for the player to bind it.
+        auto p = revision_4();
+        for (auto& b : p.bindings)
+            if (b.action == Melee && b.control.source == InputSource::Keyboard) b.control.code = 14;
+        mag_game_controls_upgrade_profile(p);
+        mag_game_controls_validate_profile(p);
+        require(talk_bindings(p).empty() && key_of(p, Melee) == 14, "Push to talk displaced the player's K");
+    }
+    {   // A revision 4 player who removed the scope wheel keeps it removed.
+        auto p = revision_4();
+        std::erase_if(p.bindings, [](const auto& b) { return b.control.source == InputSource::Mouse && b.control.code >= 8; });
+        const auto before = p.bindings.size();
+        mag_game_controls_upgrade_profile(p);
+        require(p.bindings.size() == before + 1 && count_of(p, DpadUp) == 2, "the scope wheel came back");
+    }
+    {   // Never a controller default, from any revision.
+        for (unsigned from = 0; from <= 4; ++from) {
+            ControlsProfile p;
+            p.catalog_revision = from;
+            mag_game_controls_upgrade_profile(p);
+            for (const auto& b : talk_bindings(p))
+                require(b.control.source == InputSource::Keyboard, "Push to talk gained a controller default");
+            require(talk_bindings(p).size() == 1, "an empty profile gains K");
+        }
+        for (const auto& b : talk_bindings(mag_game_controls_default_profile()))
+            require(b.control.source == InputSource::Keyboard, "a controller default for Push to talk");
+    }
+    {   // A controller button the player chooses is accepted, as for any remappable action.
+        auto p = mag_game_controls_default_profile();
+        p.controller_remap = true;
+        p.bindings.push_back({{InputSource::Controller, 4}, Talk});
+        std::erase_if(p.bindings, [](const auto& b) {
+            return b.control == PhysicalControl{InputSource::Controller, 4} && b.action != MagGameControlsPushToTalk;
+        });
+        mag_game_controls_validate_profile(p);
+        auto guide = mag_game_controls_default_profile();
+        guide.bindings.push_back({{InputSource::Controller, 5}, Talk});
+        require(rejects(guide), "Guide accepted for Push to talk");
+    }
+    const auto* talk = mag_game_controls_action(Talk);
+    require(talk && talk->host && talk->revision == 5 && talk->digital_controller && !talk->optional &&
+                talk->system_channel < 0 && !std::strcmp(talk->group, "Voice"),
+            "Push to talk is a host action in its own group");
 }
 static void upgrade() {
     ControlsProfile old;  // Revision 0: on-foot keys only, Escape and X already used by the player.
@@ -248,6 +325,7 @@ static void upgrade() {
     future.catalog_revision = MagGameControlsCatalogRevision + 1;
     upgrade_from_2();
     upgrade_from_3();
+    upgrade_from_4();
     bool refused = false;
     try { mag_game_controls_upgrade_profile(future); } catch (const std::invalid_argument&) { refused = true; }
     require(refused, "newer catalog accepted");

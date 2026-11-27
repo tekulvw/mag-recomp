@@ -1,5 +1,6 @@
 #include "player_controls_rust.h"
 #include "input_ffi.h"
+#include "player_host_actions.h"
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -28,9 +29,10 @@ struct State {
     bool mouse_motion_seen{},last_neutral=true;
     InputDevice last_device=InputDevice::None;
     uint64_t profile_revision{};
+    HostActionTracker host;
     State(){check(mag_input_create(1,nullptr,0,&handle));sync_capture();}
     ~State(){mag_input_destroy(handle);}
-    void sync_capture(){const auto previous=generation;check(mag_input_capture(handle,uint32_t(capture.focused)|(uint32_t(capture.supported_context)<<1)|(uint32_t(capture.mouse_captured)<<2)|(uint32_t(capture.controller_connected)<<3),&generation));if(previous!=generation)frame.reset();}
+    void sync_capture(){host.focus(capture.focused);const auto previous=generation;check(mag_input_capture(handle,uint32_t(capture.focused)|(uint32_t(capture.supported_context)<<1)|(uint32_t(capture.mouse_captured)<<2)|(uint32_t(capture.controller_connected)<<3),&generation));if(previous!=generation)frame.reset();}
     InputPolicy read_policy(){MagInputPolicy result{};check(mag_input_policy_read(handle,&result));return policy(result);}
     void reset(uint32_t source){check(mag_input_reset(handle,source,&generation));if(source==3){frame.reset();sample.reset();diagnostics.clear();}else std::erase_if(diagnostics,[source](auto event){return uint32_t(event.control.source)==source;});if(source==1 || source==3)mouse_motion_seen=false;if(source==2 || source==3)axes.reset();}
 };
@@ -116,14 +118,14 @@ void mag_controls_configure(const ControlsProfile& profile){
     InputPolicy permission;permission.mode=profile.mode;
     for(auto b:profile.bindings)if((b.control.source!=InputSource::Controller || profile.controller_remap) && mag_controls_gameplay_source_allowed(permission,b.control.source))bindings.push_back({uint32_t(b.control.source),b.control.code,b.action,b.contexts,uint32_t(b.behavior)});
     check(mag_input_configure(s.handle,bindings.data(),uint32_t(bindings.size())));
-    s.profile=profile;++s.profile_revision;s.frame.reset();s.sample.reset();s.diagnostics.clear();s.sync_capture();
+    s.profile=profile;s.host.configure(profile);++s.profile_revision;s.frame.reset();s.sample.reset();s.diagnostics.clear();s.sync_capture();
     MagInputPolicy ignored{};check(mag_input_policy(s.handle,uint32_t(profile.mode),uint32_t(s.capture.controller_connected)<<1|4,&ignored));
 }
 void mag_controls_set_capture_state(const InputCaptureState& capture){auto& s=state();std::lock_guard lock(s.mutex);if(capture.time_ns<s.capture.time_ns)throw std::invalid_argument("input time moved backwards");s.capture=capture;s.sync_capture();}
 void mag_controls_set_window_capture(bool focused,bool mouse){auto& s=state();std::lock_guard lock(s.mutex);s.capture.focused=focused;s.capture.mouse_captured=mouse;s.sync_capture();}
 void mag_controls_set_supported_context(bool supported){auto& s=state();std::lock_guard lock(s.mutex);s.capture.supported_context=supported;s.sync_capture();}
 void mag_controls_set_controller_connection(bool connected){auto& s=state();std::lock_guard lock(s.mutex);s.capture.controller_connected=connected;s.sync_capture();if(!connected)s.axes.reset();}
-void mag_controls_push_event(const PhysicalInputEvent& event){auto& s=state();std::lock_guard lock(s.mutex);if(event.down)s.last_device=event.control.source==InputSource::Controller?InputDevice::Controller:InputDevice::KeyboardMouse;check(mag_input_event(s.handle,event.device,uint32_t(event.control.source),event.control.code,uint32_t(event.down),event.time_ns,s.generation));if(s.diagnostics.size()>=8192){s.reset(3);throw std::runtime_error("physical diagnostic queue capacity exceeded");}s.diagnostics.push_back(event);}
+void mag_controls_push_event(const PhysicalInputEvent& event){auto& s=state();std::lock_guard lock(s.mutex);if(event.down)s.last_device=event.control.source==InputSource::Controller?InputDevice::Controller:InputDevice::KeyboardMouse;s.host.event(event.control,event.down);check(mag_input_event(s.handle,event.device,uint32_t(event.control.source),event.control.code,uint32_t(event.down),event.time_ns,s.generation));if(s.diagnostics.size()>=8192){s.reset(3);throw std::runtime_error("physical diagnostic queue capacity exceeded");}s.diagnostics.push_back(event);}
 void mag_controls_push_relative_mouse(double dx,double dy){auto& s=state();std::lock_guard lock(s.mutex);check(mag_input_mouse(s.handle,s.generation,dx,dy));if(s.capture.focused&&s.capture.supported_context&&s.capture.mouse_captured)s.mouse_motion_seen|=dx!=0||dy!=0;}
 void mag_controls_push_mouse(int64_t dx,int64_t dy){mag_controls_push_relative_mouse(double(dx),double(dy));}
 namespace {
@@ -168,6 +170,7 @@ void mag_controls_retire_frame(InputFrameKey k){auto& s=state();std::lock_guard 
 void mag_controls_release_input(InputResetReason reason){auto& s=state();std::lock_guard lock(s.mutex);s.reset(reason==InputResetReason::Device?2:3);}
 void mag_controls_release_source(InputSource source){if(uint32_t(source)>2)throw std::invalid_argument("invalid source");auto& s=state();std::lock_guard lock(s.mutex);s.reset(uint32_t(source));}
 bool mag_controls_frame_valid(InputFrameKey k,uint64_t generation){auto& s=state();std::lock_guard lock(s.mutex);if(!s.frame||s.frame->key!=k||s.generation!=generation||!s.capture.focused||!s.capture.supported_context)return false;MagInputOffer ignored{};return mag_input_offer(s.handle,key(k),0,&ignored)==3;}
+HostActionState mag_controls_host_action(ActionId action){auto& s=state();std::lock_guard lock(s.mutex);return s.host.state(action);}
 InputDevice mag_controls_last_device(){auto& s=state();std::lock_guard lock(s.mutex);return s.last_device;}
 std::vector<ControlBinding> mag_controls_action_bindings(ActionId action,InputContext context){
     auto& s=state();std::lock_guard lock(s.mutex);std::vector<ControlBinding> result;

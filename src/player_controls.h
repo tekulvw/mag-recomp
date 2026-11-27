@@ -179,4 +179,9 @@ bool mag_controls_gameplay_source_allowed(const InputPolicy&, InputSource);
 // Canonical counts: right-positive X, down-positive Y. Angles: right/up-positive.
 MouseLookDelta mag_controls_mouse_look(double dx, double dy, const MouseLookSettings&, AimMode);
 ControllerLookRequest mag_controls_controller_look(double x, double y, const ControllerLookSettings&, AimMode);
+// Host actions (Push to talk): bound like any action but read by the host, never by the game. Held
+// while one of its bindings is down and the game window has input focus (player_host_actions.h).
+// Any thread.
+struct HostActionState { bool held=false, focused=false; };
+HostActionState mag_controls_host_action(ActionId action);
 } // namespace mag

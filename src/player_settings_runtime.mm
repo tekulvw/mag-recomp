@@ -141,6 +141,13 @@ int mag_player_settings_prepare(void) { @autoreleasepool {
         if(environment("MAG_LOCAL_NO_TICKET")&&[settings[@"player_name"] length])
             setenv("MAG_LOCAL_ACCOUNT_NAME",[settings[@"player_name"] UTF8String],1);
         setenv("MAG_PLAYER_RENDER_SCALE",[settings[@"render_scale"] stringValue].UTF8String,1);
+#if MAG_PLAYER_VOICE_SUPPORTED
+        // The voice service (docs/player-settings.md, "Voice"): nothing at all with voice chat off.
+        NSDictionary<NSString*,NSString*> *voice=MAGSettingsVoiceEnvironment(settings);
+        for(NSString *name in voice)setenv(name.UTF8String,voice[name].UTF8String,1);
+#else
+        if([settings[@"voice_chat"] isEqual:@"ptt"])fprintf(stderr,"[mag settings] Voice chat needs a build with the voice service; this build has none.\n");
+#endif
         return 1;
     }
 } }

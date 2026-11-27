@@ -9,6 +9,12 @@ NSDictionary *MAGSettingsDefaults(void);
 NSDictionary *MAGSettingsValidate(id value, NSError **error);
 NSDictionary *MAGSettingsLoad(NSString *path, BOOL *exists, NSError **error);
 BOOL MAGSettingsSave(NSString *path, NSDictionary *settings, NSError **error);
+// The voice settings (docs/player-settings.md, "Voice"): whether a microphone name is acceptable,
+// and the engine environment a validated dictionary asks for, as src/player_settings_file.cpp's
+// voice_environment: empty with voice chat off; with push to talk MAG_VOICE_MODE=ptt,
+// MAG_VOICE_VOLUME=<percent> and, only when a device is named, MAG_VOICE_INPUT=<name>.
+BOOL MAGSettingsVoiceInputValid(id value);
+NSDictionary<NSString *, NSString *> *MAGSettingsVoiceEnvironment(NSDictionary *settings);
 // Whether the launch opens setup (with Play MAG) before the game: at every launch of the launcher
 // phase, filled with the saved settings, unless MAG_SKIP_SETUP is set (automation; the packaged
 // supervisor sets it for --no-prompt). A damaged file, or MAG_PLAYER_SHOW_SETTINGS (--settings),

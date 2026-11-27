@@ -224,6 +224,14 @@ extern "C" int mag_player_settings_prepare(void) {
         say("Rendering resolution " + std::to_string(settings.render_scale) +
             "% needs the Vulkan renderer; this build renders at 100%.");
 #endif
+#if MAG_PLAYER_VOICE_SUPPORTED
+    // The voice service (docs/player-settings.md, "Voice"): nothing at all with voice chat off.
+    for (const auto &[name, value] : mag::voice_environment(settings))
+        if (name == "MAG_VOICE_INPUT") export_utf8_variable(name.c_str(), value);
+        else export_variable(name.c_str(), value);
+#else
+    if (settings.voice_chat != "off") say("Voice chat needs a build with the voice service; this build has none.");
+#endif
     if (!settings.player_name.empty()) {
         // The runtime takes the online ID from this, and the sign-in keyboard opens with it typed in.
         export_variable("PS3_NP_ONLINE_ID", settings.player_name);

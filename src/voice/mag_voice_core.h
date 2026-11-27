@@ -99,6 +99,11 @@ class FrameSource {
 public:
     virtual ~FrameSource() = default;
     virtual bool frame(uint64_t index, int16_t* samples) = 0;
+    // The game started its voice service: a source may open host devices now (never earlier),
+    // and must not wait for them. Called with the service's lock held.
+    virtual void start() {}
+    // The game stopped or ended its voice service: close host devices.
+    virtual void stop() {}
 };
 
 // The lab signal: one second of a 440 Hz tone, then one second of silence, the gate following

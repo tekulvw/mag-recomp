@@ -102,6 +102,42 @@ int main(int argc, char **argv) { @autoreleasepool {
         assert(!MAGSettingsValidate(s, &error) && error);
     }
     assert(MAGSettingsSave(path, normalized, &error));
+    // Voice: older files have none of the fields (off, 100%, the system's microphone); each is
+    // written only when not the default, and the engine environment holds nothing while it is off.
+    for (NSString *key in @[@"voice_chat", @"voice_volume", @"voice_input"]) assert(!normalized[key] && !defaults[key]);
+    assert([MAGSettingsVoiceEnvironment(normalized) isEqual:@{}]);
+    NSMutableDictionary *voiced = normalized.mutableCopy;
+    voiced[@"voice_chat"] = @"off"; voiced[@"voice_volume"] = @100; voiced[@"voice_input"] = @"";
+    assert([MAGSettingsValidate(voiced, &error) isEqual:normalized]);
+    voiced[@"voice_volume"] = @150; voiced[@"voice_input"] = @"Desk Mic";
+    NSDictionary *off = MAGSettingsValidate(voiced, &error);
+    assert(off && !off[@"voice_chat"] && [off[@"voice_volume"] isEqual:@150] && [MAGSettingsVoiceEnvironment(off) isEqual:@{}]);
+    voiced[@"voice_chat"] = @"ptt"; voiced[@"voice_volume"] = @35; voiced[@"voice_input"] = @"USB Mic (2- Desk) é";
+    NSDictionary *talking = MAGSettingsValidate(voiced, &error);
+    assert(talking && [talking[@"voice_chat"] isEqual:@"ptt"]);
+    assert(MAGSettingsSave(path, talking, &error) && [MAGSettingsLoad(path, &exists, &error) isEqual:talking]);
+    assert([MAGSettingsVoiceEnvironment(talking) isEqual:(@{@"MAG_VOICE_MODE":@"ptt", @"MAG_VOICE_VOLUME":@"35",
+                                                            @"MAG_VOICE_INPUT":@"USB Mic (2- Desk) é"})]);
+    voiced[@"voice_volume"] = @100; [voiced removeObjectForKey:@"voice_input"];
+    assert([MAGSettingsVoiceEnvironment(MAGSettingsValidate(voiced, &error)) isEqual:(@{@"MAG_VOICE_MODE":@"ptt", @"MAG_VOICE_VOLUME":@"100"})]);
+    for (NSNumber *volume in @[@0, @1, @199, @200]) {
+        voiced[@"voice_volume"] = volume; assert([MAGSettingsValidate(voiced, &error)[@"voice_volume"] isEqual:volume]);
+    }
+    voiced[@"voice_volume"] = @100;
+    voiced[@"voice_input"] = [@"" stringByPaddingToLength:256 withString:@"x" startingAtIndex:0]; assert(MAGSettingsValidate(voiced, &error));
+    NSString *lone = [NSString stringWithCharacters:(unichar[]){0xD800} length:1], *c1 = [NSString stringWithCharacters:(unichar[]){0x85} length:1];
+    for (NSDictionary *bad in @[@{@"voice_chat":@"on"}, @{@"voice_chat":@"PTT"}, @{@"voice_chat":@""}, @{@"voice_chat":@1}, @{@"voice_chat":@YES},
+                                @{@"voice_volume":@201}, @{@"voice_volume":@(-1)}, @{@"voice_volume":@"50"}, @{@"voice_volume":@YES},
+                                @{@"voice_volume":@50.5}, @{@"voice_volume":NSNull.null}, @{@"voice_input":@"a\nb"}, @{@"voice_input":@"\x7f"},
+                                @{@"voice_input":c1}, @{@"voice_input":lone}, @{@"voice_input":@5},
+                                @{@"voice_input":[@"" stringByPaddingToLength:257 withString:@"x" startingAtIndex:0]}]) {
+        NSMutableDictionary *s = normalized.mutableCopy; [s addEntriesFromDictionary:bad]; error = nil;
+        assert(!MAGSettingsValidate(s, &error) && error);
+        assert(!MAGSettingsSave(path, s, &error));
+    }
+    assert([MAGSettingsLoad(path, &exists, &error) isEqual:talking]);  // refused saves kept the file
+    assert(MAGSettingsSave(path, normalized, &error));
+    assert(![[NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil] containsString:@"voice"]);
     NSMutableDictionary *nameless =normalized.mutableCopy; [nameless removeObjectForKey:@"player_name"];
     assert([MAGSettingsValidate(nameless, &error)[@"player_name"] isEqual:@""]);
     NSMutableDictionary *unsupported = defaults.mutableCopy; unsupported[@"unknown"] = @100;

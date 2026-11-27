@@ -48,13 +48,13 @@ class PortablePlayerSettingsTests(unittest.TestCase):
             'static inline uint8_t* sdata_decrypt(const uint8_t*,size_t,size_t*) { return NULL; }\n')
         cls.binary = root / 'driver'
         cls.sources = sources = ['tests/player_settings_portable.cpp', 'src/player_settings_portable.cpp', 'src/player_settings_file.cpp',
-                   'src/player_portal.cpp',
+                   'src/player_settings_form.cpp', 'src/player_portal.cpp',
                    'src/player_server_overlay_portable.cpp', 'src/player_archive.cpp',
                    'src/player_inflate.cpp', 'src/player_sha256.cpp']
-        # As Windows and Linux players build it: the Vulkan renderer, with rendering scale.
-        # The launch hook accepts the synthetic RETAIL_LIKE member as the retail one.
+        # As Windows and Linux players build it: the Vulkan renderer, with rendering scale, and the
+        # voice service. The launch hook accepts the synthetic RETAIL_LIKE member as the retail one.
         result = subprocess.run([COMPILER, '-std=c++20', '-Wall', '-Wextra', '-Werror', '-DMAG_PLAYER_ARCHIVE_NO_ZLIB=1',
-                                 '-DMAG_PLAYER_RENDER_SCALE_SUPPORTED=1',
+                                 '-DMAG_PLAYER_RENDER_SCALE_SUPPORTED=1', '-DMAG_PLAYER_VOICE_SUPPORTED=1',
                                  '-DMAG_PLAYER_SETTINGS_MEMBER_SHA256="%s"' % hashlib.sha256(RETAIL_LIKE).hexdigest(),
                                  '-I' + str(ROOT / 'src'), '-I' + str(root), *[str(ROOT / s) for s in sources],
                                  '-o', str(cls.binary)], capture_output=True, text=True, timeout=120)
@@ -170,6 +170,84 @@ class PortablePlayerSettingsTests(unittest.TestCase):
                         {'player_name': True}, {'schema_version': True}):
                 self.assertIsNone(parse(bad)[0], bad)
             self.assertIn('true or false', parse({'send_reports': 'yes'})[1])
+
+    def test_voice_settings_file_rules(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pathlib.Path(tmp) / 'settings.json'
+            def parse(value):
+                path.write_text(value if isinstance(value, str) else json.dumps(value))
+                result = self.run_driver('parse', path)
+                return (json.loads(result.stdout) if result.returncode == 0 else None), result.stderr.decode()
+            defaults = parse({})[0]
+            # Older files have none of the voice fields: voice chat off, 100%, the system's microphone.
+            for key in ('voice_chat', 'voice_volume', 'voice_input'):
+                self.assertNotIn(key, defaults)
+            # Each is written only when not the default.
+            for default in ({'voice_chat': 'off'}, {'voice_volume': 100}, {'voice_input': ''}):
+                self.assertEqual(parse(default)[0], defaults, default)
+            chosen = parse({'voice_chat': 'ptt', 'voice_volume': 35, 'voice_input': 'USB Mic (2- Desk) \u00e9'})[0]
+            self.assertEqual((chosen['voice_chat'], chosen['voice_volume'], chosen['voice_input']), ('ptt', 35, 'USB Mic (2- Desk) \u00e9'))
+            self.assertEqual(parse(chosen)[0], chosen)  # round trip
+            for volume in (0, 1, 199, 200):
+                self.assertEqual(parse({'voice_volume': volume})[0]['voice_volume'], volume)
+            self.assertEqual(parse({'voice_input': 'x' * 256})[0]['voice_input'], 'x' * 256)
+            for bad in ({'voice_chat': 'on'}, {'voice_chat': 'open'}, {'voice_chat': 'PTT'}, {'voice_chat': ''}, {'voice_chat': 1},
+                        {'voice_chat': True}, {'voice_volume': 201}, {'voice_volume': -1}, {'voice_volume': '50'},
+                        {'voice_volume': True}, {'voice_volume': None}, '{"voice_volume": 50.5}', {'voice_input': 'a\nb'},
+                        {'voice_input': '\x7f'}, {'voice_input': '\u0085'}, {'voice_input': 'x' * 257}, {'voice_input': 5}):
+                self.assertIsNone(parse(bad)[0], bad)
+            self.assertIn('Push to talk', parse({'voice_chat': 'on'})[1])
+            self.assertIn('0 to 200', parse({'voice_volume': 201})[1])
+            # Raw bytes that are not UTF-8 are refused too.
+            path.write_bytes(b'{"voice_input": "\xff\xfe"}')
+            self.assertNotEqual(self.run_driver('parse', path).returncode, 0)
+
+    def test_voice_environment_contract(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pathlib.Path(tmp) / 'settings.json'
+            def environment(value):
+                path.write_text(json.dumps(value))
+                result = self.run_driver('voice-environment', path)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                return result.stdout.decode()
+            # Off: nothing at all, whatever volume or device the file names.
+            self.assertEqual(environment({}), '')
+            self.assertEqual(environment({'voice_chat': 'off', 'voice_volume': 150, 'voice_input': 'Desk Mic'}), '')
+            self.assertEqual(environment({'voice_chat': 'ptt'}), 'MAG_VOICE_MODE=ptt\nMAG_VOICE_VOLUME=100\n')
+            self.assertEqual(environment({'voice_chat': 'ptt', 'voice_volume': 0, 'voice_input': 'Desk Mic'}),
+                             'MAG_VOICE_MODE=ptt\nMAG_VOICE_VOLUME=0\nMAG_VOICE_INPUT=Desk Mic\n')
+
+    def test_voice_form_round_trip(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pathlib.Path(tmp) / 'settings.json'
+            def form(*edits):
+                result = self.run_driver('form', path, *edits)
+                return result.returncode, result.stdout.decode().splitlines(), result.stderr.decode()
+            # No file: the defaults.
+            code, lines, _ = form()
+            self.assertEqual(lines, ['loaded=1 voice_chat=0 voice_volume=100 step=4 voice_input= dirty=1'])
+            # A volume between the menu's steps shows as the nearest step and is kept until another is picked.
+            path.write_text(json.dumps({'server_address': '', 'voice_chat': 'ptt', 'voice_volume': 90, 'voice_input': 'Desk Mic'}))
+            self.assertEqual(form()[1], ['loaded=1 voice_chat=1 voice_volume=90 step=4 voice_input=Desk Mic dirty=0'])
+            for step in ('keep', '4'):
+                code, lines, err = form('1', step, 'Desk Mic')
+                self.assertEqual((code, lines[1]), (0, 'dirty=0'), err)
+            self.assertEqual(json.loads(path.read_text())['voice_volume'], 90)
+            code, lines, err = form('1', '6', '  Desk Mic  ')
+            self.assertEqual((code, lines[1:]), (0, ['dirty=1', 'voice_chat=1 voice_volume=150 voice_input=Desk Mic dirty=0']), err)
+            saved = json.loads(path.read_text())
+            self.assertEqual((saved['voice_chat'], saved['voice_volume'], saved['voice_input']), ('ptt', 150, 'Desk Mic'))
+            # Off keeps the volume and the device for next time; the defaults leave the file.
+            code, _, err = form('0', '4', '')
+            self.assertEqual(code, 0, err)
+            saved = json.loads(path.read_text())
+            for key in ('voice_chat', 'voice_volume', 'voice_input'):
+                self.assertNotIn(key, saved)
+            # A name the file could not hold: nothing is written.
+            unchanged = path.read_text()
+            code, _, err = form('1', 'keep', 'x' * 300)
+            self.assertEqual(code, 3); self.assertIn('256 bytes', err)
+            self.assertEqual(path.read_text(), unchanged)
 
     def test_server_sign_in_profiles(self):
         def profile(name, ticket):
@@ -362,6 +440,35 @@ class PortablePlayerSettingsTests(unittest.TestCase):
             settings.write_text(json.dumps({'server_address': ''}))
             self.assertEqual(self.prepare(root, **common, MAG_PLAYER_SETUP='1')[1]['MAG_PLAYER_RENDER_SCALE'], '100')
 
+    def test_voice_settings_reach_the_engine_environment(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp); vfs = self.vfs(root, b'-- not the retail member\n')
+            settings = root / 'config/MAG/settings.json'; settings.parent.mkdir(parents=True)
+            common = {'MAG_PLAYER_SETTINGS_PATH': str(settings), 'MAG_PLAYER_OVERLAY_ROOT': str(root / 'owned'),
+                      'PS3_VFS_ROOT': str(vfs)}
+            voice = ('MAG_VOICE_MODE', 'MAG_VOICE_VOLUME', 'MAG_VOICE_INPUT', 'MAG_VOICE_TEST_TONE', 'MAG_VOICE_TRACE')
+            # An older file without the voice fields: nothing voice-related, and the file is not rewritten.
+            settings.write_text(json.dumps({'server_address': '', 'player_name': 'Rook_7'}))
+            before = settings.read_bytes()
+            for phase in ({'MAG_PLAYER_SETUP': '1'}, {}):  # the launcher, then the engine from its snapshot
+                code, values, err = self.prepare(root, **common, **phase)
+                self.assertEqual(code, 0, err)
+                self.assertEqual([values[name] for name in voice], [''] * 5)
+            self.assertEqual(settings.read_bytes(), before)
+            # Off with a volume and a device saved: still nothing.
+            settings.write_text(json.dumps({'server_address': '', 'voice_volume': 150, 'voice_input': 'Desk Mic'}))
+            code, values, err = self.prepare(root, **common, MAG_PLAYER_SETUP='1')
+            self.assertEqual([values[name] for name in voice], [''] * 5, err)
+            # Push to talk: the mode and volume, and the device only when one is named.
+            settings.write_text(json.dumps({'server_address': '', 'voice_chat': 'ptt'}))
+            for phase in ({'MAG_PLAYER_SETUP': '1'}, {}):
+                code, values, err = self.prepare(root, **common, **phase)
+                self.assertEqual((code, [values[name] for name in voice]), (0, ['ptt', '100', '', '', '']), err)
+            settings.write_text(json.dumps({'server_address': '', 'voice_chat': 'ptt', 'voice_volume': 40, 'voice_input': 'Desk Mic'}))
+            for phase in ({'MAG_PLAYER_SETUP': '1'}, {}):
+                code, values, err = self.prepare(root, **common, **phase)
+                self.assertEqual((code, [values[name] for name in voice]), (0, ['ptt', '40', 'Desk Mic', '', '']), err)
+
     def test_rendering_resolution_without_the_vulkan_adapter_is_reported(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp); vfs = self.vfs(root, b'-- not the retail member\n')
@@ -372,7 +479,8 @@ class PortablePlayerSettingsTests(unittest.TestCase):
                                      '-o', str(binary)], capture_output=True, text=True, timeout=120)
             self.assertEqual(result.returncode, 0, result.stderr)
             settings = root / 'config/MAG/settings.json'; settings.parent.mkdir(parents=True)
-            settings.write_text(json.dumps({'server_address': '', 'render_scale': 200}))
+            # Nor the voice service: its settings are kept and said, and nothing reaches the engine.
+            settings.write_text(json.dumps({'server_address': '', 'render_scale': 200, 'voice_chat': 'ptt'}))
             env = {k: v for k, v in os.environ.items() if not k.startswith(('MAG_', 'PS3'))}
             env.update(MAG_PLAYER_SETTINGS_PATH=str(settings), MAG_PLAYER_OVERLAY_ROOT=str(root / 'owned'),
                        PS3_VFS_ROOT=str(vfs), MAG_PLAYER_SETUP='1')
@@ -380,6 +488,9 @@ class PortablePlayerSettingsTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn('MAG_PLAYER_RENDER_SCALE=\n', result.stdout)
             self.assertIn('Rendering resolution 200% needs the Vulkan renderer', result.stderr)
+            self.assertIn('MAG_VOICE_MODE=\nMAG_VOICE_VOLUME=\n', result.stdout)
+            self.assertIn('Voice chat needs a build with the voice service', result.stderr)
+            self.assertEqual(json.loads(settings.read_text())['voice_chat'], 'ptt')
 
     def test_launch_hook(self):
         with tempfile.TemporaryDirectory() as tmp:

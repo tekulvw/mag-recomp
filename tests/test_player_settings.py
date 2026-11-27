@@ -104,6 +104,23 @@ int main(int argc, char **argv) { @autoreleasepool {
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn('native panel reports rows passed', result.stdout)
 
+    def test_native_panel_voice_rows(self):
+        # Headless, with and without the voice service: the window is never ordered front.
+        for supported in ('0', '1'):
+            with self.subTest(voice=supported), tempfile.TemporaryDirectory() as tmp:
+                binary = pathlib.Path(tmp) / 'voice-test'
+                result = subprocess.run([
+                    'xcrun', 'clang', '-fobjc-arc', '-Wall', '-Wextra', '-Werror',
+                    '-Wno-unused-parameter', '-DMAG_PLAYER_VOICE_SUPPORTED=' + supported, '-I' + str(ROOT / 'src'),
+                    str(ROOT / 'tests/player_settings_voice.m'),
+                    str(ROOT / 'src/player_settings_store.m'), str(ROOT / 'src/player_settings_macos.m'),
+                    *self.debug_object(tmp), '-framework', 'AppKit', '-framework', 'QuartzCore', '-o', str(binary)],
+                    capture_output=True, text=True, timeout=30)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                result = subprocess.run([str(binary), tmp], capture_output=True, text=True, timeout=25)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn('native panel voice rows passed', result.stdout)
+
     def _build_runtime_fixture(self,root):
         (root/'libs/input').mkdir(parents=True);(root/'SDL2').mkdir()
         (root/'libs/input/pad_macos.h').write_text('''#include <stdint.h>

@@ -10,6 +10,7 @@
  *   [General | Controls]                       (Controls only when a catalog is registered)
  *   General:  Connection  { Game server, Player name, Account, > Advanced: TCP port, UDP port }
  *             note, Graphics { Display mode, Output resolution, Rendering resolution, Anti-aliasing }, note,
+ *             Voice { Voice chat, Voice volume }, note,
  *             Reports { [x] Send performance and error reports, Send report }
  *   Debug:    Diagnostics { one row per mag_settings_debug_items entry }, note
  *   Controls: [Keyboard & Mouse | Controller], Input mode + Bindings, aim assist, mouse row,
@@ -76,6 +77,22 @@
     "Rendering percentages scale the game's 720p-height targets. Output resolution sets the window size."
 #define MAG_SETTINGS_GRAPHICS_NOTE_NO_SCALE "Output resolution sets the window size."
 
+/* General: Voice (docs/player-settings.md, "Voice"). The voice_chat, voice_volume and voice_input
+ * settings; the engine reads them at launch as MAG_VOICE_MODE, MAG_VOICE_VOLUME and MAG_VOICE_INPUT.
+ * A build without the voice service (MAG_PLAYER_VOICE_SUPPORTED) shows the rows disabled with
+ * MAG_SETTINGS_VOICE_UNSUPPORTED_HINT on its first row and keeps what the file holds. */
+#define MAG_SETTINGS_HEADING_VOICE "Voice"
+#define MAG_SETTINGS_VOICE_CHAT "Voice chat"
+#define MAG_SETTINGS_VOICE_CHAT_HINT "Hold K (Controls: Push to talk) to talk in a match"
+#define MAG_SETTINGS_VOICE_VOLUME "Voice volume"
+#define MAG_SETTINGS_VOICE_VOLUME_HINT "How loud other players' voices are"
+#define MAG_SETTINGS_VOICE_UNSUPPORTED_HINT "Not in this build yet"
+#define MAG_SETTINGS_VOICE_NOTE \
+    "The microphone opens only in a match, with voice chat on. Without microphone access you still hear others. Changes apply next launch."
+/* voice_input has no row (a device's name is set in the settings file); the file's rule: */
+#define MAG_SETTINGS_VOICE_INPUT_LIMIT 256  /* bytes of UTF-8 */
+#define MAG_SETTINGS_VOICE_INPUT_RULE "The microphone name has at most 256 bytes and no control characters."
+
 /* General: Reports (src/player_report_request.h; docs/player-settings.md, "Reports"). The checkbox
  * is the send_reports setting; Send report asks the supervisor to send one when MAG closes, even
  * with the checkbox off. Reports go under the linked account, so Send report needs one. */
@@ -115,6 +132,24 @@ static const int mag_settings_render_scales[MAG_SETTINGS_RENDER_SCALES] = {100, 
 #define MAG_SETTINGS_ANTI_ALIASING_MODES 2
 static const char *const mag_settings_anti_aliasing_labels[MAG_SETTINGS_ANTI_ALIASING_MODES] = {"Off", "FXAA"};
 static const char *const mag_settings_anti_aliasing_values[MAG_SETTINGS_ANTI_ALIASING_MODES] = {"off", "fxaa"};
+#define MAG_SETTINGS_VOICE_MODES 2
+static const char *const mag_settings_voice_labels[MAG_SETTINGS_VOICE_MODES] = {"Off", "Push to talk"};
+static const char *const mag_settings_voice_values[MAG_SETTINGS_VOICE_MODES] = {"off", "ptt"};
+/* Voice volume: the file takes any whole percentage from 0 to 200; the menus offer these steps. A
+ * saved value between steps shows as the nearest step and is kept until the player picks one. */
+#define MAG_SETTINGS_VOICE_VOLUME_MAX 200
+#define MAG_SETTINGS_VOICE_VOLUMES 9
+static const char *const mag_settings_voice_volume_labels[MAG_SETTINGS_VOICE_VOLUMES] = {
+    "Muted (0%)", "25%", "50%", "75%", "100%", "125%", "150%", "175%", "200%"};
+static const int mag_settings_voice_volumes[MAG_SETTINGS_VOICE_VOLUMES] = {0, 25, 50, 75, 100, 125, 150, 175, 200};
+static inline int mag_settings_voice_volume_step(int percent) {  /* the nearest step's index */
+    int best = 0;
+    for (int i = 1; i < MAG_SETTINGS_VOICE_VOLUMES; ++i) {
+        const int d = mag_settings_voice_volumes[i] - percent, b = mag_settings_voice_volumes[best] - percent;
+        if ((d < 0 ? -d : d) < (b < 0 ? -b : b)) best = i;
+    }
+    return best;
+}
 
 /* Display confirmation: windowed size or mode changes ask before they are saved. */
 #define MAG_SETTINGS_CONFIRM_SECONDS 15

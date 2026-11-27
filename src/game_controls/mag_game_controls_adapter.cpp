@@ -99,13 +99,24 @@ float value_curve(uint32_t kind, float v) {
     }
 }
 
-bool system_action(ActionId action) {
+// The catalog entry of an action the game can watch. Host actions (Push to talk) are MAG's own:
+// never mapped to a channel, required by a contract or answered to the game.
+const MagGameControlsAction* game_action(ActionId action) {
     const auto* entry = mag_game_controls_action(action);
+    return entry && !entry->host ? entry : nullptr;
+}
+bool host_action(ActionId action) {
+    const auto* entry = mag_game_controls_action(action);
+    return entry && entry->host;
+}
+
+bool system_action(ActionId action) {
+    const auto* entry = game_action(action);
     return entry && entry->system_channel >= 0;
 }
 // Situational actions are recognized by their own token only (7.3) and never required (7.4).
 bool optional_action(ActionId action) {
-    const auto* entry = mag_game_controls_action(action);
+    const auto* entry = game_action(action);
     return entry && entry->optional;
 }
 
@@ -814,12 +825,13 @@ struct MagGameControlsAdapter::State {
         std::set<ActionId> needed;
         for (const auto& binding : profile.bindings)
             if ((binding.contexts & uint32_t(InputContext::OnFoot)) && !system_action(binding.action) &&
-                !optional_action(binding.action) &&
+                !optional_action(binding.action) && !host_action(binding.action) &&
                 (binding.control.source != InputSource::Controller || profile.controller_remap))
                 needed.insert(binding.action);
         std::set<uint32_t> tokens;
         std::set<ActionId> bound;
-        for (const auto& binding : profile.bindings) bound.insert(binding.action);
+        for (const auto& binding : profile.bindings)
+            if (!host_action(binding.action)) bound.insert(binding.action);
         Contract result{local.handler, *controls, 0, 0};
         unsigned looks = 0;
         for (const auto& control : *controls) {
@@ -831,7 +843,7 @@ struct MagGameControlsAdapter::State {
                 continue;
             }
             const ActionId action = mag_game_controls_token_action(control.token);
-            if (mag_game_controls_action(action) || bound.count(action)) {
+            if (game_action(action) || bound.count(action)) {
                 needed.erase(action);
                 result.mask |= 1u << control.channel;
             }
@@ -856,7 +868,7 @@ struct MagGameControlsAdapter::State {
             for (const auto& control : contract->controls) {
                 const bool look = mag_game_controls_look_token(control.token);
                 const ActionId action = look ? control.token : mag_game_controls_token_action(control.token);
-                if ((look || (mag_game_controls_action(action) && !optional_action(action))) && !add(control.channel, action))
+                if ((look || (game_action(action) && !optional_action(action))) && !add(control.channel, action))
                     return false;
             }
         for (const auto& action : mag_game_controls_actions())
@@ -1036,7 +1048,7 @@ struct MagGameControlsAdapter::State {
         // A watched token that names a catalog action is that action wherever it is watched; any
         // other token takes the action of its channel.
         const ActionId named = mag_game_controls_token_action(*token);
-        ActionId action = mag_game_controls_action(named) ? named : 0;
+        ActionId action = game_action(named) ? named : 0;
         if (!action) {
             const auto mapped = channel_actions.find(*channel);
             if (mapped == channel_actions.end()) return false;
@@ -1044,7 +1056,7 @@ struct MagGameControlsAdapter::State {
         }
 
         // Step 3.
-        const auto* catalog = mag_game_controls_action(action);
+        const auto* catalog = game_action(action);
         const bool system = catalog && catalog->system_channel >= 0;
         const bool gameplay = owner_handler(handler);
         const bool registered = !gameplay && contains(registered_routes, handler);
