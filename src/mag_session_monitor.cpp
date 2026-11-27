@@ -193,6 +193,41 @@ void Monitor::build_info(const BuildInfo &info) {
     build_info_ = info;
 }
 
+HostShare Monitor::host_share(const HostTotals &from, const HostTotals &to) const {
+    HostShare h;
+    if (!host_seen_ || to.ns <= from.ns || to.total_ns <= from.total_ns) return h;
+    h.seen = true;
+    h.cpu_pct = 100.0 * double(to.busy_ns - from.busy_ns) / double(to.total_ns - from.total_ns);
+    // MAG's share against wall time on every CPU, so it does not depend on the system's tick.
+    if (host_cpus_ && to.process_ns >= from.process_ns)
+        h.mag_pct = std::min(100.0, 100.0 * double(to.process_ns - from.process_ns) / (double(to.ns - from.ns) * double(host_cpus_)));
+    h.runnable_known = host_runnable_ && to.runnable_count > from.runnable_count;
+    if (h.runnable_known) h.runnable = double(to.runnable_sum - from.runnable_sum) / double(to.runnable_count - from.runnable_count);
+    return h;
+}
+
+void Monitor::host_cpu(const machine::Sample &sample, uint64_t now_ns) {
+    if (!sample.ok) return;
+    std::lock_guard<std::mutex> lock(rare_);
+    HostTotals next = host_;
+    next.ns = now_ns;
+    next.busy_ns = sample.busy_ns;
+    next.total_ns = sample.total_ns;
+    next.process_ns = sample.process_ns;
+    if (sample.runnable >= 0) { next.runnable_sum += uint64_t(sample.runnable); ++next.runnable_count; }
+    host_cpus_ = sample.cpus;
+    host_runnable_ = host_runnable_ || sample.runnable >= 0;
+    if (host_seen_) {
+        // This second's share for everything but MAG: the minute keeps its busiest.
+        const HostShare second = host_share(host_, next);
+        if (second.seen) minute_other_max_pct_ = std::max(minute_other_max_pct_, second.other_pct());
+    } else {
+        host_seen_ = true;
+        minute_host_base_ = next;  // the first minute's share starts here
+    }
+    host_ = next;
+}
+
 void Monitor::set_default_phase(int phase) { default_phase_.store(phase, std::memory_order_relaxed); }
 
 void Monitor::extend_loading(uint64_t from_ns, uint64_t until_ns) {
@@ -316,6 +351,7 @@ void Monitor::current_window(Window &w, uint64_t now_ns) const {
     w.ns = now_ns;
     w.frames = frames_.load(std::memory_order_relaxed);
     std::copy(std::begin(audio_), std::end(audio_), std::begin(w.audio));
+    w.host = host_;
 }
 
 Drop Monitor::build_drop(uint64_t end_ns, const Span &span, const Window &capture_end, const Histogram &capture_hist, bool open,
@@ -341,6 +377,7 @@ Drop Monitor::build_drop(uint64_t end_ns, const Span &span, const Window &captur
     d.audio = audio_seen_;
     for (int c = 0; c < MAG_SESSION_AUDIO_COUNTER_COUNT; ++c)
         d.audio_delta[c] = capture_end.audio[c] >= drop_base_.audio[c] ? capture_end.audio[c] - drop_base_.audio[c] : 0;
+    d.host = host_share(drop_base_.host, capture_end.host);
     d.open = open;
     if (network && network->available) {
         d.network = true;
@@ -379,6 +416,10 @@ std::string drop_line(const Drop &d) {
     if (d.audio)
         line += "; audio underruns +" + std::to_string(d.audio_delta[MAG_SESSION_AUDIO_UNDERRUNS]) + ", starved frames +" +
                 std::to_string(d.audio_delta[MAG_SESSION_AUDIO_STARVED_FRAMES]);
+    if (d.host.seen) {
+        std::snprintf(text, sizeof text, "; host cpu %.0f%% (MAG %.0f%%)", d.host.cpu_pct, d.host.mag_pct);
+        line += text;
+    }
     return line;
 }
 
@@ -616,6 +657,10 @@ Snapshot Monitor::snapshot(uint64_t now_ns) {
         m.slow_with_builds = slow_builds_[0].with_builds - minute_slow_builds_base_;
         minute_builds_base_ = build_info_.totals;
         minute_slow_builds_base_ = slow_builds_[0].with_builds;
+        m.host = host_share(minute_host_base_, host_);
+        m.host.other_max_pct = minute_other_max_pct_;
+        minute_host_base_ = host_;
+        minute_other_max_pct_ = 0;
         minutes_.push_back(m);
         if (minutes_.size() > recent_minutes) minutes_.erase(minutes_.begin());
         minute_index_ = minute;
@@ -640,6 +685,9 @@ Snapshot Monitor::snapshot(uint64_t now_ns) {
                          (unsigned long long)closed.builds.pipelines, closed.builds.build_ms(),
                          (unsigned long long)closed.slow_with_builds, (unsigned long long)closed.builds.uploads,
                          closed.builds.upload_ms());
+        if (closed.host.seen)
+            std::fprintf(stderr, "; host cpu %.0f%% (MAG %.0f%%, others up to %.0f%%)", closed.host.cpu_pct, closed.host.mag_pct,
+                         closed.host.other_max_pct);
         std::fprintf(stderr, "; verdict %s\n", minute_verdict(closed));
     }
     s.uptime_s = double(elapsed) / 1e9;
@@ -684,6 +732,9 @@ Snapshot Monitor::snapshot(uint64_t now_ns) {
     if (drop_cfg_.enabled) discard_loading_drops(now_ns);
     s.drop_config = drop_cfg_;
     s.match_ends = match_ends_;
+    s.host_seen = host_seen_;
+    s.host_cpus = host_cpus_;
+    s.host_runnable = host_runnable_;
     s.drop_count = drops_total_;
     s.drops = drops_;
     const bool dropping = drop_state_ == DropState::Dip || drop_state_ == DropState::Recovering;
@@ -830,6 +881,14 @@ static std::string network_json(const net::Snapshot &n, double uptime_s) {
     return j + "},\n";
 }
 
+// Compact: the series must stay within the report's metrics budget (player_reports.h).
+static std::string host_json(const HostShare &h, bool minute) {
+    std::string j = ", \"host\": {\"cpu\": " + number(h.cpu_pct, 1) + ", \"mag\": " + number(h.mag_pct, 1);
+    j += minute ? ", \"other_max\": " + number(h.other_max_pct, 1) : ", \"other\": " + number(h.other_pct(), 1);
+    if (h.runnable_known) j += ", \"run\": " + number(h.runnable, 1);
+    return j + "}";
+}
+
 static std::string drops_json(const Snapshot &s) {
     const DropConfig &c = s.drop_config;
     if (!c.enabled) return "  \"fps_drops\": {\"enabled\": false},\n";
@@ -853,6 +912,7 @@ static std::string drops_json(const Snapshot &s) {
                 j += std::string(k == MAG_SESSION_AUDIO_UNDERRUNS ? "" : ", ") + "\"" + audio_counter_name(k) + "\": " + number(d.audio_delta[k]);
             j += "}";
         }
+        if (d.host.seen) j += host_json(d.host, false);
         if (d.open) j += ", \"open\": true";
         j += "}";
     }
@@ -949,6 +1009,9 @@ std::string summary_json(const Snapshot &s) {
     j += "],\n";
     j += network_json(s.network, s.uptime_s);
     j += build_section_json(s);
+    j += "  \"host\": {\"available\": " + std::string(s.host_seen ? "true" : "false");
+    if (s.host_seen) j += ", \"cpus\": " + number(uint64_t(s.host_cpus)) + ", \"runnable\": " + (s.host_runnable ? "true" : "false");
+    j += "},\n";
     j += "  \"timeline\": [";
     for (size_t i = 0; i < s.timeline.size(); ++i) {
         const TimelineEvent &e = s.timeline[i];
@@ -990,6 +1053,7 @@ std::string summary_json(const Snapshot &s) {
             j += ", \"builds\": {\"build_ms\": " + number(m.builds.build_ms(), 0) + ", \"shaders\": " + number(m.builds.translations) +
                  ", \"pipelines\": " + number(m.builds.pipelines) + ", \"upload_ms\": " + number(m.builds.upload_ms(), 0) +
                  ", \"uploads\": " + number(m.builds.uploads) + ", \"slow_with_builds\": " + number(m.slow_with_builds) + "}";
+        if (m.host.seen) j += host_json(m.host, true);
         j += std::string(", \"verdict\": \"") + minute_verdict(m) + "\"}";
     }
     j += s.minutes.empty() ? "],\n" : "\n  ],\n";
@@ -1128,10 +1192,14 @@ void writer() {
         std::this_thread::sleep_for(std::chrono::seconds(1));
         if (g_finished.load()) return;
         poll_network();
+        machine::Sample host;
+        machine::sample(host);  // the computer's CPU, read outside the lock
         {
             std::lock_guard<std::mutex> lock(g_write);
             poll_audio();
-            g_monitor->tick(now_ns());  // the frame-rate window of this second, for the drop detector
+            const uint64_t now = now_ns();
+            g_monitor->host_cpu(host, now);
+            g_monitor->tick(now);  // the frame-rate window of this second, for the drop detector
         }
         if (second % write_seconds == 0) write_summary(nullptr);
     }

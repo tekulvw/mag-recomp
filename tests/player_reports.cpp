@@ -410,6 +410,27 @@ static void finishing(const fs::path &root) {
     for (const auto &[name, log] : parsed.get("logs")->members) compressed += log.get("data")->text.size() / 4 * 3;
     CHECK(compressed <= logs_max_compressed + 8);
     CHECK(compressed > logs_max_compressed / 4);
+
+    // A long session's per-minute series over the metrics budget: the oldest minutes go first.
+    Session hours = launch(root / "hours");
+    std::string minutes;
+    for (int i = 0; i < 240; ++i)
+        minutes += std::string(i ? ", " : "") + "{\"minute\": " + std::to_string(i) + ", \"frames\": 6000, \"fps\": 100.0, \"pad\": \"" +
+                   std::string(400, 'x') + "\"}";
+    std::string long_summary = summary("engine", 1440000, 14400, 10, 0);
+    const std::string empty_minutes = "\"minutes\": []";
+    long_summary.replace(long_summary.find(empty_minutes), empty_minutes.size(), "\"minutes\": [" + minutes + "]");
+    write(hours.logs / "session-engine.json", long_summary);
+    Json long_report;
+    CHECK(parse_json(build_report(hours, crash, new_report_id()), long_report, 8u << 20));
+    const Json *engine = long_report.get("metrics") ? long_report.get("metrics")->get("engine") : nullptr;
+    CHECK(engine && engine->get("minutes") && engine->get("minutes_trimmed"));
+    if (engine && engine->get("minutes") && engine->get("minutes_trimmed")) {
+        const auto &kept = engine->get("minutes")->items;
+        CHECK(!kept.empty() && kept.back().get("minute")->number() == 239);
+        CHECK(double(kept.size()) + engine->get("minutes_trimmed")->number() == 240);
+        CHECK(to_json(*long_report.get("metrics")).size() <= metrics_max_bytes);
+    }
 }
 
 static void sending(const fs::path &root) {
