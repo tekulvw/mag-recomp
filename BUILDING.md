@@ -105,8 +105,12 @@ the accepted module, and a Linux build with it reached and played a Training mat
    - Linux: `~/.config/rpcs3/dev_flash/sys/external/libsre.sprx` (Flatpak:
      `~/.var/app/net.rpcs3.RPCS3/config/rpcs3/dev_flash/sys/external/libsre.sprx`)
    - Windows: `dev_flash\sys\external\libsre.sprx` inside the RPCS3 folder, next to `rpcs3.exe`
-4. Copy the result to `local/firmware/libsre.prx` (or `firmware/libsre.prx` next to `PS3_GAME` for the
-   installer).
+4. Copy the result to `local/firmware/libsre.prx` (or, for the installer, choose it as **Firmware file**
+   or place it at `firmware/libsre.prx` next to `PS3_GAME`).
+
+The [player installer](installer/README.md#getting-your-files-ready) finds these files in RPCS3's folders
+and shows the commands above, and those for step 2, with the paths filled in (`guide` in a terminal).
+It never runs RPCS3 or decrypts anything itself.
 
 What is checked is the decrypted module's SHA-256, not the release: the firmware lift relies on
 offsets inside the module (its TOC, code end and the two bridged cellSpurs stubs), so only reviewed

@@ -12,7 +12,6 @@ import threading
 from .model import InstallerError, Profile
 from .safety import Cancellation, Cancelled
 from . import ux
-from .native_build import FIRMWARE_SOURCE_HINT
 from .player_build import BUILD_SUFFIX
 
 
@@ -152,9 +151,14 @@ def open_folder(path):
 
 class PlayerBuildController(WizardController):
     """One player action owns prerequisites through final application output."""
-    def __init__(self, root, readiness=None, installer=None):
+    def __init__(self, root, readiness=None, installer=None, detector=None, reviewed=None):
         self.root = Path(root)
         self._installer = installer
+        self._detector, self._reviewed = detector, reviewed
+        self.detection = None
+        self.guide_events = queue.Queue()
+        self.guide_worker = None
+        self._guide_request = 0
         self.events = queue.Queue()
         self.worker = None
         self.state, self.error = 'idle', ''
@@ -236,10 +240,48 @@ class PlayerBuildController(WizardController):
             environment = None   # Build MAG reports the invalid value before anything starts
         return environment if environment is not None else voice_option.remembered(cache)
 
+    def survey(self, game_path='', firmware_path='', search=False):
+        """Find RPCS3's files (once, or again with search) and check the chosen inputs in the background.
+
+        Read-only: nothing is copied, moved or decrypted. The newest request's result arrives as a
+        'guide' event from poll_guide; an older one still running is superseded, not waited for."""
+        self._guide_request += 1
+        request = self._guide_request
+        def run():
+            try:
+                from . import input_guide, rpcs3_detect
+                if search or self.detection is None:
+                    self.guide_events.put({'event': 'searching', 'request': request})
+                    self.detection = (self._detector or rpcs3_detect.detect)()
+                if self._reviewed is None:
+                    self._reviewed = input_guide.load_reviewed(self.root) or {}
+                steps, game, firmware, game_found, firmware_found = input_guide.survey(
+                    self.detection, self._reviewed or None, game_path or None, firmware_path or None)
+                self.guide_events.put({'event': 'guide', 'request': request, 'steps': steps, 'game': game,
+                                       'firmware': firmware, 'game_path': game_found, 'firmware_path': firmware_found,
+                                       'text': input_guide.render(steps, self.detection), 'detection': self.detection})
+            except Exception as exc:  # the guide is advice; Build MAG still checks everything
+                self.guide_events.put({'event': 'guide-failed', 'request': request,
+                                       'message': f'Could not check the files: {exc or type(exc).__name__}'})
+        self.guide_worker = threading.Thread(target=run, name='mag-installer-guide', daemon=True)
+        self.guide_worker.start()
+        return request
+
+    def poll_guide(self):
+        """Events of the newest survey request only."""
+        events = []
+        while True:
+            try:
+                event = self.guide_events.get_nowait()
+            except queue.Empty:
+                return events
+            if event.get('request') == self._guide_request:
+                events.append(event)
+
     VOICE_HINT = ('Builds in-match voice chat (push to talk, being tested). After the build, turn it on in MAG Settings '
                   '→ General → Voice and hold K to talk. Your choice is remembered for later builds.')
 
-    def start(self, source, parent, cache, retry=False, jobs=None, voice=None):
+    def start(self, source, parent, cache, retry=False, jobs=None, voice=None, firmware=None):
         if self.blocked:
             raise InstallerError(self.blocked)
         if self.busy:
@@ -264,7 +306,8 @@ class PlayerBuildController(WizardController):
                 self.token.check()
                 result = build(self.root, Path(source).expanduser(), output, Path(cache).expanduser(), token=self.token, events=self.events.put,
                                **({'retry': True} if retry else {}), **({'jobs': jobs} if jobs is not None else {}),
-                               **({'voice': voice} if voice is not None else {}))
+                               **({'voice': voice} if voice is not None else {}),
+                               **({'firmware': Path(firmware).expanduser()} if firmware else {}))
                 self.events.put({'event':'_complete','output':str(result or output)})
             except Cancelled as exc:
                 self.events.put({'event':'_cancelled','message':str(exc)})
@@ -277,44 +320,114 @@ class PlayerBuildController(WizardController):
 def launch(root: Path, synthetic: bool = False) -> int:
     try:
         import tkinter as tk
-        from tkinter import ttk, filedialog, messagebox
         window = tk.Tk()
     except Exception as exc:
         print(f'Cannot open the installer window: {exc}. Use a Python runtime with matching Tcl/Tk support, or --help for CLI commands. Bundled installers must include Tcl/Tk.',file=sys.stderr)
         return 2
-    if synthetic:
-        try:
-            controller = WizardController(Profile.load(Path(root)/'profiles/synthetic-demonstration.json'),True)
-        except (InstallerError,OSError) as exc:
-            window.destroy();print(str(exc),file=sys.stderr);return 2
-    else:
-        controller = PlayerBuildController(root)
+    try:
+        open_window(window, root, synthetic)
+    except (InstallerError,OSError) as exc:
+        window.destroy();print(str(exc),file=sys.stderr);return 2
+    window.mainloop()
+    return 0
+
+
+def _check_summary(findings, found):
+    """One line under a picker: the first check result for that input, in words."""
+    if not findings:
+        return ''
+    first = findings[0]
+    word = {'Done': 'Checked', 'To do': 'Not ready yet', 'Problem': 'Problem'}[first.level]
+    message = first.message.rstrip(':') + ('.' if first.message.endswith(':') else '')
+    return (f'{word}{" (found by the installer)" if found else ""}: {message}'
+            + (' The guide above shows the command.' if first.commands else ''))
+
+
+def open_window(window, root: Path, synthetic: bool = False, controller=None):
+    """Lay out the wizard in window (a tk.Tk) and start its polling; returns the widgets tests inspect.
+
+    launch runs its main loop. The player wizard shows the preparation guide (input_guide.py) above
+    the pickers: RPCS3's files are looked for in the background, found paths fill empty fields, and
+    each chosen input is checked at once."""
+    import tkinter as tk
+    from tkinter import ttk, filedialog, messagebox
+    if controller is None:
+        controller = (WizardController(Profile.load(Path(root)/'profiles/synthetic-demonstration.json'),True)
+                      if synthetic else PlayerBuildController(root))
     window.title('MAG Installer' + (' — Synthetic demonstration' if synthetic else ''))
-    window.geometry('820x700');window.minsize(680,600)
+    height=min(900,max(640,window.winfo_screenheight()-80))
+    window.geometry(f'860x{height}');window.minsize(680,600)
     frame=ttk.Frame(window,padding=24);frame.pack(fill='both',expand=True)
-    frame.columnconfigure(1,weight=1);frame.rowconfigure(10,weight=1)
+    frame.columnconfigure(1,weight=1)
     ttk.Label(frame,text='Installer demonstration' if synthetic else 'Build MAG',font=('TkDefaultFont',22,'bold')).grid(row=0,column=0,columnspan=3,sticky='w',pady=(0,12))
     intro=('SYNTHETIC ONLY. Uses sample text; no game is built or playable.' if synthetic else 'Choose your game files and installation location. Build MAG handles the required tools and build steps automatically.')
     ttk.Label(frame,text=intro,wraplength=760).grid(row=1,column=0,columnspan=3,sticky='w',pady=(0,12))
-    notice=controller.blocked or ('Input needs SYNTHETIC-INPUT.txt containing “This is synthetic installer input.” followed by one LF newline.' if synthetic else 'Select the folder containing PS3_GAME, prepared game executables and firmware. Required tools download automatically. '+FIRMWARE_SOURCE_HINT)
-    ttk.Label(frame,text=notice,wraplength=760).grid(row=2,column=0,columnspan=3,sticky='w',pady=(0,12))
-    source=tk.StringVar();parent=tk.StringVar(value=str(ux.default_parent()))
+    source=tk.StringVar();parent=tk.StringVar(value=str(ux.default_parent()));firmware=tk.StringVar()
     controls=[]
-    def browse(variable):
-        chosen=filedialog.askdirectory(parent=window,initialdir=variable.get() or str(Path.home()))
-        if chosen:variable.set(chosen)
-    for row,label,variable in ((3,'Game folder' if not synthetic else 'Sample input folder',source),(4,'Install inside',parent)):
-        ttk.Label(frame,text=label).grid(row=row,column=0,sticky='w',padx=(0,12),pady=6)
-        entry=ttk.Entry(frame,textvariable=variable);entry.grid(row=row,column=1,sticky='ew',pady=6)
-        button=ttk.Button(frame,text='Browse…',command=lambda v=variable:browse(v));button.grid(row=row,column=2,padx=(8,0))
+    guide_text=guide_status=None
+    checks={}
+    if synthetic:
+        notice=controller.blocked or 'Input needs SYNTHETIC-INPUT.txt containing “This is synthetic installer input.” followed by one LF newline.'
+        ttk.Label(frame,text=notice,wraplength=760).grid(row=2,column=0,columnspan=3,sticky='w',pady=(0,12))
+    else:
+        # The preparation guide: a read-only, selectable text box (commands can be copied) and its actions.
+        guide=ttk.LabelFrame(frame,text='Getting your files ready',padding=8)
+        guide.grid(row=2,column=0,columnspan=3,sticky='nsew',pady=(0,8));guide.columnconfigure(0,weight=1);guide.rowconfigure(1,weight=1)
+        guide_status=tk.StringVar(value='Looking for RPCS3 and your MAG files…')
+        ttk.Label(guide,textvariable=guide_status,wraplength=760).grid(row=0,column=0,columnspan=2,sticky='w')
+        guide_text=tk.Text(guide,height=11,wrap='word',font='TkFixedFont',relief='flat',takefocus=True)
+        guide_text.grid(row=1,column=0,sticky='nsew',pady=(4,4))
+        scroll=ttk.Scrollbar(guide,orient='vertical',command=guide_text.yview);scroll.grid(row=1,column=1,sticky='ns',pady=(4,4))
+        guide_text.configure(yscrollcommand=scroll.set,state='disabled')
+        guide_text.bind('<1>',lambda event:guide_text.focus_set())
+        guide_actions=ttk.Frame(guide);guide_actions.grid(row=2,column=0,columnspan=2,sticky='w')
+        from .input_guide import RPCS3_URL, FIRMWARE_PUP_URL, COMMAND_INDENT
+        def visit(url):
+            import webbrowser
+            try:webbrowser.open(url)
+            except Exception:pass
+            guide_status.set(f'Opened {url} in your browser.')
+        def copy_commands():
+            lines=[line.strip() for line in guide_text.get('1.0','end').splitlines() if line.startswith(COMMAND_INDENT)]
+            if not lines:
+                guide_status.set('No commands to copy: nothing is waiting for RPCS3.');return
+            window.clipboard_clear();window.clipboard_append('\n'.join(lines))
+            guide_status.set(f'Copied {len(lines)} command{"s" if len(lines)>1 else ""}. Paste {"it" if len(lines)==1 else "them"} into a terminal.')
+        ttk.Button(guide_actions,text='RPCS3 download page',command=lambda:visit(RPCS3_URL)).pack(side='left')
+        ttk.Button(guide_actions,text='Sony system software page',command=lambda:visit(FIRMWARE_PUP_URL)).pack(side='left',padx=8)
+        ttk.Button(guide_actions,text='Copy commands',command=copy_commands).pack(side='left')
+        ttk.Button(guide_actions,text='Look again',command=lambda:survey(search=True)).pack(side='left',padx=8)
+    rows=((3,'Game folder' if not synthetic else 'Sample input folder',source,'folder'),
+          *(() if synthetic else ((5,'Firmware file',firmware,'file'),)),
+          (7,'Install inside',parent,'folder'))
+    def browse(variable,kind):
+        if kind=='file':
+            current=variable.get().strip()
+            chosen=filedialog.askopenfilename(parent=window,title='Choose the decrypted firmware module (libsre.prx)',
+                                              initialdir=str(Path(current).parent) if current else str(Path.home()),
+                                              filetypes=[('Decrypted firmware module','*.prx *.elf'),('All files','*')])
+        else:
+            chosen=filedialog.askdirectory(parent=window,initialdir=variable.get() or str(Path.home()))
+        if chosen:
+            variable.set(chosen)
+            if variable is not parent and not synthetic:survey()
+    for row,label,variable,kind in rows:
+        ttk.Label(frame,text=label).grid(row=row,column=0,sticky='w',padx=(0,12),pady=(6,0))
+        entry=ttk.Entry(frame,textvariable=variable);entry.grid(row=row,column=1,sticky='ew',pady=(6,0))
+        button=ttk.Button(frame,text='Browse…',command=lambda v=variable,k=kind:browse(v,k));button.grid(row=row,column=2,padx=(8,0),pady=(6,0))
         controls.extend((entry,button))
+        if variable is not parent and not synthetic:
+            # The check result for this input, in words; Return or leaving the field checks a typed path.
+            checks[label]=tk.StringVar(value='')
+            ttk.Label(frame,textvariable=checks[label],wraplength=600).grid(row=row+1,column=1,columnspan=2,sticky='w')
+            entry.bind('<Return>',lambda event:survey());entry.bind('<FocusOut>',lambda event:survey(changed_only=True))
     jobs=jobs_choice=voice=voice_initial=None
     if not synthetic:
         # Build option: how many compile jobs run at once (build_jobs.py), remembered between builds.
         jobs_choice=controller.jobs_choice(ux.default_cache())
         jobs=tk.StringVar(value=str(jobs_choice['value']))
-        ttk.Label(frame,text='Compile jobs').grid(row=5,column=0,sticky='nw',padx=(0,12),pady=6)
-        jobs_row=ttk.Frame(frame);jobs_row.grid(row=5,column=1,columnspan=2,sticky='ew',pady=6);jobs_row.columnconfigure(1,weight=1)
+        ttk.Label(frame,text='Compile jobs').grid(row=8,column=0,sticky='nw',padx=(0,12),pady=6)
+        jobs_row=ttk.Frame(frame);jobs_row.grid(row=8,column=1,columnspan=2,sticky='ew',pady=6);jobs_row.columnconfigure(1,weight=1)
         spin=ttk.Spinbox(jobs_row,from_=jobs_choice['minimum'],to=jobs_choice['maximum'],increment=1,width=5,textvariable=jobs)
         spin.grid(row=0,column=0,sticky='nw')
         ttk.Label(jobs_row,text=controller.jobs_hint(jobs_choice),wraplength=600).grid(row=0,column=1,sticky='w',padx=(12,0))
@@ -322,19 +435,50 @@ def launch(root: Path, synthetic: bool = False) -> int:
         # Build option: in-match voice chat (voice_option.py), off by default, remembered between builds.
         voice_initial=controller.voice_choice(ux.default_cache())
         voice=tk.BooleanVar(value=voice_initial)
-        ttk.Label(frame,text='Voice chat').grid(row=6,column=0,sticky='nw',padx=(0,12),pady=6)
-        voice_row=ttk.Frame(frame);voice_row.grid(row=6,column=1,columnspan=2,sticky='ew',pady=6);voice_row.columnconfigure(1,weight=1)
+        ttk.Label(frame,text='Voice chat').grid(row=9,column=0,sticky='nw',padx=(0,12),pady=6)
+        voice_row=ttk.Frame(frame);voice_row.grid(row=9,column=1,columnspan=2,sticky='ew',pady=6);voice_row.columnconfigure(1,weight=1)
         voice_box=ttk.Checkbutton(voice_row,text='Include',variable=voice)
         voice_box.grid(row=0,column=0,sticky='nw')
         ttk.Label(voice_row,text=controller.VOICE_HINT,wraplength=600).grid(row=0,column=1,sticky='w',padx=(12,0))
         controls.append(voice_box)
-    destination_label=ttk.Label(frame,wraplength=760);destination_label.grid(row=7,column=0,columnspan=3,sticky='w',pady=8)
+    destination_label=ttk.Label(frame,wraplength=760);destination_label.grid(row=10,column=0,columnspan=3,sticky='w',pady=8)
     status=tk.StringVar(value=controller.blocked or 'Ready when you are.')
-    ttk.Label(frame,textvariable=status,wraplength=760).grid(row=8,column=0,columnspan=3,sticky='w',pady=8)
-    progress=ttk.Progressbar(frame,mode='indeterminate');progress.grid(row=9,column=0,columnspan=3,sticky='ew',pady=(0,10))
-    details=tk.Text(frame,height=9,wrap='word',state='disabled');details.grid(row=10,column=0,columnspan=3,sticky='nsew')
-    actions=ttk.Frame(frame);actions.grid(row=11,column=0,columnspan=3,sticky='ew',pady=(16,0))
+    ttk.Label(frame,textvariable=status,wraplength=760).grid(row=11,column=0,columnspan=3,sticky='w',pady=8)
+    progress=ttk.Progressbar(frame,mode='indeterminate');progress.grid(row=12,column=0,columnspan=3,sticky='ew',pady=(0,10))
+    details=tk.Text(frame,height=9 if synthetic else 5,wrap='word',state='disabled');details.grid(row=13,column=0,columnspan=3,sticky='nsew')
+    frame.rowconfigure(13,weight=1)
+    if not synthetic:frame.rowconfigure(2,weight=2)
+    actions=ttk.Frame(frame);actions.grid(row=14,column=0,columnspan=3,sticky='ew',pady=(16,0))
     closing=False
+    surveyed={'source':None,'firmware':None}
+    filled={'source':'','firmware':''}
+    def survey(search=False,changed_only=False):
+        if synthetic:return
+        current=(source.get().strip(),firmware.get().strip())
+        if changed_only and (surveyed['source'],surveyed['firmware'])==current:return
+        surveyed['source'],surveyed['firmware']=current
+        for variable in checks.values():variable.set('Checking…' if any(current) else '')
+        guide_status.set('Looking for RPCS3 and your MAG files…' if search or controller.detection is None else 'Checking your files…')
+        controller.survey(*current,search=search)
+    def show_guide(event):
+        from .input_guide import DONE
+        guide_text.configure(state='normal');guide_text.delete('1.0','end');guide_text.insert('1.0',event['text'])
+        guide_text.configure(state='disabled')
+        detection=event['detection']
+        found=[]
+        # Found paths fill only empty fields, and only once: a choice of the player's own is never replaced.
+        if event['game_path'] and not source.get().strip() and not filled['source']:
+            filled['source']=str(event['game_path']);source.set(filled['source']);found.append('your MAG game folder')
+        if event['firmware_path'] and not firmware.get().strip() and not filled['firmware']:
+            filled['firmware']=str(event['firmware_path']);firmware.set(filled['firmware']);found.append('the firmware module')
+        surveyed['source'],surveyed['firmware']=source.get().strip(),firmware.get().strip()
+        game=event['game']
+        checks['Game folder'].set(_check_summary(game.findings if game else [], bool(filled['source']) and source.get().strip()==filled['source']))
+        checks['Firmware file'].set(_check_summary(event['firmware'] or [], bool(filled['firmware']) and firmware.get().strip()==filled['firmware']))
+        ready=all(step.state==DONE for step in event['steps'])
+        where=('RPCS3 found' if detection.rpcs3_found() else 'RPCS3 not found')+('; the search stopped at its time limit' if detection.incomplete else '')
+        guide_status.set((f'Filled in {" and ".join(found)}. ' if found else '')+('All files are ready: click Build MAG.' if ready else
+                         f'{where}. Follow the steps marked "To do" or "Problem", then choose the files below.'))
     def append(text):
         details.configure(state='normal');details.insert('end',text+'\n');details.see('end');details.configure(state='disabled')
     def start():
@@ -347,7 +491,8 @@ def launch(root: Path, synthetic: bool = False) -> int:
             else:
                 controller.start(Path(source.get()).expanduser(),Path(parent.get()).expanduser(),ux.default_cache(),retry=controller.has_journal(Path(parent.get()).expanduser()),
                                  jobs=controller.jobs_request(jobs.get(),jobs_choice['default']),
-                                 voice=(voice.get() if voice.get()!=voice_initial else None))
+                                 voice=(voice.get() if voice.get()!=voice_initial else None),
+                                 firmware=firmware.get().strip() or None)
             progress.start(12);refresh()
         except (InstallerError,OSError) as exc:status.set(str(exc))
     def folder(path):
@@ -396,6 +541,10 @@ def launch(root: Path, synthetic: bool = False) -> int:
                 status.set(controller.error);append(controller.error+f'\nLogs: {controller.logs}')
             elif visible_progress_event(event):
                 status.set(ux.format_event(event));append(status.get())
+        if not synthetic:
+            for event in controller.poll_guide():
+                if event['event']=='guide':show_guide(event)
+                elif event['event']=='guide-failed':guide_status.set(event['message'])
         if not controller.busy:
             progress.stop()
             if closing:window.destroy();return
@@ -409,8 +558,10 @@ def launch(root: Path, synthetic: bool = False) -> int:
             if isinstance(widget,ttk.Label):widget.configure(wraplength=max(240,event.width-48))
     frame.bind('<Configure>',resize);window.protocol('WM_DELETE_WINDOW',close)
     if controller.blocked:append(controller.blocked)
-    refresh();window.after(100,tick);window.mainloop()
-    return 0
+    refresh();window.after(100,tick)
+    if not synthetic:survey()
+    return {'controller':controller,'source':source,'firmware':firmware,'parent':parent,'guide':guide_text,
+            'guide_status':guide_status,'checks':checks,'survey':survey,'build':build}
 
 
 class LocalBuildController(WizardController):

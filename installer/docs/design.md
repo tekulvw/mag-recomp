@@ -80,3 +80,29 @@ Python on Windows reports a started program to audit hooks as the single command
 not as the argument list (POSIX reports the list). The recorded command line is split back into
 arguments with the rules Windows programs use to read theirs (the reverse of
 `subprocess.list2cmdline`), so the same checks apply on every platform.
+
+### Finding RPCS3's files and the preparation guide
+
+The player prepares every input with their own RPCS3. The installer never downloads RPCS3 or
+firmware, never extracts or decrypts anything and never runs RPCS3: it links to rpcs3.net and to
+Sony's system software page and prints the commands for the player to run. `rpcs3_detect.py` looks
+for what RPCS3 already has; `input_guide.py` turns that and the chosen inputs into the checklist the
+window and the `guide` command show. The specification:
+
+- The search is read-only: it lists folders and reads small text files (`vfs.yml`, `games.yml`,
+  `config.yml`, `GuiConfigs/CurrentSettings.ini`, `dev_flash/vsh/etc/version.txt`) and `PARAM.SFO`
+  headers. It never writes, copies or moves a file, and runs in the background.
+- It is bounded: fixed starting places per host (installer/README.md, "Getting your files ready"),
+  at most two folder levels below each on Windows and none elsewhere, at most 20,000 folder entries
+  and 3 seconds. A search stuck in one slow file system call is abandoned shortly after the time
+  limit with what it found so far. Links and junctions are not followed; on Windows only fixed
+  drives are searched, and `AppData`, `Windows` and other system folders are never entered. On macOS
+  the privacy-protected Downloads, Desktop and Documents folders are not read.
+- A MAG game folder is recognised by the `TITLE_ID` (BCUS98110), `CATEGORY` (DG, a disc) and
+  `APP_VER` (01.00) of its `PARAM.SFO`. Other MAG folders RPCS3 has, such as an installed update,
+  are named with the reason they cannot be used.
+- Found paths only pre-fill empty fields. Each chosen input is checked at once against the reviewed
+  SHA-256 identities: the installer manifest carries a copy of its kit's (`reviewed_inputs`, written
+  by `scripts/prepare_player_kit.py`), and a source checkout reads the repository's. Build MAG
+  checks the kit's own identities again before anything is downloaded, so the immediate check is
+  advice, never a gate.

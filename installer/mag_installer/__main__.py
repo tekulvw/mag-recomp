@@ -48,6 +48,8 @@ def main(argv=None):
     target = player.add_mutually_exclusive_group(required=True)
     target.add_argument('--parent', type=Path, help='Existing folder in which to create the MAG installation')
     target.add_argument('--output', type=Path, help='Exact new MAG installation folder')
+    player.add_argument('--firmware', type=Path, help='The decrypted firmware module (libsre.prx) to use, for example the one '
+                        'RPCS3\'s --decrypt wrote beside its libsre.sprx; without it, firmware/libsre.prx next to PS3_GAME')
     player.add_argument('--retry', action='store_true', help='Retry a matching failed or cancelled build in the same folder, retaining earlier logs')
     player.add_argument('--cache', type=Path, help='Optional download cache override')
     player.add_argument('--jobs', metavar='N', help='How many compile jobs run at once: a whole number from 1 to 64, or auto for '
@@ -57,6 +59,11 @@ def main(argv=None):
                         help='Build with (--voice) or without (--no-voice) in-match voice chat, push to talk. Remembered for '
                              'later builds. Without either, MAG_VOICE=1 or 0 in the environment, else the remembered choice, '
                              'else without voice chat')
+    guide = commands.add_parser('guide', help='Find your RPCS3 files and MAG game folder, check them, and show what is left to prepare')
+    presentation(guide, True)
+    guide.add_argument('--source', type=Path, help='Check this game folder instead of the one found')
+    guide.add_argument('--firmware', type=Path, help='Check this firmware module (libsre.prx) instead of the one found')
+    guide.add_argument('--time-limit', type=float, default=None, help='Seconds to spend looking for RPCS3 (default 3)')
     reuse = commands.add_parser('build-cache', help='Show, limit or clear the build cache that lets later builds reuse earlier work')
     presentation(reuse, True)
     reuse.add_argument('--cache', type=Path, help='Installer cache folder (defaults to your user cache)')
@@ -132,7 +139,25 @@ def main(argv=None):
                 handlers[signum] = signal.signal(signum, lambda number, frame: token.cancel())
             output = args.output if args.output is not None else destination(args.parent)
             player_build.install(ROOT, args.source, output, args.cache or default_cache(), token=token, events=report, retry=args.retry,
-                                 jobs=args.jobs, **({'voice': args.voice} if args.voice is not None else {}))
+                                 jobs=args.jobs, **({'voice': args.voice} if args.voice is not None else {}),
+                                 **({'firmware': args.firmware} if args.firmware is not None else {}))
+            return 0
+        if args.command == 'guide':
+            from . import input_guide, rpcs3_detect
+            for signum in (signal.SIGINT, signal.SIGTERM):
+                handlers[signum] = signal.signal(signum, lambda number, frame: token.cancel())
+            detection = rpcs3_detect.detect(**({'time_limit': args.time_limit} if args.time_limit is not None else {}))
+            reviewed = input_guide.load_reviewed(ROOT)
+            steps, game, firmware, game_path, firmware_path = input_guide.survey(detection, reviewed, args.source, args.firmware, token)
+            ready = all(step.state == input_guide.DONE for step in steps)
+            event = {'event': 'guide', 'ready': ready, 'reviewed_identities': reviewed is not None,
+                     'source': str(game_path) if game_path else None, 'firmware': str(firmware_path) if firmware_path else None,
+                     'steps': [{'number': step.number, 'title': step.title, 'state': step.state, 'lines': step.lines,
+                                'commands': step.commands, 'link': step.link} for step in steps],
+                     'detection': detection.to_json(),
+                     'message': input_guide.render(steps, detection) + ('\n\nThen click Build MAG in the installer window, or run the installer with these arguments:\n  '
+                                   + input_guide.suggested_build(detection, game_path, firmware_path))}
+            report(event)
             return 0
         if args.command == 'build-cache':
             from . import build_cache

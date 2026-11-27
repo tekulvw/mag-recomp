@@ -167,7 +167,12 @@ FIRMWARE_SOURCE_STEPS = (
     f'release; if it is newer than {FIRMWARE_PUP_RELEASE}, its module may be refused until it is reviewed.')
 
 
-def _verify_hash(path, expected, token=None, decrypted=False, advice=None, known=None):
+def identity_problem(path, expected, token=None, decrypted=False, known=None):
+    """What a file is, against its accepted SHA-256 identities.
+
+    Returns (kind, sha256, size): kind is 'ok', or for a mismatch 'mismatch' (an original file),
+    and for a file that should be decrypted 'encrypted' (an SELF/SPRX container), 'not-elf',
+    'known-release' (a correctly decrypted module from a release named in known) or 'other-release'."""
     size = 0
     head = b''
     with Path(path).open('rb') as stream:
@@ -181,46 +186,81 @@ def _verify_hash(path, expected, token=None, decrypted=False, advice=None, known
             digest.update(chunk)
         actual = digest.hexdigest()
     accepted = {expected} if isinstance(expected, str) else set(expected)
-    if actual not in accepted:
-        message = f'Input identity does not match the reviewed native profile: {path}'
-        if decrypted and head == b'SCE\x00':
-            message += ('\nThis file is still an encrypted SELF/SPRX container. Supply the decrypted ELF of the '
-                        'same file instead.')
-        elif decrypted and head != b'\x7fELF':
-            message += '\nThis file is not an ELF, so it is not a decrypted executable or firmware module.'
-        elif decrypted and known and actual in known:
-            message += (f'\nThis is the module from {known[actual]}, decrypted correctly, but this build is not '
-                        'reviewed for it yet.')
-        elif decrypted:
-            message += ('\nThis is a decrypted ELF, but not the reviewed one: it comes from a different game or '
-                        'firmware release, or it was modified.')
-        wanted = ' or '.join(sorted(accepted))
-        message += f'\nFound SHA-256 {actual} ({size} bytes); expected SHA-256 {wanted}.'
-        if advice: message += '\n' + advice
-        raise InstallerError(message)
+    if actual in accepted:
+        kind = 'ok'
+    elif not decrypted:
+        kind = 'mismatch'
+    elif head == b'SCE\x00':
+        kind = 'encrypted'
+    elif head != b'\x7fELF':
+        kind = 'not-elf'
+    elif known and actual in known:
+        kind = 'known-release'
+    else:
+        kind = 'other-release'
+    return kind, actual, size
+
+
+def _verify_hash(path, expected, token=None, decrypted=False, advice=None, known=None):
+    kind, actual, size = identity_problem(path, expected, token, decrypted, known)
+    if kind == 'ok':
+        return
+    accepted = {expected} if isinstance(expected, str) else set(expected)
+    message = f'Input identity does not match the reviewed native profile: {path}'
+    if kind == 'encrypted':
+        message += ('\nThis file is still an encrypted SELF/SPRX container. Supply the decrypted ELF of the '
+                    'same file instead.')
+    elif kind == 'not-elf':
+        message += '\nThis file is not an ELF, so it is not a decrypted executable or firmware module.'
+    elif kind == 'known-release':
+        message += (f'\nThis is the module from {known[actual]}, decrypted correctly, but this build is not '
+                    'reviewed for it yet.')
+    elif kind == 'other-release':
+        message += ('\nThis is a decrypted ELF, but not the reviewed one: it comes from a different game or '
+                    'firmware release, or it was modified.')
+    wanted = ' or '.join(sorted(accepted))
+    message += f'\nFound SHA-256 {actual} ({size} bytes); expected SHA-256 {wanted}.'
+    if advice: message += '\n' + advice
+    raise InstallerError(message)
+
+
+def reviewed_identities(source):
+    """The reviewed input identities a source tree accepts, as plain JSON data.
+
+    Read from tools/prepare_inputs.py (literal assignments only; nothing is executed) and
+    profiles/retail-v1.0-firmware.json. The installer manifest carries a copy (reviewed_inputs)
+    so the wizard can check files the moment they are chosen; builds read the kit's own."""
+    source = Path(source)
+    module = ast.parse((source / 'tools/prepare_inputs.py').read_text(encoding='utf-8'))
+    literal = {node.targets[0].id: node.value for node in module.body
+               if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)}
+    if 'RETAIL' not in literal or not isinstance(ast.literal_eval(literal['RETAIL']), dict):
+        raise InstallerError('Native source has no literal reviewed RETAIL input identities')
+    retail = ast.literal_eval(literal['RETAIL'])
+    firmware = json.loads((source / 'profiles/retail-v1.0-firmware.json').read_text(encoding='utf-8'))
+    # Older kits record one identity; current kits list each reviewed release's module.
+    images = ([{'release': str(image.get('release', '')), 'sha256': image['sha256']} for image in firmware['images']]
+              if 'images' in firmware else [{'release': '', 'sha256': firmware['image_sha256']}])
+    settings = ast.literal_eval(literal['RETAIL_SETTINGS_ARCHIVE_SHA256'])
+    return {'schema_version': 1,
+            'executables': {name: list(retail[name]) for name in ('EBOOT.BIN', 'bin/mage_g.self')},
+            'firmware': images,
+            'settings_archive': {'path': ast.literal_eval(literal['RETAIL_SETTINGS_ARCHIVE']),
+                                 'sha256': [settings] if isinstance(settings, str) else list(settings)}}
 
 
 def _verify_identities_unwrapped(source, disc, config, token=None):
-    module = ast.parse((source / 'tools/prepare_inputs.py').read_text(encoding='utf-8'))
-    retail = next((ast.literal_eval(node.value) for node in module.body
-                   if isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id == 'RETAIL' for t in node.targets)), None)
-    if not isinstance(retail, dict): raise InstallerError('Native source has no literal reviewed RETAIL input identities')
+    reviewed = reviewed_identities(source)
     for name, key in (('EBOOT.BIN', 'eboot_elf'), ('bin/mage_g.self', 'engine_elf')):
-        original, decrypted = retail[name]
+        original, decrypted = reviewed['executables'][name]
         _verify_hash(disc / 'USRDIR' / name, original, token)
         _verify_hash(config[key], decrypted, token, decrypted=True)
-    firmware = json.loads((source / 'profiles/retail-v1.0-firmware.json').read_text(encoding='utf-8'))
-    # Older kits record one identity; current kits list each reviewed release's module.
-    accepted = [image['sha256'] for image in firmware['images']] if 'images' in firmware else firmware['image_sha256']
-    _verify_hash(config['firmware'], accepted, token, decrypted=True,
+    _verify_hash(config['firmware'], [image['sha256'] for image in reviewed['firmware']], token, decrypted=True,
                  advice=FIRMWARE_SOURCE_STEPS, known=FIRMWARE_KNOWN_RELEASES)
     # The server overlay rewrites one member of this archive at launch; a copy an
     # earlier tool already changed would only fail there, after the whole build.
-    literal = {node.targets[0].id: ast.literal_eval(node.value) for node in module.body
-               if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)
-               and node.targets[0].id in ('RETAIL_SETTINGS_ARCHIVE', 'RETAIL_SETTINGS_ARCHIVE_SHA256')}
-    archive = disc / 'USRDIR' / literal['RETAIL_SETTINGS_ARCHIVE']
-    accepted = literal['RETAIL_SETTINGS_ARCHIVE_SHA256']
+    archive = disc / 'USRDIR' / reviewed['settings_archive']['path']
+    accepted = reviewed['settings_archive']['sha256']
     _ordinary(archive, False)
     with archive.open('rb') as stream:
         hasher = hashlib.sha256()
@@ -228,8 +268,11 @@ def _verify_identities_unwrapped(source, disc, config, token=None):
             if token: token.check()
             hasher.update(chunk)
     if hasher.hexdigest() not in accepted:
-        raise InstallerError('USRDIR/run/mag/ps3/game.psarc.sdat is not the unmodified retail file (an earlier tool may '
-                             'have changed its settings). Copy it from your disc again, then retry.')
+        raise InstallerError(SETTINGS_ARCHIVE_CHANGED)
+
+
+SETTINGS_ARCHIVE_CHANGED = ('USRDIR/run/mag/ps3/game.psarc.sdat is not the unmodified retail file (an earlier tool may '
+                            'have changed its settings). Copy it from your disc again, then retry.')
 
 
 def _verify_identities(source, disc, config, token=None):

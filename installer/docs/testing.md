@@ -19,7 +19,8 @@ Windows, SmartScreen may say "Windows protected your PC" (More info → Run anyw
 
 ## Running it
 
-Prepare the input folder as described in the [installer README](../README.md), start the installer
+Prepare the inputs as described in the [installer README](../README.md) (its **Getting your files
+ready** checklist, or `guide` in a terminal, shows what is left and the RPCS3 commands), start the installer
 (on Windows a console window opens beside the wizard and carries the CLI output), choose the input
 folder and an installation location, and click **Build MAG**. Expect a long build: the engine's
 lifted sources are large. **Compile jobs** sets how many compiles run at once; its default follows
