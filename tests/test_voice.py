@@ -152,7 +152,7 @@ class VoiceGuestGlue(unittest.TestCase):
                 events = [json.loads(line) for line in trace.read_text().splitlines()]
                 output = [e for e in events if e['event'] == 'output']
                 self.assertEqual(len(output), 1)
-                self.assertEqual(output[0]['silent'], bool(mute))
+                self.assertEqual(output[0]['device'], 0)  # no device in tests, muted or not
                 summary = [e for e in events if e['event'] == 'summary'][-1]
                 self.assertGreater(summary['frames_decoded'], 0)
                 self.assertGreater(summary['samples_played'], 0)

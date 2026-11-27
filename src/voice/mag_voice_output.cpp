@@ -56,7 +56,9 @@ std::unique_ptr<VoiceOutput> open_clock_output(RenderFn render, unsigned period_
     return std::make_unique<ClockOutput>(std::move(render), period_ms);
 }
 
-std::unique_ptr<VoiceOutput> open_voice_output(RenderFn render, const char* ps3_mute, std::string& description) {
+std::unique_ptr<VoiceOutput> open_voice_output(RenderFn render, const char* ps3_mute, std::string& description,
+                                               bool& on_device) {
+    on_device = false;
     if (choose_output(ps3_mute) == OutputKind::Silent) {
         description = "no device (PS3_MUTE): talkers are paced and counted, never played";
         return open_clock_output(std::move(render));
@@ -64,6 +66,7 @@ std::unique_ptr<VoiceOutput> open_voice_output(RenderFn render, const char* ps3_
     std::string detail;
     if (auto device = open_device_output(render, detail)) {
         description = detail.empty() ? "the host playback device" : detail;
+        on_device = true;
         return device;
     }
     description = "no playback device (" + detail + "): talkers are paced and counted, never played";

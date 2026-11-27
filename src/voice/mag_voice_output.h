@@ -35,7 +35,8 @@ std::unique_ptr<VoiceOutput> open_clock_output(RenderFn render, unsigned period_
 std::unique_ptr<VoiceOutput> open_device_output(RenderFn render, std::string& detail);
 
 // The output for this process: the clock when muted, else the device, falling back to the clock
-// (with the reason in `description`) when the device does not open.
-std::unique_ptr<VoiceOutput> open_voice_output(RenderFn render, const char* ps3_mute, std::string& description);
+// (with the reason in `description`) when the device does not open. `on_device` says which.
+std::unique_ptr<VoiceOutput> open_voice_output(RenderFn render, const char* ps3_mute, std::string& description,
+                                               bool& on_device);
 
 }  // namespace mag::voice

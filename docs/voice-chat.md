@@ -40,12 +40,12 @@ connected there (the static it plays under jamming) is mixed in the same way. Th
 talker's decoded audio in real time after a 60 ms hold, conceals up to three lost blocks with Opus's
 loss concealment, and keeps at most 300 ms per talker. The stream opens when the game starts its voice
 service and closes when it stops it; the log names it (`[voice] talkers play through ...`) and the
-trace records an `output` event.
+trace records an `output` event (`device` 1 for a device, 0 for the clock).
 
 - **The device.** SDL2 where the engine links it (macOS, Linux, and Windows builds with
   `PS3RECOMP_PAD_USE_SDL2`, the default): a second SDL playback device beside the runtime's cellAudio
-  one, 16 kHz mono, which SDL converts. `SDL_AUDIODRIVER=dummy` plays nothing while still pulling in
-  real time. Windows builds without SDL2 use WASAPI shared mode on the default playback device. The
+  one, 16 kHz mono, which SDL converts. SDL's dummy driver (`SDL_AUDIODRIVER=dummy`) opens only one
+  device, which cellAudio holds, so a dummy-driver run uses the clock below. Windows builds without SDL2 use WASAPI shared mode on the default playback device. The
   receipt's `voice-output` hashes the backend's source.
 - **Muted runs.** With `PS3_MUTE` set (to anything, as the runtime's cellAudio reads it) no device is
   opened at all: a clock pulls the audio in real time and discards it, so talkers are still paced and

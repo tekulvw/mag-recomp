@@ -49,7 +49,9 @@ int main() {
     std::string description;
     pulled = 0;
     {
-        auto output = open_voice_output(counting, "1", description);
+        bool on_device = true;
+        auto output = open_voice_output(counting, "1", description, on_device);
+        CHECK(!on_device);
         CHECK(output != nullptr);
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
@@ -58,7 +60,9 @@ int main() {
     // Not muted but no device opens: still paced on the clock, with the reason.
     pulled = 0;
     {
-        auto output = open_voice_output(counting, nullptr, description);
+        bool on_device = true;
+        auto output = open_voice_output(counting, nullptr, description, on_device);
+        CHECK(!on_device);
         CHECK(output != nullptr);
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }

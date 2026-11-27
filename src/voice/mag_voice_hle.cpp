@@ -41,14 +41,11 @@ std::unique_ptr<VoiceOutput> g_output;
 void open_output() {
     if (!g_plays || g_output) return;
     std::string description;
+    bool on_device = false;
     g_output = open_voice_output([](int16_t* out, size_t count) { g_service->render_secondary(out, count); },
-                                 std::getenv("PS3_MUTE"), description);
+                                 std::getenv("PS3_MUTE"), description, on_device);
     std::fprintf(stderr, "[voice] talkers play through %s\n", description.c_str());
-    if (g_service->tracing()) {
-        std::string fields = "\"silent\":";
-        fields += choose_output(std::getenv("PS3_MUTE")) == OutputKind::Silent ? "true" : "false";
-        g_service->trace_event("output", fields.c_str());
-    }
+    if (g_service->tracing()) g_service->trace_event("output", on_device ? "\"device\":1" : "\"device\":0");
 }
 
 // Guest memory is big-endian.
