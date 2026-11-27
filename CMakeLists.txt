@@ -566,6 +566,28 @@ if(WIN32 AND MSVC)
     set_property(SOURCE ${MAG_ENV_CACHE_SOURCES} APPEND PROPERTY COMPILE_OPTIONS "${MAG_ENV_CACHE_INCLUDE}")
 endif()
 
+# The shader cache warm-up (docs/shader-warm.md): finds the game's RSX programs in the player's
+# archives and has this same runtime translate them into the SPIR-V cache, so the files carry the
+# engine's translator key and glslang version. Vulkan engine builds only; not built by default
+# (the installer builds it after MagRecomp). Only the runtime's decompilers, text builders,
+# translator and SDATA reader are linked in.
+if(PS3RECOMP_RSX_VULKAN AND MAG_IMAGE STREQUAL "mage_g" AND EXISTS "${PS3RECOMP_DIR}/libs/video/rsx_shader_prewarm.h")
+    add_executable(MagShaderWarm EXCLUDE_FROM_ALL
+        src/mag_shader_warm.cpp src/mag_shader_programs.cpp src/player_inflate.cpp)
+    target_include_directories(MagShaderWarm PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src"
+        "${PS3RECOMP_DIR}/include"
+        "${PS3RECOMP_DIR}/libs/video"
+        "${PS3RECOMP_DIR}/runtime/ppu")
+    target_link_libraries(MagShaderWarm PRIVATE ps3recomp_runtime)
+    set_target_properties(MagShaderWarm PROPERTIES LINKER_LANGUAGE CXX)
+    if(WIN32 AND MSVC)
+        # The runtime is compiled with the cached getenv (above), so the tool carries it too.
+        target_sources(MagShaderWarm PRIVATE src/mag_env_cache_win.cpp)
+        target_compile_options(MagShaderWarm PRIVATE "${MAG_ENV_CACHE_INCLUDE}")
+    endif()
+endif()
+
 # ---------------------------------------------------------------------------
 # Install
 # ---------------------------------------------------------------------------

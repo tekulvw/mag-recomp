@@ -43,6 +43,7 @@
     "mag_installer/build_cache.py",
     "mag_installer/compile_cache.py",
     "mag_installer/lift_cache.py",
+    "mag_installer/shader_warm.py",
     "mag_installer/build_jobs.py"
   ],
   "excludes": [

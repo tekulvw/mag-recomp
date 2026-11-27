@@ -74,6 +74,14 @@ when you press **Send report** in MAG Settings. Reports waiting to be sent are k
 `home/reports` inside the MAG folder. Turn reports off in MAG Settings → General → Reports. See
 [Reports](../docs/player-settings.md#reports) for exactly what a report holds and when one is sent.
 
+On Windows, the last build step translates the game's shaders into
+`%LOCALAPPDATA%\MAG\cache\shaders`, the folder the game reads them from, so the first session
+loads them instead of translating them during play (about 2,000 shaders: a few seconds;
+[shader-warm.md](../docs/shader-warm.md)). The files are made from your own game files and stay on
+your computer. This step never fails a build: if it cannot finish, the installer says so and the
+game translates on first use as before. Its log is `MAG-build\build-work\logs\shader-warm.log`.
+`MAG_SHADER_CACHE=0` skips it.
+
 The game files are hard links where the volume allows: your game folder, the build workspace and
 `MAG/game` then share one copy on disk, and deleting any of them leaves the others intact (a file
 edited in place changes in all of them; MAG checks its executables' identities at every start). Where
