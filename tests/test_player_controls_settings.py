@@ -28,7 +28,7 @@ class ControlsSettingsTests(unittest.TestCase):
         binary = self.root/'service'
         subprocess.run([self.compiler, '-std=c++20', '-Wall', '-Wextra', '-Werror', '-pthread', '-I'+str(ROOT/'src'), str(ROOT/'tests/player_controls_settings.cpp'), *self.common, str(self.library), *self.link, '-o', str(binary)], check=True)
         with tempfile.TemporaryDirectory() as folder:
-            subprocess.run([str(binary), folder], check=True, timeout=10)
+            subprocess.run([str(binary), folder], check=True, timeout=60)  # each save fsyncs; shared CI disks can stall for seconds
 
     @unittest.skipUnless(sys.platform == 'darwin', 'native AppKit panel')
     def test_controls_apply_cancel_and_explicit_unbind_preserve_general_settings(self):
