@@ -47,17 +47,20 @@ function(mag_enable_voice target sdk image)
     endif()
     set(_voice "${_root}/src/voice")
     set(_sources "${_voice}/mag_voice_core.cpp" "${_voice}/mag_voice_opus.cpp" "${_voice}/mag_voice_capture.cpp"
-        "${_voice}/mag_voice_hle.cpp")
-    # Microphone capture (MAG_VOICE_MODE=ptt): SDL2 where the engine links it (macOS and Linux
-    # always, Windows with PS3RECOMP_PAD_USE_SDL2), WASAPI shared mode on Windows otherwise.
+        "${_voice}/mag_voice_output.cpp" "${_voice}/mag_voice_hle.cpp")
+    # Microphone capture (MAG_VOICE_MODE=ptt) and talker playback (the game's headset output): SDL2
+    # where the engine links it (macOS and Linux always, Windows with PS3RECOMP_PAD_USE_SDL2), WASAPI
+    # shared mode on Windows otherwise.
     if(WIN32 AND NOT PS3RECOMP_PAD_USE_SDL2)
         set(_capture wasapi)
         set(_capture_source "${_voice}/mag_voice_capture_wasapi.cpp")
+        set(_output_source "${_voice}/mag_voice_output_wasapi.cpp")
     else()
         set(_capture sdl)
         set(_capture_source "${_voice}/mag_voice_capture_sdl.cpp")
+        set(_output_source "${_voice}/mag_voice_output_sdl.cpp")
     endif()
-    list(APPEND _sources "${_capture_source}")
+    list(APPEND _sources "${_capture_source}" "${_output_source}")
     # macOS asks the player for microphone access (AVFoundation); other hosts have no such step.
     if(APPLE)
         list(APPEND _sources "${_voice}/mag_voice_permission_macos.mm")
@@ -77,7 +80,7 @@ function(mag_enable_voice target sdk image)
         INCLUDE_DIRECTORIES "${_includes}" COMPILE_DEFINITIONS "${_definitions}")
     target_link_libraries(${target} PRIVATE "${MAG_OPUS_LIBRARY}")
     if(_capture STREQUAL "sdl")
-        # The runtime already requires SDL2 here and links it; the capture needs its headers too.
+        # The runtime already requires SDL2 here and links it; capture and playback need its headers too.
         find_package(SDL2 REQUIRED)
         if(TARGET SDL2::SDL2)
             target_link_libraries(${target} PRIVATE SDL2::SDL2)
@@ -95,7 +98,8 @@ function(mag_enable_voice target sdk image)
         "voice-sources=${_voice}"
         "voice-build=${CMAKE_CURRENT_FUNCTION_LIST_DIR}/MagVoice.cmake"
         "voice-opus=${MAG_OPUS_LIBRARY}"
-        # Receipt extras are name=path pairs the receipt hashes; the backend is named by its source.
+        # Receipt extras are name=path pairs the receipt hashes; each backend is named by its source.
         "voice-capture=${_capture_source}"
+        "voice-output=${_output_source}"
         PARENT_SCOPE)
 endfunction()

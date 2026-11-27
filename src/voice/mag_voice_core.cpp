@@ -338,6 +338,19 @@ static void put_sample(uint8_t* out, const PortParams& p, float value) {
     for (unsigned i = 0; i < width; ++i) out[i] = uint8_t(bits >> (8 * (little ? i : width - 1 - i)));
 }
 
+// Reads one sample in a PCM port's format (the inverse of put_sample), as a value in [-1, 1].
+static float get_sample(const uint8_t* in, const PortParams& p) {
+    const bool little = (p.pcm_type & 1u) != 0;
+    const unsigned width = (p.pcm_type == 2 || p.pcm_type == 3) ? 2 : 4;
+    uint32_t bits = 0;
+    for (unsigned i = 0; i < width; ++i) bits |= uint32_t(in[i]) << (8 * (little ? i : width - 1 - i));
+    if (width == 2) return float(static_cast<int16_t>(bits)) / 32768.0f;
+    if (p.pcm_type == 4 || p.pcm_type == 5) return float(double(static_cast<int32_t>(bits)) / 2147483648.0);
+    float value;
+    std::memcpy(&value, &bits, 4);
+    return value;
+}
+
 uint32_t Service::port_info(uint32_t id, PortInfo& info) {
     std::lock_guard<std::mutex> hold(lock_);
     if (!initialized_) return status::NotInitialized;
@@ -424,7 +437,25 @@ uint32_t Service::write(uint32_t id, const uint8_t* data, size_t bytes, size_t& 
     if (!port || port->params.type >= uint32_t(PortType::OutPcm)) return status::Topology;
     ++receive_.write_calls;
     if (!port->parser) {
-        accepted = bytes;  // PCM input from the game: accepted; nothing the game connects it to plays it yet
+        // PCM from the game (the static it plays under jamming): whole samples join the port's audio,
+        // which plays on whatever output it is connected to; the newest playout_cap_ms are kept.
+        accepted = bytes;
+        if (!data || port->params.type != uint32_t(PortType::InPcm)) return status::Ok;
+        const uint32_t frame = pcm_sample_bytes(port->params);
+        const unsigned channels = std::max<unsigned>(port->params.pcm_channels, 1);
+        const size_t width = frame / channels;
+        for (size_t at = 0; at + frame <= bytes; at += frame) {
+            float sum = 0;
+            for (unsigned c = 0; c < channels; ++c) sum += get_sample(data + at + c * width, port->params);
+            const float value = std::max(-1.0f, std::min(1.0f, sum / float(channels)));
+            port->ready.push_back(static_cast<int16_t>(std::lround(value * 32767.0f)));
+        }
+        const size_t cap = size_t(options_.playout_cap_ms) * SampleRate / 1000;
+        if (port->ready.size() > cap) {
+            const size_t drop = port->ready.size() - cap;
+            port->ready.erase(port->ready.begin(), port->ready.begin() + static_cast<std::ptrdiff_t>(drop));
+            receive_.samples_dropped += drop;
+        }
         return status::Ok;
     }
     const size_t room = options_.input_capacity > port->parser->pending() ? options_.input_capacity - port->parser->pending() : 0;
@@ -525,6 +556,39 @@ void Service::advance_playout(uint64_t t) {
             ++receive_.underruns;
         }
     }
+}
+
+size_t Service::render_secondary(int16_t* out, size_t count) {
+    std::lock_guard<std::mutex> hold(lock_);
+    std::fill(out, out + count, int16_t(0));
+    if (!initialized_ || !started_ || !count) return 0;
+    advance_playout(now());
+    mix_.assign(count, 0.0f);
+    mixed_.clear();
+    size_t carried = 0;
+    for (auto& secondary : ports_) {
+        if (!secondary.used || secondary.params.type != uint32_t(PortType::OutSecondary)) continue;
+        const float out_gain = secondary.params.mute ? 0.0f : secondary.params.volume;
+        for (uint32_t input : secondary.edges) {
+            // An input on two secondary ports plays once.
+            if (std::find(mixed_.begin(), mixed_.end(), input) != mixed_.end()) continue;
+            mixed_.push_back(input);
+            Port* in = find(input);
+            if (!in) continue;
+            const size_t n = std::min(count, in->ready.size());
+            const float gain = in->params.mute ? 0.0f : in->params.volume * out_gain;
+            if (gain != 0.0f)
+                for (size_t i = 0; i < n; ++i) mix_[i] += float(in->ready[i]) / 32768.0f * gain;
+            in->ready.erase(in->ready.begin(), in->ready.begin() + static_cast<std::ptrdiff_t>(n));
+            carried = std::max(carried, n);
+        }
+    }
+    for (size_t i = 0; i < count; ++i) {
+        const float value = std::max(-1.0f, std::min(1.0f, mix_[i] * options_.voice_gain));
+        out[i] = static_cast<int16_t>(std::lround(value * 32767.0f));
+    }
+    receive_.samples_played += carried;
+    return carried;
 }
 
 // Talker samples due on a PCM output: the most any connected input has ready.

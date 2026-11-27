@@ -178,7 +178,10 @@ class X86LevelWiringTests(unittest.TestCase):
         apply = text.index('\nmag_x86_level_apply()')
         self.assertLess(apply, text.index('add_subdirectory("${PS3RECOMP_DIR}"'))
         self.assertLess(apply, text.index('add_executable(${PROJECT_NAME}'))
-        self.assertEqual(text.count('add_executable('), 1)
+        # Every executable (MagRecomp and the MagShaderWarm tool) is defined after the level.
+        targets = [i for i in range(len(text)) if text.startswith('add_executable(', i)]
+        self.assertEqual(len(targets), 2)
+        self.assertTrue(all(apply < i for i in targets))
         self.assertEqual(text.count('add_library('), 0)
 
     def test_the_receipt_records_the_level(self):

@@ -207,6 +207,12 @@ public:
     uint32_t write(uint32_t id, const uint8_t* data, size_t bytes, size_t& accepted);
     // Writes the attribute's value: energy as a level in [0, 1], voice activity as 0 or 1.
     uint32_t signal_state(uint32_t id, uint32_t attr, float& energy, uint32_t& vad, bool& is_float);
+    // The headset output (OUT_SECONDARY), which the game connects received talkers to and never
+    // reads: `count` mono 16-bit samples at SampleRate of the audio now due on every input connected
+    // to a secondary port, mixed at the inputs' and the port's volume and the player's voice volume,
+    // silence where none has audio. A host playback stream calls it as it plays. Returns how many
+    // samples carried talker audio (a muted port consumes its inputs and renders silence).
+    size_t render_secondary(int16_t* out, size_t count);
 
     SendStats send_stats();
     ReceiveStats receive_stats();
@@ -246,6 +252,8 @@ private:
     float energy_ = 0;
     uint32_t serial_ = 0;
     std::vector<Port> ports_;
+    std::vector<float> mix_;
+    std::vector<uint32_t> mixed_;
     SendStats send_;
     ReceiveStats receive_;
 };

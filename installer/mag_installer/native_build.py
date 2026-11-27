@@ -477,7 +477,11 @@ def install(config_path, output, resume=False, token=None, events=None, retry_lo
                     events({**summary, 'message': compile_cache.message(summary)})
             binaries = _validate_receipts(workspace, config['sdks']['runtime']['revision'], token)
             token.check()
-            state.update(status='complete', binaries=binaries)
+            # Translate the game's shaders into the player's cache (Windows); never fails the build.
+            from .shader_warm import warm
+            shader_warm = warm(config, workspace, logs, env, token, events)
+            token.check()
+            state.update(status='complete', binaries=binaries, shader_warm=shader_warm)
             _write_json(journal, state)
             events({'event': 'experimental-local-build-complete', 'output': str(output), 'logs': str(logs), 'message': 'Experimental local native build complete. No game was launched; gameplay and portable distribution are unverified.'})
             return output

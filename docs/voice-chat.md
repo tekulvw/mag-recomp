@@ -62,28 +62,51 @@ the setting Off nothing is passed and nothing is registered ([player-settings.md
   then receive-only: the service registers and plays talkers but never opens the microphone, and logs
   `[voice] no push to talk: ...; voice is receive-only`.
 - Codec, blocks and playback are those of the lab tone mode below: Opus at the port's rate in 37-byte
-  blocks, talkers decoded and handed to the game through its PCM ports at `MAG_VOICE_VOLUME`.
+  blocks, talkers decoded and played on the host playback stream at `MAG_VOICE_VOLUME` (see "Playback").
 - Noise suppression is not in this stage yet.
 
 ## Lab modes
 
-For the lab capture that settles the specification's unknowns. No microphone is opened and no audio
-device is used.
+For the lab capture that settles the specification's unknowns. No microphone is opened. Tone mode
+plays received talkers (see "Playback"), so keep lab runs muted.
 
 | Variable | Value | Effect |
 | --- | --- | --- |
 | `MAG_VOICE_TEST_TONE` | `pattern` | registers the service for the game's voice calls; the "microphone" is on for one second and off for the next, and each 40 ms frame while on becomes one voice block whose payload counts up from the frame number |
-| `MAG_VOICE_TEST_TONE` | `tone` | the same cadence carrying an Opus-coded 440 Hz tone; talkers the client receives are decoded and handed to the game as PCM, so a second client hears the tone through the game's own audio |
+| `MAG_VOICE_TEST_TONE` | `tone` | the same cadence carrying an Opus-coded 440 Hz tone; talkers the client receives are decoded and played on the host playback stream (see "Playback"), so a second client hears the tone; set `PS3_MUTE` or `SDL_AUDIODRIVER=dummy` in a lab |
 | `MAG_VOICE_VOLUME` | `0` to `200` | voice playback volume in percent (default 100) |
 | `MAG_VOICE_TRACE` | a path under `runs/` | JSON lines of every voice call (port parameters, sizes asked and returned, port info, signal-state attributes) and a summary every five seconds and at the end: blocks sent and dropped, bytes read, blocks received, how many were intact pattern blocks, sequence gaps and skipped bytes |
 
 A lab mode wins over `MAG_VOICE_MODE` and never opens the microphone. `MAG_VOICE_MODE` values other
 than `off` and `ptt` are logged and leave voice off.
 
-Received voice plays the way the game plays talkers: each talker's encoded input port is connected to
-a PCM output port the game reads and mixes. The service releases a talker's decoded audio in real time
-after a 60 ms hold, conceals up to three lost blocks with Opus's loss concealment, and keeps at most
-300 ms per talker.
+## Playback
+
+Received voice plays on the game's headset output. The game connects each talker's encoded input port
+to the voice library's secondary (headset) output and never reads a PCM port for them; on the console
+the library plays that output itself. So the service does too: a host playback stream pulls the
+mixed audio of every input connected to a secondary output (`Service::render_secondary`) as it plays,
+at the inputs' and the port's volume and `MAG_VOICE_VOLUME`. PCM the game writes to an input port
+connected there (the static it plays under jamming) is mixed in the same way. The service releases a
+talker's decoded audio in real time after a 60 ms hold, conceals up to three lost blocks with Opus's
+loss concealment, and keeps at most 300 ms per talker. The stream opens when the game starts its voice
+service and closes when it stops it; the log names it (`[voice] talkers play through ...`) and the
+trace records an `output` event (`device` 1 for a device, 0 for the clock).
+
+- **The device.** SDL2 where the engine links it (macOS, Linux, and Windows builds with
+  `PS3RECOMP_PAD_USE_SDL2`, the default): a second SDL playback device beside the runtime's cellAudio
+  one, 16 kHz mono, which SDL converts. SDL's dummy driver (`SDL_AUDIODRIVER=dummy`) opens only one
+  device, which cellAudio holds, so a dummy-driver run uses the clock below. Windows builds without SDL2 use WASAPI shared mode on the default playback device. The
+  receipt's `voice-output` hashes the backend's source.
+- **Muted runs.** With `PS3_MUTE` set (to anything, as the runtime's cellAudio reads it) no device is
+  opened at all: a clock pulls the audio in real time and discards it, so talkers are still paced and
+  counted (`samples_played`) and nothing is heard. The same clock stands in when no device opens.
+
+This replaces the first design, in which talkers played through PCM output ports the game would read
+and mix (retail creates sixteen talker slots of that shape). The two-client lab of 2026-11-27 showed
+the game never reads them for in-match talkers: it connected the talker's port to the secondary output,
+so decoded audio was dropped. The PCM output ports still return their inputs' audio for a game that
+reads them.
 
 The trace never contains sample or payload bytes, but it is a runtime capture of the game's
 behaviour: keep it under the Git-ignored `runs/` directory and never commit it.

@@ -6,13 +6,15 @@
  * before and nothing here runs.
  *
  * MAG_VOICE_MODE=ptt           the player mode: the microphone, gated by the controls' Push to talk
- *                              action (K by default), coded with Opus; talkers play through the
- *                              game's PCM ports. The player setting "Voice chat" sets it.
+ *                              action (K by default), coded with Opus; talkers play on a host
+ *                              stream (the game's headset output). The player setting "Voice chat"
+ *                              sets it.
  * MAG_VOICE_INPUT=<name>       the host capture device (blank: the system default)
  * MAG_VOICE_TEST_TONE=pattern  lab mode: no microphone; one second on, one second off, each frame a
  *                              block of counting bytes (docs/voice-chat.md)
  * MAG_VOICE_TEST_TONE=tone     lab mode: the same cadence carrying an Opus-coded 440 Hz tone; received
- *                              talkers are decoded and played through the game's PCM ports
+ *                              talkers are decoded and played on a host stream (the game's headset
+ *                              output; PS3_MUTE keeps it silent)
  * MAG_VOICE_VOLUME=<0..200>    voice playback volume in percent (default 100)
  * MAG_VOICE_TRACE=<path>       JSON lines of the calls: sizes, counts and times, never audio
  *
@@ -20,6 +22,7 @@
 #include "mag_voice_core.h"
 #include "mag_voice_capture.h"
 #include "mag_voice_opus.h"
+#include "mag_voice_output.h"
 #include "mag_extension.h"
 #if MAG_VOICE_PUSH_TO_TALK
 #include "mag_game_controls_push_to_talk.h"
@@ -33,6 +36,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <memory>
+#include <string>
 
 extern "C" uint8_t* vm_base;
 extern "C" void ps3_hle_register_ctx(uint32_t nid, const char* name, void (*fn)(ppu_context*));
@@ -41,6 +45,19 @@ namespace {
 using namespace mag::voice;
 
 std::unique_ptr<Service> g_service;
+// The host stream that plays the headset output, open between the game's start and stop.
+bool g_plays = false;
+std::unique_ptr<VoiceOutput> g_output;
+
+void open_output() {
+    if (!g_plays || g_output) return;
+    std::string description;
+    bool on_device = false;
+    g_output = open_voice_output([](int16_t* out, size_t count) { g_service->render_secondary(out, count); },
+                                 std::getenv("PS3_MUTE"), description, on_device);
+    std::fprintf(stderr, "[voice] talkers play through %s\n", description.c_str());
+    if (g_service->tracing()) g_service->trace_event("output", on_device ? "\"device\":1" : "\"device\":0");
+}
 
 // Guest memory is big-endian.
 uint8_t* guest(uint32_t address) { return vm_base + address; }
@@ -114,6 +131,7 @@ void voice_init(ppu_context* c) {
     ret(c, r);
 }
 void voice_end(ppu_context* c) {
+    g_output.reset();  // stops pulling before the ports go
     const uint32_t r = g_service->end();
     trace("end", "\"status\":%u", r);
     ret(c, r);
@@ -121,6 +139,7 @@ void voice_end(ppu_context* c) {
 void voice_start(ppu_context* c) {
     const uint32_t r = g_service->start();
     trace("start", "\"status\":%u", r);
+    if (r == status::Ok) open_output();
     ret(c, r);
 }
 void voice_start_ex(ppu_context* c) {
@@ -128,6 +147,7 @@ void voice_start_ex(ppu_context* c) {
     voice_start(c);
 }
 void voice_stop(ppu_context* c) {
+    g_output.reset();
     const uint32_t r = g_service->stop();
     trace("stop", "\"status\":%u", r);
     ret(c, r);
@@ -312,10 +332,12 @@ void voice_start(const char*) {
         }
         options.encoder = make_opus_encoder();
         options.decoder = opus_decoder_factory();
+        g_plays = true;
     } else if (coded) {
         options.source = std::make_unique<TestToneSource>();
         options.encoder = make_opus_encoder();
         options.decoder = opus_decoder_factory();
+        g_plays = true;
     } else {
         options.source = std::make_unique<TestToneSource>();
         options.encoder = std::make_unique<PatternEncoder>();

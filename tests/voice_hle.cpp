@@ -3,6 +3,8 @@
 //   voice_hle disabled   expects no handler registered
 //   voice_hle pattern    expects the handlers and drives a port graph through them
 //   voice_hle tone       the same with Opus, and the received talker read back as PCM
+//   voice_hle secondary  the same with Opus, the talker on the headset output as the game connects
+//                        it; the host stream (a silent clock in tests) plays it
 //   voice_hle ptt        MAG_VOICE_MODE=ptt with a stand-in microphone (VOICE_TEST_MIC=tone, or
 //                        none for a missing one) and stand-in push to talk: blocks only while held
 //   voice_hle receive    MAG_VOICE_MODE=ptt without push to talk: registered, microphone never opened
@@ -257,6 +259,11 @@ int main(int argc, char** argv) {
         CHECK(vm_base[data] == 0xA1 && vm_base[data + 1] == 0);
         // Feed what was read into the encoded input, as a relay would deliver it.
         uint32_t pcm = 0;
+        if (mode == "secondary") {
+            params(param, 5, 0);  // the headset output
+            CHECK(call("cellVoiceCreatePort", id, param) == 0);
+            CHECK(call("cellVoiceConnectIPortToOPort", in, get32(id)) == 0);
+        }
         if (mode == "tone") {
             // A 16-bit big-endian PCM port for the talker, as the game reads talkers.
             std::memset(vm_base + param, 0, 64);
@@ -272,6 +279,7 @@ int main(int argc, char** argv) {
         }
         put32(size, got);
         CHECK(call("cellVoiceWriteToIPort", in, data, size) == 0 && get32(size) == got);
+        if (mode == "secondary") std::this_thread::sleep_for(std::chrono::milliseconds(400));
         if (mode == "tone") {
             std::this_thread::sleep_for(std::chrono::milliseconds(120));
             std::memset(vm_base + info, 0, 64);
