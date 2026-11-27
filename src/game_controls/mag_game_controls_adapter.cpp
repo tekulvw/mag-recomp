@@ -40,6 +40,9 @@ constexpr double FullStickRate = 3.0, MinStickInterval = 1.0 / 240, MaxStickInte
 
 // Cycle weapons: the action on R2, a turret's secondary weapon (2.3).
 constexpr ActionId SeatSecondary = 0x2C4380C4;
+// The actions whose buttons a vehicle driver's handler watches (2.3): both triggers (Cycle weapons and
+// Cycle equipment) and the left stick's horizontal (Strafe left and right).
+constexpr ActionId DriveActions[] = {0x2C4380C4, 0xCB535315, 0x44533986, 0xF3468EB5};
 
 // Caller return addresses of the two angle-rate helpers (section 3).
 constexpr uint64_t BasicYawCaller = 0x0061E7B4, SprintYawCaller = 0x00675CF0, SprintPitchCaller = 0x00676D78;
@@ -284,7 +287,7 @@ struct MagGameControlsAdapter::State {
     // handlers of this poll (watching every look channel: a mounted weapon's, a vehicle seat's), the
     // channels seat handlers consumed in this poll, and the open seat handler update.
     std::vector<uint32_t> registered_routes;
-    std::set<uint32_t> seat_handlers;
+    std::set<uint32_t> seat_handlers, drive_handlers;
     uint64_t seat_poll{};
     uint32_t seat_consumed{};
     struct SeatScope {
@@ -682,19 +685,22 @@ struct MagGameControlsAdapter::State {
         if (!poll) return;
         if (poll == 1) {
             observe(system_receipts);
-            drain_menu_prompts();
+            spend_unread_presses();
         }
         if (--poll) return;
         abort_capture_poll();
         if (sealed && !frame) cancel("no supported local gameplay handler");
     }
-    // 7.3: on foot nothing takes Confirm or Back over, except Bleed out's alias while downed, which
-    // receipts its press. Every other press of their keys is consumed here, so none waits in the
-    // engine to act later (a press of X while alive must not bleed out when the player goes down).
-    void drain_menu_prompts() {
-        if (!gameplay_eligible || !frame_valid()) return;
+    // 7.3, end of the poll: the engine offers a press until it is observed, so a press that no
+    // handler read in its poll would wait and act much later, wherever an action's control is next
+    // read (D-pad Left on foot, which nothing watches there, replayed on the respawn bar; X on foot,
+    // bleeding out when the player goes down). Every press no recognition kept as a receipt is spent
+    // here, as a pad press nobody reads is gone; a press still held stays held. Gameplay receipts
+    // are completed at the end of the actor update (7.5).
+    void spend_unread_presses() {
+        if (!frame_valid()) return;
         for (const auto& action : mag_game_controls_actions()) {
-            if (!action.menu_prompt || gameplay_receipts.count(action.id)) continue;
+            if (gameplay_receipts.count(action.id)) continue;
             if (const auto offer = mag_controls_offer(*sample_key, action.id)) mag_controls_observe(*sample_key, action.id, *offer);
         }
     }
@@ -714,6 +720,7 @@ struct MagGameControlsAdapter::State {
             const char* role = owner_handler(handler) ? "owner"
                 : gameplay_routes && contains(*gameplay_routes, handler) ? "gameplay-route"
                 : seat_handlers.count(handler) ? "seat"
+                : drive_handlers.count(handler) ? "drive"
                 : contains(registered_routes, handler) ? "registered"
                 : contains(system_routes, handler) ? "system-route" : "other";
             char head[160];
@@ -771,14 +778,25 @@ struct MagGameControlsAdapter::State {
         if (seat_poll == poll_number) return;
         seat_poll = poll_number;
         seat_handlers.clear();
+        drive_handlers.clear();
         // Seats are looked for only outside the soldier's aim states (2.2): on foot the soldier aims.
         if (!contract || !contract->look_mask || !owner || owner->mouse_supported) return;
+        // The channels of the driving buttons, as the player's handler takes them (7.4).
+        uint32_t drive_mask = 0;
+        unsigned drive_found = 0;
+        for (const auto& [channel, action] : channel_actions)
+            if (std::find(std::begin(DriveActions), std::end(DriveActions), action) != std::end(DriveActions)) {
+                drive_mask |= 1u << channel;
+                ++drive_found;
+            }
         for (uint32_t handler : registered_routes) {
             const auto controls = guest.watched_controls(handler);
             if (!controls) continue;
             uint32_t channels = 0;
             for (const auto& control : *controls) channels |= 1u << control.channel;
             if ((channels & contract->look_mask) == contract->look_mask) seat_handlers.insert(handler);
+            if (drive_found == std::size(DriveActions) && (channels & drive_mask) == drive_mask)
+                drive_handlers.insert(handler);
         }
     }
     bool seated() const { return !seat_handlers.empty(); }
@@ -1042,6 +1060,7 @@ struct MagGameControlsAdapter::State {
         const bool system = catalog && catalog->system_channel >= 0;
         const bool gameplay = owner_handler(handler);
         const bool registered = !gameplay && contains(registered_routes, handler);
+        bool menu_button = false;
         if (system) {
             if (!contains(system_routes, handler)) {
                 cancel("native system route changed");
@@ -1057,8 +1076,10 @@ struct MagGameControlsAdapter::State {
                 gameplay_eligible = mouse_eligible = false;
                 return false;
             }
-            // While a menu holds look on foot the pad serves every handler but the player's (8.2).
-            if (!gameplay && look_held_by_menu) return false;
+            // While a menu holds look on foot the pad serves every handler but the player's (8.2), except
+            // that Melee's keys still press R3 there (the pause menu's Kill Self), beside the pad's own key.
+            menu_button = !gameplay && look_held_by_menu && mag_game_controls_menu_button(action);
+            if (!gameplay && look_held_by_menu && !menu_button) return false;
             // Situational actions may be watched by any system route (a vehicle's or a menu's own
             // handler); other actions only by the owner, a gameplay route or a handler registered
             // with the input manager (a mounted weapon's or a seat's, the pad-button reader), which
@@ -1076,8 +1097,10 @@ struct MagGameControlsAdapter::State {
         // Step 4. While the player is downed, the player's own Bleed out also reads Confirm's keys
         // (2.3). One action per press: its own keys first, then the alias's, otherwise the action the
         // record last used, so a press finishes on the action it began on.
-        // In a seat, a seat handler's control on R2 also reads Aim's keys (the right mouse button).
+        // A driver's handler reads Move forward's and Move backward's keys (W, S) on its triggers; a
+        // seat handler's control on R2 also reads Aim's keys (the right mouse button).
         const ActionId alias = gameplay && owner->downed                           ? mag_game_controls_downed_alias(action)
+                             : registered && drive_handlers.count(handler) && !system ? mag_game_controls_drive_alias(action)
                              : registered && seat_handlers.count(handler) && !system ? mag_game_controls_seat_alias(action)
                                                                                     : 0;
         if (alias)
@@ -1100,7 +1123,9 @@ struct MagGameControlsAdapter::State {
 
         // Steps 5 to 7.
         const Tuning tune = read_tuning(*tuning);
-        const bool preserve = !remapped && !kbm && frame->policy.controller_connected;
+        // On a menu's button that Melee's keys also press, the pad's own press (the keyboard pad's key for
+        // R3, or a controller's) still counts.
+        const bool preserve = (!remapped && !kbm && frame->policy.controller_connected) || menu_button;
         double value = preserve && !mouse_look && !stick ? native_value(tune, cpu.fpr[1]) : 0.0;
         const bool native_contribution = preserve && value > 0;
         if (offer && offer->down && !mouse_look) value = 1.0;

@@ -17,7 +17,8 @@ ROOT = Path(__file__).resolve().parents[2]
 
 COMMON = ['src/main.cpp', 'src/mag_jobio_selector.cpp', 'src/mag_timer_gcm_pump_diagnostics.cpp', 'src/stubs.cpp']
 LAUNCHER = ['src/retail_handoff.cpp']
-ENGINE = ['src/mag_sdk_prepare_screen.c', 'src/mag_jobio_capture.c', 'src/mag_graphics_trace.cpp']
+ENGINE = ['src/mag_sdk_prepare_screen.c', 'src/mag_jobio_capture.c', 'src/mag_graphics_trace.cpp',
+          'src/mag_stall_reporter.cpp', 'src/mag_stall_probe.cpp']
 SDK_FIRST = {'src/mag_timer_gcm_pump_diagnostics.cpp', 'src/mag_jobio_selector.cpp'}
 SCAFFOLD = ['runtime/ppu/ppu_loader.cpp', 'runtime/ppu/ppu_hle.cpp', 'runtime/ppu/ppu_fs.cpp', 'runtime/ppu/ppu_sysprx.cpp']
 

@@ -971,6 +971,55 @@ void menu_holding_look_gets_the_pad() {
     h.end_tick();
 }
 
+uint32_t watch(Memory& m, uint32_t handler, uint32_t slot, uint32_t token, uint32_t channel);
+
+// The in-match pause menu holds look on foot and binds R3 to Kill Self on its own handler. Melee's keys (F,
+// the player's R3 on keyboard and mouse) press that R3 too, while the pad's own R3 (G on the keyboard pad,
+// or a controller's) keeps reaching it; the menu's other buttons still read the pad alone.
+void menu_r3_kill_self() {
+    Harness h;
+    uint32_t jump_record = 0;
+    const uint32_t menu = route_handler(h.m, jump_record);  // a menu element: Jump's channel ...
+    const uint32_t r3 = watch(h.m, menu, 7, 0x516D9E2A, 19);  // ... and R3 (Melee's channel), as padr3
+    require(h.idle_tick() == Attached, "first tick did not attach on foot");
+    constexpr uint32_t Look = 0xFu << 20;
+    const auto poll = [&](uint32_t consumed, double r3_raw, bool* r3_taken = nullptr, bool* jump_taken = nullptr) {
+        h.m.put32(Pad + 0x80, consumed);
+        h.begin_tick();
+        h.enter_handler();
+        h.fire(Hook::HandlerExit);
+        h.enter_handler(menu);
+        const bool taken = h.recognize_record(r3, menu, r3_raw);
+        const bool jump = h.recognize_record(jump_record, menu);
+        if (r3_taken) *r3_taken = taken;
+        if (jump_taken) *jump_taken = jump;
+        h.fire(Hook::HandlerExit);
+        h.end_poll();
+        h.end_tick();
+    };
+    const auto value = [&] { return mag_guest_tuple_value(h.tuple_at(r3)); };
+    for (int i = 0; i < 3; ++i) poll(Look, 0);
+    require(h.status() == std::string("on-foot input attached; a menu holds look"), "the menu hold was not taken");
+
+    // F (Melee) presses the menu's R3.
+    mag_controls_push_event({{InputSource::Keyboard, 9}, true, time_ns()});
+    mag_controls_push_event({{InputSource::Keyboard, 44}, true, time_ns()});  // Space: Jump, a pad button there
+    bool taken = false, jump = false;
+    poll(Look, 0, &taken, &jump);
+    require(taken && value() == 1.0f, "Melee's key did not press R3 in a menu holding look");
+    require(!jump, "the adapter took over a menu button other than R3");
+    mag_controls_push_event({{InputSource::Keyboard, 9}, false, time_ns()});
+    mag_controls_push_event({{InputSource::Keyboard, 44}, false, time_ns()});
+    poll(Look, 0);
+    require(value() == 0.0f, "R3 stayed pressed after Melee's key was released");
+
+    // The pad's own R3 still reaches the menu (the game reads it, or the adapter passes it on).
+    poll(Look, 1.0, &taken);
+    require(!taken || value() == 1.0f, "the pad's R3 no longer reached the menu");
+    poll(Look, 0, &taken);
+    require(!taken || value() == 0.0f, "the pad's R3 stayed pressed after its release");
+}
+
 // The legacy keyboard pad (the SDK's fixed key layout: Cross on X, ...) is muted only while a poll
 // attaches on foot. In an in-match menu with a local player (paused, the player's handler disabled
 // as after death, a UI element that blocks gameplay) the adapter routes the system buttons alone,
@@ -1349,6 +1398,104 @@ void closed_menu_never_sees_confirm() {
     mag_controls_push_event({{InputSource::Keyboard, 41}, false, time_ns()});
 }
 
+// The input engine offers a press until it is observed. A press no handler read in its poll is
+// spent at the end of that poll, as a pad press nobody reads is gone: on foot nothing watches D-pad
+// Left, and Left presses made there used to wait and act together much later, when the respawn bar
+// started reading D-pad Left, flipping its tabs on their own. A press still held stays held.
+void unread_presses_are_spent() {
+    Harness h;
+    uint32_t record = 0;
+    const uint32_t bar = route_handler(h.m, record);  // a routed UI element, as the respawn bar is
+    require(h.idle_tick() == Attached, "first tick did not attach on foot");
+    const auto press = [&](uint32_t key, bool down) { mag_controls_push_event({{InputSource::Keyboard, key}, down, time_ns()}); };
+    // Three taps of Left (the arrow key) while nothing reads D-pad Left.
+    for (int i = 0; i < 3; ++i) {
+        press(80, true);
+        h.idle_tick();
+        press(80, false);
+        h.idle_tick();
+    }
+    // The element starts reading D-pad Left: none of those taps reaches it.
+    const uint32_t left = watch(h.m, bar, 1, 0x853D3A53, 2);
+    const auto tick = [&](const char* why) {
+        h.begin_tick();
+        h.enter_handler(bar);
+        const bool taken = h.recognize_record(left, bar);
+        const float value = mag_guest_tuple_value(h.tuple_at(left));
+        h.fire(Hook::HandlerExit);
+        h.enter_handler();
+        h.end_poll();
+        h.enter_actor();
+        h.end_tick();
+        (void)why;
+        return taken ? value : -1.0f;
+    };
+    for (int i = 0; i < 6; ++i) require(tick("old taps") <= 0.0f, "a Left tap made while nothing read it acted later");
+    // A fresh tap acts, once.
+    press(80, true);
+    require(tick("fresh tap") == 1.0f, "a fresh Left tap did not press D-pad Left");
+    press(80, false);
+    require(tick("fresh tap released") == 0.0f, "releasing Left did not release D-pad Left");
+    for (int i = 0; i < 3; ++i) require(tick("after the fresh tap") <= 0.0f, "a Left tap acted twice");
+    // A press held while nothing reads it reads as held once something does.
+    press(80, true);
+    h.idle_tick();
+    h.idle_tick();
+    require(tick("held") == 1.0f, "a held Left was dropped while nothing read it");
+    press(80, false);
+    require(tick("held released") == 0.0f, "releasing a held Left did not release D-pad Left");
+}
+
+// The same on a menu screen. The respawn bar's spawn map reads Up and Down but not Left or Right;
+// arrows pressed there must not act on the bar when the map closes (a Windows lab trace showed
+// Right, Right, Left made in the map moving the bar to its loadout tab by themselves once the map
+// closed, when presses on menus were kept waiting for a reader).
+void menu_unread_presses_are_spent() {
+    Harness h;
+    uint32_t record = 0;
+    const uint32_t bar = route_handler(h.m, record);  // a routed UI element, as the respawn bar is
+    require(h.idle_tick() == Attached, "first tick did not attach on foot");
+    // The player waits on the respawn screen (the awaiting-spawn state), a menu.
+    h.m.put32(State, 0x01A6C2F8);
+    h.m.put8(State + 0x10, 20);
+    require(h.idle_tick() == "native menu buttons attached", "the respawn screen attached on foot");
+    const auto press = [&](uint32_t key, bool down) { mag_controls_push_event({{InputSource::Keyboard, key}, down, time_ns()}); };
+    // Right, Right and Left while nothing reads D-pad Left or Right (the spawn map is open).
+    for (const uint32_t key : {79u, 79u, 80u}) {
+        press(key, true);
+        h.idle_tick();
+        press(key, false);
+        h.idle_tick();
+    }
+    // The map closes and the bar reads D-pad Left and Right again: none of those presses reaches it.
+    const uint32_t left = watch(h.m, bar, 1, 0x853D3A53, 2), right = watch(h.m, bar, 2, 0x053EC6ED, 3);
+    const auto read = [&](uint32_t control) {
+        const bool taken = h.recognize_record(control, bar);
+        return taken ? mag_guest_tuple_value(h.tuple_at(control)) : -1.0f;
+    };
+    const auto tick = [&] {
+        h.begin_tick();
+        h.enter_handler(bar);
+        const std::pair<float, float> pad{read(left), read(right)};
+        h.fire(Hook::HandlerExit);
+        h.enter_handler();
+        h.end_poll();
+        h.enter_actor();
+        h.end_tick();
+        return pad;
+    };
+    for (int i = 0; i < 4; ++i) {
+        const auto [l, r] = tick();
+        require(l <= 0.0f && r <= 0.0f, "an arrow pressed while nothing on the menu read it acted later");
+    }
+    // A fresh Right on the bar acts, once.
+    press(79, true);
+    require(tick().second == 1.0f, "a fresh Right on the respawn bar did not press D-pad Right");
+    press(79, false);
+    require(tick().second == 0.0f, "releasing Right did not release D-pad Right");
+    for (int i = 0; i < 2; ++i) require(tick().second <= 0.0f, "a Right tap acted twice");
+}
+
 void census_line(const char* line) { census_lines.push_back(line); }
 
 // The census describes each distinct handler update once, and changes nothing.
@@ -1570,6 +1717,11 @@ void mounted_weapon() {
     require(read.rockets == 1.0f, "Cycle weapons' key did not fire the secondary weapon");
     mag_controls_push_event({{InputSource::Keyboard, 20}, false, time_ns()});
     poll();
+    mag_controls_push_event({{InputSource::Keyboard, 26}, true, time_ns()});  // W: no throttle on a turret
+    read = poll();
+    require(read.rockets == 0.0f, "W fired the turret's secondary weapon");
+    mag_controls_push_event({{InputSource::Keyboard, 26}, false, time_ns()});
+    poll();
 
     // A cancel gives the held stick and buttons back.
     mag_controls_push_relative_mouse(1000, 0);
@@ -1638,6 +1790,74 @@ void registered_handler_on_foot() {
     mag_controls_push_event({{InputSource::Mouse, 1}, false, time_ns()});
 }
 
+// A vehicle driver's own handler (registered, updated before the player's) watches the triggers for
+// throttle and brake (R2 accelerates, L2 brakes and reverses) and the left stick's horizontal for
+// steering, with tokens of its own. On keyboard and mouse W and S drive it, as do the triggers' own keys.
+void vehicle_driver() {
+    Harness h;
+    const uint32_t driver = 0x100D8000, vtable = 0x01A70100;
+    handler_base(h.m, driver, vtable, true);
+    h.m.put32(vtable + 8, BaseDescriptor);
+    // In this world Cycle weapons is on 17 (R2), Cycle equipment on 18 (L2), Strafe left and right on 6, 7.
+    const uint32_t throttle = watch(h.m, driver, 1, 0x0D00F001, 17), brake = watch(h.m, driver, 2, 0x0D00F002, 18),
+                   left = watch(h.m, driver, 3, 0x0D00F003, 6), right = watch(h.m, driver, 4, 0x0D00F004, 7),
+                   smoke = watch(h.m, driver, 5, 0xE3DD5118, 8);  // vsmoke on R1
+    h.m.map(Registered + 0x20, 0x10);
+    h.m.put32(Registered + 0x28, driver);
+    h.m.link(InputManager + 0x2C, {Registered, Registered + 0x10, Registered + 0x20});
+    const auto value = [&](uint32_t record) { return mag_guest_tuple_value(h.tuple_at(record)); };
+    const auto poll = [&](std::initializer_list<uint32_t> keys, bool down) {
+        for (uint32_t key : keys) mag_controls_push_event({{InputSource::Keyboard, key}, down, time_ns()});
+        h.begin_tick();
+        h.enter_handler(driver);
+        for (uint32_t record : {throttle, brake, left, right, smoke}) h.recognize_record(record, driver);
+        h.fire(Hook::HandlerExit);
+        // The player's handler reads its own movement and trigger controls too, as the game runs it.
+        h.enter_handler();
+        for (uint32_t token : {Forward, Backward, Left, Right, CycleWeapons, CycleEquipment}) h.recognize(token);
+        h.end_poll();
+        h.enter_actor();
+        h.end_tick();
+    };
+    // On foot W is no throttle: the registered handler's R2 reads only Cycle weapons' key there.
+    require(h.idle_tick() == Attached, "a registered driver handler blocked attachment");
+    poll({26}, true);
+    require(value(throttle) == 0.0f, "W pressed a registered handler's R2 on foot");
+    poll({26}, false);
+
+    seat_state(h.m);
+    require(h.idle_tick() == Attached, "the driver's seat did not attach on foot");
+    poll({26}, true);  // W
+    require(value(throttle) == 1.0f && value(brake) == 0.0f, "W did not accelerate");
+    poll({26}, false);
+    require(value(throttle) == 0.0f, "the throttle stayed open after W was released");
+    poll({22}, true);  // S
+    require(value(brake) == 1.0f && value(throttle) == 0.0f, "S did not brake");
+    poll({22}, false);
+    poll({4}, true);  // A
+    require(value(left) == 1.0f && value(right) == 0.0f, "A did not steer left");
+    poll({4}, false);
+    poll({7}, true);  // D
+    require(value(right) == 1.0f, "D did not steer right");
+    poll({7}, false);
+    poll({20}, true);  // Q, Cycle weapons' own key, still accelerates
+    require(value(throttle) == 1.0f, "R2's own key stopped accelerating");
+    poll({20}, false);
+    // The right mouse button is a seat's R2 alias on a turret, never a driver's throttle.
+    mag_controls_push_event({{InputSource::Mouse, 1}, true, time_ns()});
+    poll({}, true);
+    require(value(throttle) == 0.0f, "the right mouse button opened the throttle");
+    mag_controls_push_event({{InputSource::Mouse, 1}, false, time_ns()});
+    poll({}, false);
+    poll({5}, true);  // B: smoke screen, by its own token
+    require(value(smoke) == 1.0f, "B did not fire the smoke screen");
+    poll({5}, false);
+    // W and S together: each trigger reads its own key.
+    poll({26, 22}, true);
+    require(value(throttle) == 1.0f && value(brake) == 1.0f, "W and S together did not press both triggers");
+    poll({26, 22}, false);
+}
+
 // Controller mode leaves a seat to the controller: the mouse pushes no stick.
 void mounted_weapon_controller_mode() {
     ControlsProfile profile = mag_game_controls_default_profile();
@@ -1664,9 +1884,10 @@ int main(int argc, char** argv) {
         {"mouse", mouse_look},       {"assist", aim_assist},     {"lifecycle", lifecycle},
         {"threads", threads_and_errors}, {"snapshot", update_snapshot}, {"menu", menu_holds_look},
         {"withdrawn", withdrawn_frame},
-        {"menu-pad", menu_keyboard_pad}, {"menu-look-pad", menu_holding_look_gets_the_pad}, {"situational", situational_actions}, {"closed-menu-confirm", closed_menu_never_sees_confirm}, {"downed-x", downed_x_bleeds_out}, {"census", census},
+        {"menu-pad", menu_keyboard_pad}, {"menu-look-pad", menu_holding_look_gets_the_pad}, {"menu-r3", menu_r3_kill_self}, {"situational", situational_actions}, {"closed-menu-confirm", closed_menu_never_sees_confirm}, {"downed-x", downed_x_bleeds_out}, {"unread-presses", unread_presses_are_spent}, {"menu-unread-presses", menu_unread_presses_are_spent}, {"census", census},
         {"prompt-queries", prompt_queries}, {"mounted", mounted_weapon},
-        {"registered-on-foot", registered_handler_on_foot}, {"mounted-controller-mode", mounted_weapon_controller_mode}};
+        {"registered-on-foot", registered_handler_on_foot}, {"mounted-controller-mode", mounted_weapon_controller_mode},
+        {"vehicle-driver", vehicle_driver}};
     try {
         if (argc != 2 || !scenarios.count(argv[1])) throw std::runtime_error("usage: game_controls_adapter <scenario>");
         scenarios.at(argv[1])();

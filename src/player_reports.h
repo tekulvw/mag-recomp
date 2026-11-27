@@ -29,17 +29,29 @@ inline constexpr double judge_min_seconds = 120;
 inline constexpr uint64_t judge_min_frames = 3600;
 // Slow frames: more than this share of frames took 50 ms or more...
 inline constexpr double slow_frame_share = 0.05;
-// ...or at least this many frames took 250 ms or more (outside the first minute's loading).
+// ...or at least this many frames took 250 ms or more outside loading: the summary's
+// frames.loading counts the boot (the first minute) and loading screens, which are left out.
 inline constexpr uint64_t long_frame_count = 30;
+// Sustained frame-rate drops: any episode the engine recorded in a match (fps_drops; the detector
+// and its MAG_FPS_DROP_* switches are in src/mag_session_monitor.h).
+// A freeze: the engine presented no frame for this long before its summary was written.
+inline constexpr double frozen_report_seconds = 10;
+// Network: the game server went silent this long during a match while frames kept coming (a
+// timeline event of kind "network", verdict "network", phase "match"; docs/player-settings.md,
+// "Frame-rate dips and network gaps").
+inline constexpr double network_gap_report_ms = 2000;
 // Audio: at least this many underruns, plus one for every this many seconds of audio...
 inline constexpr uint64_t underrun_floor = 20;
 inline constexpr double underrun_every_seconds = 30;
 // ...or any host audio device error, or this much drift against the 48 kHz clock over a session
-// of at least judge_min_seconds.
+// of at least judge_min_seconds, after taking off what stalls explain: the periods the audio path
+// dropped after a stall (audio_period_frames each), up to the stalls' length (hitches of a second
+// or more, and a freeze).
 inline constexpr double audio_drift_limit_ms = 2000;
+inline constexpr double audio_period_frames = 256, audio_rate = 48000;
 // Reports created per rolling 24 hours, by kind: crashes, halts and launch errors; slow frames and
-// audio; and the player's own requests. More are not created.
-inline constexpr int daily_error_reports = 6, daily_performance_reports = 2, daily_manual_reports = 10;
+// audio; network gaps; and the player's own requests. More are not created.
+inline constexpr int daily_error_reports = 6, daily_performance_reports = 2, daily_network_reports = 2, daily_manual_reports = 10;
 // The queue: at most this many reports and bytes; the oldest go first.
 inline constexpr size_t queue_max_reports = 5;
 inline constexpr uintmax_t queue_max_bytes = 8u << 20;
@@ -91,7 +103,7 @@ struct Redaction {
 std::string redact(const std::string &text, const Redaction &);
 
 // ---- What happened in the session ----
-enum class Trigger { None, Crash, LaunchError, Halt, SlowFrames, Audio, Manual };
+enum class Trigger { None, Crash, LaunchError, Halt, SlowFrames, Audio, Manual, Network };
 const char *trigger_name(Trigger);
 
 struct Session {
@@ -124,7 +136,7 @@ struct Decision {
 };
 // The trigger for this session from its exits, logs, summaries and request marker, before the
 // setting and the daily limits. Crash and halt come before a launch error, which comes before
-// slow frames and audio; a manual request alone is Manual.
+// slow frames, network gaps and audio, in that order; a manual request alone is Manual.
 Decision decide(const Session &);
 // The performance part alone, for one session summary (tests and decide()).
 Trigger judge_summary(const Json &summary, std::vector<std::string> &reasons);
