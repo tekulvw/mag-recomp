@@ -762,6 +762,32 @@ Json slim(Json summary) {
     return summary;
 }
 
+// Drops the oldest `count` minutes of the summary with the most, and counts them in its
+// "minutes_trimmed". False when no summary has a minute left.
+bool trim_minutes(std::vector<std::pair<std::string, Json>> &summaries, size_t count) {
+    Json *longest = nullptr;
+    for (auto &[role, summary] : summaries) {
+        const Json *m = summary.get("minutes");
+        if (m && m->kind == Json::Kind::Array && !m->items.empty() &&
+            (!longest || m->items.size() > longest->get("minutes")->items.size()))
+            longest = &summary;
+    }
+    if (!longest) return false;
+    for (auto &[key, value] : longest->members) {
+        if (key != "minutes") continue;
+        const size_t n = std::min(count, value.items.size());
+        value.items.erase(value.items.begin(), value.items.begin() + std::ptrdiff_t(n));
+        auto trimmed = std::find_if(longest->members.begin(), longest->members.end(), [](const auto &m) { return m.first == "minutes_trimmed"; });
+        Json total;
+        total.kind = Json::Kind::Number;
+        total.text = std::to_string((trimmed == longest->members.end() ? 0 : (long long)trimmed->second.number()) + (long long)n);
+        if (trimmed == longest->members.end()) longest->members.emplace_back("minutes_trimmed", total);
+        else trimmed->second = total;
+        return true;
+    }
+    return false;
+}
+
 std::string log_name(const std::string &file) {
     std::string name;
     for (char c : lower(file)) name += std::isalnum((unsigned char)c) || c == '.' || c == '_' || c == '-' ? c : '-';
@@ -829,6 +855,9 @@ std::string build_report(const Session &s, const Decision &d, const std::string 
         return m + "}";
     };
     std::string metrics = metrics_of(false);
+    // Too large: the oldest minutes go first, ten at a time, so the series keeps its latest part;
+    // then the bulkier series go altogether.
+    while (metrics.size() > metrics_max_bytes && trim_minutes(summaries, 10)) metrics = metrics_of(false);
     if (metrics.size() > metrics_max_bytes) metrics = metrics_of(true);
     if (metrics.size() > metrics_max_bytes) metrics = "{\"omitted\":\"too large\"}";
     // logs: tails of each, compressed, the largest halved until all fit

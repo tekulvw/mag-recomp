@@ -406,6 +406,10 @@ struct Run {
     double carry = 0;
     bool stream = false, silent = false;  // the game server's match stream (10 packets a second)
     uint64_t audio[MAG_SESSION_AUDIO_COUNTER_COUNT] = {};
+    // The host's CPU, when set: 16 CPUs, this share of them busy, MAG this share, 8 threads ready.
+    bool host = false;
+    double busy_share = 0.5, mag_share = 0.25;
+    machine::Sample cpu{};
     explicit Run(int phase = MAG_SESSION_PHASE_MATCH, DropConfig c = DropConfig{}) {
         m.set_drop_config(c);
         m.set_default_phase(phase);
@@ -424,6 +428,15 @@ struct Run {
                     m.net_event(socket_call(net::Kind::Recv, 4, net::Transport::Stream, none, 0, 120), t + uint64_t(1e8 * i) - 1);
             t += 1000 * ms;
             m.audio(audio, 0, 0, 48000, "synthetic");
+            if (host) {
+                cpu.ok = true;
+                cpu.cpus = 16;
+                cpu.total_ns += 16000 * ms;
+                cpu.busy_ns += uint64_t(busy_share * 16000) * ms;
+                cpu.process_ns += uint64_t(mag_share * 16000) * ms;
+                cpu.runnable = 8;
+                m.host_cpu(cpu, t);
+            }
             m.tick(t);
         }
         return *this;
@@ -813,6 +826,69 @@ static void drops(const char *scratch) {
     std::ofstream(std::string(scratch) + "/drops.json") << summary_json(s);
 }
 
+// The host's CPU: each minute's shares and a drop's, from cumulative readings; and this computer's.
+static void host_cpu() {
+    Run r;
+    r.host = true;
+    r.at(100, 30);
+    r.busy_share = 0.875;  // one second with something else taking 10 of the 16 CPUs
+    r.at(100, 1);
+    r.busy_share = 0.5;
+    r.at(100, 30);
+    r.snap();  // the summary writer closes minute 0
+    r.at(100, 60);
+    r.snap();
+    // Contention: the computer is busy with something else while the frame rate drops.
+    r.busy_share = 0.95;
+    r.mag_share = 0.2;
+    r.at(30, 10);
+    r.busy_share = 0.5;
+    r.mag_share = 0.25;
+    r.at(100, 30);
+    const Snapshot s = r.snap();
+    CHECK(s.host_seen && s.host_cpus == 16 && s.host_runnable);
+    CHECK(s.minutes.size() >= 2);
+    if (s.minutes.size() >= 2) {
+        const HostShare &first = s.minutes[0].host;
+        CHECK(first.seen && first.runnable_known);
+        NEAR(first.mag_pct, 25, 0.5);
+        NEAR(first.other_max_pct, 62.5, 0.5);
+        NEAR(first.runnable, 8, 1e-9);
+        CHECK(first.cpu_pct > 50 && first.cpu_pct < 51.5);
+        NEAR(s.minutes[1].host.other_max_pct, 25, 0.5);
+    }
+    CHECK(s.drops.size() == 1);
+    if (s.drops.size() == 1) {
+        const HostShare &h = s.drops[0].host;
+        CHECK(h.seen);
+        // The capture is 5 s before, the 10 s drop and 5 s after.
+        NEAR(h.cpu_pct, (10 * 95 + 10 * 50) / 20.0, 1.0);
+        NEAR(h.mag_pct, (10 * 20 + 10 * 25) / 20.0, 1.0);
+        CHECK(drop_line(s.drops[0]).find("; host cpu 72% (MAG 22%)") != std::string::npos);
+    }
+    const std::string json = summary_json(s);
+    CHECK(json.find("\"host\": {\"available\": true, \"cpus\": 16, \"runnable\": true}") != std::string::npos);
+    CHECK(json.find("\"host\": {\"cpu\": ") != std::string::npos && json.find("\"other_max\": 62.5") != std::string::npos);
+    CHECK(json.find("\"other\": ") != std::string::npos && json.find("\"run\": 8.0") != std::string::npos);
+    // Without readings the summary says so, and minutes carry none.
+    Run plain;
+    plain.at(100, 70);
+    const Snapshot p = plain.snap();
+    CHECK(!p.host_seen && !p.minutes.empty() && !p.minutes[0].host.seen);
+    CHECK(summary_json(p).find("\"host\": {\"available\": false}") != std::string::npos);
+    // This computer: the readings move, busy within total, and MAG's own time grows as it works.
+    machine::Sample a, b;
+    CHECK(machine::sample(a) && a.ok && a.cpus > 0 && a.busy_ns <= a.total_ns);
+    volatile double sink = 0;
+    const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(30);
+    while (std::chrono::steady_clock::now() < until) sink = sink + 1;
+    CHECK(machine::sample(b) && b.process_ns > a.process_ns && b.total_ns >= a.total_ns);
+#if defined(__linux__)
+    CHECK(b.runnable >= 1);
+#endif
+    std::printf("[session_monitor] host cpus=%u runnable=%d process_ms=%.1f\n", b.cpus, b.runnable, double(b.process_ns) / 1e6);
+}
+
 // The OS's round-trip time for a real loopback TCP connection (POSIX here; Windows' SIO_TCP_INFO is
 // checked on a Windows machine with the same function). Not a socket: no time.
 static void round_trip() {
@@ -902,6 +978,7 @@ int main(int argc, char **argv) {
     loading_lead_and_teardown();
     network_flows();
     drops(argv[1]);
+    host_cpu();
     round_trip();
     process_monitor(argv[1]);
     benchmark();

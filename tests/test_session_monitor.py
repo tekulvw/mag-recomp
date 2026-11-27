@@ -55,7 +55,7 @@ class SessionMonitorTests(unittest.TestCase):
             binary = pathlib.Path(tmp) / 'session_monitor'
             build = subprocess.run([COMPILER, '-std=c++17', '-O2', '-Wall', '-Wextra', '-Werror', '-I' + str(ROOT / 'src'),
                                     str(ROOT / 'tests/session_monitor.cpp'), str(ROOT / 'src/mag_session_monitor.cpp'),
-                                    str(ROOT / 'src/mag_session_network.cpp'),
+                                    str(ROOT / 'src/mag_session_network.cpp'), str(ROOT / 'src/mag_session_host.cpp'),
                                     '-o', str(binary), '-pthread'], capture_output=True, text=True, timeout=120)
             self.assertEqual(build.returncode, 0, build.stderr)
             scratch = pathlib.Path(tmp) / 'scratch'; scratch.mkdir()
@@ -159,7 +159,7 @@ class SessionMonitorTests(unittest.TestCase):
             binary = tmp / 'session_monitor'
             build = subprocess.run([COMPILER, '-std=c++17', '-O2', '-Wall', '-Wextra', '-Werror', '-I' + str(ROOT / 'src'), '-I' + str(tmp),
                                     str(ROOT / 'tests/session_monitor.cpp'), str(ROOT / 'src/mag_session_monitor.cpp'),
-                                    str(ROOT / 'src/mag_session_network.cpp'), str(obj), '-o', str(binary), '-pthread'],
+                                    str(ROOT / 'src/mag_session_network.cpp'), str(ROOT / 'src/mag_session_host.cpp'), str(obj), '-o', str(binary), '-pthread'],
                                    capture_output=True, text=True, timeout=120)
             self.assertEqual(build.returncode, 0, build.stderr)
             scratch = tmp / 'scratch'; scratch.mkdir()
