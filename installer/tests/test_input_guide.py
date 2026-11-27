@@ -187,7 +187,7 @@ class GuideTests(unittest.TestCase):
         found = Detection('macos', rpcs3=[(Path(RPCS3[0]),)], firmware_encrypted=[sprx])
         steps, *_ = survey(found, REVIEWED)
         self.assertEqual([s.state for s in steps[:4]], [DONE, DONE, DONE, TODO])
-        self.assertEqual(steps[3].commands, [f"{RPCS3[0]} --decrypt {shlex.quote(str(sprx))}"])
+        self.assertEqual(steps[3].commands, [f"{shlex.quote(str(Path(RPCS3[0])))} --decrypt {shlex.quote(str(sprx))}"])
         self.assertIn('writes libsre.prx beside libsre.sprx', render(steps))
 
     def test_found_and_checked_inputs_make_every_step_done(self):
