@@ -4,7 +4,7 @@ The ps3recomp runtime keeps most of its behaviour behind opt-in switches: enviro
 it reads at run time and CMake options it reads at configure time. This page lists every one
 mag-recomp sets, with the value, the platforms, the file that sets it, the reason and how to turn
 it off for a comparison. It applies to the runtime pinned in
-[`profiles/framework.json`](../profiles/framework.json) (`mag-recomp/runtime-2026.11.27-texupload`, `5d2a4c2d`).
+[`profiles/framework.json`](../profiles/framework.json) (`mag-recomp/runtime-2026.11.27-texcache`, `2d278ebb`).
 
 `tools/check_ps3recomp_flags.py` extracts the switches from the sources and fails when this page
 is missing one, lists one nothing sets any more, or gives a value or file the sources no longer
@@ -197,6 +197,7 @@ starts being set here; move its row up when that happens.
 | `PS3RECOMP_VK_TEXTURE_HEAP` | env | `1` | Vulkan builds (Linux, Windows) | Engine textures up to 16 MiB take first-fit ranges of 64 MiB device-local blocks instead of one `vkAllocateMemory` each; a range returns when the image is destroyed, after the GPU is done with it (fork #188). Same A/B as `PS3RECOMP_RSX_TEXTURE_IN_PLACE`; the heap held 9 blocks (576 MiB) for about 1,000 cached textures. | `0` |
 | `PS3RECOMP_VK_TEXTURE_STAGE_ARENA` | env | `1` | Vulkan builds (Linux, Windows) | Under batched recording, texture levels up to 4 MiB stage in the batch arena instead of a pooled host buffer each; the 32-entry pool ran dry with 16 batches in flight, so most levels allocated, mapped and later freed a host buffer (fork #188). Same A/B as `PS3RECOMP_RSX_TEXTURE_IN_PLACE`. | `0` |
 | `PS3RECOMP_VK_TEXTURE_LEVEL_CHAIN` | env | `1` | Vulkan builds (Linux, Windows) | Back-to-back level and face uploads into one image share one full dependency and image barrier instead of two each (fork #188). Same A/B as `PS3RECOMP_RSX_TEXTURE_IN_PLACE`. | `0` |
+| `PS3RECOMP_RSX_TEXTURE_CACHE_ENTRIES` | env | unset (cache sized by the backend's memory budget) | all (Vulkan and Metal report a budget; others keep 1,024) | The draw engine's texture cache keeps at least 1,024 textures and grows up to 4,096 while their decoded size fits a backend budget: a quarter of the largest device-local heap (Vulkan) or of `recommendedMaxWorkingSetSize` (Metal) (fork #189). Windows A/B (RTX 5090, MAG hosted Sabotage on test, walking, three interleaved runs each, steady in-match minutes): 1,024 entries made 2,285-3,352 evictions a run and re-uploaded 33-148 evicted textures with identical bytes (1-4% of uploads); the budget made 0-29 evictions and none. The cached textures took 726-792 MB decoded against 107-120 MB, and the backend's live device-local allocations peaked at 1.15-1.22 GB against 0.77-0.90 GB, with no allocation failures. Frame time did not move measurably after #345's upload changes (about 0.02 ms an upload; fps at the 144 cap either way). `PS3RECOMP_RSX_TEXTURE_CACHE_MB=M` overrides the budget (`0`: no budget, 1,024 entries). | `1024` |
 
 No runtime switch is documented in mag-recomp's code as one that must stay off. Diagnostics stay
 off by default (#136). Other opt-in runtime switches become defaults here only after an A/B run
