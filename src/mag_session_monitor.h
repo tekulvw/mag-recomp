@@ -163,10 +163,20 @@ struct Builds {
     uint64_t pipelines = 0, pipeline_ns = 0, cache_saves = 0, cache_save_ns = 0;
     uint64_t uploads = 0, upload_ns = 0, upload_bytes = 0, slow_uploads = 0;
     uint64_t shader_memory_hits = 0, shader_disk_hits = 0;
+    /* Version 2 of the runtime's counters (zero before it): what the uploads were. A new upload
+     * is a texture the cache did not hold (first use, or after an eviction); a changed one is a
+     * cached texture whose guest bytes changed, in_place of them reusing the texture it had. Sizes
+     * bin every upload by its guest size: up to 64 KiB, 1 MiB, 4 MiB, larger. upload_wait_ns is the
+     * part of upload_ns spent waiting for a GPU recording slot; slot waits count every such wait. */
+    uint64_t uploads_new = 0, new_bytes = 0, uploads_changed = 0, changed_bytes = 0, in_place = 0, evictions = 0;
+    std::array<uint64_t, 4> size_n{}, size_bytes{};
+    uint64_t upload_wait_ns = 0, slot_waits = 0, slot_wait_ns = 0;
     Builds since(const Builds &earlier) const;  /* this minus earlier, field by field */
     /* Pipeline and shader work: programs, translations, pipelines and cache writes. */
     double build_ms() const { return double(program_ns + translation_ns + pipeline_ns + cache_save_ns) / 1e6; }
     double upload_ms() const { return double(upload_ns) / 1e6; }
+    double upload_wait_ms() const { return double(upload_wait_ns) / 1e6; }
+    double slot_wait_ms() const { return double(slot_wait_ns) / 1e6; }
     bool built() const { return programs || translations || pipelines || cache_saves; }
 };
 
@@ -174,6 +184,9 @@ struct Builds {
 struct SlowBuilds {
     uint64_t frames = 0, with_builds = 0, with_uploads = 0;
     double frame_ms = 0, build_ms = 0, upload_ms = 0;
+    /* Version 2: their new and changed uploads, the uploads' GPU-slot waits and all slot waits. */
+    uint64_t uploads_new = 0, uploads_changed = 0;
+    double upload_wait_ms = 0, slot_wait_ms = 0;
 };
 constexpr uint64_t slow_build_thresholds_us[3] = {50000, 100000, 250000};
 /* A frame of at least this long, with builds or uploads in it, also gets one log line. */
@@ -182,6 +195,7 @@ constexpr uint64_t build_log_us = 250000;
 /* The runtime's build facts: which disk caches it uses and its totals. */
 struct BuildInfo {
     bool available = false;
+    unsigned version = 0;  /* the runtime's struct version: 2 adds what the uploads were */
     std::string backend;
     bool spirv_disk_cache = false, vk_pipeline_cache = false;
     uint64_t pipeline_cache_loaded_bytes = 0, pipeline_worst_ns = 0;

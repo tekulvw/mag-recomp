@@ -98,6 +98,12 @@ Builds Builds::since(const Builds &e) const {
     d.upload_bytes = upload_bytes - e.upload_bytes; d.slow_uploads = slow_uploads - e.slow_uploads;
     d.shader_memory_hits = shader_memory_hits - e.shader_memory_hits;
     d.shader_disk_hits = shader_disk_hits - e.shader_disk_hits;
+    d.uploads_new = uploads_new - e.uploads_new; d.new_bytes = new_bytes - e.new_bytes;
+    d.uploads_changed = uploads_changed - e.uploads_changed; d.changed_bytes = changed_bytes - e.changed_bytes;
+    d.in_place = in_place - e.in_place; d.evictions = evictions - e.evictions;
+    for (size_t i = 0; i < size_n.size(); ++i) { d.size_n[i] = size_n[i] - e.size_n[i]; d.size_bytes[i] = size_bytes[i] - e.size_bytes[i]; }
+    d.upload_wait_ns = upload_wait_ns - e.upload_wait_ns;
+    d.slot_waits = slot_waits - e.slot_waits; d.slot_wait_ns = slot_wait_ns - e.slot_wait_ns;
     return d;
 }
 
@@ -165,6 +171,10 @@ void Monitor::frame(uint64_t now_ns, const Builds *builds) {
         b.frame_ms += hitch.ms;
         if (during.built()) { ++b.with_builds; b.build_ms += during.build_ms(); }
         if (during.uploads) { ++b.with_uploads; b.upload_ms += during.upload_ms(); }
+        b.uploads_new += during.uploads_new;
+        b.uploads_changed += during.uploads_changed;
+        b.upload_wait_ms += during.upload_wait_ms();
+        b.slot_wait_ms += during.slot_wait_ms();
     }
     if (builds && us >= build_log_us && (during.built() || during.uploads))
         std::fprintf(stderr, "[mag session] slow frame %.0f ms: built %.0f ms (%llu programs, %llu shaders, %llu pipelines, "
@@ -753,6 +763,11 @@ Snapshot Monitor::snapshot(uint64_t now_ns) {
                          (unsigned long long)closed.builds.pipelines, closed.builds.build_ms(),
                          (unsigned long long)closed.slow_with_builds, (unsigned long long)closed.builds.uploads,
                          closed.builds.upload_ms());
+        if (build_info_.version >= 2 && closed.builds.uploads)
+            std::fprintf(stderr, " (%.1f MB: %llu new, %llu changed, %llu in place, %llu evictions; GPU slot waits %.0f ms)",
+                         double(closed.builds.upload_bytes) / 1048576.0, (unsigned long long)closed.builds.uploads_new,
+                         (unsigned long long)closed.builds.uploads_changed, (unsigned long long)closed.builds.in_place,
+                         (unsigned long long)closed.builds.evictions, closed.builds.upload_wait_ms());
         if (closed.host.seen)
             std::fprintf(stderr, "; host cpu %.0f%% (MAG %.0f%%, others up to %.0f%%)", closed.host.cpu_pct, closed.host.mag_pct,
                          closed.host.other_max_pct);
@@ -996,11 +1011,25 @@ static std::string drops_json(const Snapshot &s) {
     return j + (s.drops.empty() ? "]},\n" : "\n  ]},\n");
 }
 
-static std::string builds_json(const Builds &b) {
+// Version 2: what the uploads were. Compact: it goes on every minute that uploaded.
+static std::string upload_detail_json(const Builds &b, bool sizes) {
+    std::string j = ", \"new\": " + number(b.uploads_new) + ", \"changed\": " + number(b.uploads_changed) +
+                    ", \"in_place\": " + number(b.in_place) + ", \"evictions\": " + number(b.evictions) +
+                    ", \"upload_wait_ms\": " + number(b.upload_wait_ms(), 0) + ", \"slot_wait_ms\": " + number(b.slot_wait_ms(), 0);
+    if (sizes) {
+        j += ", \"sizes\": [";
+        for (size_t i = 0; i < b.size_n.size(); ++i) j += std::string(i ? ", " : "") + number(b.size_n[i]);
+        j += "]";
+    }
+    return j;
+}
+
+static std::string builds_json(const Builds &b, bool detail) {
     return "{\"build_ms\": " + number(b.build_ms(), 1) + ", \"programs\": " + number(b.programs) +
            ", \"shaders\": " + number(b.translations) + ", \"pipelines\": " + number(b.pipelines) +
            ", \"cache_writes\": " + number(b.cache_saves) + ", \"upload_ms\": " + number(b.upload_ms(), 1) +
-           ", \"uploads\": " + number(b.uploads) + ", \"upload_mb\": " + number(double(b.upload_bytes) / 1048576.0, 2) + "}";
+           ", \"uploads\": " + number(b.uploads) + ", \"upload_mb\": " + number(double(b.upload_bytes) / 1048576.0, 2) +
+           (detail ? upload_detail_json(b, false) : std::string()) + "}";
 }
 
 static std::string build_section_json(const Snapshot &s) {
@@ -1018,15 +1047,31 @@ static std::string build_section_json(const Snapshot &s) {
          ", \"pipeline_worst_ms\": " + number(double(i.pipeline_worst_ns) / 1e6, 1) +
          ", \"cache_writes\": " + number(t.cache_saves) + ", \"cache_write_ms\": " + number(double(t.cache_save_ns) / 1e6, 1) +
          ",\n    \"uploads\": " + number(t.uploads) + ", \"upload_ms\": " + number(t.upload_ms(), 1) +
-         ", \"upload_mb\": " + number(double(t.upload_bytes) / 1048576.0, 1) + ", \"slow_uploads\": " + number(t.slow_uploads) +
-         ",\n    \"slow_frames\": {";
+         ", \"upload_mb\": " + number(double(t.upload_bytes) / 1048576.0, 1) + ", \"slow_uploads\": " + number(t.slow_uploads);
+    const bool detail = i.version >= 2;
+    if (detail) {
+        j += ",\n    \"uploads_new\": " + number(t.uploads_new) + ", \"new_mb\": " + number(double(t.new_bytes) / 1048576.0, 1) +
+             ", \"uploads_changed\": " + number(t.uploads_changed) + ", \"changed_mb\": " + number(double(t.changed_bytes) / 1048576.0, 1) +
+             ", \"in_place\": " + number(t.in_place) + ", \"evictions\": " + number(t.evictions) +
+             ", \"upload_wait_ms\": " + number(t.upload_wait_ms(), 1) + ", \"slot_waits\": " + number(t.slot_waits) +
+             ", \"slot_wait_ms\": " + number(t.slot_wait_ms(), 1) + ", \"sizes\": [";
+        static const char *bins[4] = {"64KiB", "1MiB", "4MiB", "larger"};
+        for (size_t k = 0; k < 4; ++k)
+            j += std::string(k ? ", " : "") + "{\"up_to\": \"" + bins[k] + "\", \"uploads\": " + number(t.size_n[k]) +
+                 ", \"mb\": " + number(double(t.size_bytes[k]) / 1048576.0, 1) + "}";
+        j += "]";
+    }
+    j += ",\n    \"slow_frames\": {";
     static const char *names[3] = {"over_50ms", "over_100ms", "over_250ms"};
     for (size_t k = 0; k < 3; ++k) {
         const SlowBuilds &b = s.slow_builds[k];
         j += std::string(k ? ", " : "") + "\"" + names[k] + "\": {\"frames\": " + number(b.frames) +
              ", \"frame_ms\": " + number(b.frame_ms, 0) + ", \"with_builds\": " + number(b.with_builds) +
              ", \"build_ms\": " + number(b.build_ms, 0) + ", \"with_uploads\": " + number(b.with_uploads) +
-             ", \"upload_ms\": " + number(b.upload_ms, 0) + "}";
+             ", \"upload_ms\": " + number(b.upload_ms, 0) +
+             (detail ? ", \"uploads_new\": " + number(b.uploads_new) + ", \"uploads_changed\": " + number(b.uploads_changed) +
+                       ", \"upload_wait_ms\": " + number(b.upload_wait_ms, 0) + ", \"slot_wait_ms\": " + number(b.slot_wait_ms, 0)
+                     : std::string()) + "}";
     }
     return j + "}},\n";
 }
@@ -1093,7 +1138,7 @@ std::string summary_json(const Snapshot &s) {
         j += std::string(i ? ", " : "") + "{\"at_s\": " + number(s.hitches[i].at_s, 2) + ", \"ms\": " + number(s.hitches[i].ms, 1) +
              ", \"phase\": \"" + phase_name(s.hitches[i].phase) + "\"" + map_json(s, s.hitches[i].map) +
              (s.hitches[i].loading ? ", \"loading\": true" : "") +
-             (s.builds.available ? ", \"builds\": " + builds_json(s.hitches[i].builds) : std::string()) + "}";
+             (s.builds.available ? ", \"builds\": " + builds_json(s.hitches[i].builds, s.builds.version >= 2) : std::string()) + "}";
     j += "],\n";
     j += network_json(s.network, s.uptime_s);
     j += build_section_json(s);
@@ -1147,7 +1192,10 @@ std::string summary_json(const Snapshot &s) {
         if (s.builds.available && (m.builds.built() || m.builds.uploads))
             j += ", \"builds\": {\"build_ms\": " + number(m.builds.build_ms(), 0) + ", \"shaders\": " + number(m.builds.translations) +
                  ", \"pipelines\": " + number(m.builds.pipelines) + ", \"upload_ms\": " + number(m.builds.upload_ms(), 0) +
-                 ", \"uploads\": " + number(m.builds.uploads) + ", \"slow_with_builds\": " + number(m.slow_with_builds) + "}";
+                 ", \"uploads\": " + number(m.builds.uploads) + ", \"slow_with_builds\": " + number(m.slow_with_builds) +
+                 (s.builds.version >= 2 && m.builds.uploads
+                      ? ", \"upload_mb\": " + number(double(m.builds.upload_bytes) / 1048576.0, 1) + upload_detail_json(m.builds, true)
+                      : std::string()) + "}";
         if (m.host.seen) j += host_json(m.host, true);
         j += std::string(", \"verdict\": \"") + minute_verdict(m) + "\"}";
     }
@@ -1210,6 +1258,16 @@ Builds read_builds(struct ps3recomp_rsx_build_stats &st) {
     b.uploads = st.texture_uploads; b.upload_ns = st.texture_upload_ns;
     b.upload_bytes = st.texture_upload_bytes; b.slow_uploads = st.slow_texture_uploads;
     b.shader_memory_hits = st.shader_memory_hits; b.shader_disk_hits = st.shader_disk_hits;
+#if PS3RECOMP_RSX_BUILD_STATS_VERSION >= 2
+    if (st.version >= 2) {
+        b.uploads_new = st.texture_upload_new; b.new_bytes = st.texture_upload_new_bytes;
+        b.uploads_changed = st.texture_upload_changed; b.changed_bytes = st.texture_upload_changed_bytes;
+        b.in_place = st.texture_upload_in_place; b.evictions = st.texture_evictions;
+        for (size_t i = 0; i < 4; ++i) { b.size_n[i] = st.texture_upload_size_n[i]; b.size_bytes[i] = st.texture_upload_size_bytes[i]; }
+        b.upload_wait_ns = st.texture_upload_wait_ns;
+        b.slot_waits = st.gpu_slot_waits; b.slot_wait_ns = st.gpu_slot_wait_ns;
+    }
+#endif
     return b;
 }
 #endif
@@ -1221,6 +1279,8 @@ void poll_builds() {
     BuildInfo info;
     info.totals = read_builds(st);
     info.available = st.version >= 1;
+    // What this build reads: the runtime may be newer than the header it was built against.
+    info.version = std::min<unsigned>(st.version, PS3RECOMP_RSX_BUILD_STATS_VERSION);
     info.backend.assign(st.backend, strnlen(st.backend, sizeof st.backend));
     info.spirv_disk_cache = (st.flags & RSX_BUILD_FLAG_SPIRV_DISK_CACHE) != 0;
     info.vk_pipeline_cache = (st.flags & RSX_BUILD_FLAG_VK_PIPELINE_CACHE) != 0;

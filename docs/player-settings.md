@@ -295,7 +295,27 @@ A frame can be slow because the renderer met something new: a program and render
 - per minute, when it built or uploaded anything, a compact `builds` object with `slow_with_builds`, the minute's frames of 50 ms or more that had builds in them;
 - a `builds` section: the backend, which disk caches are on (`spirv_disk_cache`, `vk_pipeline_cache`, and the pipeline-cache bytes loaded at start), the session's totals, and for frames of 50, 100 and 250 ms or more, how many there were, how many had builds or uploads in them, and the time those took.
 
-A frame of 250 ms or more that built or uploaded something also writes one `[mag session] slow frame` line to `engine.log`. Without the runtime's counters the summary says `"builds": {"available": false}`.
+**What the uploads were** (version 2 of the runtime's counters, when the pinned runtime has it):
+- **new** uploads are of a texture the cache did not hold: its first use, or a use after it was evicted (`evictions` counts those);
+- **changed** uploads come from a cached texture whose guest bytes changed, and `in_place` of them went into the texture the cache already had;
+- **sizes** bin every upload by its guest size: up to 64 KiB, up to 1 MiB, up to 4 MiB, larger;
+- **`upload_wait_ms`** is the part of the upload time spent waiting for the GPU to free a recording slot (Vulkan only; 0 elsewhere), and **`slot_wait_ms`** is every such wait, on any work.
+
+These appear in each hitch's `builds` (new, changed, in place, evictions and the two waits), in each minute that uploaded anything (the same plus `upload_mb` and `sizes`, the counts per bin), in each slow-frame threshold (new and changed uploads and the two waits), and in the totals (counts and MB per kind, and per size bin). With version 1 of the counters none of these keys appear.
+
+A frame of 250 ms or more that built or uploaded something also writes one `[mag session] slow frame` line to `engine.log`. With version 2, each minute's line adds the upload MB, the new, changed and in-place counts, the evictions and the uploads' GPU-slot wait. Without the runtime's counters the summary says `"builds": {"available": false}`.
+
+### Match context
+
+A report reads differently on a quiet map than in a full lobby. The engine therefore records what it already knows about where each minute, hitch and drop happened:
+- **Phase.** Each minute says the phase it spent the most time in (`"phase"`), and `match_s`, its seconds on foot in a match, when it was only partly in one. Hitches and drops already carry their phase.
+- **Map.** The runtime tells the session monitor which files the game opens (`ps3emu/fs_host_observer.h`, when the pinned runtime has it). A map's archive, `.../levels/<name>.psarc`, names the map. Each minute (the map at its end), hitch and drop carries `"map"`, and the summary lists the map loads with their start (`"maps": {"available": true, "loads": [{"at_s": 1524.1, "map": "mag_canal_final"}]}`). A load opens its archive many times over up to a minute, so an opening counts as a new load only for another map, or for the same map 120 s or more after the previous opening. Without the observer the summary says `"maps": {"available": false}`.
+- **Map loads are loading.** Outside a match, opening a map's archive starts a [loading](#loading-and-freezes) span, the same as a frame of 1 s or more. This also covers a load whose frames never reach a second, as on a fast machine where they peak at 0.9 s.
+- **Match ends.** `match_ends_s` lists when the local player's matches were torn down.
+
+Only file names are observed, never their contents, and nothing here reads the game's memory or its network messages.
+
+**Not recorded: mode and player count.** The client has no cheap, protocol-free view of them. The lobby's world list and the match's roster arrive in the game's own network messages, which the monitor counts but does not read, and the game's memory layout is not used. The server knows both, per match and over time. A report's account, its `started_unix` and each minute's index place every minute on the server's clock (the engine's `t=` log clock is the same one). Joining a report against the server's own record of each match (world, mode, map, and players joining and leaving, by time) therefore gives the mode and the player count per minute. That join belongs on the server and the portal side. Until then, a minute's inbound game traffic (`net.in_bytes`) is a rough proxy for how much is going on around the player.
 
 ### Match context
 

@@ -175,6 +175,48 @@ static void builds(const char *scratch) {
     s.role = "engine";
     s.ending = "exit";
     std::ofstream(std::string(scratch) + "/builds.json") << summary_json(s);
+    CHECK(summary_json(s).find("\"in_place\"") == std::string::npos);  // version 1: no upload detail
+
+    // Version 2: what the uploads were, per hitch, per minute, per slow-frame threshold and in all.
+    Monitor v2(0);
+    Builds c;
+    uint64_t w = 1;
+    v2.frame(w, &c);
+    BuildInfo detail;
+    detail.available = true;
+    detail.version = 2;
+    detail.backend = "vulkan";
+    v2.build_info(detail);
+    for (int i = 0; i < 60; ++i) { w += 16666667; v2.frame(w, &c); }
+    // A 200 ms frame: 40 uploads, 30 of changed textures (25 of them in place) and 10 new after 10
+    // evictions, mostly small; 60 ms of the 150 ms waited for a GPU recording slot.
+    c.uploads += 40; c.upload_ns += 150 * ms; c.upload_bytes += 40u << 20;
+    c.uploads_changed += 30; c.changed_bytes += 30u << 20; c.in_place += 25;
+    c.uploads_new += 10; c.new_bytes += 10u << 20; c.evictions += 10;
+    c.size_n = {20, 10, 8, 2}; c.size_bytes = {1u << 20, 6u << 20, 21u << 20, 12u << 20};
+    c.upload_wait_ns += 60 * ms; c.slot_waits += 12; c.slot_wait_ns += 70 * ms;
+    w += 200 * ms; v2.frame(w, &c);
+    for (int i = 0; i < 60; ++i) { w += 16666667; v2.frame(w, &c); }
+    detail.totals = c;
+    v2.build_info(detail);
+    const Snapshot d = v2.snapshot(61 * 1000 * ms);
+    CHECK(d.hitches.size() == 1);
+    if (d.hitches.size() == 1) {
+        const Builds &h = d.hitches[0].builds;
+        CHECK(h.uploads_changed == 30 && h.in_place == 25 && h.uploads_new == 10 && h.evictions == 10 && h.size_n[3] == 2);
+        NEAR(h.upload_wait_ms(), 60, 1e-6);
+        NEAR(h.slot_wait_ms(), 70, 1e-6);
+    }
+    CHECK(d.slow_builds[0].uploads_changed == 30 && d.slow_builds[2].frames == 0);
+    NEAR(d.slow_builds[1].upload_wait_ms, 60, 1e-6);
+    CHECK(d.minutes.size() == 1 && d.minutes[0].builds.in_place == 25);
+    const std::string dj = summary_json(d);
+    CHECK(dj.find("\"upload_mb\": 40.0, \"new\": 10, \"changed\": 30, \"in_place\": 25, \"evictions\": 10, \"upload_wait_ms\": 60, "
+                  "\"slot_wait_ms\": 70, \"sizes\": [20, 10, 8, 2]}") != std::string::npos);  // the minute
+    CHECK(dj.find("\"uploads_new\": 10, \"new_mb\": 10.0, \"uploads_changed\": 30, \"changed_mb\": 30.0, \"in_place\": 25") !=
+          std::string::npos);  // the totals
+    CHECK(dj.find("{\"up_to\": \"larger\", \"uploads\": 2, \"mb\": 12.0}") != std::string::npos);
+    CHECK(dj.find("\"upload_mb\": 40.00, \"new\": 10, \"changed\": 30") != std::string::npos);  // the hitch
     // Without the runtime's counters a summary says so, and its hitches carry no builds.
     Monitor plain(0);
     uint64_t u = 1;

@@ -207,6 +207,48 @@ class SessionMonitorTests(unittest.TestCase):
             self.assertEqual(maps['available'], True)
             self.assertEqual([load['map'] for load in maps['loads']], ['mag_test_map'])
 
+    def test_runtime_build_counters_v2_reach_the_summary(self):
+        # Version 2 of the stand-in appends what the uploads were; the monitor reads it when the
+        # header and the runtime both say version 2.
+        header = STUB_BUILD_STATS_HEADER.replace('VERSION 1', 'VERSION 2').replace(
+            '    char backend[8];\n', '    char backend[8];\n'
+            '    uint64_t texture_upload_new, texture_upload_new_bytes;\n'
+            '    uint64_t texture_upload_changed, texture_upload_changed_bytes, texture_upload_in_place;\n'
+            '    uint64_t texture_evictions;\n'
+            '    uint64_t texture_upload_size_n[4], texture_upload_size_bytes[4];\n'
+            '    uint64_t texture_upload_wait_ns;\n'
+            '    uint64_t gpu_slot_waits, gpu_slot_wait_ns;\n')
+        getter = STUB_BUILD_STATS_GETTER.replace('out->version = 1;', 'out->version = 2;').replace(
+            '    memcpy(out->backend, "stub", 5);',
+            '    memcpy(out->backend, "stub", 5);\n'
+            '    out->texture_uploads = calls; out->texture_upload_changed = calls; out->texture_upload_in_place = calls;\n'
+            '    out->texture_upload_size_n[1] = calls; out->gpu_slot_waits = 2 * calls;')
+        self.assertIn('texture_upload_new', header)
+        self.assertIn('texture_upload_in_place = calls', getter)
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = pathlib.Path(tmp)
+            (tmp / 'ps3emu').mkdir()
+            (tmp / 'ps3emu/rsx_build_stats.h').write_text(header)
+            (tmp / 'stub.c').write_text(getter)
+            cc = shutil.which('cc') or shutil.which('clang') or shutil.which('gcc')
+            obj = tmp / 'stub.o'
+            build = subprocess.run([cc, '-c', '-I' + str(tmp), str(tmp / 'stub.c'), '-o', str(obj)], capture_output=True, text=True, timeout=60)
+            self.assertEqual(build.returncode, 0, build.stderr)
+            binary = tmp / 'session_monitor'
+            build = subprocess.run([COMPILER, '-std=c++17', '-O2', '-Wall', '-Wextra', '-Werror', '-I' + str(ROOT / 'src'), '-I' + str(tmp),
+                                    str(ROOT / 'tests/session_monitor.cpp'), str(ROOT / 'src/mag_session_monitor.cpp'),
+                                    str(ROOT / 'src/mag_session_network.cpp'), str(ROOT / 'src/mag_session_host.cpp'), str(obj),
+                                    '-o', str(binary), '-pthread'], capture_output=True, text=True, timeout=120)
+            self.assertEqual(build.returncode, 0, build.stderr)
+            scratch = tmp / 'scratch'; scratch.mkdir()
+            result = subprocess.run([str(binary), str(scratch)], capture_output=True, text=True, timeout=120)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            live = json.loads((scratch / 'session-engine.json').read_text())['builds']
+            self.assertGreater(live['uploads_changed'], 0)
+            self.assertEqual(live['in_place'], live['uploads_changed'])
+            self.assertEqual(live['slot_waits'], 2 * live['uploads_changed'])
+            self.assertEqual(live['sizes'][1]['uploads'], live['uploads'])
+
     def test_frame_clock_feeds_the_monitor(self):
         main = (ROOT / 'src/main.cpp').read_text()
         self.assertIn('mag_session_monitor_start(', main)
