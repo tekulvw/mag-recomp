@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.15.0](https://github.com/tekulvw/mag-recomp/compare/v0.14.0...v0.15.0) (2026-11-27)
+
+
+### Features
+
+* **installer:** find RPCS3's files and guide players through preparing the game ([#350](https://github.com/tekulvw/mag-recomp/issues/350)) ([42a5d5c](https://github.com/tekulvw/mag-recomp/commit/42a5d5c8d22754fe52cfe1031008ee45c6a8d8a2))
+
+
+### Bug Fixes
+
+* **installer:** keep command-line output from failing on Windows code pages ([#353](https://github.com/tekulvw/mag-recomp/issues/353)) ([cc0fcf0](https://github.com/tekulvw/mag-recomp/commit/cc0fcf0910e75dbcd0da9717d48d3db50f539cc1))
+
+
+### Performance
+
+* **sdk:** pin runtime-2026.11.27-depthsnap so the options overlay stops reading its depth back to the CPU every frame ([#354](https://github.com/tekulvw/mag-recomp/issues/354)) ([a25b02a](https://github.com/tekulvw/mag-recomp/commit/a25b02a3522026fd66f82b193afd14275a7c5494))
+* **sdk:** pin runtime-2026.11.27-rewritehash so the options overlay stops re-uploading the same 8 MB every frame ([#351](https://github.com/tekulvw/mag-recomp/issues/351)) ([d9a4e78](https://github.com/tekulvw/mag-recomp/commit/d9a4e78c9056a836ef0ac8109de11bc4e806b96d))
+
 ## [0.14.0](https://github.com/tekulvw/mag-recomp/compare/v0.13.0...v0.14.0) (2026-11-27)
 
 
