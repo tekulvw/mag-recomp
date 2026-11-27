@@ -10,6 +10,13 @@
  * streaming server endpoint is a network gap, the event the summary's timeline sets beside the
  * frame-rate dips. Nothing is logged per packet, and nothing here knows the game's protocol.
  *
+ * The game's data flow: a session talks to several server endpoints (sign-in, lobby, the game
+ * server), and only one or two carry the match. An endpoint is part of the game's data flow when
+ * it receives at least game_flow_share of the busiest endpoint's packet rate (each over its own
+ * span, at least game_flow_span_s). Silences on the other endpoints (a lobby connection that
+ * sends a few bytes a minute) are side-flow gaps: the timeline keeps them, marked, and the minutes
+ * and the report trigger leave them out.
+ *
  * The summary writer samples each open TCP server connection's round-trip time once a second
  * (tcp_round_trip_ms()) and closes a minute of network counters when the monitor closes a minute
  * of frames. The class takes its clock from its callers, so the tests drive it with made-up
@@ -35,6 +42,10 @@ constexpr uint64_t slow_send_us = 50000;
 constexpr size_t max_endpoints = 16;
 /* Server addresses remembered (the addresses the game opened TCP connections to). */
 constexpr size_t max_servers = 16;
+/* The game's data flow: endpoints receiving at least this share of the busiest one's packet rate,
+ * each rate taken over the endpoint's span or this many seconds, whichever is longer. */
+constexpr double game_flow_share = 0.25;
+constexpr double game_flow_span_s = 60;
 /* Network gaps kept for the timeline (the latest). */
 constexpr size_t max_gaps = 64;
 /* Socket errors counted by name per endpoint. */
@@ -83,6 +94,7 @@ struct EndpointStats {
     uint16_t port = 0;
     bool server = false;  /* the game opened a TCP connection to this address */
     bool open = false;    /* a socket of the game is attached to it */
+    bool game = false;    /* part of the game's data flow (game_flow_share), as of the snapshot */
     double first_s = 0, last_s = 0;  /* its first and latest activity */
     Direction in, out;
     std::array<uint64_t, gap_bucket_count> gaps{};
@@ -106,9 +118,11 @@ struct OtherStats {
 /* One minute of network counters, closed with the monitor's minute. */
 struct Minute {
     bool any = false;     /* some socket activity, or an open endpoint */
-    bool stream = false;  /* some server endpoint was streaming */
+    bool stream = false;  /* an endpoint of the game's data flow was streaming */
     Direction in, out;
-    double longest_gap_ms = 0;  /* the longest streaming silence that ended in the minute or was open at its end */
+    /* The longest streaming silence of the game's data flow that ended in the minute or was open at
+     * its end, and its gaps; side_gap_ms is the same for the other endpoints. */
+    double longest_gap_ms = 0, side_gap_ms = 0;
     uint64_t gap_events = 0, errors = 0, send_blocked = 0;
     double rtt_ms = 0;  /* the highest TCP round-trip time sampled in the minute; 0 without a sample */
 };
@@ -143,6 +157,10 @@ private:
         uint64_t last_rx_us = 0;
         int last_rx_phase = 0;
         bool streaming = false;  /* at the latest arrival */
+        /* The current minute: its longest streaming silence and gaps, and whether it streamed. */
+        double minute_gap_ms = 0;
+        uint64_t minute_gap_events = 0;
+        bool minute_stream = false;
         std::array<uint64_t, stream_packets> arrivals{};  /* a ring of arrival times */
         size_t arrival_count = 0;
         int sockets = 0;
@@ -150,6 +168,8 @@ private:
     };
     int endpoint_for(Transport, const std::array<uint8_t, 4> &, uint16_t, uint64_t now_us);
     bool is_server(const std::array<uint8_t, 4> &) const;
+    /* Bit i: endpoint i is part of the game's data flow at `now_us`. */
+    uint32_t game_flows(uint64_t now_us) const;
     void count_error(int endpoint, int32_t error);
     uint64_t us(uint64_t now_ns) const { return now_ns > start_ns_ ? (now_ns - start_ns_) / 1000 : 0; }
 

@@ -74,6 +74,23 @@ bool Network::is_server(const std::array<uint8_t, 4> &a) const {
     return std::find(servers_.begin(), servers_.end(), a) != servers_.end();
 }
 
+uint32_t Network::game_flows(uint64_t now_us) const {
+    static_assert(max_endpoints <= 32, "one bit per endpoint");
+    const double now_s = double(now_us) / 1e6;
+    std::array<double, max_endpoints> rate{};
+    double busiest = 0;
+    for (size_t i = 0; i < endpoints_.size(); ++i) {
+        const EndpointStats &s = endpoints_[i].stats;
+        const double span = std::max(game_flow_span_s, (s.open ? now_s : s.last_s) - s.first_s);
+        rate[i] = double(s.in.packets) / span;
+        busiest = std::max(busiest, rate[i]);
+    }
+    uint32_t mask = 0;
+    for (size_t i = 0; i < endpoints_.size(); ++i)
+        if (busiest > 0 && rate[i] >= game_flow_share * busiest) mask |= 1u << i;
+    return mask;
+}
+
 // The endpoint for a peer: a named one (index), or -1 for the others (not a server, or no room).
 int Network::endpoint_for(Transport transport, const std::array<uint8_t, 4> &address, uint16_t port, uint64_t now_us) {
     for (size_t i = 0; i < endpoints_.size(); ++i) {
@@ -215,10 +232,10 @@ void Network::observe(const Event &e, uint64_t now_ns, int phase) {
         if (ep->streaming) {
             // A silence that began while the endpoint was streaming.
             s.longest_gap_ms = std::max(s.longest_gap_ms, double(gap) / 1000.0);
-            minute_.longest_gap_ms = std::max(minute_.longest_gap_ms, double(gap) / 1000.0);
+            ep->minute_gap_ms = std::max(ep->minute_gap_ms, double(gap) / 1000.0);
             if (gap >= gap_event_us) {
                 ++s.gap_events;
-                ++minute_.gap_events;
+                ++ep->minute_gap_events;
                 gaps_.push_back(Gap{double(ep->last_rx_us) / 1e6, double(gap) / 1000.0, ep->last_rx_phase, endpoint, false});
                 if (gaps_.size() > max_gaps) gaps_.erase(gaps_.begin());
             }
@@ -230,7 +247,7 @@ void Network::observe(const Event &e, uint64_t now_ns, int phase) {
     ep->streaming = ep->arrival_count >= stream_packets &&
                     now_us - ep->arrivals[ep->arrival_count % stream_packets] <= stream_window_us;
     if (ep->streaming) s.streamed = true;
-    if (ep->streaming) minute_.stream = true;
+    if (ep->streaming) ep->minute_stream = true;
     ep->last_rx_us = now_us;
     ep->last_rx_phase = phase;
 }
@@ -262,14 +279,30 @@ Minute Network::close_minute(uint64_t now_ns) {
     const uint64_t now_us = us(now_ns);
     std::lock_guard<std::mutex> lock(mutex_);
     Minute m = minute_;
-    // A silence still open at the minute's end counts in it (and again in the next if it goes on).
-    for (const Endpoint &e : endpoints_) {
-        if (!e.stats.open) continue;
-        m.any = true;
-        if (e.streaming && e.last_rx_us && now_us > e.last_rx_us) {
-            m.stream = true;
-            m.longest_gap_ms = std::max(m.longest_gap_ms, double(now_us - e.last_rx_us) / 1000.0);
+    // Silences count in the game's data flow or as side-flow gaps; one still open at the minute's
+    // end counts in it (and again in the next if it goes on).
+    const uint32_t game = game_flows(now_us);
+    for (size_t i = 0; i < endpoints_.size(); ++i) {
+        Endpoint &e = endpoints_[i];
+        double gap = e.minute_gap_ms;
+        bool stream = e.minute_stream;
+        if (e.stats.open) {
+            m.any = true;
+            if (e.streaming && e.last_rx_us && now_us > e.last_rx_us) {
+                stream = true;
+                gap = std::max(gap, double(now_us - e.last_rx_us) / 1000.0);
+            }
         }
+        if (game >> i & 1u) {
+            m.stream = m.stream || stream;
+            m.longest_gap_ms = std::max(m.longest_gap_ms, gap);
+            m.gap_events += e.minute_gap_events;
+        } else if (stream) {
+            m.side_gap_ms = std::max(m.side_gap_ms, gap);
+        }
+        e.minute_gap_ms = 0;
+        e.minute_gap_events = 0;
+        e.minute_stream = false;
     }
     minute_ = Minute{};
     return m;
@@ -282,9 +315,11 @@ Snapshot Network::snapshot(uint64_t now_ns) {
     s.available = available_;
     s.other = other_;
     s.gaps = gaps_;
+    const uint32_t game = game_flows(now_us);
     for (size_t i = 0; i < endpoints_.size(); ++i) {
         const Endpoint &e = endpoints_[i];
         s.endpoints.push_back(e.stats);
+        s.endpoints.back().game = (game >> i & 1u) != 0;
         // The silence now, on a streaming endpoint that is still attached.
         if (e.stats.open && e.streaming && e.last_rx_us && now_us >= e.last_rx_us + gap_event_us) {
             const double ms = double(now_us - e.last_rx_us) / 1000.0;

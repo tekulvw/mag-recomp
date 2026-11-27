@@ -29,6 +29,14 @@
 
 namespace mag::session {
 
+namespace {
+// A gap on an endpoint of the game's data flow (net::game_flow_share); a gap without a known
+// endpoint counts as one.
+bool game_gap(const net::Gap &g, const net::Snapshot &n) {
+    return g.endpoint < 0 || size_t(g.endpoint) >= n.endpoints.size() || n.endpoints[size_t(g.endpoint)].game;
+}
+}  // namespace
+
 size_t bucket_of(uint64_t us) {
     if (us < 50000) return size_t(us / 500);
     if (us < 100000) return 100 + size_t((us - 50000) / 2000);
@@ -118,13 +126,33 @@ void Monitor::frame(uint64_t now_ns, const Builds *builds) {
     // A hitch: rare, so a lock and a small sorted list are fine here.
     Hitch hitch{double(now_ns - start_ns_) / 1e9, double(us) / 1000.0, phase_.load(std::memory_order_relaxed), during};
     std::lock_guard<std::mutex> lock(rare_);
-    // Loading: the boot, or outside a match a loading screen's long frame and the slow frames after it.
-    if (hitch.phase != MAG_SESSION_PHASE_MATCH && us >= load_frame_us) loading_until_ns_ = now_ns + load_join_us * 1000;
-    hitch.loading = now_ns - start_ns_ < boot_seconds * 1000000000ull ||
-                    (hitch.phase != MAG_SESSION_PHASE_MATCH && now_ns <= loading_until_ns_);
+    // Loading: the boot, or outside a match a loading screen's long frame with the slow frames
+    // just before it and after it.
+    const bool off_match = hitch.phase != MAG_SESSION_PHASE_MATCH;
+    auto count_loading = [&](uint64_t frame_us) {
+        for (size_t i = 0; i < 4 && frame_us >= slow_thresholds_us[i]; ++i) ++loading_slow_[i];
+        loading_seconds_ += double(frame_us) / 1e6;
+    };
+    if (off_match && us >= load_frame_us) {
+        const uint64_t begin = now_ns - us * 1000, lead = begin > load_lead_us * 1000 ? begin - load_lead_us * 1000 : 0;
+        // The load's slow frames that came just before its long frame were loading too.
+        for (size_t i = 0; i < lead_count_; ++i) {
+            const LeadFrame &f = lead_[i];
+            if (f.end_ns < lead) continue;
+            count_loading(f.us);
+            for (Hitch &h : hitches_)
+                if (h.at_s == f.at_s) h.loading = true;
+        }
+        lead_count_ = lead_next_ = 0;
+        extend_loading(lead, now_ns + load_join_us * 1000);
+    }
+    hitch.loading = now_ns - start_ns_ < boot_seconds * 1000000000ull || (off_match && now_ns <= loading_until_ns_);
     if (hitch.loading) {
-        for (size_t i = 0; i < 4 && us >= slow_thresholds_us[i]; ++i) ++loading_slow_[i];
-        loading_seconds_ += double(us) / 1e6;
+        count_loading(us);
+    } else if (off_match) {
+        lead_[lead_next_] = LeadFrame{now_ns, us, hitch.at_s};
+        lead_next_ = (lead_next_ + 1) % load_lead_frames;
+        lead_count_ = std::min(lead_count_ + 1, load_lead_frames);
     }
     for (size_t i = 0; i < 3 && us >= slow_build_thresholds_us[i]; ++i) {
         SlowBuilds &b = slow_builds_[i];
@@ -166,6 +194,22 @@ void Monitor::build_info(const BuildInfo &info) {
 }
 
 void Monitor::set_default_phase(int phase) { default_phase_.store(phase, std::memory_order_relaxed); }
+
+void Monitor::extend_loading(uint64_t from_ns, uint64_t until_ns) {
+    if (!loading_until_ns_ || from_ns > loading_until_ns_) loading_from_ns_ = from_ns;  // a new span
+    else loading_from_ns_ = std::min(loading_from_ns_, from_ns);
+    loading_until_ns_ = std::max(loading_until_ns_, until_ns);
+}
+
+void Monitor::match_ended(uint64_t now_ns) {
+    {
+        std::lock_guard<std::mutex> lock(rare_);
+        extend_loading(now_ns, now_ns + load_join_us * 1000);
+        match_ends_.push_back(seconds(now_ns));
+        if (match_ends_.size() > match_ends_kept) match_ends_.erase(match_ends_.begin());
+    }
+    set_phase(MAG_SESSION_PHASE_MENU, now_ns);
+}
 
 void Monitor::set_phase(int phase, uint64_t now_ns) {
     if (phase < 0 || phase >= MAG_SESSION_PHASE_COUNT || phase_.load(std::memory_order_relaxed) == phase) return;
@@ -301,7 +345,8 @@ Drop Monitor::build_drop(uint64_t end_ns, const Span &span, const Window &captur
     if (network && network->available) {
         d.network = true;
         std::vector<std::pair<double, double>> gaps;
-        for (const net::Gap &g : network->gaps) gaps.emplace_back(g.at_s, g.at_s + g.ms / 1000.0);
+        for (const net::Gap &g : network->gaps)
+            if (game_gap(g, *network)) gaps.emplace_back(g.at_s, g.at_s + g.ms / 1000.0);
         const double length = d.end_s - d.start_s;
         // How much of the drop network gaps cover (overlaps counted once).
         std::sort(gaps.begin(), gaps.end());
@@ -361,6 +406,48 @@ void Monitor::finish_drop(uint64_t capture_end_ns, const Window *current, const 
     dip_ = recovering_ = cooldown_ = candidate_ = Span{};
 }
 
+void Monitor::discard_loading_drops(uint64_t now_ns) {
+    if (!loading_until_ns_) return;
+    // Finished episodes outside a match: the load's lead can reach back over one.
+    const double from = seconds(loading_from_ns_), until = seconds(loading_until_ns_);
+    for (auto it = drops_.begin(); it != drops_.end();) {
+        if (it->phase == MAG_SESSION_PHASE_MATCH || it->start_s > until || it->end_s < from) { ++it; continue; }
+        std::fprintf(stderr, "[mag session] fps drop in %s at %.1f s was loading; discarded\n", phase_name(it->phase), it->start_s);
+        it = drops_.erase(it);
+        if (drops_total_) --drops_total_;
+    }
+    auto discard = [&] {
+        if (drops_total_) --drops_total_;
+        drop_state_ = DropState::Normal;
+        resuming_ = false;
+        dip_ = recovering_ = cooldown_ = candidate_ = Span{};
+    };
+    const bool episode_off_match = drop_.phase != MAG_SESSION_PHASE_MATCH;
+    const bool candidate_off_match = phase_.load(std::memory_order_relaxed) != MAG_SESSION_PHASE_MATCH;
+    switch (drop_state_) {
+    case DropState::Normal:
+        break;
+    case DropState::Candidate:
+        if (resuming_ && episode_off_match && loading_overlaps(drop_start_ns_, drop_end_ns_)) {
+            discard();
+        } else if (candidate_off_match && loading_overlaps(candidate_ns_, now_ns)) {
+            // The candidate was the load. One that would have continued an episode leaves it cooling down.
+            if (resuming_) { cooldown_.merge(candidate_); drop_state_ = DropState::Cooldown; }
+            else drop_state_ = DropState::Normal;
+            resuming_ = false;
+            candidate_ = Span{};
+        }
+        break;
+    case DropState::Dip:
+    case DropState::Recovering:
+        if (episode_off_match && loading_overlaps(drop_start_ns_, now_ns)) discard();
+        break;
+    case DropState::Cooldown:
+        if (episode_off_match && loading_overlaps(drop_start_ns_, drop_end_ns_)) discard();
+        break;
+    }
+}
+
 void Monitor::tick(uint64_t now_ns) {
     std::lock_guard<std::mutex> lock(rare_);
     if (!drop_cfg_.enabled) return;
@@ -380,6 +467,7 @@ void Monitor::tick(uint64_t now_ns) {
         tick_phase_changes_ = phase_changes_;
     };
     if (first) return record();
+    discard_loading_drops(now_ns);
 
     const double dt = double(now_ns - previous.ns) / 1e9;
     const uint64_t n = current.frames - previous.frames;
@@ -591,9 +679,11 @@ Snapshot Monitor::snapshot(uint64_t now_ns) {
         }
     }
     s.network = network_.snapshot(now_ns);
-    s.timeline = build_timeline(dips, s.network);
+    s.timeline = build_timeline(dips, s.network, match_ends_);
     // Sustained frame-rate drops: the finished ones kept, and the one in progress, so far.
+    if (drop_cfg_.enabled) discard_loading_drops(now_ns);
     s.drop_config = drop_cfg_;
+    s.match_ends = match_ends_;
     s.drop_count = drops_total_;
     s.drops = drops_;
     const bool dropping = drop_state_ == DropState::Dip || drop_state_ == DropState::Recovering;
@@ -631,10 +721,12 @@ double covered(double start, double end, std::vector<std::pair<double, double>> 
 }
 }  // namespace
 
-std::vector<TimelineEvent> build_timeline(const std::vector<FrameDip> &dips, const net::Snapshot &network) {
+std::vector<TimelineEvent> build_timeline(const std::vector<FrameDip> &dips, const net::Snapshot &network,
+                                          const std::vector<double> &match_ends) {
     std::vector<std::pair<double, double>> dip_spans, gap_spans;
     for (const FrameDip &d : dips) dip_spans.emplace_back(d.start_s, d.end_s);
-    for (const net::Gap &g : network.gaps) gap_spans.emplace_back(g.at_s, g.at_s + g.ms / 1000.0);
+    for (const net::Gap &g : network.gaps)
+        if (game_gap(g, network)) gap_spans.emplace_back(g.at_s, g.at_s + g.ms / 1000.0);
     std::vector<TimelineEvent> events;
     for (const FrameDip &d : dips) {
         TimelineEvent e;
@@ -662,6 +754,11 @@ std::vector<TimelineEvent> build_timeline(const std::vector<FrameDip> &dips, con
             const net::EndpointStats &ep = network.endpoints[size_t(g.endpoint)];
             e.endpoint = std::string(net::transport_name(ep.transport)) + " " + net::address_text(ep.address, ep.port);
         }
+        e.side = !game_gap(g, network);
+        // The server's silence at a match's end: the local player's match was torn down soon after.
+        if (g.phase == MAG_SESSION_PHASE_MATCH)
+            for (double end : match_ends)
+                if (end >= g.at_s && end - g.at_s <= match_end_seconds) e.match_end = true;
         const double length = g.ms / 1000.0;
         e.verdict = length > 0 && covered(g.at_s, g.at_s + length, dip_spans) >= both_cover_share * length ? "both" : "network";
         events.push_back(e);
@@ -698,6 +795,7 @@ static std::string network_json(const net::Snapshot &n, double uptime_s) {
         const double span = std::max(1.0, (e.open ? uptime_s : e.last_s) - e.first_s);
         j += std::string(i ? ",\n    " : "\n    ") + "{\"transport\": \"" + net::transport_name(e.transport) + "\", \"address\": \"" +
              net::address_text(e.address, e.port) + "\", \"open\": " + (e.open ? "true" : "false") +
+             ", \"game\": " + (e.game ? "true" : "false") +
              ", \"first_s\": " + number(e.first_s, 1) + ", \"last_s\": " + number(e.last_s, 1) +
              ", \"in\": {\"packets\": " + number(e.in.packets) + ", \"bytes\": " + number(e.in.bytes) +
              ", \"per_s\": " + number(double(e.in.packets) / span, 2) + ", \"bytes_per_s\": " + number(double(e.in.bytes) / span, 0) + "}" +
@@ -839,6 +937,10 @@ std::string summary_json(const Snapshot &s) {
     for (int p = 0; p < MAG_SESSION_PHASE_COUNT; ++p)
         j += std::string(p ? ", " : "") + "\"" + phase_name(p) + "\": " + number(s.phase_seconds[size_t(p)], 1);
     j += "},\n";
+    // When the local player's matches were torn down (game controls), the latest.
+    j += "  \"match_ends_s\": [";
+    for (size_t i = 0; i < s.match_ends.size(); ++i) j += std::string(i ? ", " : "") + number(s.match_ends[i], 1);
+    j += "],\n";
     j += "  \"hitches\": [";
     for (size_t i = 0; i < s.hitches.size(); ++i)
         j += std::string(i ? ", " : "") + "{\"at_s\": " + number(s.hitches[i].at_s, 2) + ", \"ms\": " + number(s.hitches[i].ms, 1) +
@@ -852,7 +954,8 @@ std::string summary_json(const Snapshot &s) {
         const TimelineEvent &e = s.timeline[i];
         j += std::string(i ? ",\n    " : "\n    ") + "{\"at_s\": " + number(e.at_s, 2) + ", \"kind\": \"" + (e.network ? "network" : "frames") +
              "\", \"ms\": " + number(e.ms, 0) + ", \"phase\": \"" + phase_name(e.phase) + "\"";
-        if (e.network) j += ", \"endpoint\": \"" + e.endpoint + "\"";
+        if (e.network) j += ", \"endpoint\": \"" + e.endpoint + "\", \"flow\": \"" + (e.side ? "side" : "game") + "\"" +
+                            (e.match_end ? ", \"match_end\": true" : "");
         else j += ", \"frames\": " + number(e.frames) + ", \"worst_ms\": " + number(e.worst_ms, 0);
         if (e.stall) j += ", \"stall\": true";
         if (!e.network && s.builds.available)
@@ -878,6 +981,7 @@ std::string summary_json(const Snapshot &s) {
             if (m.net.rtt_ms > 0) j += ", \"rtt_ms\": " + number(m.net.rtt_ms, 1);
             if (m.net.errors) j += ", \"errors\": " + number(m.net.errors);
             if (m.net.send_blocked) j += ", \"send_blocked\": " + number(m.net.send_blocked);
+            if (m.net.side_gap_ms >= minute_gap_ms) j += ", \"side_gap_ms\": " + number(m.net.side_gap_ms, 0);
             j += "}";
         }
         // Compact, and only for a minute that built or uploaded something: the series must stay
@@ -1078,6 +1182,10 @@ extern "C" void mag_session_frame_presented(void) {
 
 extern "C" void mag_session_set_phase(enum MagSessionPhase phase) {
     if (Monitor *m = g_monitor) m->set_phase(phase, now_ns());
+}
+
+extern "C" void mag_session_match_ended(void) {
+    if (Monitor *m = g_monitor) m->match_ended(now_ns());
 }
 
 extern "C" void mag_session_monitor_finish(const char *ending) {

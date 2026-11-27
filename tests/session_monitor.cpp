@@ -487,10 +487,112 @@ static void loading_and_frozen() {
     CHECK(json.find(", \"s\": 12.0, \"phase\": \"match\"}") != std::string::npos);
 }
 
+// A map load's slow frames before its long frame are loading too (the lead), and so is the
+// transition after a match is torn down; the teardown ends the match at once.
+static void loading_lead_and_teardown() {
+    Monitor m(0);
+    m.set_default_phase(MAG_SESSION_PHASE_MENU);
+    uint64_t t = 1;
+    m.frame(t);
+    auto after = [&](uint64_t duration_ms) { t += duration_ms * ms; m.frame(t); };
+    auto steady = [&](uint64_t until_ms) { while (t < until_ms * ms) after(16); };
+    steady(100000);
+    after(400);    // a menu stutter long before any load: stays a slow frame
+    steady(120000);
+    after(900);    // a map load's first frames, under a second each...
+    after(600);
+    steady(123000);
+    after(1500);   // ...then its loading screen: the two before it were the load too
+    after(300);
+    steady(160000);
+    Snapshot s = m.snapshot(t);
+    CHECK(s.slow[3] == 5);
+    CHECK(s.loading_slow[3] == 4);  // 900, 600, 1500 and 300; not the 400 ms frame at 100 s
+    NEAR(s.loading_seconds, 3.3, 1e-6);
+    unsigned loading = 0;
+    for (const Hitch &h : s.hitches) loading += h.loading;
+    CHECK(loading == 4);
+    // On foot, then the match is torn down: the phase is menu at once and the frames of the
+    // transition are loading.
+    m.set_phase(MAG_SESSION_PHASE_MATCH, t);
+    steady(200000);
+    m.match_ended(t);
+    CHECK(m.phase() == MAG_SESSION_PHASE_MENU);
+    steady(203000);
+    after(700);
+    steady(230000);
+    after(300);  // past the transition: a slow menu frame again
+    s = m.snapshot(t);
+    CHECK(s.loading_slow[3] == 5 && s.slow[3] == 7);
+    CHECK(s.match_ends.size() == 1);
+    if (s.match_ends.size() == 1) NEAR(s.match_ends[0], 200, 0.02);
+    CHECK(summary_json(s).find("\"match_ends_s\": [200.0]") != std::string::npos);
+}
+
+// The network gaps the report trigger must not count: a side connection's silence and the
+// server's silence at a match's end; and a gap after the teardown is no longer in the match.
+static void network_flows() {
+    Run r;
+    r.m.network().set_available();
+    r.m.net_event(socket_call(net::Kind::Connect, 4, net::Transport::Stream, server, 10473, 0), 1);
+    r.m.net_event(socket_call(net::Kind::Connect, 7, net::Transport::Stream, server, 10478, 0), 1);
+    r.stream = true;
+    // The lobby connection: a burst of 12 packets every 30 s (streaming by the 10-in-5-s rule), so
+    // each pause between bursts is a 29 s silence of a streaming endpoint, at 0.4 packets a second.
+    auto burst = [&] { for (int i = 0; i < 12; ++i) r.m.net_event(socket_call(net::Kind::Recv, 7, net::Transport::Stream, none, 0, 40), r.t + uint64_t(i) * 50 * ms); };
+    for (int k = 0; k < 6; ++k) { burst(); r.at(100, 30); }
+    // The game server goes silent for 3 s, and 20 s later the local player's match is torn down.
+    r.silent = true;
+    r.at(100, 3);
+    r.silent = false;
+    r.at(100, 20);
+    r.m.match_ended(r.t);
+    // 3 s after the teardown the server is silent for 9 s (the client reconnects).
+    r.at(100, 3);
+    r.silent = true;
+    r.at(100, 9);
+    r.silent = false;
+    r.at(100, 20);
+    const Snapshot s = r.snap();
+    const net::EndpointStats *stream = nullptr, *lobby = nullptr;
+    for (const auto &e : s.network.endpoints) {
+        if (e.port == 10473) stream = &e;
+        if (e.port == 10478) lobby = &e;
+    }
+    CHECK(stream && lobby);
+    if (stream && lobby) {
+        CHECK(stream->game && !lobby->game);
+        CHECK(lobby->streamed && lobby->gap_events >= 5);
+    }
+    int side = 0, end = 0, menu = 0, counted = 0;
+    for (const TimelineEvent &e : s.timeline) {
+        if (!e.network) continue;
+        if (e.side) { ++side; continue; }
+        if (e.match_end) { ++end; NEAR(e.ms, 3000, 110); continue; }
+        if (e.phase != MAG_SESSION_PHASE_MATCH) { ++menu; NEAR(e.ms, 9000, 110); continue; }
+        ++counted;
+    }
+    CHECK(side >= 5 && end == 1 && menu == 1 && counted == 0);
+    if (!(side >= 5 && end == 1 && menu == 1 && counted == 0))
+        for (const TimelineEvent &e : s.timeline)
+            if (e.network) std::fprintf(stderr, "gap at %.2f %.0f ms phase %d side %d end %d %s\n", e.at_s, e.ms, e.phase, e.side, e.match_end, e.verdict);
+    const std::string json = summary_json(s);
+    CHECK(json.find("\"flow\": \"side\"") != std::string::npos && json.find("\"match_end\": true") != std::string::npos);
+    CHECK(json.find("\"game\": true") != std::string::npos);
+    // The minutes judge the game's data flow only: the lobby's silences are side gaps.
+    bool side_minute = false;
+    for (const Minute &m : s.minutes) {
+        CHECK(m.net.longest_gap_ms < 20000);
+        side_minute = side_minute || m.net.side_gap_ms >= 20000;
+    }
+    CHECK(side_minute);
+}
+
 static void drops(const char *scratch) {
     // The environment's switches; bad values keep the defaults, recovery stays above the drop.
     const DropConfig defaults = drop_config(nullptr), tuned = drop_config(env_table);
     CHECK(defaults.enabled && defaults.ratio == 0.6 && defaults.floor_fps == 60 && defaults.min_seconds == 3 && defaults.keep == 8);
+    CHECK(defaults.baseline_seconds == 600 && defaults.warmup_seconds == 60);
     CHECK(tuned.ratio == 0.5 && tuned.floor_fps == 45 && tuned.min_seconds == 5 && tuned.baseline_seconds == 120);
     NEAR(tuned.recover_ratio, 0.7, 1e-9);  // 0.4 is below the drop ratio: ratio + 0.2
     CHECK(tuned.pre_roll_seconds == 2 && tuned.post_roll_seconds == 8);
@@ -591,6 +693,25 @@ static void drops(const char *scratch) {
         Run boot(MAG_SESSION_PHASE_MENU);
         boot.at(5, 20).at(120, 30).at(20, 9).at(120, 60);
         CHECK(boot.snap().drop_count == 0);
+        // A map load whose stutter starts before its loading screen: 20 fps for 6 s (a drop by
+        // then), then the loading screen. The episode was the load, and is discarded.
+        Run map(MAG_SESSION_PHASE_MENU);
+        map.at(120, 120).at(20, 6);
+        CHECK(map.snap().drop_count == 1);
+        map.at(0, 1).at(0.67, 1).at(20, 3).at(120, 30);
+        const Snapshot loaded = map.snap();
+        CHECK(loaded.drop_count == 0 && loaded.drops.empty());
+        CHECK(loaded.loading_slow[1] >= 6 * 20);  // the lead's 50 ms frames are loading too
+        // So is one that had recovered before its loading screen came.
+        Run late(MAG_SESSION_PHASE_MENU);
+        late.at(120, 120).at(20, 4).at(120, 4).at(0, 1).at(0.67, 1).at(120, 30);
+        CHECK(late.snap().drop_count == 0);
+        // A match drop just before the match is torn down stays.
+        Run end;
+        end.at(100, 120).at(30, 10).at(100, 5);
+        end.m.match_ended(end.t);
+        end.at(0, 2).at(120, 30);
+        CHECK(end.snap().drop_count == 1);
     }
     // The absolute floor: a machine at 240 fps that falls to 130 has not dropped; at 50 it has. A
     // machine that runs at 40 fps with ordinary jitter has not dropped either.
@@ -608,6 +729,33 @@ static void drops(const char *scratch) {
         // ...but its collapse to 15 fps is a drop.
         low.at(15, 10).at(40, 30);
         CHECK(low.snap().drop_count == 1);
+    }
+    // A match's quiet opening does not set the baseline: ten minutes of a busy match at 55 fps, a
+    // menu, then the next match opens at 115 fps for two minutes and settles at 50. Against the
+    // session's busy-match level that is no drop. A 180 s baseline (MAG_FPS_DROP_BASELINE=180, the
+    // old default) would be the opening itself and call it one.
+    {
+        auto session = [](Run &r) {
+            r.at(55, 660).phase(MAG_SESSION_PHASE_MENU).at(120, 30).phase(MAG_SESSION_PHASE_MATCH).at(115, 120).at(50, 30).at(55, 60);
+            return r.snap();
+        };
+        Run steady;
+        const Snapshot s = session(steady);
+        CHECK(s.drop_count == 0);
+        DropConfig short_span;
+        short_span.baseline_seconds = 180;
+        short_span.warmup_seconds = 30;
+        Run quick(MAG_SESSION_PHASE_MATCH, short_span);
+        const Snapshot q = session(quick);
+        CHECK(q.drop_count == 1);
+        if (q.drops.size() == 1) NEAR(q.drops[0].baseline_fps, 115, 1e-3);
+        // A real collapse in that match is still a drop, against the busy-match level.
+        Run deep;
+        session(deep);
+        deep.at(15, 10).at(55, 30);
+        const Snapshot d = deep.snap();
+        CHECK(d.drop_count == 1);
+        if (d.drops.size() == 1) CHECK(d.drops[0].baseline_fps < 60);
     }
     // The cap: six drops, the worst three kept, oldest first.
     {
@@ -751,6 +899,8 @@ int main(int argc, char **argv) {
     builds(argv[1]);
     network(argv[1]);
     loading_and_frozen();
+    loading_lead_and_teardown();
+    network_flows();
     drops(argv[1]);
     round_trip();
     process_monitor(argv[1]);

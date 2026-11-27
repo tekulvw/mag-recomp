@@ -61,6 +61,10 @@ void mag_session_monitor_start(const char *role);
 /* The hot path: one presented guest frame. */
 void mag_session_frame_presented(void);
 void mag_session_set_phase(enum MagSessionPhase phase);
+/* The local player's match was torn down (its input handler is gone, game controls say so): the
+ * phase becomes MAG_SESSION_PHASE_MENU at once, without waiting for the menu's buttons, and the
+ * transition that follows is loading (Monitor::match_ended). */
+void mag_session_match_ended(void);
 /* Writes the final summary. `ending` says how the session ended ("exit", "window_closed"). Called
  * at exit (an atexit handler does it when nothing else did) and before an abrupt _Exit. */
 void mag_session_monitor_finish(const char *ending);
@@ -112,10 +116,18 @@ constexpr double minute_gap_ms = 1000;
 constexpr double stall_frame_ms = 10000;
 /* Loading, which the report triggers and the drop detector leave out: every slow frame in the first
  * boot_seconds (the title's start-up load), and outside a match, a frame of load_frame_us or more
- * (a loading screen) and the slow frames within load_join_us after one. */
+ * (a loading screen) with the slow frames that end within load_lead_us before it starts and
+ * within load_join_us after it, and the load_join_us after a match is torn down. A drop episode
+ * outside a match that a loading span overlaps is the load, and is discarded. */
 constexpr uint64_t boot_seconds = 60;
 constexpr uint64_t load_frame_us = 1000000;
+constexpr uint64_t load_lead_us = 10000000;
 constexpr uint64_t load_join_us = 15000000;
+constexpr size_t load_lead_frames = 256;  /* off-match slow frames remembered for the lead (20 a second at most) */
+/* A network gap in a match that began this long or less before the local player's match was torn
+ * down is the match's end (the server's end-of-match silence), and is labelled so. */
+constexpr double match_end_seconds = 60;
+constexpr size_t match_ends_kept = 32;
 /* A frame still not presented this long when the summary is written is a freeze ("frozen"). */
 constexpr double frozen_seconds = 10;
 
@@ -205,21 +217,26 @@ struct TimelineEvent {
     bool stall = false;   /* a dip that was a match stall (stall_frame_ms) */
     double build_ms = 0, upload_ms = 0;  /* a dip's first-use work */
     std::string endpoint; /* a gap's endpoint, "tcp 192.0.2.1:10073" */
+    bool side = false;    /* a gap outside the game's data flow (net::game_flow_share) */
+    bool match_end = false;  /* a match gap that began within match_end_seconds before a match ended */
     const char *verdict = "frames";  /* "frames", "network" or "both" */
 };
 /* The dips and gaps in one timeline, oldest first (the latest timeline_events), with verdicts:
  * a gap is "both" when dips cover both_cover_share of it, else "network"; a dip is "both" when
- * gaps cover that share of it, else "frames". */
-std::vector<TimelineEvent> build_timeline(const std::vector<FrameDip> &, const net::Snapshot &);
+ * gaps of the game's data flow cover that share of it, else "frames". `match_ends` are the times
+ * (seconds since the monitor started) the local player's matches were torn down. */
+std::vector<TimelineEvent> build_timeline(const std::vector<FrameDip> &, const net::Snapshot &,
+                                          const std::vector<double> &match_ends = {});
 
 /* Sustained frame-rate drops (docs/player-settings.md, "Sustained frame-rate drops").
  *
  * The frame clock's hot path is unchanged: once a second the summary writer calls Monitor::tick(),
  * which reads the cumulative counters and turns their change into a window (frames over elapsed
  * time). Each phase keeps its own baseline, the median of its latest windows, so menus (often at
- * the frame cap) and matches never mix. Windows holding a frame of stall_ms or more (loading, a
- * stall), windows in which the phase changed, and the first settle_seconds after a change are
- * skipped. A drop begins when windows stay below min(ratio x baseline, floor_fps) for min_seconds,
+ * the frame cap) and matches never mix; the span is long (ten minutes) so that a match's quiet
+ * opening cannot set it. Windows holding a frame of stall_ms or more (loading, a stall), windows
+ * in which the phase changed, the first settle_seconds after a change and windows during loading
+ * are skipped, and an episode outside a match that loading overlaps is discarded. A drop begins when windows stay below min(ratio x baseline, floor_fps) for min_seconds,
  * and ends when they stay at or above that threshold x recover_ratio / ratio for recover_seconds;
  * another drop within cooldown_seconds of its end in the same phase continues it. Each episode
  * records its pre_roll_seconds before and post_roll_seconds after, and the worst `keep` (by frames
@@ -235,13 +252,13 @@ struct DropConfig {
     double cooldown_seconds = 10;   /* MAG_FPS_DROP_COOLDOWN: a drop this soon after another continues it */
     double pre_roll_seconds = 5;    /* MAG_FPS_DROP_CAPTURE "pre,post": recorded before... */
     double post_roll_seconds = 5;   /* ...and after the drop */
-    double baseline_seconds = 180;  /* MAG_FPS_DROP_BASELINE: the baseline's span of in-phase windows */
-    double warmup_seconds = 30;     /* in-phase windows needed before a baseline is used */
+    double baseline_seconds = 600;  /* MAG_FPS_DROP_BASELINE: the baseline's span of in-phase windows */
+    double warmup_seconds = 60;     /* in-phase windows needed before a baseline is used */
     double settle_seconds = 5;      /* skipped after a phase change */
     double stall_ms = 1000;         /* a window holding a frame this long is skipped */
     size_t keep = 8;                /* MAG_FPS_DROP_KEEP: episodes kept in the summary */
 };
-constexpr size_t drop_baseline_windows_max = 600;
+constexpr size_t drop_baseline_windows_max = 1200;
 constexpr size_t drop_ring_windows = 34;  /* window starts kept for the pre-roll (at most 30 s) */
 constexpr size_t drop_keep_max = 32;
 /* The configuration from the environment (`get` is getenv in the engine, a table in the tests).
@@ -300,6 +317,7 @@ struct Snapshot {
     DropConfig drop_config;
     uint64_t drop_count = 0;   /* episodes this session, including one in progress */
     std::vector<Drop> drops;   /* the worst drop_config.keep, oldest first, any in progress last */
+    std::vector<double> match_ends;  /* when the local player's matches were torn down (the latest) */
     BuildInfo builds;
     SlowBuilds slow_builds[3];  /* slow_build_thresholds_us */
 };
@@ -316,6 +334,9 @@ public:
     /* The runtime's build facts and totals, polled with the audio counters. */
     void build_info(const BuildInfo &info);
     void set_phase(int phase, uint64_t now_ns);
+    /* The local player's match was torn down: the phase becomes menu, the load_join_us after it
+     * are loading, and network gaps shortly before it are the match's end. */
+    void match_ended(uint64_t now_ns);
     /* The phase the first presented frame enters when nothing set one before it. */
     void set_default_phase(int phase);
     /* The audio path's cumulative counters, the frames its clock consumed over `clock_seconds`, at
@@ -365,6 +386,14 @@ private:
     };
     enum class DropState { Normal, Candidate, Dip, Recovering, Cooldown };
     const Window &ring_before(uint64_t ns, const Histogram *&hist) const;  /* the newest start at or before ns */
+    /* Loading from `from_ns` to `until_ns` (both on the monitor's clock), joined to the current
+     * span when they touch. */
+    void extend_loading(uint64_t from_ns, uint64_t until_ns);
+    bool loading_overlaps(uint64_t from_ns, uint64_t to_ns) const {
+        return loading_until_ns_ && from_ns <= loading_until_ns_ && to_ns >= loading_from_ns_;
+    }
+    /* Discards the episode in progress, and finished ones outside a match, that loading overlaps. */
+    void discard_loading_drops(uint64_t now_ns);
     bool ring_after(uint64_t ns, Window &out, const Histogram *&hist) const;  /* the oldest at or after ns */
     double baseline(int phase) const;
     Drop build_drop(uint64_t end_ns, const Span &, const Window &capture_end, const Histogram &capture_hist, bool open,
@@ -416,9 +445,15 @@ private:
     Histogram minute_base_{};
     uint64_t minute_frames_base_ = 0, minute_us_base_ = 0, minute_slow_base_ = 0, minute_slow100_base_ = 0;
     std::vector<FrameDip> dips_;
-    uint64_t loading_until_ns_ = 0;  /* a loading screen's slow frames join until then */
+    uint64_t loading_from_ns_ = 0, loading_until_ns_ = 0;  /* the latest loading span */
     uint64_t loading_slow_[4] = {};
     double loading_seconds_ = 0;
+    /* Off-match slow frames that were not loading, the latest load_lead_frames: a loading frame
+     * that follows within load_lead_us makes them loading. */
+    struct LeadFrame { uint64_t end_ns = 0, us = 0; double at_s = 0; };
+    std::array<LeadFrame, load_lead_frames> lead_{};
+    size_t lead_next_ = 0, lead_count_ = 0;
+    std::vector<double> match_ends_;
     net::Network network_;
     /* Frame thread only: the build counters at the previous present. */
     Builds previous_builds_;

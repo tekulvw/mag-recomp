@@ -552,7 +552,9 @@ Trigger judge_summary(const Json &summary, std::vector<std::string> &reasons) {
         result = Trigger::SlowFrames;
     }
     // Network gaps: the server went silent during a match while frames kept coming. A silence still
-    // open when the summary was written counts only if the session was still in a match then.
+    // open when the summary was written counts only if the session was still in a match then. Gaps
+    // outside the game's data flow ("flow": "side", a lobby connection) and the server's silence at
+    // a match's end ("match_end") do not count.
     if (const Json *timeline = summary.get("timeline"); timeline && timeline->kind == Json::Kind::Array) {
         auto text = [](const Json &object, const char *key) {
             const Json *v = object.get(key);
@@ -563,8 +565,9 @@ Trigger judge_summary(const Json &summary, std::vector<std::string> &reasons) {
         double longest = 0;
         for (const Json &event : timeline->items) {
             if (event.kind != Json::Kind::Object || text(event, "kind") != "network" || text(event, "verdict") != "network" ||
-                text(event, "phase") != "match")
+                text(event, "phase") != "match" || text(event, "flow") == "side")
                 continue;
+            if (const Json *end = event.get("match_end"); end && end->kind == Json::Kind::Bool && end->boolean) continue;
             const double length = field(event, {"ms"});
             const Json *open = event.get("open");
             if (length < network_gap_report_ms || (open && open->boolean && !still_in_match)) continue;

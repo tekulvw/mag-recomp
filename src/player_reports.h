@@ -37,8 +37,8 @@ inline constexpr uint64_t long_frame_count = 30;
 // A freeze: the engine presented no frame for this long before its summary was written.
 inline constexpr double frozen_report_seconds = 10;
 // Network: the game server went silent this long during a match while frames kept coming (a
-// timeline event of kind "network", verdict "network", phase "match"; docs/player-settings.md,
-// "Frame-rate dips and network gaps").
+// timeline event of kind "network", verdict "network", phase "match", on the game's data flow and
+// not at a match's end; docs/player-settings.md, "Frame-rate dips and network gaps").
 inline constexpr double network_gap_report_ms = 2000;
 // Audio: at least this many underruns, plus one for every this many seconds of audio...
 inline constexpr uint64_t underrun_floor = 20;
