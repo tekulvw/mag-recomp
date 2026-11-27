@@ -165,6 +165,7 @@ mag_enable_player_render_scale(wiring "${{CMAKE_CURRENT_SOURCE_DIR}}/sdk" vulkan
             'texture_upload':'rows of a guest-memory texture',
             'texture_create_3d':'volume textures decoded from guest memory',
             'texture_upload_3d':'slices of a guest-memory volume texture',
+            'texture_reusable':'whether a guest-memory texture of its guest size takes new contents in place',
         }
         adapter=(ROOT/'src/player_render_scale.cpp').read_text()
         handled=set(re.findall(r'\b(?:scaled|target)\.(\w+)\s*=',adapter))
