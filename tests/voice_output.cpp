@@ -45,6 +45,15 @@ int main() {
     std::this_thread::sleep_for(std::chrono::milliseconds(60));
     CHECK(pulled.load() == after);  // stopped with the object
 
+    // Waits (up to a generous deadline) until the output has pulled at least one period. A fixed
+    // window is not enough on a loaded machine, where the clock's thread may not run for a while.
+    const auto pulls_soon = [&] {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        while (pulled.load() == 0 && std::chrono::steady_clock::now() < deadline)
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        return pulled.load() > 0;
+    };
+
     // Muted: the clock, and the description says so.
     std::string description;
     pulled = 0;
@@ -53,10 +62,9 @@ int main() {
         auto output = open_voice_output(counting, "1", description, on_device);
         CHECK(!on_device);
         CHECK(output != nullptr);
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        CHECK(pulls_soon());
     }
     CHECK(description.find("PS3_MUTE") != std::string::npos);
-    CHECK(pulled.load() > 0);
     // Not muted but no device opens: still paced on the clock, with the reason.
     pulled = 0;
     {
@@ -64,10 +72,9 @@ int main() {
         auto output = open_voice_output(counting, nullptr, description, on_device);
         CHECK(!on_device);
         CHECK(output != nullptr);
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        CHECK(pulls_soon());
     }
     CHECK(description.find("no playback device (no device in the test build)") == 0);
-    CHECK(pulled.load() > 0);
     if (failures) {
         std::printf("%d failures\n", failures);
         return 1;

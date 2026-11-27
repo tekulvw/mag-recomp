@@ -58,13 +58,17 @@ public:
         thread_ = std::thread([this, &sink] {
             double phase = 0;
             std::vector<float> chunk(2 * 480);
+            // Paced on a steady deadline like a real device: a plain 10 ms sleep after each push runs
+            // slower than real time, so the service's frames would sometimes find the buffer short.
+            auto next = std::chrono::steady_clock::now();
             while (running_) {
                 for (size_t i = 0; i < 480; ++i) {
                     chunk[2 * i] = chunk[2 * i + 1] = float(0.4 * std::sin(phase));
                     phase += 2 * 3.14159265358979323846 * 440 / 48000;
                 }
                 sink.push(chunk.data(), 480, 48000, 2);
-                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                next += std::chrono::milliseconds(10);
+                std::this_thread::sleep_until(next);
             }
         });
         return Open::Opened;
@@ -193,11 +197,20 @@ int main(int argc, char** argv) {
         std::printf("held: %u bytes\n", talking);
         if (device) {
             CHECK(talking >= 6 * 37 && talking % 37 == 0 && first == 0xA1);
+            // The level is that of the latest frame, and a frame the microphone thread was late for
+            // reads as silence. Ask again (up to a generous deadline) rather than once, draining the
+            // encoded port as the game would so the tail below counts only the release.
             float energy = 0;
-            put32(size, 0);
-            CHECK(call("cellVoiceGetSignalState", mic, 1000, size) == 0);
-            uint32_t bits = get32(size);
-            std::memcpy(&energy, &bits, 4);
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+            for (;;) {
+                put32(size, 0);
+                CHECK(call("cellVoiceGetSignalState", mic, 1000, size) == 0);
+                uint32_t bits = get32(size);
+                std::memcpy(&energy, &bits, 4);
+                if (energy > 0.05f || std::chrono::steady_clock::now() >= deadline) break;
+                wait(20);
+                read();
+            }
             CHECK(energy > 0.05f);
         } else {
             CHECK(talking == 0);

@@ -96,20 +96,29 @@ static void concurrent()
     std::atomic<bool> stop{false};
     std::atomic<int> bad{0};
     std::atomic<long> reads{0};
+    std::atomic<int> started{0};
     std::vector<std::thread> readers;
     for (int t = 0; t < 8; ++t)
         readers.emplace_back([&] {
+            started.fetch_add(1);
             while (!stop.load(std::memory_order_relaxed)) {
                 const char* v = env_get("MAG_ENV_TEST_RACE");
                 if (!equals(v, "one") && !equals(v, "two")) bad.fetch_add(1);
                 reads.fetch_add(1, std::memory_order_relaxed);
             }
         });
-    for (int i = 0; i < 2000; ++i) env_put("MAG_ENV_TEST_RACE", (i & 1) ? "one" : "two");
+    // Write only once every reader runs, and keep writing until they have read while the writes
+    // went on: on a loaded machine the 2000 writes alone can finish before a reader is scheduled.
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (started.load() < 8 && std::chrono::steady_clock::now() < deadline) std::this_thread::yield();
+    const long before = reads.load();
+    for (int i = 0; i < 2000 || (reads.load() - before < 1000 && std::chrono::steady_clock::now() < deadline); ++i)
+        env_put("MAG_ENV_TEST_RACE", (i & 1) ? "one" : "two");
+    const long during = reads.load() - before;
     stop.store(true);
     for (auto& r : readers) r.join();
     CHECK(bad.load() == 0);
-    CHECK(reads.load() > 0);
+    CHECK(during > 0);
 }
 
 static double ns_per_call(char* (*get)(const char*), const char* name, int threads)
