@@ -5,6 +5,7 @@ from pathlib import Path
 import signal
 import sys
 
+from .console import use_utf8_streams, write_line
 from .distribution import bundle
 from .model import InstallerError, Profile, host_key
 from .pipeline import install
@@ -24,10 +25,12 @@ PROFILES = {'mag-unconfigured', 'synthetic-demonstration'}
 
 
 def emit(event):
-    print(json.dumps(event, ensure_ascii=False), flush=True)
+    write_line(sys.stdout, json.dumps(event, ensure_ascii=False))
 
 
 def main(argv=None):
+    # Progress text has arrows and dashes that a redirected Windows stream (cp1252) cannot encode.
+    use_utf8_streams()
     if sys.version_info < (3, 11):
         print('MAG installer source requires Python 3.11 or newer. Use a supported Python or a bundled player release.', file=sys.stderr)
         return 2
@@ -98,7 +101,7 @@ def main(argv=None):
     def report(event, error=False):
         stream = sys.stderr if error else sys.stdout
         if json_mode:
-            print(json.dumps(event, ensure_ascii=False), file=stream, flush=True)
+            write_line(stream, json.dumps(event, ensure_ascii=False))
         else:
             from .ux import format_event
             if 'platforms' in event:
@@ -118,7 +121,7 @@ def main(argv=None):
                     for key in ('output', 'logs', 'path'):
                         if event.get(key):
                             message += f"\n{key.capitalize()}: {event[key]}"
-            print(message, file=stream, flush=True)
+            write_line(stream, message)
     token = Cancellation()
     handlers = {}
     try:

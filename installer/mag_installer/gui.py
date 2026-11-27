@@ -9,6 +9,7 @@ import subprocess
 import sys
 import threading
 
+from .console import write_line
 from .model import InstallerError, Profile
 from .safety import Cancellation, Cancelled
 from . import ux
@@ -322,12 +323,12 @@ def launch(root: Path, synthetic: bool = False) -> int:
         import tkinter as tk
         window = tk.Tk()
     except Exception as exc:
-        print(f'Cannot open the installer window: {exc}. Use a Python runtime with matching Tcl/Tk support, or --help for CLI commands. Bundled installers must include Tcl/Tk.',file=sys.stderr)
+        write_line(sys.stderr,f'Cannot open the installer window: {exc}. Use a Python runtime with matching Tcl/Tk support, or --help for CLI commands. Bundled installers must include Tcl/Tk.')
         return 2
     try:
         open_window(window, root, synthetic)
     except (InstallerError,OSError) as exc:
-        window.destroy();print(str(exc),file=sys.stderr);return 2
+        window.destroy();write_line(sys.stderr,str(exc));return 2
     window.mainloop()
     return 0
 
