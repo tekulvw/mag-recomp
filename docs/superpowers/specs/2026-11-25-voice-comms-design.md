@@ -158,8 +158,9 @@ big-endian port parameter block: type, threshold, mute flag, volume, and the bit
   player's voice volume; this is how the game plays remote talkers, through its own audio engine, so no
   separate playback device is needed. IN_PCMAUDIO accepts PCM from the game and mixes into whatever it
   is connected to.
-- **Headset output (OUT_SECONDARY).** Mixed into a host playback stream only if the capture shows the
-  game routes talkers there instead of reading PCM ports.
+- **Headset output (OUT_SECONDARY).** Mixed into a host playback stream. The two-client lab
+  (2026-11-27) showed the game routes in-match talkers there and reads no talker PCM port, so this is
+  how received voice is heard (docs/voice-chat.md, "Playback").
 - **Signal state.** The energy and voice-activity attributes report the microphone's real level while
   the gate is open and silence otherwise. Attribute 11 keeps the stub's answer until U5 is settled.
 - **Unsupported use stays visible.** A port type, edge or attribute the service does not handle logs

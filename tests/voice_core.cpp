@@ -245,6 +245,89 @@ static void playout_to_pcm_port() {
     CHECK(service.port_info(stereo, info) == status::Ok && info.bytes <= 300 * 16 * 8);
 }
 
+// The game connects received talkers to the headset output (OUT_SECONDARY) and reads no PCM port:
+// a host stream pulls them through render_secondary.
+static void playout_to_secondary() {
+    Clock clock;
+    ServiceOptions options;
+    options.now_ms = [&clock] { return clock.ms; };
+    options.decoder = [] { return std::unique_ptr<FrameDecoder>(std::make_unique<FakeDecoder>()); };
+    options.voice_gain = 0.5f;
+    Service service(std::move(options));
+    service.init();
+    uint32_t a = 0, b = 0, headset = 0, other = 0, static_in = 0;
+    service.create_port(voice_port(PortType::InVoice), a);
+    service.create_port(voice_port(PortType::InVoice), b);
+    PortParams secondary;
+    secondary.type = uint32_t(PortType::OutSecondary);
+    secondary.volume = 1.0f;
+    service.create_port(secondary, headset);
+    service.create_port(secondary, other);
+    PortParams pcm_in;
+    pcm_in.type = uint32_t(PortType::InPcm);
+    pcm_in.pcm_type = 2;  // 16-bit big-endian
+    pcm_in.pcm_channels = 1;
+    pcm_in.pcm_buffer = 8192;
+    service.create_port(pcm_in, static_in);
+    CHECK(service.connect(a, headset) == status::Ok);
+    CHECK(service.connect(b, headset) == status::Ok);
+    CHECK(service.connect(a, other) == status::Ok);  // on two headset ports, a talker still plays once
+    std::vector<int16_t> out(4096);
+    // Not started: silence, nothing consumed.
+    CHECK(service.render_secondary(out.data(), 320) == 0 && out[0] == 0);
+    service.start();
+    size_t accepted = 0;
+    auto a0 = one_block(0, 1), a1 = one_block(1, 1), b0 = one_block(0, 2), b1 = one_block(1, 2);
+    service.write(a, a0.data(), a0.size(), accepted);
+    service.write(b, b0.data(), b0.size(), accepted);
+    clock.ms += 20;
+    // One block each is under the 60 ms hold: silence.
+    CHECK(service.render_secondary(out.data(), 320) == 0 && out[0] == 0 && out[319] == 0);
+    service.write(a, a1.data(), a1.size(), accepted);
+    service.write(b, b1.data(), b1.size(), accepted);
+    clock.ms += 20;  // both talkers due 20 ms (320 samples)
+    CHECK(service.render_secondary(out.data(), 640) == 320);
+    // (100 + 200) / 32768 at the voice volume 0.5: 150; then silence after what was due.
+    CHECK(out[0] == 150 && out[319] == 150 && out[320] == 0 && out[639] == 0);
+    CHECK(service.receive_stats().samples_played == 320);
+    // The port's volume and an input's mute apply; a muted port consumes and renders silence.
+    service.set_volume(headset, 0.5f);
+    service.set_mute(b, true);
+    clock.ms += 10;
+    CHECK(service.render_secondary(out.data(), 160) == 160 && out[0] == 25);  // 100 * 0.5 * 0.5
+    service.set_mute(b, false);
+    service.set_mute(headset, true);
+    clock.ms += 10;
+    CHECK(service.render_secondary(out.data(), 160) == 160 && out[0] == 0);
+    service.set_mute(headset, false);
+    service.set_volume(headset, 1.0f);
+    // Real-time pull: everything due is played and nothing piles up or drops.
+    for (int i = 0; i < 50; ++i) {
+        auto x = one_block(uint8_t(2 + i), 1), y = one_block(uint8_t(2 + i), 2);
+        service.write(a, x.data(), x.size(), accepted);
+        service.write(b, y.data(), y.size(), accepted);
+        clock.ms += 40;
+        service.render_secondary(out.data(), 640);
+    }
+    const ReceiveStats steady = service.receive_stats();
+    CHECK(steady.samples_dropped == 0);
+    CHECK(steady.samples_played >= 320 + 320 + 49 * 640);
+    // PCM the game writes (its jamming static) plays on the headset too, mixed down to mono.
+    service.disconnect(a, headset);
+    service.disconnect(a, other);
+    service.disconnect(b, headset);
+    CHECK(service.connect(static_in, headset) == status::Ok);
+    std::vector<uint8_t> noise(2 * 320);
+    for (size_t i = 0; i < 320; ++i) noise[2 * i] = 0x10, noise[2 * i + 1] = 0x00;  // 4096 big-endian
+    CHECK(service.write(static_in, noise.data(), noise.size(), accepted) == status::Ok && accepted == noise.size());
+    CHECK(service.render_secondary(out.data(), 400) == 320 && out[0] == 2048 && out[319] == 2048 && out[320] == 0);
+    // At most playout_cap_ms of game PCM is kept.
+    std::vector<uint8_t> lots(2 * 16000);
+    service.write(static_in, lots.data(), lots.size(), accepted);
+    CHECK(service.receive_stats().samples_dropped == 16000 - 300 * 16);
+    service.end();
+}
+
 static void lifecycle_and_topology() {
     Clock clock;
     Service service = make(clock);
@@ -437,6 +520,7 @@ int main() {
     encoded_input_counts_blocks();
     update_port_rules();
     playout_to_pcm_port();
+    playout_to_secondary();
     trace_has_no_payload();
     if (failures) {
         std::printf("%d failures\n", failures);
