@@ -53,6 +53,10 @@ def main(argv=None):
     player.add_argument('--jobs', metavar='N', help='How many compile jobs run at once: a whole number from 1 to 64, or auto for '
                         'this computer\'s default (set by its memory and CPUs). Remembered for later builds; '
                         'works with --retry. Without it, the remembered choice or the default is used')
+    player.add_argument('--voice', action=argparse.BooleanOptionalAction, default=None,
+                        help='Build with (--voice) or without (--no-voice) in-match voice chat, push to talk. Remembered for '
+                             'later builds. Without either, MAG_VOICE=1 or 0 in the environment, else the remembered choice, '
+                             'else without voice chat')
     reuse = commands.add_parser('build-cache', help='Show, limit or clear the build cache that lets later builds reuse earlier work')
     presentation(reuse, True)
     reuse.add_argument('--cache', type=Path, help='Installer cache folder (defaults to your user cache)')
@@ -128,7 +132,7 @@ def main(argv=None):
                 handlers[signum] = signal.signal(signum, lambda number, frame: token.cancel())
             output = args.output if args.output is not None else destination(args.parent)
             player_build.install(ROOT, args.source, output, args.cache or default_cache(), token=token, events=report, retry=args.retry,
-                                 jobs=args.jobs)
+                                 jobs=args.jobs, **({'voice': args.voice} if args.voice is not None else {}))
             return 0
         if args.command == 'build-cache':
             from . import build_cache

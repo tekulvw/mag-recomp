@@ -385,14 +385,17 @@ def _publish(output, build, status, name):
     _write_json(build / 'build.json', status)
 
 
-def install(root, source, output, cache, token=None, events=None, retry=False, jobs=None):
+def install(root, source, output, cache, token=None, events=None, retry=False, jobs=None, voice=None):
     """jobs: the compile job count the player chose (a number, or 'auto' for this computer's
-    default); None uses the remembered choice or the default (build_jobs.py). Checked first."""
+    default); None uses the remembered choice or the default (build_jobs.py). Checked first.
+    voice: True or False to build with or without voice chat; None uses MAG_VOICE, else the
+    remembered choice, else off (voice_option.py). Also checked first."""
     token = token or Cancellation()
     events = events or (lambda event: None)
     root, source, output, cache = (Path(p).expanduser().absolute() for p in (root, source, output, cache))
-    from . import build_jobs
+    from . import build_jobs, voice_option
     jobs, jobs_source = build_jobs.resolve(cache, jobs)
+    voice, voice_source = voice_option.resolve(cache, os.environ, voice)
     build = build_folder(output)
     state = readiness(root)
     if not state['ready']:
@@ -405,6 +408,11 @@ def install(root, source, output, cache, token=None, events=None, retry=False, j
         raise InstallerError(f'{output} was built by an earlier installer, and {build} already exists, so its build files '
                              'cannot move there. Move that folder aside, then Build MAG again. Existing files are preserved.')
     if legacy is not None and legacy.get('state') == 'complete':
+        if voice:
+            # Moving it packages its finished binaries again, so it could not gain voice chat.
+            raise InstallerError(f'{output} was built by an earlier installer without voice chat, and moving it to the new layout '
+                                 'does not rebuild it. Move that MAG folder aside (keep its home/gamedata), then Build MAG again '
+                                 'to build with voice chat. Existing files are preserved.')
         # A finished MAG folder of the earlier layout: no inputs, tools or compile needed.
         with _exclusive_lock(lock, True, events, reclaim=True):
             return _migrate(root, output, build, legacy_journal(output) or legacy, token, events)
@@ -492,6 +500,10 @@ def install(root, source, output, cache, token=None, events=None, retry=False, j
                 _prepare_retry(build, status, token)
                 status.update(state='building', attempt=status['attempt'] + 1, binding=binding)
                 retry_prepared = True
+            if voice:
+                status['voice'] = True   # this attempt builds with voice chat (absent without it)
+            else:
+                status.pop('voice', None)
             _write_json(journal, status)
             checking_inputs = True
             events({'event': 'stage-start', 'stage': 'prepare-source', 'logs': str(logs)})
@@ -538,8 +550,15 @@ def install(root, source, output, cache, token=None, events=None, retry=False, j
                 # The pinned Rust toolchain, beside the other managed tools.
                 from .managed_tools import rust_toolchain
                 config['game_controls'] = rust_toolchain(managed['root'], cache=cache, token=token, events=events)
-            if x86_level:
-                config['cmake_args'] = x86_level
+            if voice:
+                # The pinned static Opus, beside the other managed tools; -DMAG_VOICE=ON for both images
+                # (the launcher image's settings windows show the Voice rows; only the engine links Opus).
+                from .managed_tools import opus_prefix
+                config['opus'] = {'root': opus_prefix(managed, cache=cache, token=token, events=counted,
+                                                      **({'build_cache': cache_store} if cache_store else {}),
+                                                      toolchain=(toolchain if windows or linux else None), host=host)}
+            if x86_level or voice:
+                config['cmake_args'] = [*x86_level, *(['-DMAG_VOICE=ON'] if voice else [])]
             if cache_store:
                 # Reused generation and compiled objects; they stay in the per-user cache only.
                 from .compile_cache import SUPPORTED_HOSTS, ccache_tool
@@ -556,6 +575,9 @@ def install(root, source, output, cache, token=None, events=None, retry=False, j
             events({'event': 'stage-start', 'stage': 'build', 'logs': str(native_output / 'logs')})
             events({'event': 'build-jobs', 'jobs': jobs, 'source': jobs_source,
                     'message': build_jobs.describe(jobs, jobs_source)})
+            if voice_option.describe(voice, voice_source):
+                events({'event': 'build-voice', 'voice': voice, 'source': voice_source,
+                        'message': voice_option.describe(voice, voice_source)})
             build_native(config_path, native_output, token=token, events=progress, **({'retry_lock': True} if recovering else {}))
             events({'event': 'stage-start', 'stage': 'package', 'logs': str(native_output / 'logs')})
             # The MAG folder is assembled in the build folder and moved into place when complete.

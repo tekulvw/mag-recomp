@@ -367,6 +367,100 @@ def rust_toolchain(root, cache=None, token=None, events=None, host=None):
     return {key: str(value) for key, value in paths.items()}
 
 
+# Opus (BSD), the codec of the opt-in voice service (cmake/MagVoice.cmake, docs/voice-chat.md): the
+# official release source, built by voice builds only. Like the Rust toolchain it is kept apart from
+# the LOCK dictionaries and built into its own prefix, so a build without voice downloads and builds
+# nothing more and the dependency prefixes keep their identities.
+OPUS_LOCK = {'id': 'source-opus',
+             'url': 'https://github.com/xiph/opus/releases/download/v1.5.2/opus-1.5.2.tar.gz',
+             'size': 7839412,
+             'sha256': '65c1d2f78b9f2fb20082c38cbe47c951ad5839345876e46941612ee87f9a7ce1',
+             'archive': 'tar.gz',
+             'root': 'opus-1.5.2',
+             'max_expanded_bytes': 268435456,
+             'max_entries': 10000}
+# How the Opus prefix is built, beyond its source's identity: a change here gives it a new identity.
+OPUS_RECIPE = 1
+
+
+def opus_plan(paths, prefix, host, clang_cl=None):
+    """Static Opus (no programs, tests or package files) installed into its own prefix: the engine
+    links it in, so nothing is packaged beside MAG. Windows: clang-cl and the static CRT, as the
+    engine; Opus sets the CRT itself, from OPUS_STATIC_RUNTIME."""
+    cmake = str(paths['cmake']); prefix = Path(prefix)
+    def posix(value): return Path(value).as_posix()
+    source = Path(paths['source-opus']); build = prefix.parent / 'build-opus'
+    options = ['-G', 'Ninja', '-DCMAKE_MAKE_PROGRAM=' + posix(paths['ninja']), '-DCMAKE_BUILD_TYPE=Release',
+               '-DCMAKE_INSTALL_PREFIX=' + posix(prefix), '-DCMAKE_INSTALL_LIBDIR=lib', '-DCMAKE_POLICY_VERSION_MINIMUM=3.5',
+               '-DBUILD_SHARED_LIBS=OFF', '-DOPUS_BUILD_SHARED_LIBRARY=OFF', '-DOPUS_BUILD_PROGRAMS=OFF',
+               '-DOPUS_BUILD_TESTING=OFF', '-DBUILD_TESTING=OFF', '-DOPUS_INSTALL_PKG_CONFIG_MODULE=OFF',
+               '-DOPUS_INSTALL_CMAKE_CONFIG_MODULE=OFF']
+    if host == 'windows-x86_64':
+        options += ['-DCMAKE_C_COMPILER=' + posix(clang_cl), '-DCMAKE_CXX_COMPILER=' + posix(clang_cl),
+                    '-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded', '-DOPUS_STATIC_RUNTIME=ON']
+    else:
+        options += ['-DCMAKE_POSITION_INDEPENDENT_CODE=ON']
+    return [{'id': 'configure-opus', 'cwd': source, 'argv': [cmake, '-S', str(source), '-B', str(build), *options]},
+            {'id': 'build-opus', 'cwd': source, 'argv': [cmake, '--build', str(build), '--parallel', '2']},
+            {'id': 'install-opus', 'cwd': source, 'argv': [cmake, '--install', str(build)]}]
+
+
+def _opus_paths(prefix, host):
+    prefix = Path(prefix)
+    return [prefix / 'include/opus/opus.h', prefix / 'lib' / ('opus.lib' if host == 'windows-x86_64' else 'libopus.a')]
+
+
+def opus_prefix(managed, cache=None, token=None, events=None, build_cache=None, toolchain=None, host=None):
+    """The pinned Opus for a voice build, as its install prefix (MAG_OPUS_ROOT).
+
+    managed: what bootstrap returned (its managed root, CMake and Ninja). toolchain: on Windows the
+    Visual Studio toolchain (vcvars, clang_cl), on Linux the compilers (cc, cxx); macOS uses the
+    Apple Command Line Tools. A prefix already in this managed root (a Retry) is verified and kept;
+    else, with a build cache, one built earlier on this computer is reused."""
+    token = token or Cancellation(); events = events or (lambda event: None)
+    host = host or host_key()
+    if host not in LOCKS: raise InstallerError('Opus is pinned only for supported hosts')
+    if host in ('windows-x86_64', 'linux-x86_64') and not toolchain:
+        raise InstallerError('Building Opus needs the build toolchain')
+    root = Path(managed['root']).absolute()
+    if root.is_symlink(): raise InstallerError('Managed root must not be a symlink')
+    cache = Path(cache) if cache else root / 'cache'
+    home = root / 'home'; home.mkdir(parents=True, exist_ok=True)
+    logs = root / 'logs'; logs.mkdir(parents=True, exist_ok=True)
+    paths = {'cmake': managed['cmake'], 'ninja': managed['ninja'],
+             'source-opus': materialize(OPUS_LOCK, root / 'artifacts', cache, token, events) / OPUS_LOCK['root']}
+    prefix = root / 'prefix-opus'
+    identity = {'source-opus': OPUS_LOCK['sha256'], 'recipe': OPUS_RECIPE}
+    required = _opus_paths(prefix, host)
+    if (prefix / 'MANAGED-DEPENDENCIES.json').exists():
+        _dependency_prefix(prefix, identity, [], required, None, token, events)
+        return str(prefix)
+    if host == 'windows-x86_64':
+        env = msvc_environment(toolchain['vcvars'])
+        env.update(TEMP=str(home), TMP=str(home), CMAKE_BUILD_PARALLEL_LEVEL='2')
+    else:
+        env = _env(managed['python'], paths['cmake'], paths['ninja'], home)
+        if host == 'linux-x86_64':
+            env.update(CC=toolchain['cc'], CXX=toolchain['cxx'])
+    stages = opus_plan(paths, prefix, host, toolchain.get('clang_cl') if toolchain else None)
+    def run_stages():
+        for stage in stages:
+            Path(stage['cwd']).mkdir(parents=True, exist_ok=True)
+            events({'event': 'stage-start', 'stage': stage['id']})
+            run_command(stage['argv'], stage['cwd'], logs / (stage['id'] + '.log'), token, env, events, stage['id'])
+    material = None
+    if build_cache is not None:
+        from .compile_cache import toolchain_identity
+        replacements = {str(root): '<managed>', root.as_posix(): '<managed>',
+                        **{str(paths[k]): '<' + k + '>' for k in paths}, **{Path(paths[k]).as_posix(): '<' + k + '>' for k in paths}}
+        if host == 'windows-x86_64':
+            replacements.update({str(toolchain['clang_cl']): '<clang-cl>', Path(toolchain['clang_cl']).as_posix(): '<clang-cl>'})
+        material = {'host': host, 'toolchain': toolchain_identity(host, toolchain, env),
+                    'recipe': _normalized_plan(stages, replacements)}
+    _dependency_prefix(prefix, identity, stages, required, run_stages, token, events, build_cache, material, 'Opus library')
+    return str(prefix)
+
+
 def _name(value):
     if not value or '\\' in value or value.startswith('/') or ':' in value:
         raise InstallerError('Unsafe managed archive path')

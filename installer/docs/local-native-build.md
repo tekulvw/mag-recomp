@@ -75,9 +75,17 @@ Vulkan backend, with the Vulkan headers from its `include` directory; without it
 the D3D12 backend.
 
 `jobs` is 1–64 (default 2); it sets `cmake --build --parallel` and `CMAKE_BUILD_PARALLEL_LEVEL` for the launcher and engine compiles only. The player installer writes the player's [compile job count](../README.md#compile-jobs). `cmake_args` accepts only `-DMAG_GENERATED_PPU_OPT=0|1|2`,
-`-DMAG_X86_LEVEL=auto|v4|v3|baseline` and a numeric `-DCMAKE_OSX_DEPLOYMENT_TARGET`. The player
-installer writes `cmake_args` only when `MAG_X86_LEVEL` is set in its own environment (Windows and
-Linux), as a troubleshooting override of the x86-64 code generation level.
+`-DMAG_X86_LEVEL=auto|v4|v3|baseline`, `-DMAG_VOICE=ON|OFF` and a numeric
+`-DCMAKE_OSX_DEPLOYMENT_TARGET`. The player installer writes `cmake_args` only when `MAG_X86_LEVEL`
+is set in its own environment (Windows and Linux), as a troubleshooting override of the x86-64 code
+generation level, or when the player chose [voice chat](../README.md#voice-chat)
+(`-DMAG_VOICE=ON`); otherwise it writes none.
+
+`opus` (optional) is `{"root": "<Opus install prefix>"}`, a directory holding `include/opus/opus.h`
+and `lib/libopus.a` (`lib/opus.lib` on Windows), passed to both configures as `-DMAG_OPUS_ROOT`.
+Without it a `-DMAG_VOICE=ON` build looks for the system's Opus (pkg-config or `libopus-dev`; see
+[voice-chat.md](../../docs/voice-chat.md)). The player installer writes it for a voice build: the
+pinned static Opus it builds into `managed-tools/prefix-opus` (`managed_tools.opus_prefix`).
 
 `build_cache` (optional) turns on the [build cache](../README.md#build-cache):
 `{"root": "<installer cache>/build-cache", "ccache": "path/to/ccache", "base_dir": "<folder holding --output>"}`.

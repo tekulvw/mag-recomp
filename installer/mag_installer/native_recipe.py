@@ -26,8 +26,9 @@ _REQUIRED = {'schema_version', 'source_tree', 'disc_root', 'eboot_elf', 'engine_
 # pinned Rust toolchain's cargo and rustc executables (not rustup proxies).
 # build_cache: the per-user build cache folder, ccache's base_dir and (optionally) the pinned ccache (build_cache.py,
 # compile_cache.py and lift_cache.py).
+# opus: the install prefix of the pinned Opus a voice build (-DMAG_VOICE=ON, docs/voice-chat.md) links.
 _OPTIONAL = {'jobs', 'cmake_args', 'native_graphics', 'managed_prefix', 'ffmpeg', 'sdl2', 'msvc', 'host', 'linux_toolchain',
-             'game_controls', 'build_cache'}
+             'game_controls', 'build_cache', 'opus'}
 
 
 def is_windows(config):
@@ -143,11 +144,14 @@ def load_config(path):
     # Arbitrary CMake -D options can inject executable hooks/toolchains or defeat
     # provenance. Keep this optional tuning surface deliberately narrow.
     if not isinstance(arguments, list) or any(not isinstance(a, str) or re.fullmatch(
-            r'-D(?:MAG_GENERATED_PPU_OPT=[012]|MAG_X86_LEVEL=(?:auto|v4|v3|baseline)'
+            r'-D(?:MAG_GENERATED_PPU_OPT=[012]|MAG_X86_LEVEL=(?:auto|v4|v3|baseline)|MAG_VOICE=(?:ON|OFF)'
             r'|CMAKE_OSX_DEPLOYMENT_TARGET=[0-9]+(?:\.[0-9]+){0,2})', a) is None for a in arguments):
-        raise InstallerError('cmake_args supports only MAG_GENERATED_PPU_OPT=0|1|2, MAG_X86_LEVEL=auto|v4|v3|baseline '
-                             'and numeric CMAKE_OSX_DEPLOYMENT_TARGET')
+        raise InstallerError('cmake_args supports only MAG_GENERATED_PPU_OPT=0|1|2, MAG_X86_LEVEL=auto|v4|v3|baseline, '
+                             'MAG_VOICE=ON|OFF and numeric CMAKE_OSX_DEPLOYMENT_TARGET')
     result['cmake_args'] = list(arguments)
+    if 'opus' in raw:   # the Opus a voice build links (MAG_OPUS_ROOT); without it CMake searches the system
+        _object(raw['opus'], {'root'}, set(), 'opus')
+        result['opus'] = {'root': _path(raw['opus']['root'], path.parent, 'opus.root', directory=True)}
     if raw.get('managed_prefix'):
         result['managed_prefix'] = _path(raw['managed_prefix'], path.parent, 'managed_prefix', directory=True)
     if 'build_cache' in raw:
@@ -376,6 +380,9 @@ def build_plan(config, workspace):
     common += cmake_arguments(config, cmake_path)
     if config.get('managed_prefix'):
         common.append('-DCMAKE_PREFIX_PATH=' + cmake_path(config['managed_prefix']))
+    if config.get('opus'):
+        # The pinned static Opus for MAG_VOICE (only the engine image links it); never a system copy.
+        common.append('-DMAG_OPUS_ROOT=' + cmake_path(config['opus']['root']))
     for name, image, spu, build in [('launcher', 'EBOOT', 'worker-spu', 'build'),
                                     ('engine', 'mage_g', 'engine-spu', 'build-engine')]:
         extra = ['-DMAG_SPU_PROGRAMS_DIR=' + cmake_path(paths['spu-programs'])] if name == 'engine' else []

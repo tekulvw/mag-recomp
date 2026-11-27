@@ -27,6 +27,7 @@ class PlayerBuildTests(unittest.TestCase):
         environment.start(); self.addCleanup(environment.stop)
         os.environ.pop('MAG_GAME_CONTROLS', None)
         os.environ.pop('MAG_BUILD_CACHE', None)
+        os.environ.pop('MAG_VOICE', None)
         # Nor the pinned ccache: each sees where the build would get it.
         ccache = patch('mag_installer.compile_cache.ccache_tool', return_value=CCACHE)
         self.ccache = ccache.start(); self.addCleanup(ccache.stop)

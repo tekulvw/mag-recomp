@@ -173,6 +173,55 @@ computer's default. The job count changes nothing else: it is not part of the
 builds from source (see [Build cache](#build-cache)) keep 2 jobs; they are built once and then
 reused.
 
+### Voice chat
+
+In-match [voice chat](../docs/voice-chat.md) (push to talk) is being tested and is **not built by
+default**. To build MAG with it, tick **Voice chat: Include** in the wizard before **Build MAG**.
+Your choice is remembered for later builds on this computer (in `preferences.json` in the
+installer's cache folder, beside the [compile job count](#compile-jobs)), so building again for a
+new MAG version keeps voice chat until you untick the box. Once MAG is built, turn voice chat on in
+MAG Settings → General → **Voice** ([player-settings.md](../docs/player-settings.md#voice)) and hold
+**K** in a match to talk.
+
+From a terminal, `build --voice` (or `--no-voice`) does the same and is remembered too. Setting
+`MAG_VOICE=1` in the installer's environment also turns it on (and `MAG_VOICE=0` off) for that build
+and later ones; the box or `--voice`/`--no-voice` wins over it. Started from the folder you
+unpacked the installer into:
+
+- **Windows** (PowerShell):
+
+  ```powershell
+  $env:MAG_VOICE = "1"
+  .\mag-installer.exe
+  ```
+
+- **macOS** (Terminal, from the folder holding `MAG Installer.app`):
+
+  ```sh
+  MAG_VOICE=1 "./MAG Installer.app/Contents/MacOS/mag-installer"
+  ```
+
+- **Linux**:
+
+  ```sh
+  MAG_VOICE=1 ./mag-installer
+  ```
+
+The build log then says `Building with voice chat (...)`, and `MAG-build/build.json` records
+`"voice": true`. A voice build also downloads the pinned Opus 1.5.2 source (about 8 MB, from the
+Opus project's GitHub release) and builds it once into `MAG-build/managed-tools/prefix-opus`; it
+is linked into the game engine, so nothing more is packaged beside MAG, and the
+[build cache](#build-cache) reuses it in later builds. The game's other generated sources and
+compiled objects are reused as usual; the parts voice chat changes are compiled again. A `MAG`
+folder an earlier installer built with its build files inside it cannot gain voice chat by being
+moved to the new layout: move it aside (keep `home/gamedata`) and build again. Without voice chat
+the Voice rows in MAG Settings say "Not in this build yet". With `MAG_GAME_CONTROLS=0` there is no
+push to talk, so voice chat only plays other players.
+
+On macOS the first time MAG opens the microphone (when you join a match with voice chat on), macOS
+asks whether MAG may use it. Every MAG.app declares why it would ask, whether or not it was built
+with voice chat; one without it never opens the microphone, so it never asks.
+
 ### Downloads
 
 Every downloaded tool is pinned by size and SHA-256, so its source does not matter. If a GitHub

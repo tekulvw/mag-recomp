@@ -4,8 +4,8 @@ Uses the installer's own code: Build Tools detection, the pinned managed
 downloads, the vcvars-derived build environment, then the managed CMake/Ninja
 with clang-cl and the static CRT to build the pinned runtime library (with the
 Windows POSIX shim, as the MAG build applies it), the managed Python modules,
-and the package-time compile of the MAG.exe supervisor. Only lifting and
-compiling the player's game is absent.
+the package-time compile of the MAG.exe supervisor, and the pinned static Opus
+that voice builds link. Only lifting and compiling the player's game is absent.
 """
 import argparse
 import json
@@ -20,6 +20,26 @@ from mag_installer import build_cache, managed_tools, native_build, native_packa
 from mag_installer.safety import Cancellation  # noqa: E402
 
 SEEN = []
+# Voice builds link the pinned static Opus; a 40 ms frame through its encoder and decoder.
+OPUS_CHECK = r"""#include <opus/opus.h>
+#include <math.h>
+#include <stdio.h>
+int main(void) {
+    int error;
+    OpusEncoder *encoder = opus_encoder_create(16000, 1, OPUS_APPLICATION_VOIP, &error);
+    if (error != OPUS_OK) return 1;
+    OpusDecoder *decoder = opus_decoder_create(16000, 1, &error);
+    if (error != OPUS_OK) return 2;
+    opus_int16 pcm[640], decoded[640];
+    for (int i = 0; i < 640; i++) pcm[i] = (opus_int16)(8000.0 * sin(i * 0.17));
+    unsigned char packet[400];
+    int bytes = opus_encode(encoder, pcm, 640, packet, sizeof packet);
+    if (bytes <= 0) return 3;
+    if (opus_decode(decoder, packet, bytes, decoded, 640, 0) != 640) return 4;
+    printf("%s: a 40 ms frame round trip in %d bytes\n", opus_get_version_string(), bytes);
+    return 0;
+}
+"""
 
 
 def events(event):
@@ -47,6 +67,8 @@ def main():
     if not any(e.get('event') == 'build-cache-hit' and e.get('kind') == 'tools' for e in SEEN):
         raise SystemExit('the second managed root did not reuse the cached dependency prefix')
     native_build.check_windows_location(work / 'MAG')
+    opus = Path(managed_tools.opus_prefix(managed, cache=work / 'cache', token=token, events=events, build_cache=store,
+                                          toolchain=toolchain))
 
     config = {**{k: managed[k] for k in ('python', 'cmake', 'ninja', 'git')}, 'jobs': 2,
               'msvc': {k: toolchain[k] for k in ('vcvars', 'clang_cl')}}
@@ -78,6 +100,12 @@ def main():
                                '-DPS3RECOMP_PAD_USE_SDL2=ON', '-DSDL2_DIR=' + posix(managed['sdl2']['cmake_dir'])], work)
     # Windows builds do not use the compile cache (installer/mag_installer/compile_cache.py).
     step('build runtime', [managed['cmake'], '--build', build, '--target', 'ps3recomp_runtime'], work)
+
+    voice = work / 'opus-check'; voice.mkdir(exist_ok=True)
+    (voice / 'opus_check.c').write_text(OPUS_CHECK)
+    step('link the pinned static Opus (static CRT)', [toolchain['clang_cl'], '/nologo', '/O2', '/MT', '/I' + str(opus / 'include'),
+         'opus_check.c', str(opus / 'lib/opus.lib'), '/Fe:opus_check.exe'], voice)
+    step('Opus round trip', [voice / 'opus_check.exe'], voice)
 
     scratch = work / 'supervisor'; scratch.mkdir(exist_ok=True)
     (scratch / 'supervisor_config.h').write_text(
