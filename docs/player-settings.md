@@ -295,7 +295,15 @@ A frame can be slow because the renderer met something new: a program and render
 - per minute, when it built or uploaded anything, a compact `builds` object with `slow_with_builds`, the minute's frames of 50 ms or more that had builds in them;
 - a `builds` section: the backend, which disk caches are on (`spirv_disk_cache`, `vk_pipeline_cache`, and the pipeline-cache bytes loaded at start), the session's totals, and for frames of 50, 100 and 250 ms or more, how many there were, how many had builds or uploads in them, and the time those took.
 
-A frame of 250 ms or more that built or uploaded something also writes one `[mag session] slow frame` line to `engine.log`. Without the runtime's counters the summary says `"builds": {"available": false}`.
+**What the uploads were** (version 2 of the runtime's counters, when the pinned runtime has it):
+- **new** uploads are of a texture the cache did not hold: its first use, or a use after it was evicted (`evictions` counts those);
+- **changed** uploads come from a cached texture whose guest bytes changed, and `in_place` of them went into the texture the cache already had;
+- **sizes** bin every upload by its guest size: up to 64 KiB, up to 1 MiB, up to 4 MiB, larger;
+- **`upload_wait_ms`** is the part of the upload time spent waiting for the GPU to free a recording slot (Vulkan only; 0 elsewhere), and **`slot_wait_ms`** is every such wait, on any work.
+
+These appear in each hitch's `builds` (new, changed, in place, evictions and the two waits), in each minute that uploaded anything (the same plus `upload_mb` and `sizes`, the counts per bin), in each slow-frame threshold (new and changed uploads and the two waits), and in the totals (counts and MB per kind, and per size bin). With version 1 of the counters none of these keys appear.
+
+A frame of 250 ms or more that built or uploaded something also writes one `[mag session] slow frame` line to `engine.log`. With version 2, each minute's line adds the upload MB, the new, changed and in-place counts, the evictions and the uploads' GPU-slot wait. Without the runtime's counters the summary says `"builds": {"available": false}`.
 
 ### Match context
 
