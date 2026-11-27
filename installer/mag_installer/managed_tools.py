@@ -383,10 +383,14 @@ OPUS_LOCK = {'id': 'source-opus',
 OPUS_RECIPE = 1
 
 
-def opus_plan(paths, prefix, host, clang_cl=None):
+def opus_plan(paths, prefix, host):
     """Static Opus (no programs, tests or package files) installed into its own prefix: the engine
-    links it in, so nothing is packaged beside MAG. Windows: clang-cl and the static CRT, as the
-    engine; Opus sets the CRT itself, from OPUS_STATIC_RUNTIME."""
+    links it in, so nothing is packaged beside MAG.
+
+    Windows: MSVC's cl from the same Build Tools environment, with the static CRT as the engine
+    (Opus sets the CRT itself, from OPUS_STATIC_RUNTIME). Not clang-cl: Opus's CMake treats it as
+    MSVC and gives its SSE4.1 and AVX2 sources no -msse4.1/-mavx2, which clang-cl needs for their
+    intrinsics. A cl-built static library links into the clang-cl engine like any MSVC library."""
     cmake = str(paths['cmake']); prefix = Path(prefix)
     def posix(value): return Path(value).as_posix()
     source = Path(paths['source-opus']); build = prefix.parent / 'build-opus'
@@ -396,8 +400,7 @@ def opus_plan(paths, prefix, host, clang_cl=None):
                '-DOPUS_BUILD_TESTING=OFF', '-DBUILD_TESTING=OFF', '-DOPUS_INSTALL_PKG_CONFIG_MODULE=OFF',
                '-DOPUS_INSTALL_CMAKE_CONFIG_MODULE=OFF']
     if host == 'windows-x86_64':
-        options += ['-DCMAKE_C_COMPILER=' + posix(clang_cl), '-DCMAKE_CXX_COMPILER=' + posix(clang_cl),
-                    '-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded', '-DOPUS_STATIC_RUNTIME=ON']
+        options += ['-DCMAKE_C_COMPILER=cl', '-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded', '-DOPUS_STATIC_RUNTIME=ON']
     else:
         options += ['-DCMAKE_POSITION_INDEPENDENT_CODE=ON']
     return [{'id': 'configure-opus', 'cwd': source, 'argv': [cmake, '-S', str(source), '-B', str(build), *options]},
@@ -414,7 +417,7 @@ def opus_prefix(managed, cache=None, token=None, events=None, build_cache=None, 
     """The pinned Opus for a voice build, as its install prefix (MAG_OPUS_ROOT).
 
     managed: what bootstrap returned (its managed root, CMake and Ninja). toolchain: on Windows the
-    Visual Studio toolchain (vcvars, clang_cl), on Linux the compilers (cc, cxx); macOS uses the
+    Visual Studio toolchain (its vcvars environment provides cl), on Linux the compilers (cc, cxx); macOS uses the
     Apple Command Line Tools. A prefix already in this managed root (a Retry) is verified and kept;
     else, with a build cache, one built earlier on this computer is reused."""
     token = token or Cancellation(); events = events or (lambda event: None)
@@ -442,7 +445,7 @@ def opus_prefix(managed, cache=None, token=None, events=None, build_cache=None, 
         env = _env(managed['python'], paths['cmake'], paths['ninja'], home)
         if host == 'linux-x86_64':
             env.update(CC=toolchain['cc'], CXX=toolchain['cxx'])
-    stages = opus_plan(paths, prefix, host, toolchain.get('clang_cl') if toolchain else None)
+    stages = opus_plan(paths, prefix, host)
     def run_stages():
         for stage in stages:
             Path(stage['cwd']).mkdir(parents=True, exist_ok=True)
@@ -453,8 +456,7 @@ def opus_prefix(managed, cache=None, token=None, events=None, build_cache=None, 
         from .compile_cache import toolchain_identity
         replacements = {str(root): '<managed>', root.as_posix(): '<managed>',
                         **{str(paths[k]): '<' + k + '>' for k in paths}, **{Path(paths[k]).as_posix(): '<' + k + '>' for k in paths}}
-        if host == 'windows-x86_64':
-            replacements.update({str(toolchain['clang_cl']): '<clang-cl>', Path(toolchain['clang_cl']).as_posix(): '<clang-cl>'})
+        # On Windows the identity names the Build Tools (VCToolsVersion: cl's version) and clang-cl.
         material = {'host': host, 'toolchain': toolchain_identity(host, toolchain, env),
                     'recipe': _normalized_plan(stages, replacements)}
     _dependency_prefix(prefix, identity, stages, required, run_stages, token, events, build_cache, material, 'Opus library')

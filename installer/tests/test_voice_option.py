@@ -72,7 +72,7 @@ class OpusTests(unittest.TestCase):
         paths = {'cmake': '/t/cmake', 'ninja': '/t/ninja', 'source-opus': '/t/opus-1.5.2'}
         for host in managed_tools.SUPPORTED_HOSTS:
             with self.subTest(host=host):
-                stages = managed_tools.opus_plan(paths, Path('/m/prefix-opus'), host, clang_cl='/vs/clang-cl.exe')
+                stages = managed_tools.opus_plan(paths, Path('/m/prefix-opus'), host)
                 self.assertEqual([s['id'] for s in stages], ['configure-opus', 'build-opus', 'install-opus'])
                 configure = stages[0]['argv']
                 for option in ('-DBUILD_SHARED_LIBS=OFF', '-DOPUS_BUILD_SHARED_LIBRARY=OFF', '-DOPUS_BUILD_PROGRAMS=OFF',
@@ -81,7 +81,9 @@ class OpusTests(unittest.TestCase):
                 windows = host == 'windows-x86_64'
                 # Opus sets the MSVC runtime itself; the engine's static CRT needs OPUS_STATIC_RUNTIME.
                 self.assertEqual('-DOPUS_STATIC_RUNTIME=ON' in configure, windows)
-                self.assertEqual('-DCMAKE_C_COMPILER=/vs/clang-cl.exe' in configure, windows)
+                # MSVC's cl on Windows: Opus gives clang-cl's SIMD sources no target flags.
+                self.assertEqual('-DCMAKE_C_COMPILER=cl' in configure, windows)
+                self.assertFalse(any('clang' in a for a in configure))
                 self.assertEqual('-DCMAKE_POSITION_INDEPENDENT_CODE=ON' in configure, not windows)
                 self.assertEqual(stages[1]['argv'][-2:], ['--parallel', '2'])
 

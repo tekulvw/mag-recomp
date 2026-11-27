@@ -67,8 +67,15 @@ def main():
     if not any(e.get('event') == 'build-cache-hit' and e.get('kind') == 'tools' for e in SEEN):
         raise SystemExit('the second managed root did not reuse the cached dependency prefix')
     native_build.check_windows_location(work / 'MAG')
-    opus = Path(managed_tools.opus_prefix(managed, cache=work / 'cache', token=token, events=events, build_cache=store,
-                                          toolchain=toolchain))
+    try:
+        opus = Path(managed_tools.opus_prefix(managed, cache=work / 'cache', token=token, events=events, build_cache=store,
+                                              toolchain=toolchain))
+    except Exception:
+        # The stage logs stay on the runner; show the failing one here.
+        for log in sorted((Path(managed['root']) / 'logs').glob('*-opus.log')):
+            print(f'== {log.name} (last 60 lines)', flush=True)
+            print('\n'.join(log.read_text(errors='replace').splitlines()[-60:]), flush=True)
+        raise
 
     config = {**{k: managed[k] for k in ('python', 'cmake', 'ninja', 'git')}, 'jobs': 2,
               'msvc': {k: toolchain[k] for k in ('vcvars', 'clang_cl')}}
