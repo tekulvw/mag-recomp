@@ -52,11 +52,12 @@ function(mag_enable_voice target sdk image)
     # always, Windows with PS3RECOMP_PAD_USE_SDL2), WASAPI shared mode on Windows otherwise.
     if(WIN32 AND NOT PS3RECOMP_PAD_USE_SDL2)
         set(_capture wasapi)
-        list(APPEND _sources "${_voice}/mag_voice_capture_wasapi.cpp")
+        set(_capture_source "${_voice}/mag_voice_capture_wasapi.cpp")
     else()
         set(_capture sdl)
-        list(APPEND _sources "${_voice}/mag_voice_capture_sdl.cpp")
+        set(_capture_source "${_voice}/mag_voice_capture_sdl.cpp")
     endif()
+    list(APPEND _sources "${_capture_source}")
     # macOS asks the player for microphone access (AVFoundation); other hosts have no such step.
     if(APPLE)
         list(APPEND _sources "${_voice}/mag_voice_permission_macos.mm")
@@ -94,6 +95,7 @@ function(mag_enable_voice target sdk image)
         "voice-sources=${_voice}"
         "voice-build=${CMAKE_CURRENT_FUNCTION_LIST_DIR}/MagVoice.cmake"
         "voice-opus=${MAG_OPUS_LIBRARY}"
-        "voice-capture=${_capture}"
+        # Receipt extras are name=path pairs the receipt hashes; the backend is named by its source.
+        "voice-capture=${_capture_source}"
         PARENT_SCOPE)
 endfunction()

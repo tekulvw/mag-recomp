@@ -230,6 +230,45 @@ class VoiceBuildSwitch(unittest.TestCase):
         self.assertIn('mag_enable_voice(${PROJECT_NAME} "${PS3RECOMP_DIR}" "${MAG_IMAGE}")', lists)
         self.assertIn('list(APPEND MAG_RECEIPT_EXTRA ${MAG_VOICE_RECEIPT_EXTRA})', lists)
 
+    def test_receipt_extras_are_paths_the_receipt_can_hash(self):
+        # A MAG_VOICE=ON engine build hashes every receipt extra (tools/provenance.py); a value that
+        # is not a file or directory fails the build after linking. Configure a stand-in project.
+        if not shutil.which('cmake'):
+            self.skipTest('cmake required')
+        from tools.provenance import extension_record
+        with tempfile.TemporaryDirectory() as t:
+            p = Path(t)
+            shutil.copytree(SOURCES, p / 'src/voice')
+            (p / 'cmake').mkdir()
+            shutil.copyfile(ROOT / 'cmake/MagVoice.cmake', p / 'cmake/MagVoice.cmake')
+            (p / 'opus/include/opus').mkdir(parents=True)
+            (p / 'opus/include/opus/opus.h').write_text('')
+            (p / 'opus/lib').mkdir()
+            for name in ('libopus.a', 'opus.lib'):
+                (p / 'opus/lib' / name).write_bytes(b'')
+            (p / 'sdl2').mkdir()
+            (p / 'sdl2/SDL2Config.cmake').write_text('set(SDL2_INCLUDE_DIRS "${CMAKE_CURRENT_LIST_DIR}")\n'
+                                                     'set(SDL2_LIBRARIES "")\n')
+            (p / 'main.cpp').write_text('int main() { return 0; }\n')
+            (p / 'CMakeLists.txt').write_text(
+                'cmake_minimum_required(VERSION 3.20)\nproject(Fixture C CXX)\nadd_executable(fixture main.cpp)\n'
+                'include(cmake/MagVoice.cmake)\nmag_enable_voice(fixture "${CMAKE_SOURCE_DIR}/sdk" mage_g)\n'
+                'file(WRITE "${CMAKE_BINARY_DIR}/voice-extra.txt" "${MAG_VOICE_RECEIPT_EXTRA}")\n')
+            for sdl in ('OFF', 'ON'):
+                build = p / f'build-{sdl}'
+                args = ['cmake', '-S', str(p), '-B', str(build), '-DMAG_VOICE=ON', '-DMAG_OPUS_ROOT=' + str(p / 'opus'),
+                        '-DSDL2_DIR=' + str(p / 'sdl2'), '-DPS3RECOMP_PAD_USE_SDL2=' + sdl]
+                if shutil.which('ninja'):
+                    args += ['-G', 'Ninja']
+                result = subprocess.run(args, capture_output=True, text=True, timeout=300)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                entries = dict(item.split('=', 1) for item in (build / 'voice-extra.txt').read_text().split(';'))
+                self.assertEqual(set(entries), {'voice-sources', 'voice-build', 'voice-opus', 'voice-capture'})
+                backend = 'wasapi' if sys.platform == 'win32' and sdl == 'OFF' else 'sdl'
+                self.assertEqual(Path(entries['voice-capture']).name, f'mag_voice_capture_{backend}.cpp')
+                record = extension_record(entries)
+                self.assertIn('sha256', record['voice-capture'])
+
     def test_registers_only_from_its_start_callback(self):
         glue = (SOURCES / 'mag_voice_hle.cpp').read_text()
         # Handlers are registered in one place, after the environment selected a mode.

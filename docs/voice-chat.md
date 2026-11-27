@@ -13,7 +13,8 @@ it yet. This page lists what exists now and how to switch it on in a lab.
   system paths (`libopus-dev` on Debian and Ubuntu); configuration fails clearly without it.
 - The service still does nothing until the engine's environment selects a mode. Until then the
   runtime's own cellVoice stub answers every voice call, exactly as in a build without it. The
-  receipt's `voice-capture` names the microphone backend the build uses (`sdl` or `wasapi`). The
+  receipt's `voice-capture` hashes the microphone backend's source the build uses
+  (`mag_voice_capture_sdl.cpp` or `mag_voice_capture_wasapi.cpp`). The
   service reads the environment at the extensions' start, after the ELF is loaded and after the
   player settings have exported their variables (`src/main.cpp`), and registers its handlers there
   if a mode is selected; the runtime looks context handlers up at call time, before the guest runs.
