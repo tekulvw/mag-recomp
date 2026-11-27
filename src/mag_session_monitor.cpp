@@ -25,6 +25,10 @@
 #include "ps3emu/rsx_build_stats.h"
 #define MAG_SESSION_RSX_BUILD_STATS 1
 #endif
+#if __has_include("ps3emu/fs_host_observer.h")
+#include "ps3emu/fs_host_observer.h"
+#define MAG_SESSION_FS_OBSERVER 1
+#endif
 #endif
 
 namespace mag::session {
@@ -147,6 +151,7 @@ void Monitor::frame(uint64_t now_ns, const Builds *builds) {
         extend_loading(lead, now_ns + load_join_us * 1000);
     }
     hitch.loading = now_ns - start_ns_ < boot_seconds * 1000000000ull || (off_match && now_ns <= loading_until_ns_);
+    hitch.map = map_;
     if (hitch.loading) {
         count_loading(us);
     } else if (off_match) {
@@ -229,6 +234,63 @@ void Monitor::host_cpu(const machine::Sample &sample, uint64_t now_ns) {
 }
 
 void Monitor::set_default_phase(int phase) { default_phase_.store(phase, std::memory_order_relaxed); }
+
+std::string map_from_path(const char *path) {
+    if (!path) return {};
+    const char *at = std::strstr(path, "/levels/");
+    if (!at) return {};
+    const char *name = at + 8, *end = std::strstr(name, ".psarc");
+    if (!end || end == name || end[6] != '\0') return {};
+    std::string out;
+    for (const char *c = name; c < end && out.size() < map_name_max; ++c) {
+        if (*c == '/') return {};  // a folder under levels, not a map's archive
+        out += std::isalnum((unsigned char)*c) || *c == '_' || *c == '-' ? *c : '_';
+    }
+    return out;
+}
+
+void Monitor::set_files_seen() {
+    std::lock_guard<std::mutex> lock(rare_);
+    files_seen_ = true;
+}
+
+void Monitor::file_opened(const char *path, uint64_t now_ns) {
+    if (!path || !std::strstr(path, "/levels/")) return;  // the common case: not a map
+    const std::string name = map_from_path(path);
+    if (name.empty()) return;
+    std::lock_guard<std::mutex> lock(rare_);
+    files_seen_ = true;
+    int index = -1;
+    for (size_t i = 0; i < maps_.size(); ++i)
+        if (maps_[i] == name) index = int(i);
+    if (index < 0 && maps_.size() < maps_kept) {
+        maps_.push_back(name);
+        index = int(maps_.size() - 1);
+    }
+    // A new load: another map, or the same one again after a while (the next match on it).
+    if (index != map_ || !map_opened_ns_ || now_ns - map_opened_ns_ > map_reload_us * 1000) {
+        map_loads_.push_back(Snapshot::MapLoad{seconds(now_ns), index});
+        if (map_loads_.size() > map_loads_kept) map_loads_.erase(map_loads_.begin());
+    }
+    map_ = index;
+    map_opened_ns_ = now_ns;
+    // Outside a match, reading a map's archive is a map load: loading.
+    if (phase_.load(std::memory_order_relaxed) != MAG_SESSION_PHASE_MATCH) extend_loading(now_ns, now_ns + load_join_us * 1000);
+}
+
+std::array<double, MAG_SESSION_PHASE_COUNT> Monitor::phase_seconds_at(uint64_t now_ns) const {
+    std::array<double, MAG_SESSION_PHASE_COUNT> out = phase_seconds_;
+    const uint64_t since = phase_since_ns_ ? phase_since_ns_ : start_ns_;
+    if (now_ns > since) out[size_t(phase_.load(std::memory_order_relaxed))] += double(now_ns - since) / 1e9;
+    return out;
+}
+
+int Minute::phase() const {
+    int best = 0;
+    for (int p = 1; p < MAG_SESSION_PHASE_COUNT; ++p)
+        if (phase_s[size_t(p)] > phase_s[size_t(best)]) best = p;
+    return best;
+}
 
 void Monitor::extend_loading(uint64_t from_ns, uint64_t until_ns) {
     if (!loading_until_ns_ || from_ns > loading_until_ns_) loading_from_ns_ = from_ns;  // a new span
@@ -589,6 +651,7 @@ void Monitor::tick(uint64_t now_ns) {
                     drop_ = Drop{};
                     drop_.start_s = candidate_ns_ > start_ns_ ? double(candidate_ns_ - start_ns_) / 1e9 : 0.0;
                     drop_.phase = phase;
+                    drop_.map = map_;
                     drop_.baseline_fps = candidate_baseline_;
                     drop_start_ns_ = candidate_ns_;
                     drop_base_ = candidate_base_;
@@ -659,6 +722,10 @@ Snapshot Monitor::snapshot(uint64_t now_ns) {
         minute_slow_builds_base_ = slow_builds_[0].with_builds;
         m.host = host_share(minute_host_base_, host_);
         m.host.other_max_pct = minute_other_max_pct_;
+        const auto phase_now = phase_seconds_at(now_ns);
+        for (size_t p = 0; p < phase_now.size(); ++p) m.phase_s[p] = std::max(0.0, phase_now[p] - minute_phase_base_[p]);
+        minute_phase_base_ = phase_now;
+        m.map = map_;
         minute_host_base_ = host_;
         minute_other_max_pct_ = 0;
         minutes_.push_back(m);
@@ -671,9 +738,10 @@ Snapshot Monitor::snapshot(uint64_t now_ns) {
         minute_slow100_base_ = s.slow[2];
         const Minute &closed = minutes_.back();
         // One line a minute in the log (not per frame or packet): what the report's minute says.
-        std::fprintf(stderr, "[mag session] minute %llu: %.1f fps, longest frame %.0f ms, %llu frames of 100 ms or more",
+        std::fprintf(stderr, "[mag session] minute %llu: %.1f fps, longest frame %.0f ms, %llu frames of 100 ms or more; %s",
                      (unsigned long long)closed.index, closed.seconds > 0 ? double(closed.frames) / closed.seconds : 0.0, closed.max_ms,
-                     (unsigned long long)closed.over_100ms);
+                     (unsigned long long)closed.over_100ms, phase_name(closed.phase()));
+        if (closed.map >= 0) std::fprintf(stderr, " on %s", maps_[size_t(closed.map)].c_str());
         if (closed.net.any)
             std::fprintf(stderr, "; network in %llu out %llu packets, longest gap %.0f ms, rtt %.0f ms",
                          (unsigned long long)closed.net.in.packets, (unsigned long long)closed.net.out.packets,
@@ -735,6 +803,9 @@ Snapshot Monitor::snapshot(uint64_t now_ns) {
     s.host_seen = host_seen_;
     s.host_cpus = host_cpus_;
     s.host_runnable = host_runnable_;
+    s.files_seen = files_seen_;
+    s.maps = maps_;
+    s.map_loads = map_loads_;
     s.drop_count = drops_total_;
     s.drops = drops_;
     const bool dropping = drop_state_ == DropState::Dip || drop_state_ == DropState::Recovering;
@@ -889,6 +960,12 @@ static std::string host_json(const HostShare &h, bool minute) {
     return j + "}";
 }
 
+// A map's name for the summary (", \"map\": \"<name>\""), or nothing for none.
+static std::string map_json(const Snapshot &s, int map) {
+    // Names are already letters, digits, '_' and '-' (map_from_path).
+    return map >= 0 && size_t(map) < s.maps.size() ? ", \"map\": \"" + s.maps[size_t(map)] + "\"" : std::string();
+}
+
 static std::string drops_json(const Snapshot &s) {
     const DropConfig &c = s.drop_config;
     if (!c.enabled) return "  \"fps_drops\": {\"enabled\": false},\n";
@@ -897,7 +974,7 @@ static std::string drops_json(const Snapshot &s) {
     for (size_t i = 0; i < s.drops.size(); ++i) {
         const Drop &d = s.drops[i];
         j += std::string(i ? ",\n    " : "\n    ") + "{\"at_s\": " + number(d.start_s, 2) + ", \"s\": " + number(d.end_s - d.start_s, 1) +
-             ", \"phase\": \"" + phase_name(d.phase) + "\", \"baseline_fps\": " + number(d.baseline_fps, 1) +
+             ", \"phase\": \"" + phase_name(d.phase) + "\"" + map_json(s, d.map) + ", \"baseline_fps\": " + number(d.baseline_fps, 1) +
              ", \"mean_fps\": " + number(d.mean_fps, 1) + ", \"min_fps\": " + number(d.min_fps, 1) + ", \"frames\": " + number(d.frames) +
              ", \"lost_frames\": " + number(d.lost_frames, 0) + ", \"capture\": {\"from_s\": " + number(d.capture_start_s, 1) +
              ", \"to_s\": " + number(d.capture_end_s, 1) + ", \"frames\": " + number(d.capture_frames) +
@@ -1001,10 +1078,21 @@ std::string summary_json(const Snapshot &s) {
     j += "  \"match_ends_s\": [";
     for (size_t i = 0; i < s.match_ends.size(); ++i) j += std::string(i ? ", " : "") + number(s.match_ends[i], 1);
     j += "],\n";
+    // Map loads (the runtime's file observer): when each began and the map.
+    j += "  \"maps\": {\"available\": " + std::string(s.files_seen ? "true" : "false");
+    if (s.files_seen) {
+        j += ", \"loads\": [";
+        for (size_t i = 0; i < s.map_loads.size(); ++i)
+            j += std::string(i ? ", " : "") + "{\"at_s\": " + number(s.map_loads[i].at_s, 1) +
+                 (s.map_loads[i].map >= 0 ? map_json(s, s.map_loads[i].map) : std::string(", \"map\": null")) + "}";
+        j += "]";
+    }
+    j += "},\n";
     j += "  \"hitches\": [";
     for (size_t i = 0; i < s.hitches.size(); ++i)
         j += std::string(i ? ", " : "") + "{\"at_s\": " + number(s.hitches[i].at_s, 2) + ", \"ms\": " + number(s.hitches[i].ms, 1) +
-             ", \"phase\": \"" + phase_name(s.hitches[i].phase) + "\"" + (s.hitches[i].loading ? ", \"loading\": true" : "") +
+             ", \"phase\": \"" + phase_name(s.hitches[i].phase) + "\"" + map_json(s, s.hitches[i].map) +
+             (s.hitches[i].loading ? ", \"loading\": true" : "") +
              (s.builds.available ? ", \"builds\": " + builds_json(s.hitches[i].builds) : std::string()) + "}";
     j += "],\n";
     j += network_json(s.network, s.uptime_s);
@@ -1031,7 +1119,14 @@ std::string summary_json(const Snapshot &s) {
     j += "  \"minutes\": [";
     for (size_t i = 0; i < s.minutes.size(); ++i) {
         const Minute &m = s.minutes[i];
-        j += std::string(i ? ",\n    " : "\n    ") + "{\"minute\": " + number(m.index) + ", \"frames\": " + number(m.frames) +
+        // The minute's phase (where it spent the most time; match_s when it was partly in a match) and map.
+        double in_phases = 0;
+        for (double p : m.phase_s) in_phases += p;
+        const double match_s = m.phase_s[MAG_SESSION_PHASE_MATCH];
+        const bool mixed = match_s >= 0.5 && in_phases - match_s >= 0.5;
+        j += std::string(i ? ",\n    " : "\n    ") + "{\"minute\": " + number(m.index) + ", \"phase\": \"" + phase_name(m.phase()) + "\"" +
+             (mixed ? ", \"match_s\": " + number(match_s, 0) : std::string()) +
+             map_json(s, m.map) + ", \"frames\": " + number(m.frames) +
              ", \"fps\": " + number(m.seconds > 0 ? double(m.frames) / m.seconds : 0.0, 1) +
              ", \"p50_ms\": " + number(m.p50_ms, 1) + ", \"p95_ms\": " + number(m.p95_ms, 1) + ", \"p99_ms\": " + number(m.p99_ms, 1) +
              ", \"max_ms\": " + number(m.max_ms, 1) + ", \"over_50ms\": " + number(m.over_50ms) +
@@ -1135,6 +1230,16 @@ void poll_builds() {
 #endif
 }
 
+#ifdef MAG_SESSION_FS_OBSERVER
+// The runtime's file observer: on the guest thread that opened the file. Only a map's archive
+// takes the monitor's lock.
+void on_file_open(const struct ps3recomp_fs_event *event) {
+    Monitor *m = g_monitor;
+    if (!m || !event || event->version < 1 || event->kind != PS3RECOMP_FS_OPEN || event->fd < 0 || !event->path) return;
+    m->file_opened(event->path, now_ns());
+}
+#endif
+
 #ifdef MAG_SESSION_NET_OBSERVER
 // The runtime's socket observer: runs on the guest thread that made the call, so it only copies
 // the event into the monitor's counters.
@@ -1229,6 +1334,11 @@ extern "C" void mag_session_monitor_start(const char *role) {
         g_monitor->network().set_available();
         ps3recomp_net_set_observer(on_socket_call);
     }
+#endif
+#ifdef MAG_SESSION_FS_OBSERVER
+    // Match context (the map), while a summary is written.
+    g_monitor->set_files_seen();
+    ps3recomp_fs_set_observer(on_file_open);
 #endif
     std::atexit(finish_at_exit);
     write_summary(nullptr);

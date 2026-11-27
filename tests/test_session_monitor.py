@@ -48,6 +48,34 @@ int ps3recomp_rsx_build_stats(struct ps3recomp_rsx_build_stats *out) {
 '''
 
 
+STUB_FS_OBSERVER_HEADER = r'''
+#include <stdint.h>
+#ifdef __cplusplus
+extern "C" {
+#endif
+#define PS3RECOMP_FS_OBSERVER_VERSION 1
+enum ps3recomp_fs_event_kind { PS3RECOMP_FS_OPEN = 1 };
+struct ps3recomp_fs_event { uint32_t version; uint32_t kind; int32_t fd; int32_t error; const char *path; };
+typedef void (*ps3recomp_fs_observer_fn)(const struct ps3recomp_fs_event *event);
+ps3recomp_fs_observer_fn ps3recomp_fs_set_observer(ps3recomp_fs_observer_fn fn);
+#ifdef __cplusplus
+}
+#endif
+'''
+STUB_FS_OBSERVER = r'''
+#include "ps3emu/fs_host_observer.h"
+static ps3recomp_fs_observer_fn installed;
+ps3recomp_fs_observer_fn ps3recomp_fs_set_observer(ps3recomp_fs_observer_fn fn) {
+    ps3recomp_fs_observer_fn previous = installed; installed = fn; return previous;
+}
+/* The test's stand-in for a guest open: what the runtime reports after cellFsOpen. */
+void stub_fs_open(const char *path, int fd) {
+    struct ps3recomp_fs_event e = {PS3RECOMP_FS_OBSERVER_VERSION, PS3RECOMP_FS_OPEN, fd, fd < 0 ? -1 : 0, path};
+    if (installed) installed(&e);
+}
+'''
+
+
 @unittest.skipUnless(COMPILER, 'C++ compiler')
 class SessionMonitorTests(unittest.TestCase):
     def test_counters_summary_and_overhead(self):
@@ -142,6 +170,7 @@ class SessionMonitorTests(unittest.TestCase):
             live = json.loads((scratch / 'session-engine.json').read_text())
             self.assertEqual((live['role'], live['state'], live['ending']), ('engine', 'ended', 'window_closed'))
             self.assertEqual(live['frames']['count'], 4)
+            self.assertEqual(live['maps'], {'available': False})
             self.assertFalse(list(scratch.glob('*.tmp')))
 
     def test_runtime_build_counters_reach_the_summary(self):
@@ -151,13 +180,16 @@ class SessionMonitorTests(unittest.TestCase):
             tmp = pathlib.Path(tmp)
             (tmp / 'ps3emu').mkdir()
             (tmp / 'ps3emu/rsx_build_stats.h').write_text(STUB_BUILD_STATS_HEADER)
-            (tmp / 'stub.c').write_text(STUB_BUILD_STATS_GETTER)
+            (tmp / 'ps3emu/fs_host_observer.h').write_text(STUB_FS_OBSERVER_HEADER)
+            (tmp / 'stub.c').write_text(STUB_BUILD_STATS_GETTER + STUB_FS_OBSERVER.replace('#include "ps3emu/fs_host_observer.h"', ''))
             cc = shutil.which('cc') or shutil.which('clang') or shutil.which('gcc')
             obj = tmp / 'stub.o'
-            build = subprocess.run([cc, '-c', '-I' + str(tmp), str(tmp / 'stub.c'), '-o', str(obj)], capture_output=True, text=True, timeout=60)
+            build = subprocess.run([cc, '-c', '-I' + str(tmp), '-include', str(tmp / 'ps3emu/fs_host_observer.h'), str(tmp / 'stub.c'),
+                                    '-o', str(obj)], capture_output=True, text=True, timeout=60)
             self.assertEqual(build.returncode, 0, build.stderr)
             binary = tmp / 'session_monitor'
-            build = subprocess.run([COMPILER, '-std=c++17', '-O2', '-Wall', '-Wextra', '-Werror', '-I' + str(ROOT / 'src'), '-I' + str(tmp),
+            build = subprocess.run([COMPILER, '-std=c++17', '-O2', '-Wall', '-Wextra', '-Werror', '-DMAG_TEST_FS_STUB=1',
+                                    '-I' + str(ROOT / 'src'), '-I' + str(tmp),
                                     str(ROOT / 'tests/session_monitor.cpp'), str(ROOT / 'src/mag_session_monitor.cpp'),
                                     str(ROOT / 'src/mag_session_network.cpp'), str(ROOT / 'src/mag_session_host.cpp'), str(obj), '-o', str(binary), '-pthread'],
                                    capture_output=True, text=True, timeout=120)
@@ -170,6 +202,10 @@ class SessionMonitorTests(unittest.TestCase):
                              (True, 'stub', True, False))
             self.assertGreater(live['programs'], 0)
             self.assertEqual(live['pipeline_cache_loaded_bytes'], 4096)
+            # The file observer: a map's archive opened in the menu is the session's map load.
+            maps = json.loads((scratch / 'session-engine.json').read_text())['maps']
+            self.assertEqual(maps['available'], True)
+            self.assertEqual([load['map'] for load in maps['loads']], ['mag_test_map'])
 
     def test_frame_clock_feeds_the_monitor(self):
         main = (ROOT / 'src/main.cpp').read_text()
