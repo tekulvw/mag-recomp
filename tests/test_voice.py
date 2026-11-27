@@ -82,6 +82,18 @@ class VoiceCore(unittest.TestCase):
                     self.assertTrue(isinstance(value, (int, float)) or key == 'event', (key, value))
 
 
+@unittest.skipUnless(compiler(), 'clang++ required')
+class VoiceOutput(unittest.TestCase):
+    def test_mute_keeps_voice_off_devices_and_the_clock_paces(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            binary = Path(tmp) / ('output.exe' if sys.platform == 'win32' else 'output')
+            build(binary, [SOURCES / 'mag_voice_output.cpp', ROOT / 'tests/voice_output_stub.cpp',
+                           ROOT / 'tests/voice_output.cpp'], [SOURCES])
+            run = subprocess.run([str(binary)], capture_output=True, text=True, timeout=60, env=clean_env())
+            self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+            self.assertIn('PASS voice output', run.stdout)
+
+
 @unittest.skipUnless(compiler() and opus(), 'clang++ and Opus (MAG_TEST_OPUS_ROOT, pkg-config or libopus-dev) required')
 class VoiceOpus(unittest.TestCase):
     def test_tone_survives_the_codec_and_two_services(self):
@@ -102,6 +114,7 @@ class VoiceGuestGlue(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             binary = Path(tmp) / ('hle.exe' if sys.platform == 'win32' else 'hle')
             build(binary, [ROOT / 'src/mag_extension.cpp', SOURCES / 'mag_voice_core.cpp', SOURCES / 'mag_voice_opus.cpp',
+                           SOURCES / 'mag_voice_output.cpp', ROOT / 'tests/voice_output_stub.cpp',
                            SOURCES / 'mag_voice_hle.cpp', ROOT / 'tests/voice_hle.cpp'],
                   [ROOT / 'src', SOURCES, sdk / 'runtime', sdk / 'include'], opus())
             for env in (clean_env(), clean_env(MAG_VOICE_TEST_TONE='0'), clean_env(MAG_VOICE_MODE='off'),
@@ -124,6 +137,26 @@ class VoiceGuestGlue(unittest.TestCase):
                                   env=clean_env(MAG_VOICE_TEST_TONE='tone', MAG_VOICE_VOLUME='80'))
             self.assertEqual(tone.returncode, 0, tone.stdout + tone.stderr)
             self.assertIn('PASS voice hle tone', tone.stdout)
+            # The game connects talkers to the headset output: the host stream plays them. Muted (and in
+            # tests, where no device exists) a silent clock paces and counts them; nothing piles up.
+            for mute in ('1', None):
+                trace = Path(tmp) / f'secondary-{mute}.jsonl'
+                env = clean_env(MAG_VOICE_TEST_TONE='tone', MAG_VOICE_TRACE=str(trace))
+                env.pop('PS3_MUTE', None)
+                if mute:
+                    env['PS3_MUTE'] = mute
+                headset = subprocess.run([str(binary), 'secondary'], capture_output=True, text=True, timeout=60, env=env)
+                self.assertEqual(headset.returncode, 0, headset.stdout + headset.stderr)
+                self.assertIn('PASS voice hle secondary', headset.stdout)
+                self.assertIn('PS3_MUTE' if mute else 'no device in the test build', headset.stderr)
+                events = [json.loads(line) for line in trace.read_text().splitlines()]
+                output = [e for e in events if e['event'] == 'output']
+                self.assertEqual(len(output), 1)
+                self.assertEqual(output[0]['silent'], bool(mute))
+                summary = [e for e in events if e['event'] == 'summary'][-1]
+                self.assertGreater(summary['frames_decoded'], 0)
+                self.assertGreater(summary['samples_played'], 0)
+                self.assertEqual(summary['samples_dropped'], 0)
 
 
 class VoiceBuildSwitch(unittest.TestCase):
@@ -136,6 +169,44 @@ class VoiceBuildSwitch(unittest.TestCase):
         self.assertIn('include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/MagVoice.cmake")', lists)
         self.assertIn('mag_enable_voice(${PROJECT_NAME} "${PS3RECOMP_DIR}" "${MAG_IMAGE}")', lists)
         self.assertIn('list(APPEND MAG_RECEIPT_EXTRA ${MAG_VOICE_RECEIPT_EXTRA})', lists)
+
+    def test_receipt_extras_are_paths_the_receipt_can_hash(self):
+        # A MAG_VOICE=ON engine build hashes every receipt extra (tools/provenance.py); a value that
+        # is not a file or directory fails the build after linking. Configure a stand-in project.
+        if not shutil.which('cmake'):
+            self.skipTest('cmake required')
+        from tools.provenance import extension_record
+        with tempfile.TemporaryDirectory() as t:
+            p = Path(t)
+            shutil.copytree(SOURCES, p / 'src/voice')
+            (p / 'cmake').mkdir()
+            shutil.copyfile(ROOT / 'cmake/MagVoice.cmake', p / 'cmake/MagVoice.cmake')
+            (p / 'opus/include/opus').mkdir(parents=True)
+            (p / 'opus/include/opus/opus.h').write_text('')
+            (p / 'opus/lib').mkdir()
+            for name in ('libopus.a', 'opus.lib'):
+                (p / 'opus/lib' / name).write_bytes(b'')
+            (p / 'sdl2').mkdir()
+            (p / 'sdl2/SDL2Config.cmake').write_text('set(SDL2_INCLUDE_DIRS "${CMAKE_CURRENT_LIST_DIR}")\n'
+                                                     'set(SDL2_LIBRARIES "")\n')
+            (p / 'main.cpp').write_text('int main() { return 0; }\n')
+            (p / 'CMakeLists.txt').write_text(
+                'cmake_minimum_required(VERSION 3.20)\nproject(Fixture C CXX)\nadd_executable(fixture main.cpp)\n'
+                'include(cmake/MagVoice.cmake)\nmag_enable_voice(fixture "${CMAKE_SOURCE_DIR}/sdk" mage_g)\n'
+                'file(WRITE "${CMAKE_BINARY_DIR}/voice-extra.txt" "${MAG_VOICE_RECEIPT_EXTRA}")\n')
+            for sdl in ('OFF', 'ON'):
+                build_dir = p / f'build-{sdl}'
+                args = ['cmake', '-S', str(p), '-B', str(build_dir), '-DMAG_VOICE=ON', '-DMAG_OPUS_ROOT=' + str(p / 'opus'),
+                        '-DSDL2_DIR=' + str(p / 'sdl2'), '-DPS3RECOMP_PAD_USE_SDL2=' + sdl]
+                if shutil.which('ninja'):
+                    args += ['-G', 'Ninja']
+                result = subprocess.run(args, capture_output=True, text=True, timeout=300)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                entries = dict(item.split('=', 1) for item in (build_dir / 'voice-extra.txt').read_text().split(';'))
+                self.assertEqual(set(entries), {'voice-sources', 'voice-build', 'voice-opus', 'voice-output'})
+                backend = 'wasapi' if sys.platform == 'win32' and sdl == 'OFF' else 'sdl'
+                self.assertEqual(Path(entries['voice-output']).name, f'mag_voice_output_{backend}.cpp')
+                self.assertIn('sha256', extension_record(entries)['voice-output'])
 
     def test_registers_only_from_its_prepare_callback(self):
         glue = (SOURCES / 'mag_voice_hle.cpp').read_text()
