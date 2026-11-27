@@ -826,6 +826,102 @@ static void drops(const char *scratch) {
     std::ofstream(std::string(scratch) + "/drops.json") << summary_json(s);
 }
 
+// Match context: the map from the archives the game opens, map loads as loading, and each
+// minute's, hitch's and drop's phase and map.
+static void match_context() {
+    CHECK(map_from_path("/dev_bdvd/PS3_GAME/USRDIR/run/mag/ps3/levels/mag_canal_final.psarc") == "mag_canal_final");
+    CHECK(map_from_path("/levels/mag_canal_final.psarc.sdat").empty());
+    CHECK(map_from_path("/audio/levels.psarc").empty() && map_from_path("/levels/.psarc").empty());
+    CHECK(map_from_path("/levels/sub/mag_canal_final.psarc").empty() && map_from_path(nullptr).empty());
+    CHECK(map_from_path("/levels/odd name;x.psarc") == "odd_name_x");
+    const char *canal = "/dev_bdvd/PS3_GAME/USRDIR/run/mag/ps3/levels/mag_canal_final.psarc";
+    const char *kennicott = "/dev_bdvd/PS3_GAME/USRDIR/run/mag/ps3/levels/mag_kennicott_final.psarc";
+
+    Monitor m(0);
+    m.set_default_phase(MAG_SESSION_PHASE_MENU);
+    uint64_t t = 1;
+    m.frame(t);
+    uint64_t written = 0;  // the summary writer's snapshots, every 10 s
+    auto after = [&](uint64_t duration_ms) {
+        t += duration_ms * ms;
+        m.frame(t);
+        if (t / (10000 * ms) != written) { written = t / (10000 * ms); m.snapshot(t); }
+    };
+    auto steady = [&](uint64_t until_ms) { while (t < until_ms * ms) after(16); };
+    steady(100000);
+    m.file_opened("/dev_bdvd/PS3_GAME/USRDIR/run/mag/ps3/main.psarc", t);  // not a map
+    Snapshot s = m.snapshot(t);
+    CHECK(!s.files_seen && s.maps.empty());
+    // A map load: its archive opened many times over 40 s, with sub-second stutter, all loading.
+    for (int i = 0; i < 20; ++i) {
+        m.file_opened(canal, t);
+        after(i % 5 == 0 ? 700 : 16);
+        steady(t / ms + 2000);
+    }
+    m.set_phase(MAG_SESSION_PHASE_MATCH, t);
+    steady(200000);
+    after(300);  // a hitch on foot, on the map
+    steady(260000);
+    m.match_ended(t);
+    steady(270000);
+    m.file_opened(kennicott, t);  // the next match, on another map
+    steady(300000);
+    m.set_phase(MAG_SESSION_PHASE_MATCH, t);
+    steady(450000);
+    m.match_ended(t);
+    steady(650000);
+    m.file_opened(kennicott, t);  // the same map again, much later: another load
+    steady(651000);
+    s = m.snapshot(t);
+    CHECK(s.files_seen && s.maps.size() == 2);
+    CHECK(s.map_loads.size() == 3);
+    if (s.map_loads.size() == 3 && s.maps.size() == 2) {
+        NEAR(s.map_loads[0].at_s, 100, 0.1);
+        CHECK(s.maps[size_t(s.map_loads[0].map)] == "mag_canal_final");
+        CHECK(s.maps[size_t(s.map_loads[1].map)] == "mag_kennicott_final" && s.map_loads[2].map == s.map_loads[1].map);
+    }
+    CHECK(s.loading_slow[3] == 4);  // the four 700 ms frames of the canal load; not the 300 ms frame on foot
+    bool on_foot = false;
+    for (const Hitch &h : s.hitches)
+        if (h.phase == MAG_SESSION_PHASE_MATCH) { on_foot = true; CHECK(h.map >= 0 && s.maps[size_t(h.map)] == "mag_canal_final" && !h.loading); }
+    CHECK(on_foot);
+    // Minutes: 0 in the menu without a map, 2 partly in the match, 3 a match on canal, 6 a match on kennicott.
+    CHECK(s.minutes.size() >= 7);
+    if (s.minutes.size() >= 7) {
+        CHECK(s.minutes[0].phase() == MAG_SESSION_PHASE_MENU && s.minutes[0].map == -1);
+        CHECK(s.minutes[2].phase_s[MAG_SESSION_PHASE_MATCH] > 1 && s.minutes[2].phase_s[MAG_SESSION_PHASE_MATCH] < 59);
+        CHECK(s.minutes[3].phase() == MAG_SESSION_PHASE_MATCH && s.maps[size_t(s.minutes[3].map)] == "mag_canal_final");
+        NEAR(s.minutes[3].phase_s[MAG_SESSION_PHASE_MATCH], 60, 0.1);
+        CHECK(s.minutes[6].phase() == MAG_SESSION_PHASE_MATCH && s.maps[size_t(s.minutes[6].map)] == "mag_kennicott_final");
+    }
+    const std::string json = summary_json(s);
+    CHECK(json.find("\"maps\": {\"available\": true, \"loads\": [{\"at_s\": 100.0, \"map\": \"mag_canal_final\"}") != std::string::npos);
+    CHECK(json.find("{\"minute\": 3, \"phase\": \"match\", \"map\": \"mag_canal_final\"") != std::string::npos);
+    CHECK(json.find("\"phase\": \"match\", \"map\": \"mag_canal_final\", \"builds\"") != std::string::npos ||
+          json.find("\"phase\": \"match\", \"map\": \"mag_canal_final\"}") != std::string::npos);
+    CHECK(json.find("\"match_s\": ") != std::string::npos);  // a minute partly in a match
+    // Without the runtime's file observer the summary says so.
+    Monitor plain(0);
+    CHECK(summary_json(plain.snapshot(1)).find("\"maps\": {\"available\": false}") != std::string::npos);
+
+    // The drop detector: a map load in a menu whose frames never reach a second (a slower machine
+    // shows 0.9 s at most) is loading from its archive's opening, so it is never a drop.
+    Run load(MAG_SESSION_PHASE_MENU);
+    load.at(120, 120);
+    load.m.file_opened(canal, load.t);
+    load.at(20, 6).at(120, 30);
+    CHECK(load.snap().drop_count == 0);
+    Run control(MAG_SESSION_PHASE_MENU);  // the same stutter without the archive is a menu drop
+    control.at(120, 120).at(20, 6).at(120, 30);
+    CHECK(control.snap().drop_count == 1);
+    // A match drop carries the map.
+    Run match;
+    match.m.file_opened(kennicott, 1);
+    match.at(100, 120).at(30, 10).at(100, 30);
+    const Snapshot d = match.snap();
+    CHECK(d.drops.size() == 1 && d.drops[0].map == 0 && summary_json(d).find("\"phase\": \"match\", \"map\": \"mag_kennicott_final\", \"baseline_fps\"") != std::string::npos);
+}
+
 // The host's CPU: each minute's shares and a drop's, from cumulative readings; and this computer's.
 static void host_cpu() {
     Run r;
@@ -920,6 +1016,10 @@ static void round_trip() {
 #endif
 }
 
+#ifdef MAG_TEST_FS_STUB
+extern "C" void stub_fs_open(const char *path, int fd);
+#endif
+
 static void process_monitor(const char *scratch) {
 #ifdef _WIN32
     _putenv_s("MAG_SESSION_DIR", scratch);
@@ -928,6 +1028,12 @@ static void process_monitor(const char *scratch) {
 #endif
     mag_session_monitor_start("engine");
     mag_session_monitor_start("launcher");  // ignored: one monitor per process
+#ifdef MAG_TEST_FS_STUB
+    // The runtime's file observer (a stand-in): a failed open, another file, then a map's archive.
+    stub_fs_open("/dev_bdvd/PS3_GAME/USRDIR/run/mag/ps3/levels/mag_missing.psarc", -1);
+    stub_fs_open("/dev_bdvd/PS3_GAME/USRDIR/run/mag/ps3/main.psarc", 7);
+    stub_fs_open("/dev_bdvd/PS3_GAME/USRDIR/run/mag/ps3/levels/mag_test_map.psarc", 9);
+#endif
     for (int i = 0; i < 5; ++i) { mag_session_frame_presented(); std::this_thread::sleep_for(std::chrono::milliseconds(2)); }
     mag_session_set_phase(MAG_SESSION_PHASE_MATCH);
     mag_session_monitor_finish("window_closed");
@@ -979,6 +1085,7 @@ int main(int argc, char **argv) {
     network_flows();
     drops(argv[1]);
     host_cpu();
+    match_context();
     round_trip();
     process_monitor(argv[1]);
     benchmark();

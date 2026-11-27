@@ -30,7 +30,12 @@
  *
  * Host CPU (src/mag_session_host.h): once a second the summary writer also reads the computer's
  * CPU use, MAG's own and the threads ready to run, which each minute and each drop's capture
- * report as shares (docs/player-settings.md, "Host CPU"). */
+ * report as shares (docs/player-settings.md, "Host CPU").
+ *
+ * Match context: the runtime's file observer (ps3emu/fs_host_observer.h, when the pinned runtime
+ * has it) names each file the game opens. A map's archive (".../levels/<name>.psarc") names the
+ * map, and outside a match its opening is a map load, which is loading. Each minute, hitch and
+ * drop carries the map and phase it happened in (docs/player-settings.md, "Match context"). */
 #include <stddef.h>
 #include <stdint.h>
 
@@ -133,6 +138,13 @@ constexpr size_t load_lead_frames = 256;  /* off-match slow frames remembered fo
  * down is the match's end (the server's end-of-match silence), and is labelled so. */
 constexpr double match_end_seconds = 60;
 constexpr size_t match_ends_kept = 32;
+/* Maps: distinct names kept (more are not named), map loads kept (the latest), the longest name,
+ * and how long after the previous opening of the map's archive another one is a new load (one
+ * load opens it many times over up to a minute). */
+constexpr size_t maps_kept = 32, map_loads_kept = 32, map_name_max = 63;
+constexpr uint64_t map_reload_us = 120000000;
+/* The map name in a path the game opened: the file name of ".../levels/<name>.psarc", or empty. */
+std::string map_from_path(const char *path);
 /* A frame still not presented this long when the summary is written is a freeze ("frozen"). */
 constexpr double frozen_seconds = 10;
 
@@ -182,6 +194,7 @@ struct Hitch {
     int phase = 0;
     Builds builds;    /* what the renderer built and uploaded during the frame */
     bool loading = false;  /* boot or a loading screen (boot_seconds, load_frame_us) */
+    int map = -1;     /* the map (Snapshot::maps) loaded then, -1 before any */
 };
 
 using Histogram = std::array<uint64_t, bucket_count>;
@@ -210,6 +223,9 @@ struct Minute {
     Builds builds;                 /* the minute's first-use work (when build counters are available) */
     uint64_t slow_with_builds = 0; /* its frames of 50 ms or more that had builds in them */
     HostShare host;                /* the computer's CPU over the minute */
+    std::array<double, MAG_SESSION_PHASE_COUNT> phase_s{};  /* seconds in each phase */
+    int map = -1;                  /* the map loaded at its end (Snapshot::maps), -1 before any */
+    int phase() const;             /* the phase it spent the most time in */
 };
 /* "ok", "frames" (frame time high, network fine), "network" (frames fine, network gap) or "both". */
 const char *minute_verdict(const Minute &);
@@ -304,6 +320,7 @@ struct Drop {
     bool audio = false;
     uint64_t audio_delta[MAG_SESSION_AUDIO_COUNTER_COUNT] = {};
     HostShare host;                 /* the computer's CPU over the capture */
+    int map = -1;                   /* the map loaded at its start (Snapshot::maps) */
     bool open = false;              /* still below the recovery threshold at the snapshot */
 };
 /* The engine log's line for an episode. */
@@ -340,6 +357,10 @@ struct Snapshot {
     bool host_seen = false;          /* the host's CPU counters were read */
     unsigned host_cpus = 0;
     bool host_runnable = false;      /* the system reports threads ready to run */
+    bool files_seen = false;         /* the runtime reports the files the game opens */
+    std::vector<std::string> maps;   /* the maps' names, by index */
+    struct MapLoad { double at_s = 0; int map = -1; };
+    std::vector<MapLoad> map_loads;  /* when each map load began (the latest) */
     BuildInfo builds;
     SlowBuilds slow_builds[3];  /* slow_build_thresholds_us */
 };
@@ -357,6 +378,10 @@ public:
     void build_info(const BuildInfo &info);
     /* The host's cumulative CPU readings at `now_ns`, once a second (the summary writer). */
     void host_cpu(const machine::Sample &sample, uint64_t now_ns);
+    /* The game opened `path` (the runtime's file observer, on the guest thread): a map's archive
+     * names the map, and outside a match starts a map load. Other paths cost a substring search. */
+    void file_opened(const char *path, uint64_t now_ns);
+    void set_files_seen();
     void set_phase(int phase, uint64_t now_ns);
     /* The local player's match was torn down: the phase becomes menu, the load_join_us after it
      * are loading, and network gaps shortly before it are the match's end. */
@@ -498,6 +523,13 @@ private:
     unsigned host_cpus_ = 0;
     HostTotals host_{}, minute_host_base_{};
     double minute_other_max_pct_ = 0;
+    std::array<double, MAG_SESSION_PHASE_COUNT> minute_phase_base_{};
+    std::array<double, MAG_SESSION_PHASE_COUNT> phase_seconds_at(uint64_t now_ns) const;  /* under rare_ */
+    bool files_seen_ = false;
+    std::vector<std::string> maps_;
+    std::vector<Snapshot::MapLoad> map_loads_;
+    int map_ = -1;
+    uint64_t map_opened_ns_ = 0;  /* the latest opening of a map's archive */
 };
 
 /* For the stall reporter: the network's state now (Network::status), "" without network counters. */
