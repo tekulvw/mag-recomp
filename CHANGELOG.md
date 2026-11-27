@@ -1,5 +1,34 @@
 # Changelog
 
+## [0.14.0](https://github.com/tekulvw/mag-recomp/compare/v0.13.0...v0.14.0) (2026-11-27)
+
+
+### Features
+
+* **installer:** let players build MAG with voice chat ([#348](https://github.com/tekulvw/mag-recomp/issues/348)) ([5088ea0](https://github.com/tekulvw/mag-recomp/commit/5088ea0ce78a6954a843e80fff7e2500731f6e63))
+* **reports:** name the map and phase of each minute, hitch and FPS drop ([#344](https://github.com/tekulvw/mag-recomp/issues/344)) ([7be4fe7](https://github.com/tekulvw/mag-recomp/commit/7be4fe791ac0241b7357a7e926b3eca5042e54d7))
+* **reports:** say what each upload was: new, changed, in place, size and GPU wait ([#346](https://github.com/tekulvw/mag-recomp/issues/346)) ([919f96a](https://github.com/tekulvw/mag-recomp/commit/919f96a571af6c800ba2b0991d598126b5c89541))
+* **reports:** show how busy the computer was in each minute and FPS drop ([#342](https://github.com/tekulvw/mag-recomp/issues/342)) ([750b473](https://github.com/tekulvw/mag-recomp/commit/750b47358282ae50c90c7ecea3863c7caa8aa5da))
+* **voice:** add the opt-in voice service with a lab pattern mode ([#315](https://github.com/tekulvw/mag-recomp/issues/315)) ([101a9e5](https://github.com/tekulvw/mag-recomp/commit/101a9e5171beacd032eeee63706a69e999970082))
+* **voice:** capture the microphone behind push to talk and add the voice settings ([#320](https://github.com/tekulvw/mag-recomp/issues/320)) ([1687c8a](https://github.com/tekulvw/mag-recomp/commit/1687c8ac935d1b9925d40f88aa7eaac3df9711be))
+* **voice:** code voice with Opus and play talkers through the game's PCM ports ([#316](https://github.com/tekulvw/mag-recomp/issues/316)) ([accdde4](https://github.com/tekulvw/mag-recomp/commit/accdde4fc1475ccd58675e9bdf05a7e466b601c1))
+
+
+### Bug Fixes
+
+* **controls:** let Melee's keys press the pause menu's Kill Self (R3) ([#339](https://github.com/tekulvw/mag-recomp/issues/339)) ([d0bedd3](https://github.com/tekulvw/mag-recomp/commit/d0bedd33b6343aad680fb3d95b4f47ebee33fdd4))
+* **reports:** keep map loads out of FPS drops and judge only the game server's silences ([#341](https://github.com/tekulvw/mag-recomp/issues/341)) ([3a7c674](https://github.com/tekulvw/mag-recomp/commit/3a7c6749423d3b3707aabedd860f41a2ec84f860))
+* **sdk:** pin runtime-2026.11.27-logquiet so engine logs cover the whole session ([#343](https://github.com/tekulvw/mag-recomp/issues/343)) ([228cf91](https://github.com/tekulvw/mag-recomp/commit/228cf9199266ac4fb06671bdefa9c157c55c2fdf))
+* **voice:** play received talkers on the game's headset output ([#340](https://github.com/tekulvw/mag-recomp/issues/340)) ([f426337](https://github.com/tekulvw/mag-recomp/commit/f426337b9953c38d9baf626f928ffc0207685c10))
+
+
+### Performance
+
+* **installer:** translate the game's shaders into the cache at install time ([#336](https://github.com/tekulvw/mag-recomp/issues/336)) ([145d3cd](https://github.com/tekulvw/mag-recomp/commit/145d3cdc29eb6caa6ffff9717633e1bbf07e5b2e))
+* **sdk:** pin runtime-2026.11.26-shaderwarm for the shader cache preload and warm-up API ([#338](https://github.com/tekulvw/mag-recomp/issues/338)) ([1b88bb2](https://github.com/tekulvw/mag-recomp/commit/1b88bb28e6cd45694a72fcf204090f2bd5d4088c))
+* **sdk:** pin runtime-2026.11.27-texcache so the texture cache stops evicting textures it needs again ([#349](https://github.com/tekulvw/mag-recomp/issues/349)) ([074bf2d](https://github.com/tekulvw/mag-recomp/commit/074bf2da61d8990aa7df39d784a9c5454639f114))
+* **sdk:** pin runtime-2026.11.27-texupload so texture uploads stop allocating driver memory ([#345](https://github.com/tekulvw/mag-recomp/issues/345)) ([14ad740](https://github.com/tekulvw/mag-recomp/commit/14ad7403162a23949ce7f301582b8e6679edbf42))
+
 ## [0.13.0](https://github.com/tekulvw/mag-recomp/compare/v0.12.0...v0.13.0) (2026-11-26)
 
 
