@@ -9,6 +9,8 @@
 //   loss or 15 seconds cancel), conflict replacement, clear and per-device reset. Apply controls
 //   saves them, and the game takes them at once.
 // - Cancel discards every unapplied change. Setup adds Play MAG.
+// The page segments stay at the top and the error, the display confirmation and the buttons at the
+// bottom; the page between them scrolls when the window would be taller than its monitor's work area.
 #ifndef _WIN32_WINNT
 #define _WIN32_WINNT 0x0A00
 #endif
@@ -47,6 +49,8 @@
 namespace mag {
 // Opens the account portal's page in the browser; the synthetic driver replaces it.
 void (*settings_window_open_page)(const std::string& url) = nullptr;
+// The area the window fits in (the default: its monitor's work area); the synthetic driver replaces it.
+void (*settings_window_work_area)(void* window, long area[4]) = nullptr;
 
 namespace {
 enum : int {
@@ -54,6 +58,7 @@ enum : int {
     IdDisplay, IdOutput, IdRendering, IdAntiAliasing, IdSendReports, IdReportNow, IdReportComment, IdReportCounter,
     IdKeyboardMouse = 200, IdController, IdMode, IdScope, IdSensitivity, IdInvert, IdReset, IdRows, IdHint,
     IdError = 300, IdRevert, IdKeep, IdCancel, IdApply, IdPlay, IdStatus, IdAccountStatus, IdReportStatus,
+    IdPage = 320,  // the scrolling page: every control of General, Controls and Debug
     IdDebugPage = 120, IdDebugNote,
     IdVoiceChat = 130, IdVoiceVolume,
     IdDebugItem = 400,  // + its index in mag_settings_debug_items; its hint is IdDebugHint + index
@@ -64,6 +69,7 @@ constexpr UINT_PTR CaptureTimer = 1, ConfirmTimer = 2;
 constexpr UINT AccountProgress = WM_APP + 1, AccountFinished = WM_APP + 2;
 constexpr const wchar_t* WindowClass = L"MAGSettingsWindow";
 constexpr const wchar_t* RowsClass = L"MAGSettingsRows";
+constexpr const wchar_t* PageClass = L"MAGSettingsPage";
 constexpr const wchar_t* PreviewClass = L"MAGSettingsPreview";
 constexpr COLORREF GroupFill = RGB(255, 255, 255), GroupBorder = RGB(217, 217, 217), SeparatorColor = RGB(225, 225, 225),
                    SecondaryText = RGB(105, 105, 110), ErrorText = RGB(215, 0, 21);
@@ -146,6 +152,23 @@ RECT frame_for_client(int width, int height, DWORD style, DWORD ex_style, UINT d
     else AdjustWindowRectEx(&r, style, FALSE, ex_style);
     return r;
 }
+int scrollbar_width(UINT dpi) {
+    using Metric = int(WINAPI*)(int, UINT);
+    static const auto metric = from_user32<Metric>("GetSystemMetricsForDpi");
+    return metric ? metric(SM_CXVSCROLL, dpi) : GetSystemMetrics(SM_CXVSCROLL);
+}
+// The monitor's work area, in the window's pixels.
+RECT work_area(HWND window) {
+    if (settings_window_work_area) {
+        long area[4] = {};
+        settings_window_work_area(window, area);
+        return {area[0], area[1], area[2], area[3]};
+    }
+    MONITORINFO monitor{};
+    monitor.cbSize = sizeof monitor;
+    GetMonitorInfoW(MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST), &monitor);
+    return monitor.rcWork;
+}
 // Runs `f` with this thread in per-monitor DPI mode, so window sizes are physical pixels even for
 // a window (the game's) that is not DPI aware.
 template <typename F> void physical_pixels(F&& f) {
@@ -178,6 +201,11 @@ struct Window {
     std::unique_ptr<SettingsAccount> account;
     SettingsWindowResult result = SettingsWindowResult::Cancelled;
     HWND hwnd = nullptr, rows = nullptr, preview = nullptr, preview_label = nullptr;
+    // The page between the segments and the footer: its controls are its children, placed in points
+    // from the window's top less page_top, and scrolled by page_scroll pixels.
+    HWND page = nullptr, parent = nullptr;  // parent: where make() puts new controls
+    int page_top = 0, page_height = 0, page_scroll = 0;  // page_height: the content's, in points
+    HWND focus = nullptr;  // the focus the page last scrolled to
     UINT dpi = 96;
     HFONT body = nullptr, small = nullptr, heading = nullptr, large = nullptr;
     HBRUSH group_brush = nullptr, face_brush = nullptr;
@@ -224,7 +252,7 @@ Window* s = nullptr;
 int px(int points) { return MulDiv(points, int(s->dpi), 96); }
 
 HWND make(const wchar_t* type, const std::wstring& title, DWORD style, int id, HWND parent = nullptr, DWORD extended = 0) {
-    HWND h = CreateWindowExW(extended, type, title.c_str(), WS_CHILD | style, 0, 0, 10, 10, parent ? parent : s->hwnd,
+    HWND h = CreateWindowExW(extended, type, title.c_str(), WS_CHILD | style, 0, 0, 10, 10, parent ? parent : s->parent ? s->parent : s->hwnd,
                              reinterpret_cast<HMENU>(INT_PTR(id)), GetModuleHandleW(nullptr), nullptr);
     SendMessageW(h, WM_SETFONT, WPARAM(s->body), FALSE);
     return h;
@@ -273,8 +301,10 @@ int text_height(HWND h, int width) {
     ReleaseDC(h, dc);
     return MulDiv(r.bottom - r.top, 96, int(s->dpi)) + 1;
 }
+// A page child's top, in the page's pixels, for `y` points from the window's top.
+int page_y(int y) { return px(y - s->page_top) - s->page_scroll; }
 void place(HWND h, int x, int y, int w, int height) {
-    SetWindowPos(h, nullptr, px(x), px(y), px(w), px(height), SWP_NOZORDER | SWP_NOACTIVATE);
+    SetWindowPos(h, nullptr, px(x), GetParent(h) == s->page ? page_y(y) : px(y), px(w), px(height), SWP_NOZORDER | SWP_NOACTIVATE);
 }
 
 void make_fonts() {
@@ -474,6 +504,8 @@ void layout() {
         }
         y += 26 + spacing;
     }
+    // The page: from here to the error or the footer, placed in the page (place() and page_y()).
+    s->page_top = y;
     for (HWND h : s->debug) show(h, s->debug_page);
     if (s->debug_page) {
         place(s->heading_debug, left, y, width, 20);
@@ -565,65 +597,100 @@ void layout() {
         place(s->controls_note, left, y, width, note);
         y += note + spacing;
     }
-    if (has_visible_style(s->error)) {
-        const int error = text_height(s->error, width);
-        place(s->error, left, y, width, error);
-        y += error + spacing;
-    }
-    for (HWND h : {s->confirm_question, s->countdown, s->revert, s->keep}) show(h, s->pending);
-    if (s->pending) {
-        place(s->confirm_question, left, y, width, 18);
-        y += 18 + 7;
-        place(s->countdown, left, y, width, 16);
-        y += 16 + 7;
-        place(s->revert, left, y, 90, 28);
-        place(s->keep, left + 98, y, 120, 28);
-        y += 28 + spacing;
-    }
-    s->footer_line = y;
-    y += 1 + spacing;
-    show(s->play, s->options.setup);
-    const int play = s->options.setup ? 100 : 0, apply = s->controls_page ? 116 : 84;
-    int x = left + width - play - (play ? 8 : 0);
-    if (play) place(s->play, x, y, play, 28);
-    x -= apply;
-    place(s->apply, x, y, apply, 28);
-    x -= 8 + 84;
-    place(s->cancel, x, y, 84, 28);
-    place(s->status, left, y + 6, x - left - 8, 18);
-    y += 28 + 22;
+    s->page_height = y - s->page_top;
+    // The footer, below the page: the error, the display confirmation, a line and the buttons.
+    auto footer = [&](int y) {
+        if (has_visible_style(s->error)) {
+            const int error = text_height(s->error, width);
+            place(s->error, left, y, width, error);
+            y += error + spacing;
+        }
+        for (HWND h : {s->confirm_question, s->countdown, s->revert, s->keep}) show(h, s->pending);
+        if (s->pending) {
+            place(s->confirm_question, left, y, width, 18);
+            y += 18 + 7;
+            place(s->countdown, left, y, width, 16);
+            y += 16 + 7;
+            place(s->revert, left, y, 90, 28);
+            place(s->keep, left + 98, y, 120, 28);
+            y += 28 + spacing;
+        }
+        s->footer_line = y;
+        y += 1 + spacing;
+        show(s->play, s->options.setup);
+        const int play = s->options.setup ? 100 : 0, apply = s->controls_page ? 116 : 84;
+        int x = left + width - play - (play ? 8 : 0);
+        if (play) place(s->play, x, y, play, 28);
+        x -= apply;
+        place(s->apply, x, y, apply, 28);
+        x -= 8 + 84;
+        place(s->cancel, x, y, 84, 28);
+        place(s->status, left, y + 6, x - left - 8, 18);
+        return y + 28 + 22;
+    };
+    const int footer_height = footer(0);
+    // As tall as everything, unless that is more than the work area (less a margin) holds: then the
+    // page shows what fits, at least a few rows, and scrolls. Its scroll bar widens the window.
     const DWORD style = DWORD(GetWindowLongPtrW(s->hwnd, GWL_STYLE)), ex_style = DWORD(GetWindowLongPtrW(s->hwnd, GWL_EXSTYLE));
-    RECT frame = frame_for_client(px(MAG_SETTINGS_WIDTH), px(y), style, ex_style, s->dpi);
-    SetWindowPos(s->hwnd, nullptr, 0, 0, frame.right - frame.left, frame.bottom - frame.top, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+    const RECT area = work_area(s->hwnd), edges = frame_for_client(0, 0, style, ex_style, s->dpi);
+    const int room = (area.bottom - area.top) - (edges.bottom - edges.top) - px(2 * MAG_SETTINGS_WORK_AREA_MARGIN);
+    const int fits = MulDiv(std::max(0, room), 96, int(s->dpi)) - s->page_top - footer_height;
+    const int view = std::min(s->page_height, std::max(MAG_SETTINGS_MIN_PAGE_HEIGHT, fits));
+    const bool scrolls = view < s->page_height;
+    const int content = px(s->page_height), shown_height = px(view), bar = scrolls ? scrollbar_width(s->dpi) : 0;
+    if (const int to = std::clamp(s->page_scroll, 0, std::max(0, content - shown_height)); to != s->page_scroll) {
+        s->page_scroll = to;  // the page got shorter: place it again at the scroll it can have
+        layout();
+        return;
+    }
+    SetWindowPos(s->page, nullptr, 0, px(s->page_top), px(MAG_SETTINGS_WIDTH) + bar, shown_height, SWP_NOZORDER | SWP_NOACTIVATE);
+    SCROLLINFO info{sizeof info, SIF_RANGE | SIF_PAGE | SIF_POS, 0, content - 1, UINT(shown_height), s->page_scroll, 0};
+    SetScrollInfo(s->page, SB_VERT, &info, TRUE);
+    show(s->page, true);
+    const int bottom = footer(s->page_top + view);
+    const RECT frame = frame_for_client(px(MAG_SETTINGS_WIDTH) + bar, px(bottom), style, ex_style, s->dpi);
+    RECT now;
+    GetWindowRect(s->hwnd, &now);
+    const int frame_width = frame.right - frame.left, frame_height = frame.bottom - frame.top;
+    // A window that grew past the work area's bottom moves up into it.
+    int top = now.top;
+    if (frame_height != now.bottom - now.top && top + frame_height > area.bottom) top = std::max(area.top, area.bottom - frame_height);
+    SetWindowPos(s->hwnd, nullptr, now.left, top, frame_width, frame_height, SWP_NOZORDER | SWP_NOACTIVATE);
     InvalidateRect(s->hwnd, nullptr, TRUE);
+    InvalidateRect(s->page, nullptr, TRUE);
 }
 
-void paint(HDC dc) {
+// The page's groups (`page`), or the window's line above the buttons.
+void paint(HDC dc, bool page) {
     HPEN border = CreatePen(PS_SOLID, 1, GroupBorder), line = CreatePen(PS_SOLID, 1, SeparatorColor);
     HGDIOBJ old_pen = SelectObject(dc, border), old_brush = SelectObject(dc, s->group_brush);
-    for (const Group& g : s->groups) {
-        SelectObject(dc, border);
-        RoundRect(dc, px(g.box.left), px(g.box.top), px(g.box.right), px(g.box.bottom), px(16), px(16));
-        SelectObject(dc, line);
-        for (int y : g.lines) {
-            MoveToEx(dc, px(g.box.left + 12), px(y), nullptr);
-            LineTo(dc, px(g.box.right - 12), px(y));
+    if (page)
+        for (const Group& g : s->groups) {
+            SelectObject(dc, border);
+            RoundRect(dc, px(g.box.left), page_y(g.box.top), px(g.box.right), page_y(g.box.bottom), px(16), px(16));
+            SelectObject(dc, line);
+            for (int y : g.lines) {
+                MoveToEx(dc, px(g.box.left + 12), page_y(y), nullptr);
+                LineTo(dc, px(g.box.right - 12), page_y(y));
+            }
         }
+    else {
+        SelectObject(dc, line);
+        MoveToEx(dc, px(MAG_SETTINGS_MARGIN), px(s->footer_line), nullptr);
+        LineTo(dc, px(MAG_SETTINGS_WIDTH - MAG_SETTINGS_MARGIN), px(s->footer_line));
     }
-    SelectObject(dc, line);
-    MoveToEx(dc, px(MAG_SETTINGS_MARGIN), px(s->footer_line), nullptr);
-    LineTo(dc, px(MAG_SETTINGS_WIDTH - MAG_SETTINGS_MARGIN), px(s->footer_line));
     SelectObject(dc, old_pen);
     SelectObject(dc, old_brush);
     DeleteObject(border);
     DeleteObject(line);
 }
 bool in_group(HWND child) {
+    if (GetParent(child) != s->page) return false;  // groups are the page's
     RECT r;
     GetWindowRect(child, &r);
-    MapWindowPoints(nullptr, s->hwnd, reinterpret_cast<POINT*>(&r), 2);
+    MapWindowPoints(nullptr, s->page, reinterpret_cast<POINT*>(&r), 2);
     for (const Group& g : s->groups)
-        if (r.top >= px(g.box.top) && r.bottom <= px(g.box.bottom)) return true;
+        if (r.top >= page_y(g.box.top) && r.bottom <= page_y(g.box.bottom)) return true;
     return false;
 }
 bool secondary(HWND child) {
@@ -962,13 +1029,13 @@ void reset_device() {
 void refresh_debug() {
     for (int i = 0; i < MAG_SETTINGS_DEBUG_ITEMS; ++i) {
         const MagSettingsDebugItem& item = mag_settings_debug_items[i];
-        HWND control = GetDlgItem(s->hwnd, IdDebugItem + i);
+        HWND control = GetDlgItem(s->page, IdDebugItem + i);
         if (item.kind == MAG_SETTINGS_DEBUG_SWITCH)
             SendMessageW(control, BM_SETCHECK, debug_switch(item.id, s->path) ? BST_CHECKED : BST_UNCHECKED, 0);
         else if (!std::strcmp(item.id, "open_logs")) {
             const bool available = !logs_folder().empty();
             EnableWindow(control, available);
-            set_text(GetDlgItem(s->hwnd, IdDebugHint + i), available ? item.hint : MAG_SETTINGS_DEBUG_NO_LOGS);
+            set_text(GetDlgItem(s->page, IdDebugHint + i), available ? item.hint : MAG_SETTINGS_DEBUG_NO_LOGS);
         }
     }
 }
@@ -977,7 +1044,7 @@ void debug_clicked(int index) {
     const MagSettingsDebugItem& item = mag_settings_debug_items[index];
     std::string error;
     if (item.kind == MAG_SETTINGS_DEBUG_SWITCH) {
-        const bool on = SendMessageW(GetDlgItem(s->hwnd, IdDebugItem + index), BM_GETCHECK, 0, 0) == BST_CHECKED;
+        const bool on = SendMessageW(GetDlgItem(s->page, IdDebugItem + index), BM_GETCHECK, 0, 0) == BST_CHECKED;
         if (!set_debug_switch(item.id, s->path, on, error)) show_error(error);
         else set_text(s->status, on ? MAG_SETTINGS_DEBUG_SWITCH_ON : MAG_SETTINGS_DEBUG_SWITCH_OFF);
     } else if (!std::strcmp(item.id, "open_logs")) {
@@ -1003,6 +1070,7 @@ void show_page(int page) {
     if (s->debug_page) refresh_debug();
     show(s->error, false);
     if (controls) fill_controls();
+    s->page_scroll = 0;
     changed();
     layout();
 }
@@ -1334,14 +1402,63 @@ LRESULT color(HDC dc, HWND child) {
     return LRESULT(group ? s->group_brush : s->face_brush);
 }
 
-void scroll_rows(int to) {
+// False when it is already there (at an end).
+bool scroll_rows(int to) {
     RECT client;
     GetClientRect(s->rows, &client);
     to = std::clamp(to, 0, std::max(0, px(s->rows_height) - int(client.bottom)));
-    if (to == s->rows_scroll) return;
+    if (to == s->rows_scroll) return false;
     ScrollWindowEx(s->rows, 0, s->rows_scroll - to, nullptr, nullptr, nullptr, nullptr, SW_SCROLLCHILDREN | SW_INVALIDATE | SW_ERASE);
     s->rows_scroll = to;
     SetScrollPos(s->rows, SB_VERT, to, TRUE);
+    return true;
+}
+bool scroll_page(int to) {
+    RECT client;
+    GetClientRect(s->page, &client);
+    to = std::clamp(to, 0, std::max(0, px(s->page_height) - int(client.bottom)));
+    if (to == s->page_scroll) return false;
+    ScrollWindowEx(s->page, 0, s->page_scroll - to, nullptr, nullptr, nullptr, nullptr, SW_SCROLLCHILDREN | SW_INVALIDATE | SW_ERASE);
+    s->page_scroll = to;
+    SetScrollPos(s->page, SB_VERT, to, TRUE);
+    return true;
+}
+// Scrolls `container` (the page or the bindings list) so its child `child` shows, with a margin.
+void reveal_in(HWND container, HWND child, bool (*scroll)(int), int position) {
+    RECT r, client;
+    GetWindowRect(child, &r);
+    MapWindowPoints(nullptr, container, reinterpret_cast<POINT*>(&r), 2);
+    GetClientRect(container, &client);
+    const int margin = std::min(px(8), std::max(0, int(client.bottom - (r.bottom - r.top)) / 2));
+    if (r.top < margin) scroll(position + r.top - margin);
+    else if (r.bottom > client.bottom - margin) scroll(position + std::min(r.bottom - client.bottom + margin, r.top - margin));
+}
+// Keyboard focus moved to `focus`: scroll it into view, in the bindings list and in the page.
+void reveal(HWND focus) {
+    HWND child = focus;
+    while (child && GetParent(child) != s->page) child = GetParent(child);
+    if (!child) return;  // not on the page
+    if (GetParent(focus) == s->rows) reveal_in(s->rows, focus, scroll_rows, s->rows_scroll);
+    reveal_in(s->page, child, scroll_page, s->page_scroll);
+}
+// The scroll bar's requests, for the page and the bindings list.
+int scrolled_to(HWND hwnd, WPARAM w, int line) {
+    SCROLLINFO info{};
+    info.cbSize = sizeof info;
+    info.fMask = SIF_ALL;
+    GetScrollInfo(hwnd, SB_VERT, &info);
+    int to = info.nPos;
+    switch (LOWORD(w)) {
+    case SB_LINEUP: to -= line; break;
+    case SB_LINEDOWN: to += line; break;
+    case SB_PAGEUP: to -= int(info.nPage); break;
+    case SB_PAGEDOWN: to += int(info.nPage); break;
+    case SB_THUMBTRACK: case SB_THUMBPOSITION: to = info.nTrackPos; break;
+    case SB_TOP: to = 0; break;
+    case SB_BOTTOM: to = info.nMax; break;
+    default: break;
+    }
+    return to;
 }
 
 LRESULT CALLBACK rows_procedure(HWND hwnd, UINT message, WPARAM w, LPARAM l) {
@@ -1354,27 +1471,43 @@ LRESULT CALLBACK rows_procedure(HWND hwnd, UINT message, WPARAM w, LPARAM l) {
         SetTextColor(HDC(w), secondary(HWND(l)) ? SecondaryText : GetSysColor(COLOR_WINDOWTEXT));
         return LRESULT(s->group_brush);
     case WM_MOUSEWHEEL:
-        scroll_rows(s->rows_scroll - GET_WHEEL_DELTA_WPARAM(w) * px(31) / WHEEL_DELTA);
+        // At either end of the list the wheel scrolls the page instead.
+        if (!scroll_rows(s->rows_scroll - MulDiv(GET_WHEEL_DELTA_WPARAM(w), px(31), WHEEL_DELTA)))
+            return SendMessageW(s->page, message, w, l);
         return 0;
-    case WM_VSCROLL: {
-        SCROLLINFO info{};
-        info.cbSize = sizeof info;
-        info.fMask = SIF_ALL;
-        GetScrollInfo(hwnd, SB_VERT, &info);
-        int to = info.nPos;
-        switch (LOWORD(w)) {
-        case SB_LINEUP: to -= px(31); break;
-        case SB_LINEDOWN: to += px(31); break;
-        case SB_PAGEUP: to -= int(info.nPage); break;
-        case SB_PAGEDOWN: to += int(info.nPage); break;
-        case SB_THUMBTRACK: case SB_THUMBPOSITION: to = info.nTrackPos; break;
-        case SB_TOP: to = 0; break;
-        case SB_BOTTOM: to = info.nMax; break;
-        default: break;
-        }
-        scroll_rows(to);
+    case WM_VSCROLL:
+        scroll_rows(scrolled_to(hwnd, w, px(31)));
+        return 0;
+    default:
+        return DefWindowProcW(hwnd, message, w, l);
+    }
+}
+
+LRESULT CALLBACK procedure(HWND hwnd, UINT message, WPARAM w, LPARAM l);
+// The page: its controls' notifications go to the window, as they did before it scrolled.
+LRESULT CALLBACK page_procedure(HWND hwnd, UINT message, WPARAM w, LPARAM l) {
+    switch (message) {
+    case WM_COMMAND: case WM_CTLCOLORSTATIC: case WM_CTLCOLORBTN: case WM_HSCROLL:
+        return procedure(s->hwnd, message, w, l);
+    case WM_ERASEBKGND: {
+        RECT r;
+        GetClientRect(hwnd, &r);
+        FillRect(HDC(w), &r, s->face_brush);
+        return 1;
+    }
+    case WM_PAINT: {
+        PAINTSTRUCT ps;
+        HDC dc = BeginPaint(hwnd, &ps);
+        paint(dc, true);
+        EndPaint(hwnd, &ps);
         return 0;
     }
+    case WM_MOUSEWHEEL:  // touchpads send fractions of a notch
+        scroll_page(s->page_scroll - MulDiv(GET_WHEEL_DELTA_WPARAM(w), px(3 * MAG_SETTINGS_ROW_HEIGHT / 2), WHEEL_DELTA));
+        return 0;
+    case WM_VSCROLL:
+        scroll_page(scrolled_to(hwnd, w, px(MAG_SETTINGS_ROW_HEIGHT)));
+        return 0;
     default:
         return DefWindowProcW(hwnd, message, w, l);
     }
@@ -1404,10 +1537,12 @@ LRESULT CALLBACK procedure(HWND hwnd, UINT message, WPARAM w, LPARAM l) {
     case WM_PAINT: {
         PAINTSTRUCT ps;
         HDC dc = BeginPaint(hwnd, &ps);
-        paint(dc);
+        paint(dc, false);
         EndPaint(hwnd, &ps);
         return 0;
     }
+    case WM_MOUSEWHEEL:  // the wheel over the segments or the footer scrolls the page
+        return SendMessageW(s->page, message, w, l);
     case WM_HSCROLL:
         if (HWND(l) == s->sensitivity) {
             settings_form_set_mouse_sensitivity(*s->form, double(SendMessageW(s->sensitivity, TBM_GETPOS, 0, 0)) / 100);
@@ -1436,6 +1571,7 @@ LRESULT CALLBACK procedure(HWND hwnd, UINT message, WPARAM w, LPARAM l) {
         return 0;
     }
     case WM_DPICHANGED: {
+        s->page_scroll = MulDiv(s->page_scroll, HIWORD(w), int(s->dpi));  // the same place on the page
         s->dpi = HIWORD(w);
         make_fonts();
         apply_fonts();
@@ -1482,6 +1618,10 @@ void build() {
     w.segment[0] = button(MAG_SETTINGS_PAGE_GENERAL, IdGeneral, segment | WS_GROUP);
     w.segment[1] = button(MAG_SETTINGS_PAGE_CONTROLS, IdControls, segment);
     w.segment[2] = button(MAG_SETTINGS_PAGE_DEBUG, IdDebugPage, segment);
+    // Between the segments and the footer in the tab order, as they were before it scrolled.
+    w.page = CreateWindowExW(WS_EX_CONTROLPARENT, PageClass, L"", WS_CHILD | WS_VSCROLL, 0, 0, 10, 10, w.hwnd,
+                             reinterpret_cast<HMENU>(INT_PTR(IdPage)), GetModuleHandleW(nullptr), nullptr);
+    w.parent = w.page;
     // General: Connection.
     w.heading_connection = label(MAG_SETTINGS_HEADING_CONNECTION, s->heading);
     heading_text.push_back(w.heading_connection);
@@ -1569,7 +1709,7 @@ void build() {
     w.column[1] = small_label(MAG_CONTROLS_COLUMN_PRIMARY);
     w.column[2] = small_label(MAG_CONTROLS_COLUMN_SECONDARY);
     w.rows = CreateWindowExW(WS_EX_CLIENTEDGE | WS_EX_CONTROLPARENT, RowsClass, L"", WS_CHILD | WS_VSCROLL | WS_TABSTOP, 0, 0, 10, 10,
-                             w.hwnd, reinterpret_cast<HMENU>(INT_PTR(IdRows)), GetModuleHandleW(nullptr), nullptr);
+                             w.page, reinterpret_cast<HMENU>(INT_PTR(IdRows)), GetModuleHandleW(nullptr), nullptr);
     HWND tips = CreateWindowExW(WS_EX_TOPMOST, TOOLTIPS_CLASSW, nullptr, WS_POPUP | TTS_ALWAYSTIP, 0, 0, 0, 0, w.hwnd, nullptr,
                                 GetModuleHandleW(nullptr), nullptr);
     SetWindowLongPtrW(w.rows, GWLP_USERDATA, LONG_PTR(tips));
@@ -1589,7 +1729,8 @@ void build() {
     w.debug_note = small_label(MAG_SETTINGS_DEBUG_NOTE, IdDebugNote);
     w.debug.insert(w.debug.end(), {w.heading_debug, w.debug_note});
     if (w.form->controls) set_text(w.hint, first_hint());
-    // Shared.
+    // Shared: the footer.
+    w.parent = w.hwnd;
     w.error = label("", nullptr, nullptr, IdError);
     w.confirm_question = label(MAG_SETTINGS_CONFIRM_QUESTION);
     w.countdown = small_label("");
@@ -1633,6 +1774,10 @@ SettingsWindowResult settings_window_run(SettingsForm& form, const std::filesyst
     type.lpszClassName = RowsClass;
     type.hbrBackground = window.group_brush;
     RegisterClassExW(&type);
+    type.lpfnWndProc = page_procedure;
+    type.lpszClassName = PageClass;
+    type.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_BTNFACE + 1);
+    RegisterClassExW(&type);
     type.lpfnWndProc = preview_procedure;
     type.lpszClassName = PreviewClass;
     type.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_BTNFACE + 1);
@@ -1670,9 +1815,17 @@ SettingsWindowResult settings_window_run(SettingsForm& form, const std::filesyst
     MSG msg;
     while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
         if (window.capture.on && (msg.hwnd == window.hwnd || IsChild(window.hwnd, msg.hwnd)) && capture_message(msg)) continue;
-        if (IsDialogMessageW(window.hwnd, &msg)) continue;
-        TranslateMessage(&msg);
-        DispatchMessageW(&msg);
+        if (!IsDialogMessageW(window.hwnd, &msg)) {
+            TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+        }
+        // Focus moved by the keyboard (Tab, arrows, mnemonics) scrolls its control into view; a
+        // click does not, or the control would move away from under the pointer before the release.
+        if (HWND focus = GetFocus(); focus != window.focus) {
+            window.focus = focus;
+            const bool keyboard = msg.message == WM_KEYDOWN || msg.message == WM_SYSKEYDOWN || msg.message == WM_CHAR;
+            if (keyboard && focus && IsChild(window.hwnd, focus)) reveal(focus);
+        }
     }
     window.account->cancel_link();
     if (window.preview) DestroyWindow(window.preview);

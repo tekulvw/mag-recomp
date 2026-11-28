@@ -102,7 +102,18 @@ jobs:
       - name: Pinned Rust toolchain
         run: rustup toolchain install 1.99.0 --profile minimal
       - name: Settings window tests
+        env:
+          # The driver's pictures of the synthetic window on stand-in screens (1280x720, 1080p at 150%).
+          MAG_TEST_SCREENSHOTS: ${{ runner.temp }}/settings-screenshots
         run: python -m unittest tests.test_player_settings_window -v
+      - name: Settings window screenshots
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: settings-window-windows
+          path: ${{ runner.temp }}/settings-screenshots
+          if-no-files-found: ignore
+          retention-days: 14
   settings-macos:
     # The macOS settings panel's fixtures (AppKit panel, controls pane, Debug page, reports rows,
     # runtime glue) on pull requests that touch them. python-macos runs the whole suite only on

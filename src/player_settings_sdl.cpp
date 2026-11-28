@@ -34,6 +34,7 @@ constexpr int Margin = MAG_SETTINGS_MARGIN, Content = SettingsPanel::width - 2 *
 constexpr int ControlWidth = MAG_SETTINGS_CONTROL_WIDTH, ControlHeight = 20, RowHeight = 30;
 constexpr int ListHeight = 200, BindingRow = 24;
 constexpr int NoteLines = 3;  // the Send report comment box shows its last three lines
+constexpr int PageStep = 40;  // points the page scrolls for a notch of the wheel
 
 struct Color { Uint8 r, g, b; };
 // The macOS light palette: window, group fill, separators, text, secondary text, accent, error.
@@ -116,6 +117,25 @@ std::string gain_text(double multiple) {
 SDL_Rect question_box(int height) { return {60, std::max(40, height / 2 - 60), SettingsPanel::width - 120, 120}; }
 SDL_Rect question_cancel(int height) { const SDL_Rect b = question_box(height); return {b.x + b.w - 200, b.y + b.h - 34, 84, 22}; }
 SDL_Rect question_confirm(int height) { const SDL_Rect b = question_box(height); return {b.x + b.w - 108, b.y + b.h - 34, 96, 22}; }
+// Below its box, or above it where the window ends first (a scrolled page puts boxes low).
+SDL_Rect choice_list(SDL_Rect box, int count, int height) {
+    SDL_Rect list{box.x, box.y + box.h, box.w, count * 16 + 4};
+    if (list.y + list.h > height && box.y - list.h >= 0) list.y = box.y - list.h;
+    return list;
+}
+// The page's scrollbar, in the margin right of the page: the track, where a click reaches it (the
+// whole margin), the thumb at `scroll` of `limit`, and the scroll that puts the thumb's top at `top`.
+SDL_Rect scroll_track(SDL_Rect page) { return {SettingsPanel::width - Margin / 2 - 4, page.y + 2, 8, page.h - 4}; }
+SDL_Rect scroll_reach(SDL_Rect page) { return {SettingsPanel::width - Margin, page.y, Margin, page.h}; }
+SDL_Rect scroll_thumb(SDL_Rect page, int limit, int scroll) {
+    const SDL_Rect track = scroll_track(page);
+    const int h = std::clamp(track.h * page.h / std::max(1, page.h + limit), std::min(16, track.h), track.h);
+    return {track.x, track.y + (track.h - h) * scroll / std::max(1, limit), track.w, h};
+}
+int thumb_scroll(SDL_Rect page, int limit, int top) {
+    const SDL_Rect track = scroll_track(page), thumb = scroll_thumb(page, limit, 0);
+    return std::clamp((top - track.y) * limit / std::max(1, track.h - thumb.h), 0, limit);
+}
 }  // namespace
 
 SettingsPanel::SettingsPanel(SettingsForm& form, std::filesystem::path settings, SettingsWindowOptions options,
@@ -215,6 +235,9 @@ SettingsPanel::Layout SettingsPanel::layout() const {
         }
         y += 22 + 10;
     }
+    // The page: everything from here to the error and the footer, which scrolls in a short window.
+    const int page_top = y;
+    const size_t page_first = out.items.size();
     const int inner = Margin + 12, inner_width = Content - 24, labels = inner_width - ControlWidth - 16;
     const int control_x = inner + inner_width - ControlWidth;
     // A group of rows: a title and a hint on the left, the control on the right, separators between.
@@ -375,6 +398,9 @@ SettingsPanel::Layout SettingsPanel::layout() const {
         y += 22 + 9;
         y += words(Margin, y, MAG_CONTROLS_NOTE, 1, Content) + 9;
     }
+    const int page_end = y;
+    const size_t page_items = out.items.size(), page_labels = out.labels.size();
+    out.paged_lines = out.lines.size();
     if (!error_.empty()) y += words(Margin, y, error_, 2, Content) + 9;
     if (pending_) {
         y += words(Margin, y, MAG_SETTINGS_CONFIRM_QUESTION, 0, Content) + 7;
@@ -398,11 +424,41 @@ SettingsPanel::Layout SettingsPanel::layout() const {
     item("button:cancel", Kind::Button, {x, y, 84, 24}, MAG_SETTINGS_CANCEL);
     out.labels.push_back({Margin, y + 8, status_, 1, false, (x - Margin - 8) / Glyph});
     y += 24 + 14;
-    out.height = y;
+    out.height = out.natural = y;
+    for (size_t i = page_first; i < page_items; ++i) out.items[i].paged = true;
+    for (size_t i = 0; i < page_labels; ++i) out.labels[i].paged = true;
+    out.page = {0, page_top, width, page_end - page_top};
+    // A window shorter than the layout: the page keeps what is left between the segments and the
+    // footer (at least MAG_SETTINGS_MIN_PAGE_HEIGHT) and scrolls; the footer moves up by what it hides.
+    const int view = std::max(MAG_SETTINGS_MIN_PAGE_HEIGHT, view_height_ - page_top - (y - page_end));
+    if (view_height_ <= 0 || y <= view_height_ || view >= out.page.h) return out;
+    out.page_limit = out.page.h - view;
+    out.page_scroll = std::clamp(page_scroll_, 0, out.page_limit);
+    out.page.h = view;
+    const int scroll = out.page_scroll, lift = out.page_limit;
+    for (size_t i = page_first; i < out.items.size(); ++i) out.items[i].rect.y -= out.items[i].paged ? scroll : lift;
+    for (Label& label : out.labels) label.y -= label.paged ? scroll : lift;
+    for (size_t i = 0; i < out.lines.size(); ++i) out.lines[i].y -= i < out.paged_lines ? scroll : lift;
+    for (SDL_Rect& g : out.groups) g.y -= scroll;
+    if (out.list.w) out.list.y -= scroll;
+    out.height = y - lift;
     return out;
 }
 
 int SettingsPanel::height() const { return layout().height; }
+int SettingsPanel::natural_height() const { return layout().natural; }
+SDL_Rect SettingsPanel::page_rect() const { return layout().page; }
+int SettingsPanel::page_scroll() const { return layout().page_scroll; }
+int SettingsPanel::page_scroll_limit() const { return layout().page_limit; }
+SDL_Rect SettingsPanel::page_thumb() const {
+    const Layout l = layout();
+    return l.page_limit ? scroll_thumb(l.page, l.page_limit, l.page_scroll) : SDL_Rect{0, 0, 0, 0};
+}
+bool SettingsPanel::visible(const std::string& name) const {
+    const Layout l = layout();
+    const Item* i = find(l, name);
+    return shown(name) && i && (!i->paged || contained(i->rect, l.page));
+}
 int SettingsPanel::scroll_limit() const {
     int total = 8;
     std::string previous;
@@ -465,10 +521,22 @@ void SettingsPanel::request_report_now() {
 
 void SettingsPanel::ensure_visible(const Layout& l) {
     const Item* i = find(l, focus_);
-    if (!i || (i->kind != Kind::Slot && i->kind != Kind::Clear) || l.list.h == 0) return;
-    if (i->rect.y < l.list.y + 2) scroll_ -= l.list.y + 2 - i->rect.y;
-    else if (i->rect.y + i->rect.h > l.list.y + l.list.h - 2) scroll_ += i->rect.y + i->rect.h - (l.list.y + l.list.h - 2);
-    scroll_ = std::clamp(scroll_, 0, scroll_limit());
+    if (!i) return;
+    SDL_Rect r = i->rect;
+    if ((i->kind == Kind::Slot || i->kind == Kind::Clear) && l.list.h) {
+        const int before = scroll_;
+        if (i->rect.y < l.list.y + 2) scroll_ -= l.list.y + 2 - i->rect.y;
+        else if (i->rect.y + i->rect.h > l.list.y + l.list.h - 2) scroll_ += i->rect.y + i->rect.h - (l.list.y + l.list.h - 2);
+        scroll_ = std::clamp(scroll_, 0, scroll_limit());
+        r.y -= scroll_ - before;  // where the list's scroll moved it
+    }
+    // Then the page, when it scrolls: the item with some room around it, for its row's words.
+    if (!i->paged || !l.page_limit) return;
+    constexpr int room = 10;
+    int scroll = l.page_scroll;
+    if (r.y < l.page.y + room) scroll -= l.page.y + room - r.y;
+    else if (r.y + r.h > l.page.y + l.page.h - room) scroll += r.y + r.h - (l.page.y + l.page.h - room);
+    page_scroll_ = std::clamp(scroll, 0, l.page_limit);
 }
 
 // ---- State ----
@@ -496,7 +564,7 @@ void SettingsPanel::show_page(int page) {
     controls_page_ = page == 1;
     debug_page_ = page == 2;
     error_.clear();
-    scroll_ = 0;
+    scroll_ = page_scroll_ = 0;
     refresh_rows();
     focus_ = page == 1 ? "segment:controls" : page == 2 ? "segment:debug" : "segment:general";
     changed();
@@ -834,6 +902,9 @@ SettingsPanel::State SettingsPanel::handle(const SDL_Event& event, uint64_t now_
         cancel();
         return state_;
     }
+    if (event.type == SDL_MOUSEMOTION) { pointer_x_ = event.motion.x; pointer_y_ = event.motion.y; }
+    if (event.type == SDL_MOUSEBUTTONDOWN) { pointer_x_ = event.button.x; pointer_y_ = event.button.y; }
+    if (event.type == SDL_MOUSEBUTTONUP && event.button.button == SDL_BUTTON_LEFT) drag_ = -1;
     const Layout l = layout();
     // A question waits for its answer.
     if (question_ != Question::None) {
@@ -862,7 +933,7 @@ SettingsPanel::State SettingsPanel::handle(const SDL_Event& event, uint64_t now_
                 set_choice(name, choice_cursor_);
             } else if (key == SDL_SCANCODE_ESCAPE) open_choice_.clear();
         } else if (event.type == SDL_MOUSEBUTTONDOWN && box) {
-            const SDL_Rect list{box->rect.x, box->rect.y + box->rect.h, box->rect.w, count * 16 + 4};
+            const SDL_Rect list = choice_list(box->rect, count, l.height);
             const std::string name = open_choice_;
             open_choice_.clear();
             if (inside(list, event.button.x, event.button.y)) set_choice(name, (event.button.y - list.y - 2) / 16);
@@ -977,6 +1048,11 @@ SettingsPanel::State SettingsPanel::handle(const SDL_Event& event, uint64_t now_
             ensure_visible(layout());
             break;
         }
+        if ((key == SDL_SCANCODE_PAGEUP || key == SDL_SCANCODE_PAGEDOWN) && l.page_limit) {
+            const int step = std::max(PageStep, l.page.h - PageStep);
+            page_scroll_ = std::clamp(l.page_scroll + (key == SDL_SCANCODE_PAGEDOWN ? step : -step), 0, l.page_limit);
+            break;
+        }
         if ((key == SDL_SCANCODE_RETURN || key == SDL_SCANCODE_KP_ENTER) && current && current->kind == Kind::Note) {
             report_comment_ = clip_report_comment(report_comment_ + "\n");  // a new line in the comment
             break;
@@ -1013,18 +1089,38 @@ SettingsPanel::State SettingsPanel::handle(const SDL_Event& event, uint64_t now_
         if (key == SDL_SCANCODE_SPACE && current->kind != Kind::Text && current->kind != Kind::Note) activate(*current, now_ms);
         break;
     }
-    case SDL_MOUSEBUTTONDOWN:
+    case SDL_MOUSEBUTTONDOWN: {
         if (event.button.button != SDL_BUTTON_LEFT) break;
+        const int x = event.button.x, y = event.button.y;
+        if (l.page_limit && inside(scroll_reach(l.page), x, y)) {
+            // The thumb is grabbed where it was clicked; a click on the track moves the thumb there first.
+            SDL_Rect thumb = scroll_thumb(l.page, l.page_limit, l.page_scroll);
+            if (y < thumb.y || y >= thumb.y + thumb.h) {
+                page_scroll_ = thumb_scroll(l.page, l.page_limit, y - thumb.h / 2);
+                thumb = scroll_thumb(l.page, l.page_limit, page_scroll_);
+            }
+            drag_ = std::max(0, y - thumb.y);
+            break;
+        }
         for (const auto& item : l.items) {
             if ((item.kind == Kind::Slot || item.kind == Kind::Clear) && !contained(item.rect, l.list)) continue;
-            if (!inside(item.rect, event.button.x, event.button.y) || !item.enabled) continue;
+            if (item.paged && !inside(l.page, x, y)) continue;  // scrolled out of the page's viewport
+            if (!inside(item.rect, x, y) || !item.enabled) continue;
             if (item.kind != Kind::Clear) focus_ = item.name;
-            activate(item, now_ms, event.button.x);
+            activate(item, now_ms, x);
+            if (item.paged && focus_ == item.name) ensure_visible(layout());  // a half-shown item comes in
             break;
         }
         break;
+    }
+    case SDL_MOUSEMOTION:
+        if (drag_ >= 0 && l.page_limit) page_scroll_ = thumb_scroll(l.page, l.page_limit, event.motion.y - drag_);
+        break;
     case SDL_MOUSEWHEEL:
-        if (controls_page_) scroll_ = std::clamp(scroll_ - event.wheel.y * BindingRow, 0, scroll_limit());
+        // The bindings list scrolls under the pointer, or anywhere when the page fits; otherwise the page.
+        if (controls_page_ && (!l.page_limit || inside(l.list, pointer_x_, pointer_y_)))
+            scroll_ = std::clamp(scroll_ - event.wheel.y * BindingRow, 0, scroll_limit());
+        else if (l.page_limit) page_scroll_ = std::clamp(l.page_scroll - event.wheel.y * PageStep, 0, l.page_limit);
         break;
     default: break;
     }
@@ -1050,127 +1146,140 @@ SDL_Texture* SettingsPanel::make_font(SDL_Renderer* renderer) {
 void SettingsPanel::draw(SDL_Renderer* r, SDL_Texture* font) const {
     const Layout l = layout();
     fill(r, {0, 0, width, l.height}, Window);
-    for (const SDL_Rect& g : l.groups) {
-        fill(r, g, GroupFill);
-        outline(r, g, Border);
-    }
-    for (const SDL_Rect& line : l.lines) fill(r, line, Border);
-    if (l.list.w) {
-        fill(r, l.list, GroupFill);
-        outline(r, l.list, Border);
-    }
-    for (const Label& label : l.labels) {
-        if (label.listed && !(label.y >= l.list.y + 2 && label.y + Glyph <= l.list.y + l.list.h - 2)) continue;
-        int y = label.y;
-        const Color c = label.tone == 2 ? Error : label.tone == 1 ? Secondary : Ink;
-        if (label.listed) {  // one line in the list, cut to its column
-            text(r, font, label.x, y, label.text, c, size_t(label.columns));
-            continue;
+    // The page first, clipped to its viewport when it scrolls, then the segments and the footer.
+    for (const bool paged : {true, false}) {
+        if (paged && l.page_limit) SDL_RenderSetClipRect(r, &l.page);
+        for (const SDL_Rect& g : l.groups) {
+            if (!paged) break;
+            fill(r, g, GroupFill);
+            outline(r, g, Border);
         }
-        for (const auto& line : wrap(label.text, size_t(std::max(1, label.columns)))) {
-            text(r, font, label.x, y, line, c, 200, label.bold);
-            y += Line;
+        for (size_t i = 0; i < l.lines.size(); ++i)
+            if ((i < l.paged_lines) == paged) fill(r, l.lines[i], Border);
+        if (paged && l.list.w) {
+            fill(r, l.list, GroupFill);
+            outline(r, l.list, Border);
         }
-    }
-    for (const Item& item : l.items) {
-        if ((item.kind == Kind::Slot || item.kind == Kind::Clear) && !contained(item.rect, {0, l.list.y + 1, width, l.list.h - 2})) continue;
-        const bool focus = item.name == focus_ && question_ == Question::None && open_choice_.empty();
-        const Color ink = item.enabled ? Ink : Disabled;
-        const SDL_Rect& b = item.rect;
-        switch (item.kind) {
-        case Kind::Segment:
-            fill(r, b, item.selected ? AccentSoft : Control);
-            outline(r, b, item.selected ? Accent : Border);
-            text(r, font, b.x + (b.w - int(ascii(item.text).size()) * Glyph) / 2, b.y + (b.h - Glyph) / 2, item.text, ink);
-            break;
-        case Kind::Text: {
-            fill(r, b, GroupFill);
-            outline(r, b, focus ? Accent : Border);
-            const std::string value = item.text;
-            const char* placeholder = item.name == "text:server" ? MAG_SETTINGS_SERVER_PLACEHOLDER
-                                      : item.name == "text:name" ? MAG_SETTINGS_NAME_PLACEHOLDER : MAG_SETTINGS_PORT_PLACEHOLDER;
-            const size_t room = size_t(b.w / Glyph) - 2;
-            const std::string shown = value.size() > room ? value.substr(value.size() - room) : value;
-            if (value.empty() && !focus) text(r, font, b.x + 5, b.y + 6, placeholder, Disabled);
-            else text(r, font, b.x + 5, b.y + 6, shown + (focus ? "_" : ""), Ink);
-            break;
+        for (const Label& label : l.labels) {
+            if (label.paged != paged) continue;
+            if (label.listed && !(label.y >= l.list.y + 2 && label.y + Glyph <= l.list.y + l.list.h - 2)) continue;
+            int y = label.y;
+            const Color c = label.tone == 2 ? Error : label.tone == 1 ? Secondary : Ink;
+            if (label.listed) {  // one line in the list, cut to its column
+                text(r, font, label.x, y, label.text, c, size_t(label.columns));
+                continue;
+            }
+            for (const auto& line : wrap(label.text, size_t(std::max(1, label.columns)))) {
+                text(r, font, label.x, y, line, c, 200, label.bold);
+                y += Line;
+            }
         }
-        case Kind::Note: {
-            fill(r, b, item.enabled ? GroupFill : Window);
-            outline(r, b, focus ? Accent : Border);
-            const size_t columns = size_t(std::max(1, b.w / Glyph - 1));
-            if (item.text.empty() && !focus) {
-                text(r, font, b.x + 5, b.y + 5, MAG_SETTINGS_REPORT_COMMENT_HINT, Disabled, columns);
+        for (const Item& item : l.items) {
+            if (item.paged != paged) continue;
+            if ((item.kind == Kind::Slot || item.kind == Kind::Clear) && !contained(item.rect, {0, l.list.y + 1, width, l.list.h - 2})) continue;
+            const bool focus = item.name == focus_ && question_ == Question::None && open_choice_.empty();
+            const Color ink = item.enabled ? Ink : Disabled;
+            const SDL_Rect& b = item.rect;
+            switch (item.kind) {
+            case Kind::Segment:
+                fill(r, b, item.selected ? AccentSoft : Control);
+                outline(r, b, item.selected ? Accent : Border);
+                text(r, font, b.x + (b.w - int(ascii(item.text).size()) * Glyph) / 2, b.y + (b.h - Glyph) / 2, item.text, ink);
+                break;
+            case Kind::Text: {
+                fill(r, b, GroupFill);
+                outline(r, b, focus ? Accent : Border);
+                const std::string value = item.text;
+                const char* placeholder = item.name == "text:server" ? MAG_SETTINGS_SERVER_PLACEHOLDER
+                                          : item.name == "text:name" ? MAG_SETTINGS_NAME_PLACEHOLDER : MAG_SETTINGS_PORT_PLACEHOLDER;
+                const size_t room = size_t(b.w / Glyph) - 2;
+                const std::string shown = value.size() > room ? value.substr(value.size() - room) : value;
+                if (value.empty() && !focus) text(r, font, b.x + 5, b.y + 6, placeholder, Disabled);
+                else text(r, font, b.x + 5, b.y + 6, shown + (focus ? "_" : ""), Ink);
                 break;
             }
-            // Its own lines, each wrapped; the last NoteLines of them, with the caret when focused.
-            std::vector<std::string> lines;
-            size_t start = 0;
-            const std::string value = item.text + (focus ? "_" : "");
-            for (;;) {
-                const size_t end = value.find('\n', start);
-                const std::string paragraph = value.substr(start, end == std::string::npos ? std::string::npos : end - start);
-                const auto wrapped = wrap(paragraph, columns);
-                if (wrapped.empty()) lines.push_back("");
-                lines.insert(lines.end(), wrapped.begin(), wrapped.end());
-                if (end == std::string::npos) break;
-                start = end + 1;
+            case Kind::Note: {
+                fill(r, b, item.enabled ? GroupFill : Window);
+                outline(r, b, focus ? Accent : Border);
+                const size_t columns = size_t(std::max(1, b.w / Glyph - 1));
+                if (item.text.empty() && !focus) {
+                    text(r, font, b.x + 5, b.y + 5, MAG_SETTINGS_REPORT_COMMENT_HINT, Disabled, columns);
+                    break;
+                }
+                // Its own lines, each wrapped; the last NoteLines of them, with the caret when focused.
+                std::vector<std::string> lines;
+                size_t start = 0;
+                const std::string value = item.text + (focus ? "_" : "");
+                for (;;) {
+                    const size_t end = value.find('\n', start);
+                    const std::string paragraph = value.substr(start, end == std::string::npos ? std::string::npos : end - start);
+                    const auto wrapped = wrap(paragraph, columns);
+                    if (wrapped.empty()) lines.push_back("");
+                    lines.insert(lines.end(), wrapped.begin(), wrapped.end());
+                    if (end == std::string::npos) break;
+                    start = end + 1;
+                }
+                const size_t first = lines.size() > size_t(NoteLines) ? lines.size() - size_t(NoteLines) : 0;
+                for (size_t i = first; i < lines.size(); ++i)
+                    text(r, font, b.x + 5, b.y + 5 + int(i - first) * Line, lines[i], item.enabled ? Ink : Disabled, columns);
+                break;
             }
-            const size_t first = lines.size() > size_t(NoteLines) ? lines.size() - size_t(NoteLines) : 0;
-            for (size_t i = first; i < lines.size(); ++i)
-                text(r, font, b.x + 5, b.y + 5 + int(i - first) * Line, lines[i], item.enabled ? Ink : Disabled, columns);
-            break;
+            case Kind::Choice:
+                fill(r, b, item.enabled ? Control : Window);
+                outline(r, b, focus ? Accent : Border);
+                text(r, font, b.x + 6, b.y + 6, choice_label(item.name, choice_value(item.name)), ink, size_t(b.w / Glyph) - 3);
+                text(r, font, b.x + b.w - 14, b.y + 6, "v", ink);
+                break;
+            case Kind::Link:
+                text(r, font, b.x, b.y + 2, item.text, focus ? Accent : Secondary);
+                break;
+            case Kind::Slot: {
+                const bool live = capture_.on && size_t(item.row) == capture_.row && item.slot == capture_.slot;
+                fill(r, b, live ? AccentSoft : Control);
+                outline(r, b, live || focus ? Accent : Border);
+                const std::string shown = live ? std::string("Press...") : item.text;
+                text(r, font, b.x + (b.w - int(std::min<size_t>(ascii(shown).size(), 16)) * Glyph) / 2, b.y + 6, shown,
+                     item.enabled ? Ink : Disabled, 16);
+                break;
+            }
+            case Kind::Clear:
+                fill(r, b, Control);
+                outline(r, b, Border);
+                text(r, font, b.x + 6, b.y + 6, item.text, item.enabled ? Ink : Disabled);
+                break;
+            case Kind::Slider: {
+                fill(r, {b.x, b.y + b.h / 2 - 1, b.w, 3}, Border);
+                const double fraction = (settings_form_mouse_sensitivity(form_) - .1) / 4.9;
+                fill(r, {b.x + int(fraction * (b.w - 8)), b.y, 8, b.h}, item.enabled ? Accent : Disabled);
+                if (focus) outline(r, {b.x - 2, b.y - 2, b.w + 4, b.h + 4}, Accent);
+                break;
+            }
+            case Kind::Check:
+                fill(r, {b.x, b.y + 3, 10, 10}, GroupFill);
+                outline(r, {b.x, b.y + 3, 10, 10}, focus ? Accent : Secondary);
+                if (item.name.rfind("check:debug:", 0) == 0 ? debug_switch(item.name.substr(12), settings_)
+                    : item.name == "check:reports" ? form_.send_reports : form_.profile.mouse.invert_y)
+                    fill(r, {b.x + 3, b.y + 6, 4, 4}, Accent);
+                text(r, font, b.x + 16, b.y + 4, item.text, ink);
+                break;
+            case Kind::Button:
+                fill(r, b, item.selected && item.enabled ? Accent : Control);
+                outline(r, b, focus ? Accent : Border);
+                text(r, font, b.x + (b.w - int(ascii(item.text).size()) * Glyph) / 2, b.y + (b.h - Glyph) / 2, item.text,
+                     item.selected && item.enabled ? GroupFill : ink);
+                break;
+            }
         }
-        case Kind::Choice:
-            fill(r, b, item.enabled ? Control : Window);
-            outline(r, b, focus ? Accent : Border);
-            text(r, font, b.x + 6, b.y + 6, choice_label(item.name, choice_value(item.name)), ink, size_t(b.w / Glyph) - 3);
-            text(r, font, b.x + b.w - 14, b.y + 6, "v", ink);
-            break;
-        case Kind::Link:
-            text(r, font, b.x, b.y + 2, item.text, focus ? Accent : Secondary);
-            break;
-        case Kind::Slot: {
-            const bool live = capture_.on && size_t(item.row) == capture_.row && item.slot == capture_.slot;
-            fill(r, b, live ? AccentSoft : Control);
-            outline(r, b, live || focus ? Accent : Border);
-            const std::string shown = live ? std::string("Press...") : item.text;
-            text(r, font, b.x + (b.w - int(std::min<size_t>(ascii(shown).size(), 16)) * Glyph) / 2, b.y + 6, shown,
-                 item.enabled ? Ink : Disabled, 16);
-            break;
-        }
-        case Kind::Clear:
-            fill(r, b, Control);
-            outline(r, b, Border);
-            text(r, font, b.x + 6, b.y + 6, item.text, item.enabled ? Ink : Disabled);
-            break;
-        case Kind::Slider: {
-            fill(r, {b.x, b.y + b.h / 2 - 1, b.w, 3}, Border);
-            const double fraction = (settings_form_mouse_sensitivity(form_) - .1) / 4.9;
-            fill(r, {b.x + int(fraction * (b.w - 8)), b.y, 8, b.h}, item.enabled ? Accent : Disabled);
-            if (focus) outline(r, {b.x - 2, b.y - 2, b.w + 4, b.h + 4}, Accent);
-            break;
-        }
-        case Kind::Check:
-            fill(r, {b.x, b.y + 3, 10, 10}, GroupFill);
-            outline(r, {b.x, b.y + 3, 10, 10}, focus ? Accent : Secondary);
-            if (item.name.rfind("check:debug:", 0) == 0 ? debug_switch(item.name.substr(12), settings_)
-                : item.name == "check:reports" ? form_.send_reports : form_.profile.mouse.invert_y)
-                fill(r, {b.x + 3, b.y + 6, 4, 4}, Accent);
-            text(r, font, b.x + 16, b.y + 4, item.text, ink);
-            break;
-        case Kind::Button:
-            fill(r, b, item.selected && item.enabled ? Accent : Control);
-            outline(r, b, focus ? Accent : Border);
-            text(r, font, b.x + (b.w - int(ascii(item.text).size()) * Glyph) / 2, b.y + (b.h - Glyph) / 2, item.text,
-                 item.selected && item.enabled ? GroupFill : ink);
-            break;
+        if (paged && l.page_limit) {
+            SDL_RenderSetClipRect(r, nullptr);
+            fill(r, scroll_track(l.page), Border);
+            fill(r, scroll_thumb(l.page, l.page_limit, l.page_scroll), drag_ >= 0 ? Secondary : Disabled);
         }
     }
     // An open choice list, then a question, over everything else.
     if (const Item* box = open_choice_.empty() ? nullptr : find(l, open_choice_)) {
         const int count = choice_count(open_choice_);
-        const SDL_Rect list{box->rect.x, box->rect.y + box->rect.h, box->rect.w, count * 16 + 4};
+        const SDL_Rect list = choice_list(box->rect, count, l.height);
         fill(r, list, GroupFill);
         outline(r, list, Accent);
         for (int i = 0; i < count; ++i) {
@@ -1315,11 +1424,19 @@ SettingsWindowResult settings_window_run(SettingsForm& form, const std::filesyst
     panel.open_page = open_browser;
     panel.controls_saved = [&game] { game.send("controls\n"); };
     // A whole-number scale keeps the 8x8 glyphs sharp: twice where the screen holds the tallest page.
-    SDL_Rect usable{0, 0, 1280, 720};
-    SDL_GetDisplayUsableBounds(0, &usable);
+    // The window stays within its display's usable area, less MAG_SETTINGS_WORK_AREA_MARGIN above and
+    // below and its frame; a taller layout scrolls its page (the panel's view height).
+    constexpr int margin = MAG_SETTINGS_WORK_AREA_MARGIN;
+    auto usable_on = [](int display) {
+        SDL_Rect usable{0, 0, 1280, 720};
+        SDL_GetDisplayUsableBounds(std::max(0, display), &usable);
+        return usable;
+    };
+    SDL_Rect usable = usable_on(0);
     // The General page (with Reports) is usually the tallest; the Controls page needs about 560.
+    const int scale = usable.w >= 2 * SettingsPanel::width && usable.h - 4 * margin >= 2 * std::max(560, panel.natural_height()) ? 2 : 1;
+    panel.set_view_height(std::max(1, usable.h / scale - 2 * margin));
     int height = panel.height();
-    const int scale = usable.w >= 2 * SettingsPanel::width && usable.h >= 2 * std::max(560, height) ? 2 : 1;
     SDL_Window* window = SDL_CreateWindow(MAG_SETTINGS_TITLE, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
                                           SettingsPanel::width * scale, height * scale, SDL_WINDOW_SHOWN);
     SDL_Renderer* renderer = window ? SDL_CreateRenderer(window, -1, 0) : nullptr;
@@ -1374,13 +1491,29 @@ SettingsWindowResult settings_window_run(SettingsForm& form, const std::filesyst
                      forward.driver().c_str());
         break;
     }
+    // The display the window is on (the window manager places it, and the player may move it), less
+    // its frame where SDL knows it: the view height. Moving to another display changes it.
+    auto fit_display = [&] {
+        usable = usable_on(SDL_GetWindowDisplayIndex(window));
+        int top = 0, bottom = 0;
+        if (SDL_GetWindowBordersSize(window, &top, nullptr, &bottom, nullptr) != 0) top = bottom = 0;
+        panel.set_view_height(std::max(1, (usable.h - top - bottom) / scale - 2 * margin));
+    };
+    fit_display();
     SDL_StartTextInput();
     SettingsPanel::State state = SettingsPanel::State::Open;
     while (state == SettingsPanel::State::Open) {
         if (const int now = panel.height(); now != height) {
+            const bool grew = now > height;
             height = now;
             SDL_SetWindowSize(window, SettingsPanel::width * scale, height * scale);
             SDL_RenderSetLogicalSize(renderer, SettingsPanel::width, height);
+            // Grown past the usable area's bottom: up, as far as its top (a compositor may not allow it).
+            int x = 0, y = 0, top = 0;
+            SDL_GetWindowPosition(window, &x, &y);
+            if (SDL_GetWindowBordersSize(window, &top, nullptr, nullptr, nullptr) != 0) top = 0;
+            const int lowest = usable.y + usable.h - margin * scale - height * scale;
+            if (grew && y > lowest) SDL_SetWindowPosition(window, x, std::max(usable.y + top, lowest));
         }
         panel.draw(renderer, font);
         SDL_RenderPresent(renderer);
@@ -1391,6 +1524,10 @@ SettingsWindowResult settings_window_run(SettingsForm& form, const std::filesyst
                 if (auto* c = SDL_GameControllerOpen(event.cdevice.which)) controllers.push_back(c);
             // The preview window's own events (its close button) are not the panel's.
             if (event.type == SDL_WINDOWEVENT && event.window.windowID != window_id) continue;
+            if (event.type == SDL_WINDOWEVENT && event.window.event == SDL_WINDOWEVENT_MOVED) fit_display();
+#if SDL_VERSION_ATLEAST(2, 0, 18)
+            if (event.type == SDL_WINDOWEVENT && event.window.event == SDL_WINDOWEVENT_DISPLAY_CHANGED) fit_display();
+#endif
             state = panel.handle(event, SDL_GetTicks64());
         } else {
             state = panel.tick(SDL_GetTicks64());
