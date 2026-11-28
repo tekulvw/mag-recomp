@@ -167,8 +167,8 @@ const HostInputFrame& mag_controls_attach_sample(InputFrameKey k,const InputInte
 const HostInputFrame& mag_controls_acquire_frame(InputFrameKey k,InputContext context){auto& s=state();std::lock_guard lock(s.mutex);seal(s,k);return attach(s,k,{context,{}});}
 ActionFrameView mag_controls_actions(const HostInputFrame& frame,InputContext context,ConsumptionLedger& ledger){auto& s=state();std::lock_guard lock(s.mutex);(void)ledger;if(!s.frame||s.frame->key!=frame.key||frame.context!=context||frame.capture_generation!=s.generation)return {};return {frame.values,{}};}
 void mag_controls_retire_frame(InputFrameKey k){auto& s=state();std::lock_guard lock(s.mutex);if(s.sample&&s.sample->key==k){check(mag_input_retire(s.handle,key(k)));s.frame.reset();s.sample.reset();s.sync_capture();}}
-void mag_controls_release_input(InputResetReason reason){auto& s=state();std::lock_guard lock(s.mutex);s.reset(reason==InputResetReason::Device?2:3);}
-void mag_controls_release_source(InputSource source){if(uint32_t(source)>2)throw std::invalid_argument("invalid source");auto& s=state();std::lock_guard lock(s.mutex);s.reset(uint32_t(source));}
+void mag_controls_release_input(InputResetReason reason){auto& s=state();std::lock_guard lock(s.mutex);s.reset(reason==InputResetReason::Device?2:3);if(reason==InputResetReason::Device)s.host.release(InputSource::Controller);else s.host.release();}
+void mag_controls_release_source(InputSource source){if(uint32_t(source)>2)throw std::invalid_argument("invalid source");auto& s=state();std::lock_guard lock(s.mutex);s.reset(uint32_t(source));s.host.release(source);}
 bool mag_controls_frame_valid(InputFrameKey k,uint64_t generation){auto& s=state();std::lock_guard lock(s.mutex);if(!s.frame||s.frame->key!=k||s.generation!=generation||!s.capture.focused||!s.capture.supported_context)return false;MagInputOffer ignored{};return mag_input_offer(s.handle,key(k),0,&ignored)==3;}
 HostActionState mag_controls_host_action(ActionId action){auto& s=state();std::lock_guard lock(s.mutex);return s.host.state(action);}
 InputDevice mag_controls_last_device(){auto& s=state();std::lock_guard lock(s.mutex);return s.last_device;}

@@ -30,6 +30,7 @@
 #include <cstdio>
 #include <exception>
 #include <mutex>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -176,6 +177,13 @@ public:
         return state;
     }
     uint64_t now_ns() override { return steady_ns(); }
+    // SDL's own key state (scancodes are USB HID usages), for releases the capture never received.
+    std::optional<bool> key_down(uint32_t usage) override {
+        int count = 0;
+        const Uint8* keys = SDL_GetKeyboardState(&count);
+        if (!keys || int(usage) >= count) return std::nullopt;
+        return keys[usage] != 0;
+    }
 };
 
 struct Backend {
@@ -196,6 +204,7 @@ struct Backend {
     bool overflow = false;
     int reported = -1;
     bool lock_lost_reported = false;
+    uint64_t lost_reported = 0;
 };
 
 // Never destroyed: SDL may call the filter until the process ends.
@@ -400,6 +409,7 @@ void pump(Backend& b, SDL_Window* window, bool dialog) {
     b.core.refresh();
     if (const char* change = desktop_capture_transition(was_ready, was_relative, b.core.ready(), b.core.relative()))
         std::fprintf(stderr, "[game-controls] %s\n", change);
+    desktop_capture_report_lost_releases(b.core, b.lost_reported);
     trace_summary(b);
     const int on = b.core.installed() ? 1 : 0;
     if (on != b.reported) {

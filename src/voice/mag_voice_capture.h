@@ -128,20 +128,33 @@ struct PttInput {
 // (whole frames, rounded up), closed at once when the game window loses input focus (another app
 // or the settings panel). The inner source is read every frame, open or not, so a press starts
 // with current audio rather than audio queued while closed. Closed frames are silent.
+//
+// A hold longer than `max_hold_ms` (three minutes by default; 0 turns the limit off) closes the
+// gate until push to talk is released (or focus leaves and returns): a stuck key or a missed
+// release cannot keep the microphone on the air. Each open and close is one log line with the
+// reason and how long it was open; no audio.
 class PttGate final : public FrameSource {
 public:
-    PttGate(std::unique_ptr<FrameSource> inner, std::function<PttInput()> input, unsigned tail_ms = 150);
+    using Log = std::function<void(const char*)>;
+    static constexpr unsigned DefaultMaxHoldMs = 3 * 60 * 1000;
+    PttGate(std::unique_ptr<FrameSource> inner, std::function<PttInput()> input, unsigned tail_ms = 150,
+            unsigned max_hold_ms = DefaultMaxHoldMs, Log log = {});
     void start() override;
     void stop() override;
     bool frame(uint64_t index, int16_t* samples) override;
     bool is_open() const { return open_; }
+    // The hold limit closed the gate and push to talk has not been released since.
+    bool limited() const { return limited_; }
 
 private:
+    void change(bool open, uint64_t index, const char* reason);
+
     std::unique_ptr<FrameSource> inner_;
     std::function<PttInput()> input_;
-    uint64_t tail_frames_;
-    bool open_ = false, held_seen_ = false;
-    uint64_t last_held_ = 0;
+    uint64_t tail_frames_, max_hold_frames_;
+    Log log_;
+    bool open_ = false, held_seen_ = false, holding_ = false, limited_ = false;
+    uint64_t last_held_ = 0, hold_start_ = 0, opened_at_ = 0, last_index_ = 0;
 };
 
 }  // namespace mag::voice

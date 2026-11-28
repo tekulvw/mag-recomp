@@ -49,6 +49,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <exception>
+#include <optional>
 
 static_assert(RI_KEY_BREAK == MAG_WIN32_KEY_BREAK && RI_KEY_E0 == MAG_WIN32_KEY_E0 && RI_KEY_E1 == MAG_WIN32_KEY_E1);
 static_assert(MOUSE_MOVE_ABSOLUTE == MAG_WIN32_MOUSE_MOVE_ABSOLUTE);
@@ -171,6 +172,34 @@ public:
         return state;
     }
     uint64_t now_ns() override { return steady_ns(); }
+    // Physical state for the core's reconciliation of releases that never arrived: the key's
+    // virtual keys (from its scan codes, plus its Num Lock keypad form) as the system holds them.
+    std::optional<bool> key_down(uint32_t usage) override {
+        uint16_t codes[4];
+        const unsigned count = mag_win32_usage_scan_codes(usage, codes);
+        bool known = false;
+        for (unsigned i = 0; i < count; ++i) {
+            const UINT key = MapVirtualKeyW(codes[i], MAPVK_VSC_TO_VK_EX);
+            if (!key) continue;
+            known = true;
+            if (virtual_key_down(key)) return true;
+        }
+        if (const UINT pad = keypad_virtual_key(usage)) {
+            known = true;
+            if (virtual_key_down(pad)) return true;
+        }
+        if (!known) return std::nullopt;
+        return false;
+    }
+    std::optional<bool> button_down(uint32_t index, uint64_t) override {
+        if (index >= 5) return std::nullopt;
+        const bool swapped = GetSystemMetrics(SM_SWAPBUTTON) != 0;
+        const UINT buttons[5] = {UINT(swapped ? VK_RBUTTON : VK_LBUTTON), UINT(swapped ? VK_LBUTTON : VK_RBUTTON),
+                                 VK_MBUTTON, VK_XBUTTON1, VK_XBUTTON2};
+        return virtual_key_down(buttons[index]);
+    }
+    // The core released the key: its next report is a press, not auto-repeat.
+    void key_forgotten(uint32_t usage) override { (void)mag_win32_key_edge(&keys, usage, 0); }
 
     // Relative mode holds a confinement that no longer matches the window or was replaced.
     bool clip_lost() {
@@ -208,6 +237,7 @@ struct Backend {
     // Window thread only.
     bool focused = false, registration_failed = false;
     int reported = -1;
+    uint64_t lost_reported = 0;
     bool lock_lost_reported = false;
 };
 
@@ -326,6 +356,7 @@ void pump(Backend& b, bool dialog) {
     // per change makes that visible.
     if (const char* change = desktop_capture_transition(was_ready, was_relative, b.core.ready(), b.core.relative()))
         std::fprintf(stderr, "[game-controls] %s\n", change);
+    desktop_capture_report_lost_releases(b.core, b.lost_reported);
     auto& trace = motion_trace();
     if (trace.on && std::chrono::steady_clock::now() >= trace.next) {
         trace.mouse_requests_on = g_mouse_requests_on.exchange(0, std::memory_order_relaxed);

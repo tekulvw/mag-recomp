@@ -548,6 +548,27 @@ static void host_action_tests() {
     mag_controls_configure(profile);
     mag_controls_push_event({pad,true,15});
     check(!mag_controls_host_action(Talk).held,"keyboard and mouse mode ignores the controller binding");
+    mag_controls_push_event({pad,false,16});
+    // A released source forgets its held controls: a release the backend never reports (a capture
+    // reinstalled, the adapter's context reset) cannot leave push to talk open.
+    mag_controls_push_event({k,true,17});
+    check(mag_controls_host_action(Talk).held,"pressed before the source release");
+    mag_controls_release_source(InputSource::Keyboard);
+    check(!mag_controls_host_action(Talk).held,"a source release ends push to talk");
+    mag_controls_push_event({k,true,18});
+    check(!mag_controls_host_action(Talk).held,"a repeated press of the still-held key does not resume it");
+    mag_controls_push_event({k,false,19});
+    mag_controls_push_event({k,true,20});
+    check(mag_controls_host_action(Talk).held,"a fresh press after the release talks");
+    mag_controls_release_source(InputSource::Mouse);
+    check(mag_controls_host_action(Talk).held,"releasing another source leaves the key held");
+    mag_controls_release_input(InputResetReason::Context);
+    check(!mag_controls_host_action(Talk).held,"releasing all input ends push to talk");
+    mag_controls_push_event({k,false,21});
+    mag_controls_push_event({k,true,22});
+    check(mag_controls_host_action(Talk).held,"pressed again after the input release");
+    mag_controls_push_event({k,false,23});
+    check(!mag_controls_host_action(Talk).held,"released");
 }
 
 int main(int argc, char** argv) {
