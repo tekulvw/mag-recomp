@@ -22,7 +22,16 @@
       "guest_path": "/dev_hdd0/game/BCUS98110/USRDIR/bin/libpace_g.sprx",
       "runtime_path_proven": true,
       "image_size": 263752,
-      "relocated_image_sha256": "ab1611d6838da7d49a5f8de58160b884455c8b7592a638c6123f7aa370c5e27e"
+      "relocated_image_sha256": "ab1611d6838da7d49a5f8de58160b884455c8b7592a638c6123f7aa370c5e27e",
+      "module_info_offset": 224200,
+      "import_linkage": {
+        "descriptor_count": 12,
+        "function_imports": 125,
+        "variable_imports": 1,
+        "tls_imports": 0,
+        "function_references": 6,
+        "variable_references": 1
+      }
     },
     "libpacePrx_g": {
       "elf_sha256": "a8e2aaf80d4dd7de031f1507d0e7d68229d26c0dd4c63814be59889d03077254",
@@ -56,5 +65,7 @@
     "0xFA77821A"
   ],
   "relocation_reference": "https://github.com/RPCS3/rpcs3/blob/master/rpcs3/Emu/Cell/PPUModule.cpp",
-  "runtime_verified": false
+  "runtime_verified": false,
+  "import_linkage_reference": "RPCS3 PPUModule.cpp: real guest function exports publish their OPD address; ADDR32 references write the resolved export value. Primary module references use type1 and zero addends only.",
+  "required_runtime_api": "typed guest library registry: prx_resolve_library_export"
 }

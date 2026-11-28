@@ -59,6 +59,54 @@ class PacePreparationTests(unittest.TestCase):
         self.assertEqual(stubs, [{'library': 'sysPrxForUser', 'nid': '0x12345678', 'stub': '0x21200040'}])
 
 
+def import_image():
+    base=0x21200000
+    image=bytearray(0x400)
+    struct.pack_into('>II',image,0x20+0x2c,base+0x80,base+0xac)
+    image[0x80]=44
+    struct.pack_into('>HHHHH',image,0x82,1,0x2001,2,1,0)
+    struct.pack_into('>IIIII',image,0x90,base+0x150,base+0x100,base+0x120,base+0x130,base+0x134)
+    image[0x150:0x158]=b'fixture\0'
+    struct.pack_into('>IIII',image,0x100,0x101,0x102,base+0x200,0)
+    struct.pack_into('>II',image,0x120,base+0x40,base+0x60)
+    struct.pack_into('>II',image,0x130,0x201,base+0x220)
+    struct.pack_into('>III',image,0x200,1,base+0x300,0)
+    struct.pack_into('>III',image,0x220,1,base+0x304,0)
+    struct.pack_into('>I',image,0x300,0x1111)
+    return image
+
+
+class PaceImportReferenceTests(unittest.TestCase):
+    def test_function_and_variable_chains_have_distinct_source_bound_records(self):
+        from tools.v212_pace_prepare import import_references
+        image=bytes(import_image())
+        refs,summary=import_references(image,0x21200000,0x20)
+        self.assertEqual(summary,dict(descriptor_count=1,function_imports=2,variable_imports=1,tls_imports=0,function_references=1,variable_references=1))
+        self.assertEqual([(r['kind'],r['target'],r['expected']) for r in refs],
+                         [('function','0x21200300','0x00001111'),('variable','0x21200304','0x00000000')])
+        self.assertEqual(refs[0]['nid'],'0x00000101')
+        self.assertEqual(refs[1]['nid'],'0x00000201')
+        self.assertEqual(image,bytes(import_image()))
+
+    def test_bad_counts_tables_names_types_addends_and_duplicate_targets_reject(self):
+        from tools.v212_pace_prepare import import_references
+        mutations=[(0x8a,'>H',1),(0x80,'>B',43),(0x9c,'>I',0x212003ff),
+                   (0x200,'>I',4),(0x208,'>I',1),(0x224,'>I',0x21200300),
+                   (0x204,'>I',0x21200400),(0x204,'>I',0x21200301)]
+        for at,fmt,value in mutations:
+            image=import_image();struct.pack_into(fmt,image,at,value)
+            with self.subTest(at=at,value=value),self.assertRaises(ValueError):
+                import_references(bytes(image),0x21200000,0x20)
+        image=import_image();image[0x150:0x1d0]=b'x'*128
+        with self.assertRaises(ValueError):import_references(bytes(image),0x21200000,0x20)
+
+    def test_missing_chain_terminator_is_bounded(self):
+        from tools.v212_pace_prepare import import_references
+        image=import_image();struct.pack_into('>I',image,0x108,0x212003f4)
+        struct.pack_into('>III',image,0x3f4,1,0x21200300,0)
+        with self.assertRaises(ValueError):import_references(bytes(image),0x21200000,0x20)
+
+
 class PacePreparedCheckTests(unittest.TestCase):
     def setUp(self):
         import contextlib
@@ -74,7 +122,10 @@ class PacePreparedCheckTests(unittest.TestCase):
         self.sdk=self.root/'sdk'
         (self.root/'profiles').mkdir()
         profile=json.loads((prepare.ROOT/'profiles/retail-v2.12-pace.json').read_text())
-        image=b'synthetic relocated image'
+        image=bytes(import_image())
+        profile['variants']['libpace_g']['module_info_offset']=0x20
+        references,summary=prepare.import_references(image,0x21200000,0x20)
+        profile['variants']['libpace_g']['import_linkage']=summary
         profile['variants']['libpace_g']['image_size']=len(image)
         profile['variants']['libpace_g']['relocated_image_sha256']=__import__('hashlib').sha256(image).hexdigest()
         for relative in profile['sdk_tools']:
@@ -93,7 +144,8 @@ class PacePreparedCheckTests(unittest.TestCase):
         (inputs/'pace_image.bin').write_bytes(image)
         for name in ('pace_functions.json','pace_exports.json','pace_imports.json','hle-stubs.json'):
             (inputs/name).write_text('{}')
-        self.record=dict(status='complete',target='retail-v2.12',variant='libpace_g',
+        (inputs/'import-references.json').write_text(json.dumps(dict(format=1,module_info_offset=0x20,summary=summary,references=references)))
+        self.record=dict(module_info_offset=0x20,import_linkage=summary,status='complete',target='retail-v2.12',variant='libpace_g',
                          elf_sha256=profile['variants']['libpace_g']['elf_sha256'],
                          self_sha256=profile['variants']['libpace_g']['self_sha256'],
                          profile_sha256=self.sha(self.root/'profiles/retail-v2.12-pace.json'),
@@ -165,6 +217,14 @@ class PacePreparedCheckTests(unittest.TestCase):
         image=self.output/'inputs/pace_image.bin';image.write_bytes(b'x'*self.record['image_size'])
         self.record['inputs']['inputs/pace_image.bin']=self.sha(image);self.write_record()
         with self.assertRaises(ValueError):self.prepare.check(self.output,self.sdk)
+
+    def test_rehashed_import_linkage_cannot_omit_or_retarget_original_references(self):
+        import json
+        path=self.output/'inputs/import-references.json'
+        original=path.read_text();record=json.loads(original);record['references'].pop()
+        path.write_text(json.dumps(record))
+        self.record['inputs']['inputs/import-references.json']=self.sha(path);self.write_record()
+        with self.assertRaisesRegex(ValueError,'linkage'):self.prepare.check(self.output,self.sdk)
 
     def test_rehashed_source_cannot_remove_executed_unknown_guard(self):
         path=self.output/'ppu_recomp_000.cpp';path.write_text('/* TODO: .word 0x00000000 */;\n')

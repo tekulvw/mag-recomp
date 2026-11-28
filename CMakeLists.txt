@@ -340,6 +340,11 @@ add_executable(${PROJECT_NAME}
 
 if(MAG_RETAIL_V212)
     target_compile_definitions(${PROJECT_NAME} PRIVATE MAG_RETAIL_V212=1)
+    file(STRINGS "${PS3RECOMP_DIR}/runtime/prx/prx_loader.h" MAG_V212_TYPED_PRX_API
+        REGEX "^#define PRX_LOADED_EXPORT_LIMIT ")
+    if(NOT MAG_V212_TYPED_PRX_API)
+        message(FATAL_ERROR "2.12 original PACE linkage requires the typed loaded-library API from ps3recomp PR192; provide its explicit source-bound runtime candidate")
+    endif()
     set(MAG_V212_PACE_DIR "${MAG_WORKSPACE}/generated/retail-v2.12/pace-native" CACHE PATH
         "Checked original 2.12 libpace preparation directory")
     execute_process(

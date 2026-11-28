@@ -101,8 +101,10 @@ cmake -S . -B build/retail-v2.12/EBOOT -G Ninja \
 cmake --build build/retail-v2.12/EBOOT --parallel 2
 ```
 
-The runtime defaults to the exact reviewed runtime pin. An intentional 2.12 SDK
-candidate additionally requires `MAG_RUNTIME_CANDIDATE_MANIFEST`, binding a clean
+The original PACE imports require the typed loaded-library API from
+[SDK PR192](https://github.com/tekulvw/ps3recomp/pull/192), which is absent from the
+normal runtime baseline. Until that API is part of a reviewed runtime pin, select
+its explicit 2.12 SDK candidate with `MAG_RUNTIME_CANDIDATE_MANIFEST`, binding a clean
 SDK commit and tree, framework hash, reviewed ancestor revision, target,
 `codex/retail-v2.12` integration branch and a focused SDK source PR. This leaves
 the ordinary runtime allowlist unchanged. Candidate manifests and local SDK paths
@@ -114,6 +116,12 @@ explicit disc and HDD roots. The launcher handoff verifies the exact updated
 HDD engine, its native receipt and key hash at the actual spawn request; the
 original availability check still runs for both engine and PACE. A test uses a
 disposable HDD copy so the verified assembled installation remains unchanged.
+The observed launcher settings come from `tpps.psarc.sdat`, which takes precedence
+over the same member in `game.psarc.sdat`. A bounded headless bootstrap uses
+`tools/v212_boot_probe.py`, requiring a verified private TPPS settings proof with
+literal closed-loopback endpoints. It checks ownership and stops/reaps its exact
+process group; logs and receipts stay ignored. This tool exposes no live-host or
+input-injection option. Its loopback settings checks are not an OS egress sandbox.
 
 ## Offline SPU audit
 

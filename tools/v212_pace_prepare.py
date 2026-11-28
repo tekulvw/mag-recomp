@@ -89,6 +89,97 @@ def import_stubs(image, imports, base):
     return result
 
 
+REFERENCE_LIMIT = 4096
+
+
+def import_references(image, base, module_info_offset):
+    """Read original linkage chains independently of function-stub extraction.
+
+    The pinned primary module uses only ADDR32 records with zero addends.
+    Function linkage values remain OPD addresses, rather than their code words.
+    Unknown layouts, TLS, relocation types and addends fail explicitly.
+    """
+    def region(ea, size):
+        offset=ea-base
+        if not isinstance(ea,int) or offset<0 or size<0 or offset>len(image) or size>len(image)-offset:
+            raise ValueError('Import linkage range is outside the original module image')
+        return offset
+    def word(ea):
+        return struct.unpack_from('>I',image,region(ea,4))[0]
+    def string(ea):
+        begin=region(ea,1)
+        end=image.find(b'\0',begin,min(len(image),begin+128))
+        if end<=begin:
+            raise ValueError('Import library name is empty or unterminated')
+        try:return image[begin:end].decode('ascii')
+        except UnicodeDecodeError as exc:raise ValueError('Unsupported import library name') from exc
+    mi=region(base+module_info_offset,0x34)
+    start,end=struct.unpack_from('>II',image,mi+0x2c)
+    begin=region(start,0);finish=region(end,0)
+    if finish<begin:
+        raise ValueError('Import descriptor range is reversed')
+    refs=[];seen_targets=set();seen_libraries=set()
+    summary=dict(descriptor_count=0,function_imports=0,variable_imports=0,tls_imports=0,
+                 function_references=0,variable_references=0)
+    def chain(library,nid,kind,pointer,descriptor):
+        if not pointer:return
+        for index in range(REFERENCE_LIMIT+1):
+            at=pointer+index*12
+            kind_word=word(at)
+            if kind_word==0:return
+            region(at,12)
+            target,addend=word(at+4),word(at+8)
+            if kind_word!=1 or addend:
+                raise ValueError('Unsupported import reference type or addend')
+            if len(refs)==REFERENCE_LIMIT or target%4:
+                raise ValueError('Import reference count or alignment invalid')
+            expected=word(target)
+            if target in seen_targets:
+                raise ValueError('Duplicate import reference target')
+            seen_targets.add(target)
+            refs.append(dict(library=library,nid=f'0x{nid:08X}',kind=kind,type=kind_word,
+                             target=f'0x{target:08X}',addend=addend,expected=f'0x{expected:08X}',
+                             descriptor=f'0x{descriptor:08X}',chain=f'0x{pointer:08X}'))
+            summary[kind+'_references']+=1
+        raise ValueError('Import reference chain has no bounded terminator')
+    offset=begin
+    while offset<finish:
+        if summary['descriptor_count']==128 or offset+44>finish or (image[offset] or 44)!=44:
+            raise ValueError('Unsupported or truncated import descriptor layout')
+        version,attributes,functions,variables,tls=struct.unpack_from('>HHHHH',image,offset+2)
+        if tls or attributes & ~0x2009:
+            raise ValueError('Unsupported import attributes or TLS imports')
+        name,nids,stubs,vnids,vrefs,extra1,extra2=struct.unpack_from('>IIIIIII',image,offset+16)
+        if extra1 or extra2:
+            raise ValueError('Unsupported extra import tables')
+        library=string(name)
+        if library in seen_libraries:
+            raise ValueError('Duplicate import library descriptor')
+        seen_libraries.add(library)
+        summary['descriptor_count']+=1;summary['function_imports']+=functions
+        summary['variable_imports']+=variables;summary['tls_imports']+=tls
+        if summary['function_imports']+summary['variable_imports']>65536:
+            raise ValueError('Import symbol count exceeds bound')
+        if functions:
+            region(nids,functions*(8 if attributes&0x2000 else 4));region(stubs,functions*4)
+        used=set()
+        for i in range(functions):
+            nid=word(nids+i*4)
+            if not nid or nid in used:
+                raise ValueError('Invalid or duplicate function import NID')
+            used.add(nid)
+            if attributes&0x2000:chain(library,nid,'function',word(nids+(functions+i)*4),base+offset)
+        if variables:region(vnids,variables*4);region(vrefs,variables*4)
+        used=set()
+        for i in range(variables):
+            nid=word(vnids+i*4);pointer=word(vrefs+i*4)
+            if not nid or nid in used or not pointer:
+                raise ValueError('Invalid variable import or missing reference chain')
+            used.add(nid);chain(library,nid,'variable',pointer,base+offset)
+        offset+=44
+    return refs,summary
+
+
 def _json(path, value):
     path.write_text(json.dumps(value, indent=2)+'\n')
 
@@ -162,7 +253,7 @@ def check(output: Path, sdk: Path | None = None):
         verify_hash(path, receipt['outputs'][name])
     inputs = {p.relative_to(output).as_posix(): p for p in (output/'inputs').iterdir() if p.is_file()}
     required = {'inputs/'+name for name in ('pace_image.bin', 'pace_functions.json', 'pace_exports.json',
-                                           'pace_imports.json', 'hle-stubs.json')}
+                                           'pace_imports.json', 'hle-stubs.json', 'import-references.json')}
     if set(inputs) != required or set(receipt.get('inputs', {})) != required:
         raise ValueError('Prepared libpace input evidence is incomplete or unexpected')
     for name, path in inputs.items():
@@ -171,6 +262,12 @@ def check(output: Path, sdk: Path | None = None):
     if image.stat().st_size != receipt['image_size']:
         raise ValueError('Prepared libpace relocated image size changed')
     verify_hash(image, selected['relocated_image_sha256'])
+    references,summary=import_references(image.read_bytes(),BASE,selected['module_info_offset'])
+    linkage=json.loads((output/'inputs/import-references.json').read_text())
+    expected_linkage=dict(format=1,module_info_offset=selected['module_info_offset'],summary=summary,references=references)
+    if (linkage!=expected_linkage or summary!=selected['import_linkage'] or
+            receipt.get('import_linkage')!=summary or receipt.get('module_info_offset')!=selected['module_info_offset']):
+        raise ValueError('Prepared libpace import linkage metadata changed or is incomplete')
     counts = Counter()
     for name in chunks:
         text = outputs[name].read_text()
@@ -222,6 +319,11 @@ def generate(source: Path, output: Path, sdk: Path | None = None, variant='libpa
         raise ValueError('Expected an original decrypted relocatable PRX')
     image, relocations = relocate_prx(prx, BASE)
     name, toc, exports, imports = prx.parse_modinfo(image, BASE)
+    module_info_offset=next(va+prx.modinfo_off-off for off,va,size,_ in prx.loads
+                            if off<=prx.modinfo_off and prx.modinfo_off+0x34<=off+size)
+    references,summary=import_references(image,BASE,module_info_offset)
+    if variant=='libpace_g' and (module_info_offset!=selected['module_info_offset'] or summary!=selected['import_linkage']):
+        raise ValueError('Original libpace import linkage differs from the reviewed primary profile')
     if name != 'pace' or BASE+toc != profile['toc']:
         raise ValueError('Unexpected libpace module name or TOC')
     code_end = BASE + selected['code_end_offset']
@@ -230,6 +332,8 @@ def generate(source: Path, output: Path, sdk: Path | None = None, variant='libpa
         raise ValueError('The module does not provide the reviewed libpace export surface')
     _validate_title_placement()
     stubs = import_stubs(image, imports, BASE)
+    if len(stubs)!=summary['function_imports']:
+        raise ValueError('Function import parser dropped or duplicated original entries')
     seeds = set()
     for group in exports.values():
         for opd in group.values():
@@ -252,6 +356,7 @@ def generate(source: Path, output: Path, sdk: Path | None = None, variant='libpa
     _json(inputs/'pace_exports.json', dict(module=name, toc=hex(BASE+toc), exports=exports))
     _json(inputs/'pace_imports.json', imports)
     _json(inputs/'hle-stubs.json', stubs)
+    _json(inputs/'import-references.json',dict(format=1,module_info_offset=module_info_offset,summary=summary,references=references))
     command = [sys.executable, str(sdk/'tools/ppu_lifter.py'), str(inputs/'pace_image.bin'),
                '--raw', '--base', hex(BASE), '--toc', hex(BASE+toc), '--code-end', hex(code_end),
                '--functions', str(inputs/'pace_functions.json'), '--hle-stubs', str(inputs/'hle-stubs.json'),
@@ -263,6 +368,7 @@ def generate(source: Path, output: Path, sdk: Path | None = None, variant='libpa
                   sdk_tools=profile['sdk_tools'],
                   framework_sha256=sha256_file(framework_path), base=BASE, image_size=len(image),
                   relocations=relocations, command=command,
+                  module_info_offset=module_info_offset,import_linkage=summary,
                   executed_unknown_policy='halt', runtime_verified=False)
     try:
         with (output/'generation.log').open('w') as log:
@@ -278,7 +384,7 @@ def generate(source: Path, output: Path, sdk: Path | None = None, variant='libpa
                 raise ValueError('Module generation has unresolved targets or continuations')
             path.write_text(guard_generated_source(code, retail_entry=False))
         record['todo_by_mnemonic'] = dict(counts)
-        _write_module(output, image, exports, selected)
+        _write_module(output, image, exports, selected, references)
         record['outputs'] = {p.name: sha256_file(p) for p in sorted(output.iterdir())
                              if p.suffix in ('.c', '.cpp', '.h')}
         record['inputs'] = {p.relative_to(output).as_posix(): sha256_file(p) for p in sorted(inputs.iterdir())}
@@ -292,12 +398,17 @@ def generate(source: Path, output: Path, sdk: Path | None = None, variant='libpa
     return record
 
 
-def _write_module(output, image, exports, selected):
+def _write_module(output, image, exports, selected, references):
     data = ',\n'.join(','.join(f'0x{x:02x}' for x in image[i:i+16]) for i in range(0,len(image),16))
     (output/'pace_image.c').write_text('#include <stdint.h>\nconst uint8_t mag_pace_image[] = {\n'+data+'\n};\n')
     entries = '\n'.join(f'    {{{int(nid,0)}u, {int(opd,0)-BASE}u}},'
                          for nid, opd in exports['libpace'].items())
     system = exports['!syslib']
+    reference_rows='\n'.join('    {'+json.dumps(ref['library'])+', '+str(int(ref['nid'],0))+'u, '+
+        ('PRX_EXPORT_FUNCTION' if ref['kind']=='function' else 'PRX_EXPORT_VARIABLE')+', '+
+        ', '.join(str(int(ref[field],0) if isinstance(ref[field],str) else ref[field])+'u' for field in ('type','target','addend','expected'))+'},'
+        for ref in references)
+    if not reference_rows:reference_rows='    {nullptr,0,0,0,0,0,0},'
     (output/'pace_module.cpp').write_text(f'''#include "mag_pace_recomp.h"
 #include "v212_pace.h"
 extern "C" const uint8_t mag_pace_image[];
@@ -308,8 +419,11 @@ extern "C" const MagV212PaceModule* mag_v212_pace_prepared_module(void) {{
     static const prx_module module = {{"pace", {BASE}u, mag_pace_image, {len(image)}u,
         reinterpret_cast<const prx_func_entry*>(mag_pace_function_table), mag_pace_function_table_count,
         exports, sizeof(exports)/sizeof(exports[0])}};
+    static const MagV212PaceImportReference references[] = {{
+{reference_rows}
+    }};
     static const MagV212PaceModule descriptor = {{&module, "{selected['guest_path']}",
-        {int(system['0xBC9A0086'],0)}u, {int(system['0xAB779874'],0)}u}};
+        {int(system['0xBC9A0086'],0)}u, {int(system['0xAB779874'],0)}u,references,{len(references)}u}};
     return &descriptor;
 }}
 ''')
