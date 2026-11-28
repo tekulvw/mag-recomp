@@ -8,6 +8,10 @@ everything generated from it stays in Git-ignored directories and must not be sh
 A complete clean bootstrap on a second machine has not yet been verified end to end; please report
 any step that does not work as written.
 
+For the separate offline 2.12 data-preparation investigation, see
+[retail 2.12 preparation](docs/retail-v2.12-preparation.md). That opt-in tool assembles and
+verifies local disc/update inputs; native compilation and execution still target v1.0.
+
 ## Development baseline and normal defaults
 
 Start new work from freshly fetched `origin/main`, then create a focused PR branch. Keep SDK
