@@ -42,8 +42,9 @@ def digest_tree(root):
             for path in sorted(root.rglob('*'))}
 
 
-def make_app(destination, host, version, options=None):
-    """A minimal app updating accepts: runtime record, both images with receipts, a supervisor."""
+def make_app(destination, host, version, options=None, supervisor=None):
+    """A minimal app updating accepts: runtime record, both images with receipts, a supervisor.
+    supervisor: the supervisor's bytes, for one that has --mag-verify-install."""
     destination.mkdir()
     if host == 'macos-arm64':
         images = {'launcher': 'Contents/MacOS/MagRecomp', 'engine': 'Contents/MacOS/MagEngine'}
@@ -61,11 +62,13 @@ def make_app(destination, host, version, options=None):
         if elf.is_file():
             receipt['elf_sha256'] = hashlib.sha256(elf.read_bytes()).hexdigest()
         (receipts / (role + '.json')).write_text(json.dumps(receipt))
-    supervisor = updating.supervisor_path(destination, host)
-    supervisor.parent.mkdir(parents=True, exist_ok=True)
-    supervisor.write_bytes(b'synthetic supervisor')
-    supervisor.chmod(0o755)
+    program = updating.supervisor_path(destination, host)
+    program.parent.mkdir(parents=True, exist_ok=True)
+    program.write_bytes(supervisor or b'synthetic supervisor')
+    program.chmod(0o755)
     runtime = {'schema_version': 2, 'game': '../game', **images, 'version': version}
+    if supervisor is not None:
+        runtime['supervisor'] = ['mag-verify-install', 'session-lock']
     if options is not None:
         runtime['build_options'] = options
     updating.runtime_path(destination, host).write_text(json.dumps(runtime))
@@ -89,14 +92,14 @@ class UpdateFixture(LayoutFixture):
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(data)
 
-    def packager(self, version, calls=None, game=True):
+    def packager(self, version, calls=None, game=True, supervisor=None):
         def package(config, workspace, destination, token=None, events=None, **kwargs):
             if game:
                 if config.get('disc_root'):
                     link_tree(Path(config['disc_root']), destination.parent / 'game' / 'PS3_GAME', Cancellation())
                 else:
                     (destination.parent / 'game/PS3_GAME').mkdir(parents=True)
-            make_app(destination, config_host(config), version, config.get('build_options'))
+            make_app(destination, config_host(config), version, config.get('build_options'), supervisor)
             if calls is not None:
                 calls.append(config)
             return destination
@@ -267,6 +270,42 @@ class UpdateTests(UpdateFixture, unittest.TestCase):
             player_build.update(root, output, cache, restore_previous=True)
             self.assertEqual(updating.app_version(output / 'MAG.app', 'macos-arm64'), '0.16.0')
             self.assertEqual(self.player_files(output), before)
+
+
+class SupervisorCheckTests(UpdateFixture, unittest.TestCase):
+    def test_the_new_supervisors_own_check_runs_and_its_failure_rolls_back(self):
+        import subprocess as processes
+        with tempfile.TemporaryDirectory() as temp, ExitStack() as stack:
+            root, source, output, cache = self.installed(temp)
+            self.setup_host(stack, 'macos-arm64', '0.16.0')
+            stack.enter_context(patch('mag_installer.native_package.package',
+                                      side_effect=self.packager('0.16.0', supervisor=b'native supervisor')))
+            calls = []
+            def run(argv, **kwargs):
+                calls.append((argv, kwargs))
+                return processes.CompletedProcess(argv, 3, b'', b'MAG could not start: Local input identity changed')
+            with patch.object(updating.subprocess, 'run', side_effect=run), patch.dict(os.environ, {'MAG_SKIP_SETUP': '1'}):
+                with self.assertRaisesRegex(InstallerError, 'failed its own check .*identity changed'):
+                    player_build.update(root, output, cache)
+            self.assertEqual(calls[0][0], [str(output / 'MAG.app/Contents/MacOS/MAG'), '--mag-verify-install'])
+            self.assertNotIn('MAG_SKIP_SETUP', calls[0][1]['env'])
+            self.assertEqual(updating.app_version(output / 'MAG.app', 'macos-arm64'), '0.15.0')
+            with patch.object(updating.subprocess, 'run', return_value=processes.CompletedProcess([], 0, b'MAG install verified', b'')):
+                player_build.update(root, output, cache)
+            self.assertEqual(updating.app_version(output / 'MAG.app', 'macos-arm64'), '0.16.0')
+
+    @unittest.skipIf(os.name == 'nt', 'a POSIX script stands in for the supervisor')
+    def test_a_real_supervisor_program_is_run_from_the_app(self):
+        with tempfile.TemporaryDirectory() as temp:
+            output = Path(temp).resolve() / 'MAG'; (output / 'game/PS3_GAME').mkdir(parents=True)
+            script = b'#!/bin/sh\n[ "$1" = --mag-verify-install ] && [ -z "$MAG_PLAYER_SETUP" ] && echo verified && exit 0\necho "wrong $1" >&2; exit 9\n'
+            app = make_app(output / 'MAG', 'linux-x86_64', '1.0.0', supervisor=script)
+            with patch.dict(os.environ, {'MAG_PLAYER_SETUP': '1'}):
+                self.assertTrue(updating.supervisor_check(app, 'linux-x86_64'))
+            updating.supervisor_path(app, 'linux-x86_64').write_bytes(b'#!/bin/sh\necho "bad identity" >&2; exit 1\n')
+            with self.assertRaisesRegex(InstallerError, 'bad identity'):
+                updating.supervisor_check(app, 'linux-x86_64')
+            self.assertFalse(updating.supervisor_check(make_app(output / 'Old', 'linux-x86_64', '0.9.0'), 'linux-x86_64'))
 
 
 class RememberedInputTests(UpdateFixture, unittest.TestCase):

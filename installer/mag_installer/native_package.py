@@ -85,7 +85,9 @@ _LAUNCHER = r'''
 #import <AppKit/AppKit.h>
 #import <CommonCrypto/CommonDigest.h>
 #include "player_reports.h"
+#include <errno.h>
 #include <fcntl.h>
+#include <sys/file.h>
 #include <sys/stat.h>
 #include <unistd.h>
 static void fail(NSString *s) { @throw [NSException exceptionWithName:@"MAGLaunch" reason:s userInfo:nil]; }
@@ -149,6 +151,9 @@ int main(int argc,char **argv) { @autoreleasepool {
  // The detached report sender a session starts: MAG --send-reports <launch log folder>.
  if(argc==3&&!strcmp(argv[1],"--send-reports"))
   return mag::reports::run_sender(std::filesystem::path(root.fileSystemRepresentation)/"home/reports",settingsFile().fileSystemRepresentation,argv[2]);
+ // MAG --mag-verify-install: the installer's check of an updated app (installer update.py): the
+ // identity checks of a start, then nothing else; a failure writes no launch-error.log.
+ BOOL verifying=argc==2&&!strcmp(argv[1],"--mag-verify-install");
  @try {
  NSDictionary *m=json([app stringByAppendingPathComponent:@"Contents/Resources/runtime.json"],2097152);
  NSString *(^inApp)(NSString *)=^NSString *(NSString *p){return [app stringByAppendingPathComponent:p].stringByStandardizingPath;};
@@ -164,6 +169,13 @@ int main(int argc,char **argv) { @autoreleasepool {
  NSDictionary *lr=json(inApp(@"Contents/Resources/package-receipts/launcher.json"),2097152),*er=json(inApp(@"Contents/Resources/package-receipts/engine.json"),2097152);
  if(![lr[@"image_name"] isEqual:@"EBOOT"]||![er[@"image_name"] isEqual:@"mage_g"])fail(@"Incorrect image receipts");
  check(launcher,lr[@"binary_sha256"]);check(engine,er[@"binary_sha256"]);check(launcherElf,lr[@"elf_sha256"]);check(engineElf,er[@"elf_sha256"]);check(engineSelf,m[@"engine_self_sha256"]);
+ if(verifying){printf("MAG install verified\n");return 0;}
+ // Held (shared) for this launch's whole life. An in-place update takes it exclusively, so it never
+ // replaces the app while MAG runs, and MAG does not start while it does (installer update.py).
+ NSString *home=[root stringByAppendingPathComponent:@"home"];
+ [NSFileManager.defaultManager createDirectoryAtPath:home withIntermediateDirectories:YES attributes:@{NSFilePosixPermissions:@0700} error:nil];
+ {int session=open([home stringByAppendingPathComponent:@".session-lock"].fileSystemRepresentation,O_RDWR|O_CREAT|O_NOFOLLOW|O_CLOEXEC,0600);
+  if(session>=0&&flock(session,LOCK_SH|LOCK_NB)!=0&&errno==EWOULDBLOCK)fail(@"MAG is being updated. Start it again when the update has finished.");}
  NSString *token=[NSUUID.UUID.UUIDString.lowercaseString stringByReplacingOccurrencesOfString:@"-" withString:@""];
  NSString *logs=[root stringByAppendingPathComponent:[@"logs/launch-" stringByAppendingString:token]];
  if(![NSFileManager.defaultManager createDirectoryAtPath:logs withIntermediateDirectories:YES attributes:@{NSFilePosixPermissions:@0700} error:nil])fail(@"Cannot create launch log directory");
@@ -220,13 +232,18 @@ int main(int argc,char **argv) { @autoreleasepool {
  } @catch(NSException *e) {
  if(e.reason)report.session.launch_error=e.reason.UTF8String;
  NSString *message=[NSString stringWithFormat:@"MAG could not start: %@\n",e.reason];
- [message writeToFile:[root stringByAppendingPathComponent:@"launch-error.log"] atomically:YES encoding:NSUTF8StringEncoding error:nil];
+ if(!verifying)[message writeToFile:[root stringByAppendingPathComponent:@"launch-error.log"] atomically:YES encoding:NSUTF8StringEncoding error:nil];
  fprintf(stderr,"%s",message.UTF8String);return 1;
  } @finally {
  if(ownedOverlay)[NSFileManager.defaultManager removeItemAtPath:ownedOverlay error:nil];
  }
 } }
 '''
+
+
+# What the supervisors of this installer do for an in-place update (installer update.py): the
+# --mag-verify-install check, and the session lock they hold while MAG runs. Recorded in runtime.json.
+SUPERVISOR_FEATURES = ['mag-verify-install', 'session-lock']
 
 
 # Why MAG asks for the microphone (Info.plist NSMicrophoneUsageDescription).
@@ -390,6 +407,7 @@ def package(config, workspace, destination, token=None, events=None):
                     _run_tool(['/usr/bin/install_name_tool', '-delete_rpath', rpath, str(target)], token)
             _run_tool(['/usr/bin/codesign', '--force', '--sign', '-', str(target)], token)
         runtime = {'schema_version':2,'game':os.path.relpath(game,destination),'version':product_version(workspace),
+                   'supervisor':SUPERVISOR_FEATURES,
                    'launcher':'Contents/MacOS/MagRecomp','engine':'Contents/MacOS/MagEngine',
                    'engine_self_sha256':manifest['images']['mage_g']['source_sha256'],
                    'signing':'local-ad-hoc','adjustments':adjustments,

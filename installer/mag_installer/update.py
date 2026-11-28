@@ -28,6 +28,7 @@ from pathlib import Path
 import shutil
 import secrets
 import stat
+import subprocess
 import time
 
 from .model import InstallerError
@@ -256,6 +257,27 @@ def verify_app(app, host, output, token=None):
             raise InstallerError(f'The game files in the MAG folder are not the ones the new app\'s {role} was built from.')
 
 
+def supervisor_check(app, host, timeout=300):
+    """The new app's own check, ``MAG --mag-verify-install``, when its supervisor has one (recorded
+    as 'supervisor' in runtime.json): the identity checks MAG makes at every start, without a
+    window, a game image or a socket. Returns whether it ran; a failure raises."""
+    features = (read_runtime(app, host) or {}).get('supervisor')
+    if not isinstance(features, list) or 'mag-verify-install' not in features:
+        return False
+    supervisor = supervisor_path(app, host)
+    # The caller's MAG_ overrides are for a normal start (automation, tests), never for this check.
+    environment = {key: value for key, value in os.environ.items() if not key.upper().startswith('MAG_')}
+    try:
+        result = subprocess.run([str(supervisor), '--mag-verify-install'], stdin=subprocess.DEVNULL, capture_output=True,
+                                timeout=timeout, env=environment, cwd=str(Path(app).parent))
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise InstallerError(f'The new app\'s own check could not run: {exc}') from exc
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or b'').decode('utf-8', 'replace').strip()[-600:]
+        raise InstallerError(f'The new app failed its own check (exit {result.returncode}): {detail or "no message"}')
+    return True
+
+
 def _step(name):
     """One named step of the swap. Tests replace it to fail or stop at that step."""
 
@@ -481,6 +503,7 @@ def _advance(output, build, status, record, host, write, token, events):
     if record['phase'] == 'verifying':
         _step('verify')
         verify_app(app, host, output, token)
+        supervisor_check(app, host)
         _step('permissions')
         _keep_permissions(app, output, record)
         record['phase'] = 'keeping'

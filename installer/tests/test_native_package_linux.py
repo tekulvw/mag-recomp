@@ -158,6 +158,37 @@ int main(void) {
             run=subprocess.run([str(moved/'MAG/MAG')],env=env,capture_output=True,text=True,timeout=15)
             self.assertEqual(run.returncode,1);self.assertIn('game files are missing',run.stderr)
 
+    @unittest.skipUnless(sys.platform=='linux','requires Linux ELF loader and OpenSSL development headers')
+    def test_native_supervisor_verifies_an_install_and_holds_the_session_lock(self):
+        """--mag-verify-install checks the identities and starts nothing; a normal start holds
+        home/.session-lock shared, and an update holding it exclusively keeps MAG from starting."""
+        import fcntl
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp).resolve()
+            install=self.install_fixture(root,'int main(void){return 23;}\n')
+            supervisor=str(install/'MAG/MAG')
+            self.assertEqual(json.loads((install/'MAG/resources/runtime.json').read_text())['supervisor'],
+                             ['mag-verify-install','session-lock'])
+            env=dict(os.environ,DISPLAY=':fixture',XDG_CONFIG_HOME=str(root/'config'))
+            check=subprocess.run([supervisor,'--mag-verify-install'],env=env,capture_output=True,text=True,timeout=15)
+            self.assertEqual(check.returncode,0,check.stderr);self.assertIn('MAG install verified',check.stdout)
+            self.assertEqual(sorted(p.name for p in install.iterdir()),['MAG','game'])  # no logs, no home
+            (install/'home').mkdir();lock=os.open(install/'home/.session-lock',os.O_RDWR|os.O_CREAT,0o600)
+            try:
+                fcntl.flock(lock,fcntl.LOCK_EX)
+                held=subprocess.run([supervisor,'--no-prompt'],env=env,capture_output=True,text=True,timeout=15)
+                self.assertEqual(held.returncode,1);self.assertIn('MAG is being updated',held.stderr)
+                self.assertFalse((install/'logs').exists())
+            finally:
+                os.close(lock)
+            started=subprocess.run([supervisor,'--no-prompt'],env=env,capture_output=True,text=True,timeout=15)
+            self.assertNotIn('MAG is being updated',started.stderr);self.assertTrue((install/'logs').is_dir())
+            (install/'launch-error.log').unlink(missing_ok=True)
+            (install/'MAG/bin/MagEngine').write_bytes(b'changed')
+            check=subprocess.run([supervisor,'--mag-verify-install'],env=env,capture_output=True,text=True,timeout=15)
+            self.assertEqual(check.returncode,1);self.assertIn('identity changed',check.stderr)
+            self.assertFalse((install/'launch-error.log').exists())
+
     def install_fixture(self, root, game_source):
         """A packaged MAG whose launcher and engine are this synthetic C program."""
         # The build workspace sits beside the MAG folder, never inside it.

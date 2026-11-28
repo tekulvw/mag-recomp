@@ -139,7 +139,9 @@ MAG" for a folder that does not record its version). Leave the game folder and f
 to use the ones from last time, or choose them again. Then:
 
 1. The installer checks that MAG is not running from that folder (close MAG and its settings window
-   first), that the folder holds nothing it does not know, and that the drive has room: the build
+   first; MAG holds `home/.session-lock` while it runs, and a MAG started during the update says
+   "MAG is being updated" instead of starting), that the folder holds nothing it does not know, and
+   that the drive has room: the build
    folder's size at its fullest (measured by the last build on this computer, else about 40 GB), one
    more copy of the app and 2 GB to spare. Any of these stops the update with nothing changed.
 2. It finds your inputs: the game folder used last time, else the game files already in `MAG/game`,
@@ -150,8 +152,10 @@ to use the ones from last time, or choose them again. Then:
    this MAG was built with (voice chat, game controls), unless you change them.
 4. It replaces only the app (`MAG.app`, or `MAG\MAG` on Windows and `MAG/MAG` on Linux). The
    `MAG` folder, `game/`, `home/` and `logs/` stay where they are, so MAG starts from the same path,
-   your shortcuts keep working and Windows asks no new firewall questions. On Windows the new app
-   gets exactly the previous app's permissions; if they cannot be matched, the update is undone.
+   your shortcuts keep working and Windows asks no new firewall questions. The new app must pass the
+   installer's checks and its own (`MAG --mag-verify-install`, which checks the same identities as
+   every start and opens no window). On Windows the new app gets exactly the previous app's
+   permissions; if they cannot be matched, the update is undone.
 5. The previous version is kept in `MAG-build/previous`, and the rest of `MAG-build` is removed
    except its logs and journal. Deleting `MAG-build` afterwards only removes that copy.
 
