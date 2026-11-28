@@ -104,8 +104,12 @@ def prepare(source_tree, sdks, output_archive, token=None, events=None):
         env={'PATH':str(Path(git).parent)+os.pathsep+'/usr/bin:/bin', 'HOME':str(home),
              'TMPDIR':str(home),'GIT_CONFIG_NOSYSTEM':'1','GIT_CONFIG_GLOBAL':os.devnull,
              'GIT_OPTIONAL_LOCKS':'0','GIT_TERMINAL_PROMPT':'0','GIT_ALLOW_PROTOCOL':'file',
-             'GIT_CONFIG_COUNT':'2','GIT_CONFIG_KEY_0':'core.hooksPath','GIT_CONFIG_VALUE_0':os.devnull,
-             'GIT_CONFIG_KEY_1':'init.templateDir','GIT_CONFIG_VALUE_1':str(home/'empty-template')}
+             'GIT_CONFIG_COUNT':'4','GIT_CONFIG_KEY_0':'core.hooksPath','GIT_CONFIG_VALUE_0':os.devnull,
+             'GIT_CONFIG_KEY_1':'init.templateDir','GIT_CONFIG_VALUE_1':str(home/'empty-template'),
+             # Git's post-fetch maintenance otherwise races the inventory and
+             # tar walk by creating/removing .git/objects/maintenance.lock.
+             'GIT_CONFIG_KEY_2':'maintenance.auto','GIT_CONFIG_VALUE_2':'false',
+             'GIT_CONFIG_KEY_3':'gc.auto','GIT_CONFIG_VALUE_3':'0'}
         (home/'empty-template').mkdir()
         # A kit carries tracked source only: refuse untracked scratch, captures or
         # output that happen to sit inside the allowlisted directories.

@@ -9,6 +9,9 @@ from pathlib import Path
 if __package__ in (None, ''):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from tools.prepare_inputs import ROOT, sha256_file, validate_ppu_elf, verify_hash, data_path, load_framework
+from tools import prepare_inputs
+from tools.targets import (DEFAULT_TARGET, TARGET_NAMES, get_target,
+                           validate_target_profile, validate_target_output)
 
 SDK_REVISION = '5244db92669b54831c6d3ebb7a96d58c4dbfa6df'
 
@@ -41,7 +44,19 @@ def restrict_to_code(rows: list, ranges: list) -> list:
     return result
 
 
-def inventory_image(elf_path: Path, sdk_root: Path, output_dir: Path) -> dict:
+def inventory_image(elf_path: Path, sdk_root: Path, output_dir: Path,
+                    target: str = DEFAULT_TARGET) -> dict:
+    definition = get_target(target)
+    validate_target_output(output_dir, target, workspace=prepare_inputs.WORKSPACE)
+    if target != DEFAULT_TARGET:
+        manifest = json.loads(data_path(definition.profile).read_text())
+        validate_target_profile(manifest, target)
+        image = manifest['images'].get(elf_path.stem)
+        if image is None:
+            raise ValueError('ELF name does not belong to the selected target')
+        verify_hash(elf_path, image['elf_sha256'])
+        if output_dir.exists() and any(output_dir.iterdir()):
+            raise ValueError('Target inventory requires a fresh output directory')
     check_sdk(sdk_root)
     header = validate_ppu_elf(elf_path)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -77,6 +92,8 @@ def inventory_image(elf_path: Path, sdk_root: Path, output_dir: Path) -> dict:
                    imports_by_library={lib: sum(x['lib']==lib for x in imports) for lib in sorted({x['lib'] for x in imports})},
                    spu_elfs=[dict(path=str(p.relative_to(output_dir)), bytes=p.stat().st_size, sha256=sha256_file(p)) for p in sorted((output_dir/'spu').glob('*.elf'))],
                    coverage='Descriptor TOCs; heuristic function discovery; embedded ELF scan excludes raw or compressed SPU jobs.')
+    if target != DEFAULT_TARGET:
+        summary['target'] = target
     (output_dir/'summary.json').write_text(json.dumps(summary, indent=2)+'\n')
     return summary
 
@@ -85,11 +102,16 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--sdk', type=Path, default=os.environ.get('PS3RECOMP_DIR'), required='PS3RECOMP_DIR' not in os.environ,
                         help='ps3recomp checkout (default: $PS3RECOMP_DIR)')
+    parser.add_argument('--target', choices=TARGET_NAMES, default=DEFAULT_TARGET)
     args = parser.parse_args()
-    config = json.loads((data_path('profiles/retail-v1.0.json')).read_text())
+    definition = get_target(args.target)
+    config = json.loads(data_path(definition.profile).read_text())
+    validate_target_profile(config, args.target)
+    inventory_path = data_path(Path(definition.profile).with_name(f'{args.target}-inventory.json'))
+    validate_target_output(inventory_path, args.target, workspace=prepare_inputs.WORKSPACE)
     summaries = {}
     for name, record in config['images'].items():
         path = Path(record['elf']); verify_hash(path, record['elf_sha256'])
-        summaries[name] = inventory_image(path, args.sdk, data_path('analysis/retail-v1.0')/name)
+        summaries[name] = inventory_image(path, args.sdk, data_path(definition.analysis)/name, target=args.target)
         print(name, summaries[name]['discovered_function_count'], 'functions,', len(summaries[name]['tocs']), 'TOCs,', len(summaries[name]['spu_elfs']), 'SPU ELFs', flush=True)
-    (data_path('profiles/retail-v1.0-inventory.json')).write_text(json.dumps(summaries, indent=2)+'\n')
+    inventory_path.write_text(json.dumps(summaries, indent=2)+'\n')

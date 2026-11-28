@@ -242,4 +242,32 @@ class NativeBuildTests(unittest.TestCase):
             self.assertTrue({'rust-toolchain.toml','crates/mag-input/Cargo.toml','crates/mag-input/Cargo.lock','crates/mag-input/src/lib.rs'}<=paths)
             self.assertFalse(any('/target/' in p for p in paths))
 
+    def test_curated_source_includes_target_tools_and_excludes_all_machine_profiles(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+            for name in native.SOURCE_DIRS:
+                (root/name).mkdir()
+            for relative in ('tools/targets.py', 'cmake/MagRetailTarget.cmake',
+                             'profiles/framework.json', 'profiles/retail-v2.12-inputs.json',
+                             'profiles/retail-v1.0.json', 'profiles/retail-v1.0-inventory.json',
+                             'profiles/retail-v2.12.json', 'profiles/retail-v2.12-inventory.json'):
+                path = root/relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text('synthetic source or private machine data')
+            paths = {p.relative_to(root).as_posix() for p in native._source_files(root)}
+            self.assertTrue({'tools/targets.py', 'cmake/MagRetailTarget.cmake',
+                             'profiles/framework.json', 'profiles/retail-v2.12-inputs.json'} <= paths)
+            for target in ('retail-v1.0', 'retail-v2.12'):
+                self.assertNotIn(f'profiles/{target}.json', paths)
+                self.assertNotIn(f'profiles/{target}-inventory.json', paths)
+
+    def test_repository_reviewed_identities_remain_literal_v1_inputs(self):
+        source = Path(__file__).resolve().parents[2]
+        identities = native.reviewed_identities(source)
+        self.assertEqual(identities['executables'], {
+            'EBOOT.BIN': ['ebe4a52656cc38483d24656029a55ddef6fd53adc7f23b4c52c42f272ac8d1f9',
+                          'eb916f92e7c32a9401739d79835630273e1f41a92e6a5d17753d9374062da7d9'],
+            'bin/mage_g.self': ['54b324a39e5453916768d8e83057ea72865cf53b23a1a8f058e25915d401840c',
+                                '0089f0d6d17e48533ce7ff8d943dddd03487b925e7b04a1a055bfb907568694c']})
+
 if __name__=='__main__': unittest.main()

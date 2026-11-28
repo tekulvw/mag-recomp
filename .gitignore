@@ -8,6 +8,8 @@ runs/
 # Written per machine by tools/prepare_inputs.py and tools/inventory.py from your own inputs.
 profiles/retail-v1.0.json
 profiles/retail-v1.0-inventory.json
+profiles/retail-v2.12.json
+profiles/retail-v2.12-inventory.json
 *.BIN
 *.self
 *.sprx

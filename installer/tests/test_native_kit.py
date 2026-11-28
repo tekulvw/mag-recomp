@@ -78,6 +78,7 @@ class NativeKitTests(unittest.TestCase):
             self.assertEqual(self.git('-C',str(lifter),'rev-parse','HEAD').strip(),sdks['lifter-ppu']['revision'])
             self.assertEqual(self.git('-C',str(lifter),'rev-parse','refs/tags/mag-recomp/lifter-fixture^{commit}').strip(),fixed)
             self.assertEqual(self.git('-C',str(lifter),'show',fixed+':runtime.txt'),'fixed\n')
+
             # Roles without a splice commit stay single-commit.
             with self.assertRaises(subprocess.CalledProcessError):
                 self.git('-C',str(extracted/'sdks/runtime'),'rev-parse','--verify','refs/tags/mag-recomp/lifter-fixture')
@@ -102,6 +103,29 @@ class NativeKitTests(unittest.TestCase):
             with patch('mag_installer.native_kit.validate_source_tree',return_value=pins):
                 with self.assertRaisesRegex(InstallerError,'does not name its pinned splice commit'):
                     native_kit.prepare(source,sdks,root/'refused.tar.gz')
+
+    def test_owned_git_operations_disable_background_maintenance_before_archiving(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+            source, sdks = self.fixture(root)
+            original = native_kit._git
+            observed = []
+            def audited(argv, cwd, env, token):
+                # Query Git itself, since its process-local configuration must
+                # keep background tasks from changing .git during the archive.
+                values = []
+                for setting in ('maintenance.auto', 'gc.auto'):
+                    result = subprocess.run(['/usr/bin/git', 'config', '--get', setting],
+                                            cwd=cwd, env=env, capture_output=True, text=True)
+                    values.append(result.stdout.strip())
+                self.assertEqual(values, ['false', '0'])
+                observed.append(argv)
+                return original(argv, cwd, env, token)
+            pins = {r: {'commit': s['revision'], 'tag': 'fixture'} for r, s in sdks.items()}
+            with patch('mag_installer.native_kit.validate_source_tree', return_value=pins), \
+                 patch('mag_installer.native_kit._git', side_effect=audited):
+                native_kit.prepare(source, sdks, root/'kit.tar.gz')
+            self.assertTrue(observed)
 
     def test_git_checkout_source_refuses_untracked_files_in_allowlisted_directories(self):
         with tempfile.TemporaryDirectory() as temp:

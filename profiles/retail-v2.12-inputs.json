@@ -1,0 +1,1902 @@
+{
+  "schema": 1,
+  "title_id": "BCUS98110",
+  "media": "retail disc (USA)",
+  "app_version": "02.12",
+  "content_level": 489979,
+  "disc_files": [
+    {
+      "path": "PS3_DISC.SFB",
+      "size": 1536,
+      "sha256": "5474f6c757d70aa8abdad61ae6314052a4afb495bfd72fd6afd6f5378642a06b"
+    },
+    {
+      "path": "PS3_GAME/ICON0.PNG",
+      "size": 49912,
+      "sha256": "4ce392800a646910de891bf664ba0c2c6fbe1e99126e45afe120dae32eb9809e"
+    },
+    {
+      "path": "PS3_GAME/ICON1.PAM",
+      "size": 1546240,
+      "sha256": "d24761966cf89cb73daeedd25e4c2b0d4caaf1eb0142e8505e7e53e529c0b341"
+    },
+    {
+      "path": "PS3_GAME/LICDIR/LIC.DAT",
+      "size": 65536,
+      "sha256": "7beea12ffcd98bffccc4fcc463de7acda97473ec1ad1c30f2a091c2895691e14"
+    },
+    {
+      "path": "PS3_GAME/PARAM.SFO",
+      "size": 1040,
+      "sha256": "1377f1b8f5707810b437091e8f18cc81317b67f720b13f6077fbf79e703cf63b"
+    },
+    {
+      "path": "PS3_GAME/PIC1.PNG",
+      "size": 3232159,
+      "sha256": "18f92bbbcedd7446a85c5466345da706a5faf72d6c452fe058f489549a740972"
+    },
+    {
+      "path": "PS3_GAME/PS3LOGO.DAT",
+      "size": 5120,
+      "sha256": "e08430957ac3f4ee719dc2ed04d3443c395dd3b997d8f34f68a1b5c37d92f425"
+    },
+    {
+      "path": "PS3_GAME/SND0.AT3",
+      "size": 1474660,
+      "sha256": "84f5652dec906d731caa60516bd6419225a16fef3c140776fed32524194845cf"
+    },
+    {
+      "path": "PS3_GAME/TROPDIR/NPWR00380_00/TROPHY.TRP",
+      "size": 1227584,
+      "sha256": "f507b4014ca2f895e0b021cc22200fd21c6d31847f5387915cba090d94d44ae4"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/bin/mage_g.self",
+      "size": 30254008,
+      "sha256": "54b324a39e5453916768d8e83057ea72865cf53b23a1a8f058e25915d401840c"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/EBOOT.BIN",
+      "size": 4702544,
+      "sha256": "ebe4a52656cc38483d24656029a55ddef6fd53adc7f23b4c52c42f272ac8d1f9"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/skat/vo.ctl",
+      "size": 97940,
+      "sha256": "450597c6dd6a571709429718ae2748132d4a7c5e8f17f410e2018935d5b36914"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/skat/vo.skx",
+      "size": 983616,
+      "sha256": "53a863cc4b051ee8ebf17500211accde69c1c2e2b6aaa3bc6f247a481a16e9e9"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/skat/vo.skx.1",
+      "size": 301262112,
+      "sha256": "f9eb22f2ace50431cb1ede33c647f6f6ab454e9476988b1116bef5c76b095aa1"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/skat/vo.tbl",
+      "size": 40912,
+      "sha256": "c95739e49ecf714f2cde9b746297ceb91efd4d8a12f3d3b6a5d968d6825d0439"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/skat/vo_english.ctl",
+      "size": 97940,
+      "sha256": "450597c6dd6a571709429718ae2748132d4a7c5e8f17f410e2018935d5b36914"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/skat/vo_english.skx",
+      "size": 983616,
+      "sha256": "53a863cc4b051ee8ebf17500211accde69c1c2e2b6aaa3bc6f247a481a16e9e9"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/skat/vo_english.skx.1",
+      "size": 301262112,
+      "sha256": "f9eb22f2ace50431cb1ede33c647f6f6ab454e9476988b1116bef5c76b095aa1"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/skat/vo_english.tbl",
+      "size": 40912,
+      "sha256": "c95739e49ecf714f2cde9b746297ceb91efd4d8a12f3d3b6a5d968d6825d0439"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/skat/vo_french.ctl",
+      "size": 97940,
+      "sha256": "450597c6dd6a571709429718ae2748132d4a7c5e8f17f410e2018935d5b36914"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/skat/vo_french.skx",
+      "size": 985632,
+      "sha256": "3fdf68b50392bff65beb229f2a0b215ca2570a7c416e83d679818f543d23658d"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/skat/vo_french.skx.1",
+      "size": 290945264,
+      "sha256": "40c16b223b6e67980d0c277ca4a70c653d667c9848d44386d02247137d0bf8d6"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/skat/vo_french.tbl",
+      "size": 40912,
+      "sha256": "e8e4a5a93b7c41343581ee46ff2700a9d24e08163ec8f6e253cd0a33d972aad3"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/skat/vo_german.ctl",
+      "size": 97940,
+      "sha256": "450597c6dd6a571709429718ae2748132d4a7c5e8f17f410e2018935d5b36914"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/skat/vo_german.skx",
+      "size": 1016912,
+      "sha256": "74beae7006361b1e2b28acf6f9b7014110db084e6ee9dca933532a3fbe69b42b"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/skat/vo_german.skx.1",
+      "size": 321161136,
+      "sha256": "71f4619c20410c2f81114549b71453294f002be57605ba28df474be1738f35ee"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/skat/vo_german.tbl",
+      "size": 40912,
+      "sha256": "18e3a609fb6966474a4efd38d835b8e50f503f7298971ebab92177d1a0bdcc3d"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/skat/vo_italian.ctl",
+      "size": 97940,
+      "sha256": "450597c6dd6a571709429718ae2748132d4a7c5e8f17f410e2018935d5b36914"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/skat/vo_italian.skx",
+      "size": 1034640,
+      "sha256": "05da76264c544265324e0e47425c03801ee34ab1bdbf5138b403d9705f9bbb50"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/skat/vo_italian.skx.1",
+      "size": 323621488,
+      "sha256": "64ec1cec004a9da4d5d662b84237776a11981d4c0b94b97bfeaa3a517b2b4399"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/skat/vo_italian.tbl",
+      "size": 40912,
+      "sha256": "acf11b301851a3bec3de3faae12195eb1cedc32695122951bf65479ec1945a05"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/skat/vo_japanese.ctl",
+      "size": 97940,
+      "sha256": "450597c6dd6a571709429718ae2748132d4a7c5e8f17f410e2018935d5b36914"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/skat/vo_japanese.skx",
+      "size": 1021264,
+      "sha256": "8b3ef9524d3c0aeb702288d124f67b50206a767124ef8ec4240884e9a3ed1597"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/skat/vo_japanese.skx.1",
+      "size": 290857360,
+      "sha256": "89673520889bbfdc16392ac7ad1859d3a5691914571450e7c5464c59237d21aa"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/skat/vo_japanese.tbl",
+      "size": 40912,
+      "sha256": "c7fc582ffacd1fef0dbad85b757b60e8211dfddc6695c372b5fcde0697a98d01"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/skat/vo_korean.ctl",
+      "size": 97940,
+      "sha256": "450597c6dd6a571709429718ae2748132d4a7c5e8f17f410e2018935d5b36914"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/skat/vo_korean.skx",
+      "size": 1008464,
+      "sha256": "f9a9310839827b41febea4d55519e88eb1bdb2d31de957bcf095b32a207f8b39"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/skat/vo_korean.skx.1",
+      "size": 304205632,
+      "sha256": "559da6a3eb359e713698716734903dfc4c5ed4d6e159a80fe8970a1968531d51"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/skat/vo_korean.tbl",
+      "size": 40912,
+      "sha256": "28e36dbe7f753c483e9326cd21199fe05de0a9d864c16d6584b481cbd5b1e893"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/skat/vo_polish.ctl",
+      "size": 97940,
+      "sha256": "450597c6dd6a571709429718ae2748132d4a7c5e8f17f410e2018935d5b36914"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/skat/vo_polish.skx",
+      "size": 980192,
+      "sha256": "97b32652d63f6321c30912eb9e666bc31ab5a106466d22b75441401fd4b80698"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/skat/vo_polish.skx.1",
+      "size": 326416480,
+      "sha256": "bb71444bdcb80db5e6b7f9c15bc666a32a03c9e2759767654fd62b345277247a"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/skat/vo_polish.tbl",
+      "size": 40912,
+      "sha256": "9e84a2dbe71fc640ed04410962f74e93cd64fcfec69456a664c24e82f34fc3cc"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/skat/vo_portuguese.ctl",
+      "size": 97940,
+      "sha256": "450597c6dd6a571709429718ae2748132d4a7c5e8f17f410e2018935d5b36914"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/skat/vo_portuguese.skx",
+      "size": 1001120,
+      "sha256": "09bed32efa12d09c1a5d104da360fe579fda2a220aea37167365cf1df9420e23"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/skat/vo_portuguese.skx.1",
+      "size": 328616288,
+      "sha256": "0203f6ef1eecf9676964d266ae61073afc686a93df9792a861aaac1cd08bd7dc"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/skat/vo_portuguese.tbl",
+      "size": 40912,
+      "sha256": "89edf37a246dc591fb00a4337f7b9e30b6823f92f1c4b8060c030df019f6ff8e"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/skat/vo_russian.ctl",
+      "size": 97940,
+      "sha256": "450597c6dd6a571709429718ae2748132d4a7c5e8f17f410e2018935d5b36914"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/skat/vo_russian.skx",
+      "size": 958672,
+      "sha256": "69ddb22b5f47af131ea4dd9335d68f2d9834e87b98ca76c860608598b21de048"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/skat/vo_russian.skx.1",
+      "size": 314653456,
+      "sha256": "13cef108fd6a578cf0430a8169c00f8964c1bab8f3ba077745601b824a6b064d"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/skat/vo_russian.tbl",
+      "size": 40912,
+      "sha256": "79c49d412588dfc86d9b94a7c2c3bd7be371e8e4a9af6943c57b5a11d7e70395"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/skat/vo_spanish.ctl",
+      "size": 97940,
+      "sha256": "450597c6dd6a571709429718ae2748132d4a7c5e8f17f410e2018935d5b36914"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/skat/vo_spanish.skx",
+      "size": 962032,
+      "sha256": "cab481399309b21a4592907dc577793a322cdd297ad32707cd62ebef1fd18e69"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/skat/vo_spanish.skx.1",
+      "size": 306479472,
+      "sha256": "04699347501cee603a569ecdab9c54dece90d2f940509bf6a7e7e9623acac8f5"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/skat/vo_spanish.tbl",
+      "size": 40912,
+      "sha256": "2d9f6ec56c77cefa08c5d681e921be13f6ad6b4b726e8925abddaf9daba57ff0"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/ambience/ambience.xvag",
+      "size": 31430636,
+      "sha256": "292309af2164960dbb16bffa534b98c0b5e0080abdc03aa22b9105721e3c287a"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/ambience/amb_cosmo_outdoor.xvag",
+      "size": 6312748,
+      "sha256": "e247ab998befda754b5b05c11c0080fe034e4fa43e070349a1797fe0476a69a4"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/ambience/amb_jungle.vpk",
+      "size": 3098624,
+      "sha256": "603f0b94b02873ce71718bbf03b7586df07d364aa1f5eb20f07211164d808f6e"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/ambience/cosmodrome_ambience.xvag",
+      "size": 19411020,
+      "sha256": "1d3762cf6c0037652fa4d2a9faca5980d3c95788b0f889fcc560193c918b4798"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/global/air_raid_siren_samples/siren_head.xvag",
+      "size": 60140,
+      "sha256": "afe6a43c3d5469d33ae7ee990305b7ce3fb5da15b3b8021ef2f6117dec28c0cb"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/global/air_raid_siren_samples/siren_loop.xvag",
+      "size": 1034476,
+      "sha256": "310a125eb13e540c7a61f705e028aa84dda3422b42ea40b854547841cdc980b4"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/global/air_raid_siren_samples/siren_tail.xvag",
+      "size": 316300,
+      "sha256": "d3aff416c27560baa93a4ed797bc482c9954a356212b272e688f2361d22ff031"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/credits_01.xvag",
+      "size": 14284332,
+      "sha256": "7b2c01707f5c772d8cbed7a2272f7e51a5b060ec74e662ba76545952d5be4202"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/gen_fe_01.xvag",
+      "size": 10707136,
+      "sha256": "dbf258980042c091eabad456268f6eeff56eecefb67a7ebe9af26d0c733dbec2"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/gen_fe_01_loop.xvag",
+      "size": 8661516,
+      "sha256": "209bb50533718fa915031ee884f671416fff60ffa78f47b258fc02411825e84c"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/gen_fe_01_start.xvag",
+      "size": 2106156,
+      "sha256": "412c8d2a02275eea8df9d64da005cfeb2208fc7514c8b203a0cfea5d0282bb7e"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/gen_fe_02_loop.xvag",
+      "size": 8661516,
+      "sha256": "930faa8f6686671146d3d126b18c2a665164d244dacc2c4dce41fb8dac4bac35"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/gen_fe_03_loop.xvag",
+      "size": 8661516,
+      "sha256": "a966e6b38aad419558495439fbe392f862c78ef95b658888801e818a129cb7b3"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/raven_a_chaotic_world.xvag",
+      "size": 4755756,
+      "sha256": "f67e15368b030d2073876e0db9ec37507525980f1ae400b18a7b0b8a7824924f"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/raven_a_force_for_order.xvag",
+      "size": 4171084,
+      "sha256": "5ba5b6c1aaf3dc6933082b8e7812803197c8c4747ba3c4f654c79d77b0ba9dd1"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/raven_defense_industry.xvag",
+      "size": 3119052,
+      "sha256": "33c7c9d5ca3e4719c1b9c402c8c3ff8f2e6af1014cff3d13043f1c197176a3c2"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/raven_raven_theme.xvag",
+      "size": 4662988,
+      "sha256": "5267ae4f7367ad87c81163e018def573c9da44b1a636d562ea628fcd22fce8f5"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/rv_control_01.xvag",
+      "size": 2488076,
+      "sha256": "cccb73b999ea1bd341f8776792cb217afaf47b85f1329ecdaa27fb9473d4e41d"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/rv_control_announce_01.xvag",
+      "size": 476396,
+      "sha256": "b36b2477e10ec1d5581bc67c5f71920baeba979d56666781a5c63bbcd2ee0745"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/rv_fe_01.xvag",
+      "size": 15590476,
+      "sha256": "3571c47413a407401b72aa6f693fb4d61331416f66e5072e4d4722bb2163cd1d"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/rv_fe_02.xvag",
+      "size": 15590476,
+      "sha256": "ecbab3e0f095c70a0dbc891348bca3226d4e56c1af1d7a5a70a82e4ff6f4eb9a"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/rv_fe_03.xvag",
+      "size": 15590476,
+      "sha256": "750398e1cc8c8f537925f6cf63694463f532eb7833bb47caeb6f2d9862537a23"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/rv_fe_04.xvag",
+      "size": 15590476,
+      "sha256": "c4b0ca7eaa045a30af06d4cbd9e2cf5d061270632a788261d3180f8400dbcac9"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/rv_killstreak_01.xvag",
+      "size": 2415340,
+      "sha256": "fa8d8d81280f5d251268b71a8a46dc0e6890616f7f9d98a669d6ce5cd6a79c81"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/rv_killstreak_02.xvag",
+      "size": 2777612,
+      "sha256": "ce2d3e906be4458bb2afc532585db5ca3a441fba2e6d22f0433b0608431b279a"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/rv_killstreak_03.xvag",
+      "size": 2489676,
+      "sha256": "430b31d9867d7ba894d9b7aefdc79b83f6f49073d83170e695d66fda1976d5fa"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/rv_killstreak_04.xvag",
+      "size": 2377548,
+      "sha256": "3e4bb4b50e817f2781a7a641290a8aedd76ffd708fe206fb913109ae94e3f38b"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/rv_killstreak_05.xvag",
+      "size": 2093612,
+      "sha256": "df5d1dafeecf6f0e0747fade131972702b2c3d5f5e94970de0a42cdf18689ca2"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/rv_killstreak_06.xvag",
+      "size": 2434764,
+      "sha256": "1a0b05e78b94d1647230b695cb33fbebfc3d041bd4dc5bca047d56673a85c1e0"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/rv_killstreak_07.xvag",
+      "size": 2141932,
+      "sha256": "9daa25d3400d465c705c7a3d59d852d1aab78c6345be0c5c92fba2ddb8f4adb5"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/rv_killstreak_08.xvag",
+      "size": 2343660,
+      "sha256": "94fb3aae5850300eeb92c90de43456bddea2e1b9953f576c83fb1e3a8a10b5a6"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/rv_killstreak_09.xvag",
+      "size": 2054124,
+      "sha256": "2e1ba0d06f8f30ed44a3ed42ecda4bb5a2605199d4e3f93dcd7e368d3e590975"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/rv_loss_01.xvag",
+      "size": 2116876,
+      "sha256": "41d56520fc24a1142519469a0726e0524cfc811b54316971ae8f6177a7f601be"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/rv_loss_02.xvag",
+      "size": 2350188,
+      "sha256": "5ef637bc9f77faf39fc385a0047791d40506969b0c43c3bedff58a26a8abefab"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/rv_radio_01.vag",
+      "size": 2168992,
+      "sha256": "b48147ff644ba9583b975e2b87139234afac0300da0aea9284def153e3f22971"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/rv_spawn_01.xvag",
+      "size": 1597644,
+      "sha256": "23bd55a683bb3b7f59b46faff897ffdd6cc0312bb57ca48ed0c3ef8eaf04770b"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/rv_spawn_02.xvag",
+      "size": 1496268,
+      "sha256": "26372b92907db6c32b8f5c80ecbda582e6aacc413cd68339c28eb52f0bcb4361"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/rv_spawn_03.xvag",
+      "size": 1642252,
+      "sha256": "31143572a897d57f6a2bcf03e4de53a6bc3777923a79c8e0813b1254d3a39bcd"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/rv_spawn_04.xvag",
+      "size": 1653612,
+      "sha256": "c0e19e6489be24b668b2814da3d7b067600505b3e9b619350ba487abdd0450a4"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/rv_spawn_rnd_01.xvag",
+      "size": 1185708,
+      "sha256": "051b495a4a50d7c61760c2030e59c48c2232fddc52be3788fb8b7a95b491497b"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/rv_spawn_rnd_02.xvag",
+      "size": 1753996,
+      "sha256": "f3e6930de87d48932b2f8c4bacd0741ff858e86668f0b398e3c96324d27351bc"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/rv_spawn_rnd_03.xvag",
+      "size": 1693516,
+      "sha256": "928a4fa780330604638cad845eeaff75e85353e278dbbefe6ce20c942f8d80d5"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/rv_spawn_rnd_04.xvag",
+      "size": 1597644,
+      "sha256": "e7c6f606a28113596259883f1e5207b6089d699c6815b152af167c02835d90b0"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/rv_spawn_rnd_05.xvag",
+      "size": 1341996,
+      "sha256": "04a1ad8019c563c3fe65fd21e4856ad231ee0195a27b48b17c60f7646dfaac58"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/rv_spawn_rnd_06.xvag",
+      "size": 1642252,
+      "sha256": "bf88a3aae7e9a95fb8fb0e59e3730ac17566f7ca4947cd92db8400914f4b7b8b"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/rv_spawn_rnd_07.xvag",
+      "size": 1738860,
+      "sha256": "85aba55893171fdaf799b186c61272e5a64159871ed9355f9b2576b4af6a0245"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/rv_spawn_rnd_08.xvag",
+      "size": 1436012,
+      "sha256": "89758183682a8213f687176a627a6afcce59ec06e59d28b7ec393d90e1987868"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/rv_spawn_rnd_09.xvag",
+      "size": 852268,
+      "sha256": "8a984fef42c870a94a8758972438c0491ec507a7b9d857b40df25121451f2ae5"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/rv_spawn_rnd_10.xvag",
+      "size": 1209676,
+      "sha256": "e0ad7a3ed7b3085a0da7567e189d16b4b9a793d483288c2116c7808ff795d706"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/rv_spawn_rnd_11.xvag",
+      "size": 1496268,
+      "sha256": "5ae12f9dbce21d93a691e0c97d6ee264f3e5a74fc18bd172769e18790ea3ce7e"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/rv_spawn_rnd_12.xvag",
+      "size": 1714956,
+      "sha256": "062d039c1984959c59d9a71a687e920ee756d884da7150671a2c60f78c8cabe4"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/rv_spawn_rnd_13.xvag",
+      "size": 1331468,
+      "sha256": "314dae16d2162116a7388ce1e0ef485b8045b852c8fda13d8d46537ad9dd4f60"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/rv_spawn_rnd_14.xvag",
+      "size": 1653612,
+      "sha256": "33946b45eb0a77f18a81d34d081c65868c419e248f3c7afb3b66c80d005562a0"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/rv_spawn_rnd_15.xvag",
+      "size": 1582700,
+      "sha256": "27e226390572f572b656dbf4db0a05bed6407d6c4c3dbc2dfc6d8a25424ad260"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/rv_spawn_rnd_16.xvag",
+      "size": 1491532,
+      "sha256": "19e21d97f69bab44a6fda6a8026ae7248f5f41b58f5190d2dfbcfc4f4379f759"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/rv_stats_01.xvag",
+      "size": 5072844,
+      "sha256": "4c535c77cfc284e5ce70b2549ce6e07751ada32a09820e1929ad8220a120bd9c"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/rv_vehicle_01.xvag",
+      "size": 2416108,
+      "sha256": "753e6dfbd7b0aca275bdd45776b50110c9240633afd74ad1a68367ab46d69a7a"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/rv_vehicle_announce_01.xvag",
+      "size": 399244,
+      "sha256": "2b0688146e91cb530b47cea098a0e03f11f988f6c94c283e572505ea500e312f"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/rv_won_01.xvag",
+      "size": 1595148,
+      "sha256": "bc5ad92b1a0000c833912a73f477be3e67149e515327b71fb34241caf0398ec1"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/rv_won_02.xvag",
+      "size": 1728076,
+      "sha256": "357144c26982b1b3d6e3846d0d27bccdd68985746e906e5032534e1a0d5bb706"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/rv_won_03.xvag",
+      "size": 1912012,
+      "sha256": "6d22b60b4bf647687a8bf23614d9c81c6b84b331d93b4cf7fb7abbf0b000a4d8"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/rv_won_04.xvag",
+      "size": 2118284,
+      "sha256": "c950e1ae57a07183f67dd1a999a16ece269739c89400bfd47109ca940d2aed49"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/rv_xp_01.xvag",
+      "size": 934348,
+      "sha256": "23614c4532a0100394d293101378b11ebdb4360c9eafad26761ba0983eaa4ec4"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/rv_xp_02.xvag",
+      "size": 1828716,
+      "sha256": "073f3682198cf721264fa65ff18b19b09624e95ec83dd50aa09cc1ca25420967"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/rv_xp_03.xvag",
+      "size": 1735052,
+      "sha256": "508e51c0acfc147c2f1946bc91dc962a10f42212d458f974bd2a7651b7ef237e"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/rv_xp_04.xvag",
+      "size": 2023436,
+      "sha256": "1c136c877af86ccc7fd2d15e5d2fca293048bf5c22202821761c4c7b3e92a183"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/rv_xp_05.xvag",
+      "size": 1649324,
+      "sha256": "519fc76042c1661f69b774aefcff1b30d080502e2b23c39052e72a2fd2b0d8a2"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/rv_xp_06.xvag",
+      "size": 1947724,
+      "sha256": "13d233266b98b1cc82797cf4c5d4de517a16bbf889d80d5cd42bed0013e4a14b"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/rv_xp_07.xvag",
+      "size": 1814476,
+      "sha256": "db3e7adddcc05c8eddc4aad129d772b76632c03dc6c2e2aa508d1cc5f385e194"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/rv_xp_08.xvag",
+      "size": 1675596,
+      "sha256": "0a6f37148ae96faba0b13931ff6a2a0a85e6b6bc0397be24c0e562c8520fdb3d"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/rv_xp_09.xvag",
+      "size": 1641676,
+      "sha256": "5bcde378fd48c698e7dab8b0c43a384ea5b702c815a5846bf79e76a96e60aab8"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/rv_xp_10.xvag",
+      "size": 1301804,
+      "sha256": "5a8a7d7fbe281de0a4af934f430b9ae791e36d35d1847f88b14ca8006cdb08c6"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/rv_xp_11.xvag",
+      "size": 2014700,
+      "sha256": "77b61fd962b834f649f0b3281a4fd3c2c5db62547ee9b8d489722d2cd8a4afb4"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/sver_survival_and_rebelion.xvag",
+      "size": 4850284,
+      "sha256": "ba150f4c0a4371e8ad9c313f78a3fc0711959e094ffb93c3e0a02b7c279bd945"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/sver_sver_theme.xvag",
+      "size": 4560780,
+      "sha256": "ff5d5e9f9eff03e42081f529f1a5b7932876c4bbb71327507db4ba30d3936472"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/sver_the_crushing_heel_of_tyranny.xvag",
+      "size": 2473868,
+      "sha256": "96d309efeaddd159aa9b5ca65aae6266d8b685df0b360a5cffbd70357260a719"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/sver_the_fire_within.xvag",
+      "size": 3075724,
+      "sha256": "83a2544d1a5cb5f9b45ae3be727fa6c0e2430457425b41da16fe9eb4aaeb285a"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/sv_control_01.xvag",
+      "size": 1977260,
+      "sha256": "713ac3b85a6d4637cf2c1dc738364dee5ed10c39c1ee54ba827c0ccf3fe45ab8"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/sv_control_02.xvag",
+      "size": 2160428,
+      "sha256": "f84304b680ed0ddce5f5c8fc280933dcd27207cea63ec8a32f04b8ee7b820b05"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/sv_control_03.xvag",
+      "size": 1490924,
+      "sha256": "07f275b31019fecfd4e11bce4691c13515ce7c15d1fd5595dc9e1316b9a7c9ab"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/sv_control_04.xvag",
+      "size": 1812268,
+      "sha256": "d33ca4b6b8d2fa3369fca4f46cf880414c0e4839286936b2a658f5a3cb45181e"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/sv_control_announce_01.xvag",
+      "size": 389100,
+      "sha256": "fc13f5ba02233998a62946ecab13fafa1423cf08a9c0249696828e6c8ae67b05"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/sv_control_announce_02.xvag",
+      "size": 407404,
+      "sha256": "3cca1596c0466d92c14ece4eebeb54542ee561282e7ef424125a0e43f44a544a"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/sv_control_announce_03.xvag",
+      "size": 389516,
+      "sha256": "58fa2c56ca3735a2d030ec6f76eecfad89d8dadfae47d3c4650047d072dbc1fe"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/sv_fe_01.xvag",
+      "size": 12654348,
+      "sha256": "51176bcdf80f547a0cad000f811e9debac5c530f94337faa86e0265a96b44fde"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/sv_fe_02.xvag",
+      "size": 12654348,
+      "sha256": "9da1a350bc9bfb0285982945b16d29aa1691aa1389032c57dd581bdce7db0e3f"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/sv_fe_03.xvag",
+      "size": 12654348,
+      "sha256": "12af3bb381b0c8af65d0cead704f0380bffd68f32587d65cce72cf0ab63dbce5"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/sv_killstreak_01.xvag",
+      "size": 2505196,
+      "sha256": "0647fb1a900449a53557a6e6aece1e93437fceeee0fc4db339953ccc58f57a50"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/sv_killstreak_02.xvag",
+      "size": 2503276,
+      "sha256": "06dd033d2c9aa93fb4eab65d1bd8f2c6f24b8e3ee89bb0319e2db4fdd15fc0bf"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/sv_killstreak_03.xvag",
+      "size": 1484204,
+      "sha256": "50ec22d64dca916ee7eefdb672de0e0e6401ccf4a3cd502a63d888b8d90edb67"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/sv_killstreak_04.xvag",
+      "size": 1486348,
+      "sha256": "f0b7efcf7e581e058cb3510cc1588615a116ae89ae24a3324234d068ec9a3f0e"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/sv_killstreak_05.xvag",
+      "size": 2304076,
+      "sha256": "105ab62714b228e30fe8e1c3f587505ee0a97216fce0cdf9c295f67dba89e485"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/sv_killstreak_06.xvag",
+      "size": 1977260,
+      "sha256": "c1fe1607bd44e1f089b3cd9a8bd8f9dccba4be9b1cf7a299f3b29b90c348479a"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/sv_killstreak_07.xvag",
+      "size": 2160428,
+      "sha256": "07a1d744a0eadebec53a40baa31666b61df53b7043af175264c04aa28043124b"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/sv_loss_01.xvag",
+      "size": 1872204,
+      "sha256": "0aa72453fcd59122d87e488366394fae49ef6c430c572d1f333cb4142e94575c"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/sv_loss_02.xvag",
+      "size": 1856620,
+      "sha256": "4433718c208458e1187c47057355a9944d06ff3cd732ca78069460711992ab19"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/sv_loss_03.xvag",
+      "size": 1646188,
+      "sha256": "89fe292fa226f9640290636d2b7191294fbbd16f62512e4bb44537db6299ea79"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/sv_loss_04.xvag",
+      "size": 2151308,
+      "sha256": "a4c0836491ea5ebf33ba305939db0b0520c92844ab9631be35b61298adc280a0"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/sv_loss_05.xvag",
+      "size": 1895692,
+      "sha256": "ba715ff4d4c3f8ba5e4689018f453b57337f94a1a485124c68f19a23e1b72616"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/sv_loss_06.xvag",
+      "size": 2177740,
+      "sha256": "d2be3f76d3f46737c96dfed4ca970ccd4a2cae752aa2cb79183ec788959d35b0"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/sv_loss_07.xvag",
+      "size": 1492364,
+      "sha256": "7592a49392ebb7d9a2c9015812c74a7d802ab165de39a7aff7bd52568821759f"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/sv_radio_01.vag",
+      "size": 1668464,
+      "sha256": "01855f337606252ab43dbd77b9efa3f034429623254163467557854ec66e4aec"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/sv_spawn_01.xvag",
+      "size": 1118508,
+      "sha256": "3fbbb9e9fb06c9725e7243c4ba8b291ba43f097eff8458ba9c2e6a11a2d49589"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/sv_spawn_02.xvag",
+      "size": 1786316,
+      "sha256": "93f2df216063614c6ccd2e58357e252292d30dbb727aa5faa556d8f5ed446bf2"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/sv_spawn_03.xvag",
+      "size": 1669068,
+      "sha256": "3f9d048a1520e0730f83ace952651314e4ca88f4d20f648c4e84cd8fd728c1d8"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/sv_spawn_04.xvag",
+      "size": 1310636,
+      "sha256": "872977eb4652a8e38b698ba2bcaacc4ffb5394c15df369502d7dc5b0bad23599"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/sv_spawn_05.xvag",
+      "size": 1428556,
+      "sha256": "e77a7cc2ef2479a3970dd60681dede08b6b78eeefc2c70099b086d4669cf5bb8"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/sv_spawn_06.xvag",
+      "size": 1456716,
+      "sha256": "c28881f55dcf6884b92aa8f6cb22f363cbd007fefae143b97bc3af556aed0fb1"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/sv_spawn_07.xvag",
+      "size": 1122220,
+      "sha256": "1f837d168752206b9e406634be424b56f27244d20d5c9c2a39fb1795721d1926"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/sv_spawn_rnd_01.xvag",
+      "size": 1118508,
+      "sha256": "370eb780360345ac6a56c95bf5ffef68a5017ed05e1c3c17861e72ce74987d72"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/sv_spawn_rnd_02.xvag",
+      "size": 1669068,
+      "sha256": "81b75e9f0aa623548741b776aeba9015091b3a15cbf718e51c45df5b9a0176e9"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/sv_spawn_rnd_03.xvag",
+      "size": 1310636,
+      "sha256": "90ae66c02e4ff079812bd06d68fbe0db3447a81bbd6150515dca06aae458c4e2"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/sv_spawn_rnd_04.xvag",
+      "size": 1326860,
+      "sha256": "f48dd6129e9d754f07ebdf777095880fd04a9d5d98cc5e2aa73a7e57a6fb84a5"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/sv_spawn_rnd_05.xvag",
+      "size": 1691148,
+      "sha256": "9db5715a4ea51de8d511ccac155adefbd5446bc9bf54faeb0e12bc3bdc1bae23"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/sv_spawn_rnd_06.xvag",
+      "size": 1122220,
+      "sha256": "3b895c4b0d051c5c22cd09b1905c34de8ef278077096154473ff291282416f54"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/sv_spawn_rnd_07.xvag",
+      "size": 1428556,
+      "sha256": "e77a7cc2ef2479a3970dd60681dede08b6b78eeefc2c70099b086d4669cf5bb8"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/sv_spawn_rnd_08.xvag",
+      "size": 1319628,
+      "sha256": "e2a2de755f4db3ba6150c2afba8929675758d71decdf3cd745060ba9e94ca2fb"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/sv_spawn_rnd_09.xvag",
+      "size": 1065548,
+      "sha256": "d726223b09b4b6cd568b3c14939f3ca75dfa9a6b5c5c3efb6308b56ddd4aa764"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/sv_spawn_rnd_10.xvag",
+      "size": 831468,
+      "sha256": "8d38e4fdd3516fb0f0dcf10c88b008c47791dcf909d3b085ec70f380d9d58711"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/sv_spawn_rnd_11.xvag",
+      "size": 1246124,
+      "sha256": "3503ef1ca4bed8a15059550306a049179ac8633d0deb283ec8cf8881b3722315"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/sv_spawn_rnd_12.xvag",
+      "size": 1374604,
+      "sha256": "dbaae288f219b5e7fe71f42ec3cf3693921c6fcbc3a117dc0da545be765b451e"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/sv_spawn_rnd_13.xvag",
+      "size": 1310604,
+      "sha256": "49c301abaea0d018e569acb616fe2ab8a2502325fe94eb1bb072f4305138c69a"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/sv_spawn_rnd_14.xvag",
+      "size": 1122220,
+      "sha256": "c23c6e5c3c202d0d1c53705d43dc06f6337968471fc929d87a2700f68e7fd209"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/sv_stats_01.xvag",
+      "size": 4519052,
+      "sha256": "c414deb8aaf13195976802410c25cc1fb8a3589a1444f8fbc5a06e35413a3fa5"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/sv_vehicle_01.xvag",
+      "size": 1605804,
+      "sha256": "72e29feaddddcf1b51a5023232a4f0dade468709777f658722385d6f7f13dd57"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/sv_vehicle_02.xvag",
+      "size": 2304044,
+      "sha256": "478523533c6cd570d5957b5b21a1b7cd06e2ea1bd72aed6cc1be997ca32ef956"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/sv_vehicle_announce_01.xvag",
+      "size": 389516,
+      "sha256": "58fa2c56ca3735a2d030ec6f76eecfad89d8dadfae47d3c4650047d072dbc1fe"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/sv_vehicle_announce_02.xvag",
+      "size": 389100,
+      "sha256": "fc13f5ba02233998a62946ecab13fafa1423cf08a9c0249696828e6c8ae67b05"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/sv_vehicle_announce_03.xvag",
+      "size": 407404,
+      "sha256": "3cca1596c0466d92c14ece4eebeb54542ee561282e7ef424125a0e43f44a544a"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/sv_won_01.xvag",
+      "size": 1817740,
+      "sha256": "fc924ac7a3dbf0db12af060f6b1d7ebc04f5522db694f8d794d4b23d5ce72208"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/sv_won_02.xvag",
+      "size": 1567756,
+      "sha256": "c80b0c6ed893b33d3394a23438378f682d1d04a14313e426ade044b675199ca1"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/sv_won_03.xvag",
+      "size": 1406924,
+      "sha256": "a72e2f846782080a746ebdb0b901da59e8ccead09e2797af49465b0f85442638"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/sv_won_04.xvag",
+      "size": 2019500,
+      "sha256": "f5ff18d1b96f83b0f5f224d4bcf833e05cd1937bb9dd31171830063b94d9af34"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/sv_xp_01.xvag",
+      "size": 1786316,
+      "sha256": "79241d93f9c6c8075a2c599b8181f1e14588bb104395c4e95e5d9e401e03f599"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/sv_xp_02.xvag",
+      "size": 1310636,
+      "sha256": "3fba10f7596e1e6e81b2e6d96ac26ab1a5c1e4863b9d3c49db9a035636560e60"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/sv_xp_03.xvag",
+      "size": 1356044,
+      "sha256": "3af98a7350fbc16f4eb7e1355119d865a17a6493a3bb151dbf618432f0c6af36"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/sv_xp_04.xvag",
+      "size": 1487020,
+      "sha256": "60c706fbb402edbf6cf4f25f33f0df9cd1282316d9c6efa1c3a7977b76c949c2"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/sv_xp_05.xvag",
+      "size": 1712396,
+      "sha256": "dff08784704a9c32682169fcf423d9c0385d5c8b1930527067a92cc29cf18be8"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/sv_xp_06.xvag",
+      "size": 1597900,
+      "sha256": "e5964433bf465c097d5f3f5adaf2fe9b79a118acc30067ca8a897337038b662c"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/sv_xp_07.xvag",
+      "size": 1812268,
+      "sha256": "33f1a5ebabc63a3f1e164935535ce3b1520b0085fb3c683610d7590ce7a23a43"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/sv_xp_08.xvag",
+      "size": 1605804,
+      "sha256": "6dfbdf09589082b5a506a0e833058379bef78e636663edd932e3dc5c49c548d5"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/valor_a_soldiers_pride.xvag",
+      "size": 4287148,
+      "sha256": "45f1d96b9dde762f4fc36f9f22e3a3f4fabbe4c5a36460e2718f3c1a2d2a1e20"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/valor_day_in_and_day_out.xvag",
+      "size": 3383820,
+      "sha256": "fb85f69a6fe95942d1cdecffb898a3c93267e9de5b0a070955ce36759c53d76c"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/valor_for_glory.xvag",
+      "size": 2541772,
+      "sha256": "f52e91d90b495e834b2dcc51a722704d808c21a9719f690cc5b76db15d232b7b"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/valor_valor_theme.xvag",
+      "size": 5662060,
+      "sha256": "845fcecf1cf3ba79fe681e8146f6edc6d8bef03a4e8b94e3a42dd32c8c46c0ca"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/vl_control_01.xvag",
+      "size": 2035468,
+      "sha256": "67686d2f2c2156c67a0f4c683924508f9038f0628b14b7ad54961891ee2cbe0a"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/vl_control_announce_01.xvag",
+      "size": 255372,
+      "sha256": "f48b6ae41454c0f3875e5b66398d55ea5cac8c923bbfbbcb8cc2cc4e0203ef42"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/vl_fe_01.xvag",
+      "size": 12777516,
+      "sha256": "910e2823df55d8b4add21bf58ec7bfaedf477dbc72e09c44c52ae627910fe0d7"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/vl_fe_02.xvag",
+      "size": 12777516,
+      "sha256": "1d9c1c936dbed9d665f150e18042e09323b915428931c289a9795977a8f01aa1"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/vl_fe_03.xvag",
+      "size": 12777516,
+      "sha256": "83766ccd4d0ff60cb094e48846ced2bf3db24dc2a7824b129f5de2097d2c1d15"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/vl_killstreak_01.xvag",
+      "size": 2945260,
+      "sha256": "9d50ec30e4add39dfc3634bbb307391841967dae13d5e2b6fb0282fb78332dee"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/vl_killstreak_02.xvag",
+      "size": 2337996,
+      "sha256": "1bed6b6f9361f055d04009cda79c5ab86e950b89d71c02ab0edfd57ef46bc562"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/vl_killstreak_03.xvag",
+      "size": 2249324,
+      "sha256": "4096feadddbea0c3673882fcf0ff06b111f309f395695c957417904063fb35b0"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/vl_killstreak_04.xvag",
+      "size": 2910284,
+      "sha256": "848b6e46041cac4e8cc0947b13d424efb5040695e3fe419b82737845a773aa18"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/vl_killstreak_05.xvag",
+      "size": 2284236,
+      "sha256": "0b08f14eca5ee6e5fd8efbe655b10244ac66dcd81366fc2f242af26db7bf3e65"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/vl_killstreak_06.xvag",
+      "size": 2874540,
+      "sha256": "3087928c83f029edf98d0b9977cd6e909938a67144f0a6ce774919c10ef14449"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/vl_killstreak_07.xvag",
+      "size": 2778924,
+      "sha256": "788cd998e521a8922b4c264272f646dc1f74f5659120dbf93e9ba0bc91f9e5f5"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/vl_killstreak_08.xvag",
+      "size": 1880588,
+      "sha256": "fefaabf4151f35584e7c0405aa56a6b41a6d21efbbfbde8d3e0546c76d9ee4d6"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/vl_loss_01.xvag",
+      "size": 2137964,
+      "sha256": "5a32cd9ad8f54612297ee7ad9a04afbd263c160ea54b4961ec9fcf209aae01c0"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/vl_loss_02.xvag",
+      "size": 2175468,
+      "sha256": "42a56a1addb89139eba9e848ca0dbf747cebaa47135a22c0713f09a383141bcf"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/vl_loss_03.xvag",
+      "size": 2165932,
+      "sha256": "4cf9dd86877668f4164c0e85af7ecd05751943390f5585ea35a6af83201a4432"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/vl_radio_01.vag",
+      "size": 2862512,
+      "sha256": "f9754e75238300822b95755140369f093f8e86a23ab891ed717f9d81701ca0e1"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/vl_spawn_01.xvag",
+      "size": 1416108,
+      "sha256": "ef8dfb74cf0644b839b57252d3b07b641b787def8f0fec1dc99bdf578bb653fc"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/vl_spawn_02.xvag",
+      "size": 1531148,
+      "sha256": "0d9b2871746b60f461f44256d1d4376d789b4f3d24bc8a6c29c6630b165e265c"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/vl_spawn_03.xvag",
+      "size": 1429196,
+      "sha256": "bcd077c11885c1ca24d84cb3e9f4da5fb7ee6bc11f40b439f9ab3340d42562d7"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/vl_spawn_04.xvag",
+      "size": 1904076,
+      "sha256": "8994d8f2c041c17450c892859087b915033446dec92f9b4baef8a7939b3ac175"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/vl_spawn_05.xvag",
+      "size": 1688460,
+      "sha256": "461c76c81e2a0e5b69eff08587249feebe1c34cfdf85dd725fa6613df6eebe19"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/vl_spawn_06.xvag",
+      "size": 1948972,
+      "sha256": "8662eaa03c129efcab066bcce43363b5182b75dc2c19128365f4cf64606ada55"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/vl_spawn_07.xvag",
+      "size": 1258348,
+      "sha256": "7cdc800474b690ca99f9e50e5a41118186ff6fdf58d760b2468e4a770afe3ef3"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/vl_spawn_08.xvag",
+      "size": 1423628,
+      "sha256": "e73cb6376f3adfe9da717cabeb7b74cb62cc928fec73e70359ad4c10f83032d8"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/vl_spawn_09.xvag",
+      "size": 1335084,
+      "sha256": "9cfde9c54733402838abeb5ebde85ee376393ba02165e806f7973a74d1ff415a"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/vl_spawn_high_01.xvag",
+      "size": 1416108,
+      "sha256": "144a31c511c332bd850c7b023564da061f9fe150e622a0f00d707d0729fa057d"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/vl_spawn_rnd_01.xvag",
+      "size": 1416108,
+      "sha256": "a61d507ec999b68ba43a2d137fd0c3766a814e6522555880a62be15163360694"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/vl_spawn_rnd_02.xvag",
+      "size": 1429196,
+      "sha256": "b8c11c59f46b9869219f6770202fbb28d32fccadc23726aa7a9e7c0a03eaf6ff"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/vl_spawn_rnd_03.xvag",
+      "size": 1531148,
+      "sha256": "0d9b2871746b60f461f44256d1d4376d789b4f3d24bc8a6c29c6630b165e265c"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/vl_spawn_rnd_04.xvag",
+      "size": 1688460,
+      "sha256": "aaf51f55ca0807f7c33ea04035c33313a09bdcd47c31391da8300a72d210a018"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/vl_spawn_rnd_05.xvag",
+      "size": 2012172,
+      "sha256": "31d1d301de1da17677348cf6e85a28e6ace4948517fee11319180b898f01a22e"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/vl_spawn_rnd_06.xvag",
+      "size": 1948972,
+      "sha256": "60b27e00c0464b4aa89bee154a628ddc24b1a5de707c03cf2013338da5f8a852"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/vl_spawn_rnd_07.xvag",
+      "size": 1258348,
+      "sha256": "0b2e2b18b868a340697b682381dc049c0e76986acee9711bda1a95fa3725f092"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/vl_spawn_rnd_08.xvag",
+      "size": 1423628,
+      "sha256": "b0420ca68f4605abcd555bd916669f00c074dcc9956f4d1ea6a63b1a67d6fe49"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/vl_spawn_rnd_09.xvag",
+      "size": 1335084,
+      "sha256": "1c71a6d0af38a115ecd8255cb667c931a64ff19cbf17e6c2a906b7d0c51d498f"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/vl_spawn_rnd_10.xvag",
+      "size": 1585868,
+      "sha256": "0f9deb068845419d8585cd49b55ba796c00b4beaf0e20c18c11406ffde48d67e"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/vl_spawn_rnd_11.xvag",
+      "size": 1044076,
+      "sha256": "07c967273be8edb07ba9c9f75775f41b5618e2d4db7f447a785fb78e8f0dad93"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/vl_spawn_rnd_12.xvag",
+      "size": 1260076,
+      "sha256": "4a5447d726da318d4ea5d63a10245102cb3a8082aab94c621aa4d56f89c0c7dc"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/vl_spawn_rnd_13.xvag",
+      "size": 1116812,
+      "sha256": "d421f2ab6206f3734bb605929bb3ac28f7711903694e4ac02f961632a0257eb6"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/vl_spawn_rnd_14.xvag",
+      "size": 1377100,
+      "sha256": "cc5294a84fc57c2f01bb57d2a65678d7e6294be2a141ad5e02a88ba0a42fef69"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/vl_stats_01.xvag",
+      "size": 3603180,
+      "sha256": "3acee8af583eda546604d5aba6f40a7d00169d435cef5cc1f552aba2ff90966b"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/vl_vehicle_01.xvag",
+      "size": 2035468,
+      "sha256": "67686d2f2c2156c67a0f4c683924508f9038f0628b14b7ad54961891ee2cbe0a"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/vl_vehicle_announce_01.xvag",
+      "size": 255372,
+      "sha256": "f48b6ae41454c0f3875e5b66398d55ea5cac8c923bbfbbcb8cc2cc4e0203ef42"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/vl_won_01.xvag",
+      "size": 2137516,
+      "sha256": "87d8985396f377ed6454e448fa099eb779031ee21f25811e52da9df6ab82645a"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/vl_won_02.xvag",
+      "size": 2125708,
+      "sha256": "9b0ef9c9c05df53b9199b628594f5a6d9b534c2682fafc9c6d63f0ec144a777e"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/vl_won_03.xvag",
+      "size": 1866476,
+      "sha256": "69cf7b7f248b5fa0360175d922a7e14f6cfd6adf10e2e57109b585355206c1ff"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/vl_xp_01.xvag",
+      "size": 1673068,
+      "sha256": "6cac7bc4a300c55c1854da59ac7f0553a2f1387db5173e54dd3ed2f335037fbc"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/vl_xp_02.xvag",
+      "size": 2033388,
+      "sha256": "e53ae45551bf6982e34fd70d501e4ad14eddc8c1085e0645ca7caada856365ef"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/vl_xp_03.xvag",
+      "size": 1904076,
+      "sha256": "8994d8f2c041c17450c892859087b915033446dec92f9b4baef8a7939b3ac175"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/vl_xp_04.xvag",
+      "size": 2012172,
+      "sha256": "31d1d301de1da17677348cf6e85a28e6ace4948517fee11319180b898f01a22e"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/vl_xp_05.xvag",
+      "size": 1948972,
+      "sha256": "60b27e00c0464b4aa89bee154a628ddc24b1a5de707c03cf2013338da5f8a852"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/vl_xp_06.xvag",
+      "size": 1585868,
+      "sha256": "0f9deb068845419d8585cd49b55ba796c00b4beaf0e20c18c11406ffde48d67e"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/music/vl_xp_07.xvag",
+      "size": 1377100,
+      "sha256": "cc5294a84fc57c2f01bb57d2a65678d7e6294be2a141ad5e02a88ba0a42fef69"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/vehicles/a400m_flyby.xvag",
+      "size": 1300164,
+      "sha256": "f51487117a9964c74c55398a51adf42988d08e876507d859c61b72c6b80a21aa"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/vehicles/a400m_flyby_02.xvag",
+      "size": 469588,
+      "sha256": "a4b3d80dc116d4f7b3237a8fe52a5af22b84f5f61b89cbb310ffb36bc50cf7a6"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/vehicles/jetby_uav.xvag",
+      "size": 146828,
+      "sha256": "b7034e6fd977a7954033fee932b7992389ff97d3ceddfa1cce3cb5b23a35eb73"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/vehicles/jet_by_fast_01.xvag",
+      "size": 318660,
+      "sha256": "6d0cb56513157f5b6501428bfd60a3210be50d4b5feeca88937c67ad8e2d761d"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/vehicles/jet_by_fast_02.xvag",
+      "size": 334276,
+      "sha256": "11429fa48e6572d3ece99644ff48f21917dca0c6a7f9c5f839f18f0d7a56d24d"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/vehicles/jet_by_fast_03.xvag",
+      "size": 150644,
+      "sha256": "696298e62d956bc8083460f9e9a11d5fec224b939bbb39d9fab75400f105d91a"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/vehicles/uav_prop_by.xvag",
+      "size": 78308,
+      "sha256": "0100da1cdcae7d2f59511a5104932ece2769b47b0c8357a7aad66d0b2e05032e"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/vh_aircraft/pc_vh_a400m.bnk",
+      "size": 181191,
+      "sha256": "0d3a5a7b39ca8d8e84c95a9a292fa240af0f5bd005454d3eace7f956224ce719"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/vh_aircraft/vh_a400m.bnk",
+      "size": 181191,
+      "sha256": "36146a96d183f56e28fdd34c1ee7f1472c57c5a9da1faedc2ad21966cd924315"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/vh_ground_surveillance_uav/pc_vh_ground_surveillance_uav.bnk",
+      "size": 303113,
+      "sha256": "a9e1a5e9d4f64e7cd6a67d5850f9cfc037f3c4651a3a02afadf79bbaccb8ebf0"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/vh_ground_surveillance_uav/vh_ground_surveillance_uav.bnk",
+      "size": 303113,
+      "sha256": "22aee502a7bde729a18c6d843eb722bd1820f27dacc1050eac6a712aa3fea2a3"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/vh_helos/mi24_bank.bnk",
+      "size": 773696,
+      "sha256": "82e730a9b564fc4d9a02fe8ed2ff826dee967d15ae9a56b7c194dbeec1c004e1"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/vh_helos/pc_mi24_bank.bnk",
+      "size": 773696,
+      "sha256": "a812473b0468d292f8d76b15b295cde62f2812037f744d306d2695ec3c429396"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/vh_infantry_fighting_vehicle/infantry_fighting_vehicle_bank.bnk",
+      "size": 327056,
+      "sha256": "1ec1fe713d31f949743bb8aae273ff1b32eaf4746c50a8b7b329d77a81c94b93"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/vh_infantry_fighting_vehicle/m2a3_bradley_patch.smp",
+      "size": 4522,
+      "sha256": "3e04b4091f3e5ba1b3cfa629979d50cbbe3043245ba2ee703a0188f07196ef01"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/vh_infantry_fighting_vehicle/pc_infantry_fighting_vehicle_bank.bnk",
+      "size": 327056,
+      "sha256": "73ee993c187b312606eb312818a0dc22751c64f7a35c0c6669d17af5a37ba24f"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/vh_light_armored_vehicle/light_armored_vehicle_bank.bnk",
+      "size": 248864,
+      "sha256": "02d97dfe4a5700d2bab0b85703c89544657873aec0c21fd18f75fc38a9d007e2"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/vh_light_armored_vehicle/light_armored_vehicle_test_bank_xfdr.bnk",
+      "size": 807168,
+      "sha256": "eddfa43ab04817972cf9eedecb7bc814dce4376d77dd2b979e2759a3569abbc9"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/vh_light_armored_vehicle/pc_light_armored_vehicle_bank.bnk",
+      "size": 248864,
+      "sha256": "7e17a46b3e74ee7a9b229d077bedd9dd1c6e8fdd3e23975c871496abebd00269"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/vh_light_armored_vehicle/pc_light_armored_vehicle_test_bank_xfdr.bnk",
+      "size": 807168,
+      "sha256": "798661b3e08dd8da6c0e45445f6a7630198dbf662374c567f133b778504fa873"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/vh_light_armored_vehicle/pc_terrain.bnk",
+      "size": 171888,
+      "sha256": "201cb9aabe76afd7424db55ecb1db6ef1b42045bfb3844138153837d9cf38887"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/vh_light_armored_vehicle/terrain.bnk",
+      "size": 171888,
+      "sha256": "d54dfdde2748b312d61b8593beb99cc09a73cde6a4f11a9ef5026e8ed64d42c6"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/vh_light_tactical_truck/light_tactical_truck_bank.bnk",
+      "size": 306592,
+      "sha256": "f2c98034ae5872339687195d47339084c278d16aff3fad61b1a19f63795c74c1"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/vh_light_tactical_truck/pc_light_tactical_truck_bank.bnk",
+      "size": 306592,
+      "sha256": "234e6f7026afdeed910f4ffb01a6f6d92473e73f80e1d09132c794f486e6d798"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/vh_medium_tactical_truck/medium_tactical_truck_bank.bnk",
+      "size": 347856,
+      "sha256": "bf10708b838cd905b2d962453f8d5d545ce3ac1a4ed4f50d84f726d638e56963"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/vh_medium_tactical_truck/pc_medium_tactical_truck_bank.bnk",
+      "size": 347856,
+      "sha256": "f762e25d3de06b378ea096f399ce081af3a02536615d4e169bb10395f4590803"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/vh_scout_vehicle/alsv_patch.smp",
+      "size": 3684,
+      "sha256": "c1dd64936910a018cd2a8a0e6728913e986dfc234083fca0ff132dec3b15e76d"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/vh_scout_vehicle/pc_scout_vehicle_bank.bnk",
+      "size": 673248,
+      "sha256": "e3ea4548577946e5452a0ec2eb44609b481059ce2356a39cca76cdf9bd45ce62"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/vh_scout_vehicle/scout_vehicle_bank.bnk",
+      "size": 673248,
+      "sha256": "8e71708f58188cdaeff1b4bdaa747a142e419b68fdda20dadb85d42405e60aa9"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/vh_scout_vehicle/spider_patch.smp",
+      "size": 3684,
+      "sha256": "c1dd64936910a018cd2a8a0e6728913e986dfc234083fca0ff132dec3b15e76d"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/audio/streams/vh_scout_vehicle/vbl_patch.smp",
+      "size": 3684,
+      "sha256": "c1dd64936910a018cd2a8a0e6728913e986dfc234083fca0ff132dec3b15e76d"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/game.psarc.sdat",
+      "size": 4476704,
+      "sha256": "e35e3e40172805422b2a5a21cb1a9b1b38216b2f4f88d1bd505a9c533fd76208"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/icons/default/icon0.png",
+      "size": 49912,
+      "sha256": "4ce392800a646910de891bf664ba0c2c6fbe1e99126e45afe120dae32eb9809e"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/icons/default/pic1.png",
+      "size": 3232159,
+      "sha256": "18f92bbbcedd7446a85c5466345da706a5faf72d6c452fe058f489549a740972"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/icons/default/snd0.at3",
+      "size": 1474660,
+      "sha256": "84f5652dec906d731caa60516bd6419225a16fef3c140776fed32524194845cf"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/icons/japan/icon0.png",
+      "size": 38021,
+      "sha256": "1ed137e544db7a382ad5b03ad5afe0c544db38af649671c1fc809e3a01d145e8"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/icons/japan/pic1.png",
+      "size": 3234829,
+      "sha256": "7f88ad0ce7d3280eb35f0e4c3478e4632495ac9efd558873f7792ba8d99173c0"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/icons/japan/snd0.at3",
+      "size": 1474660,
+      "sha256": "84f5652dec906d731caa60516bd6419225a16fef3c140776fed32524194845cf"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/levels/mag_alaska_subpen_final.psarc",
+      "size": 205135809,
+      "sha256": "fb0e9c12653dcecd9c6f444ec6c5a997aec7f99f481f7951065bf4b64a39f7a0"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/levels/mag_baku_final.psarc",
+      "size": 243037529,
+      "sha256": "e355622ac2b42c91d9aa22c0b46f80cbbc190dc61cc75c710157d08b4ba674e7"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/levels/mag_canal_final.psarc",
+      "size": 249121328,
+      "sha256": "90295495a150c06762284b15de411fca11657557cb228fba8f854ee68ee6059e"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/levels/mag_cosmodrome_final.psarc",
+      "size": 105647167,
+      "sha256": "8157f5abc55ddd2ca9eaad3379e87ae909d0b8f7c9b08fa04f1f1e2d8018d96e"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/levels/mag_kennicott_final.psarc",
+      "size": 112981956,
+      "sha256": "399a38f568f4cd4c9c1d787b8ebbe857506b807638dc19f7e2e893ef051332ec"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/levels/mag_panama_military_base_final.psarc",
+      "size": 211279496,
+      "sha256": "232e7abf68e89c669bcf6b3335830748975ce4216d3f5ed6b8b3317910e6b1f2"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/levels/mag_raven_sup_final.psarc",
+      "size": 114873892,
+      "sha256": "6290c001a820b6542dc0c9dd5b26027e30c981230034999fb449081b5d206fe8"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/levels/mag_remote_comms_final.psarc",
+      "size": 114040178,
+      "sha256": "f066f00a74a58d36a531526f4216538300362d5f358a0f40c6b75f2edc226313"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/levels/mag_sver_sup_final.psarc",
+      "size": 102830407,
+      "sha256": "209b9d16bf64ddcb9ed616bedd789505f90df3100b8b1266d495dfb171b23284"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/levels/mag_training_raven_final.psarc",
+      "size": 121314320,
+      "sha256": "0e01c3153dfbb7ceb0cad587967b610ccbfe45d699b44e8dfa5e5d0b9a091790"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/levels/mag_training_sver_final.psarc",
+      "size": 278514067,
+      "sha256": "7daf9b225be763aa69f278945de80bd6da7bb75c6759c4fa9dd768523064fdf9"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/levels/mag_training_valor_final.psarc",
+      "size": 178795076,
+      "sha256": "9e8650cd5e9928438613a8449c2ef133328a1aa8cfb8eda3cfba1cc1b55b4cd8"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/levels/mag_unalaska_final.psarc",
+      "size": 274743262,
+      "sha256": "bbd2f66f3664aca428b04f879e9268df121b6d7fb4ca155f3e0b53a7a241b8ed"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/levels/mag_valour_sup_final.psarc",
+      "size": 124271763,
+      "sha256": "f9a0f68f53835933f3834079375b0f80deeddfd77a263b50dba878bb036c4a05"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/levels/mag_voz_final.psarc",
+      "size": 303337767,
+      "sha256": "e8bf8760097604ef7186583ef9f1208f5d8dc5fddc4f972f30990a79590cead4"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/main.psarc",
+      "size": 170185557,
+      "sha256": "a2e8345cd9f5c650ac22544096ba83e8c9e6f0fffd0ef69eb8791fb265f9baad"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/video/mag_intro.pam",
+      "size": 196734976,
+      "sha256": "7b2a9f771380ecb04c4c892bbf3762b318e002fdd79de866ddc5990e9f623964"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/video/pmc_raven_danish.pam",
+      "size": 186673152,
+      "sha256": "080308e52f170907fdd2fd491b91c729000102d8104116e6598fa797fe681ad5"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/video/pmc_raven_dutch.pam",
+      "size": 186671104,
+      "sha256": "7e26ec0400596011f786b0e75505f1dcf6579d71ffb541fdfe4be4acf625e3c2"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/video/pmc_raven_english.pam",
+      "size": 187021312,
+      "sha256": "9d93be62eeea663760f98b0f7b397e0057a5f50bc43eaa98e72a1f89ee277749"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/video/pmc_raven_finnish.pam",
+      "size": 186779648,
+      "sha256": "9be04a701bc58511f10692dcf0859398c8c891ddf0c1925a443a863695e1d536"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/video/pmc_raven_french.pam",
+      "size": 186699776,
+      "sha256": "df6179ca69781629694c44097463fa363bc6de0b87ca92a2d2c22cecad907480"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/video/pmc_raven_german.pam",
+      "size": 186703872,
+      "sha256": "bcd091a83f10a54b92850c210dd97d27097a6efafe0682844b4d4a990a11237c"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/video/pmc_raven_italian.pam",
+      "size": 186707968,
+      "sha256": "0abd2d0e03db870c121147f31f8eb351e2b56060a65930f89ae151a1e805b4ef"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/video/pmc_raven_japanese.pam",
+      "size": 186718208,
+      "sha256": "9785392f845c5430a8bf5bfc276259c30423ca71f4f76c22984d57cc3d9f3783"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/video/pmc_raven_korean.pam",
+      "size": 186681344,
+      "sha256": "f8434f45287158a5acb27b05488a14d7b88a9619c9f0137bec18eb9e6caffc4f"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/video/pmc_raven_norwegian.pam",
+      "size": 186720256,
+      "sha256": "31a8780812cbd1052f010c7f4b669bdd6d4d88a5280dfdfe18b863a16486cb88"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/video/pmc_raven_polish.pam",
+      "size": 186718208,
+      "sha256": "b8af865674b48b3aeac7986107277e0bbf4cb3c73d3669a5e144a32497174622"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/video/pmc_raven_portugese.pam",
+      "size": 186701824,
+      "sha256": "ee715b530d9470a2e7a111b70de4e3bc23d31d4b92f9379a9293534ca1440650"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/video/pmc_raven_russian.pam",
+      "size": 186769408,
+      "sha256": "b920aed9183168db5e4db40b0d2ef70e5fbe9f263f555616ee3dc5e8c97266db"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/video/pmc_raven_spanish.pam",
+      "size": 186710016,
+      "sha256": "cdbfafb50308c3a302c8c4b63052acbc2b81e7f9239d5e61bb1a96463220deb4"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/video/pmc_raven_swedish.pam",
+      "size": 186765312,
+      "sha256": "d7567c836bf5ba1293019be1f577135c8ed35fc7a2a23ee092075088f75f0595"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/video/pmc_sver_danish.pam",
+      "size": 155056128,
+      "sha256": "4b2e9376b67da9cfc5c40c2a75cd5a5bde51f0b596e85f19cff65e2018ef8589"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/video/pmc_sver_dutch.pam",
+      "size": 155123712,
+      "sha256": "8d5dd9bc6c5371dbe757e8eb35ee32564d565048349d39e1512d00c8a8641c00"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/video/pmc_sver_english.pam",
+      "size": 154961920,
+      "sha256": "f611b72a4c3133276ff33e20ec232f18ad8439f5e1557db32da4f88bd82becd4"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/video/pmc_sver_finnish.pam",
+      "size": 155754496,
+      "sha256": "740863b098b4f24151a4c6def4c3fda377a5fc5a415bee1623e76dabe59aae12"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/video/pmc_sver_french.pam",
+      "size": 155074560,
+      "sha256": "dceb3cfb79803816219487e20de033f2cab9823353cada1059da13d3fef1df95"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/video/pmc_sver_german.pam",
+      "size": 154853376,
+      "sha256": "24fcd020979d36911d2feb2ccd0bae4f26a65e277edc52596a6691dc4a73efe5"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/video/pmc_sver_italian.pam",
+      "size": 155170816,
+      "sha256": "c52e6e71749fa602e3f57c6acdee1a5c366203c056adaafc33858e279299585d"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/video/pmc_sver_japanese.pam",
+      "size": 155273216,
+      "sha256": "758d21b91a261abb2a98eb2929d78b55ce778a497a701ec70789a6d6109c1562"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/video/pmc_sver_korean.pam",
+      "size": 156932096,
+      "sha256": "4c212a5258dd5008ad1a6b846acfe8b6ce783c502f3efee630e0d3d25bca87db"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/video/pmc_sver_norwegian.pam",
+      "size": 156631040,
+      "sha256": "98410f81ccec6e2a5b54f5f658cc3c20ac5295d52f9b64a8888bf79cd8c91032"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/video/pmc_sver_polish.pam",
+      "size": 154724352,
+      "sha256": "bafb572aa06fbdea02b02b8e9c7e792044cef842fd875633b077ea829f1b8fe5"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/video/pmc_sver_portugese.pam",
+      "size": 155103232,
+      "sha256": "3875484fb4790c57ddc8b5f422469906b8165ff2ca4ac30e9bb18c7a0407ce94"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/video/pmc_sver_russian.pam",
+      "size": 154773504,
+      "sha256": "66cc0a3b1ab95a908c9f818f4206d1a1c47bd7ea3de0356274a2a0bac5eb488a"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/video/pmc_sver_spanish.pam",
+      "size": 154724352,
+      "sha256": "f4ff2d9a915904bfe68cff3ceb97d2e2578548b197f1c3fc21adebcde34790ef"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/video/pmc_sver_swedish.pam",
+      "size": 155154432,
+      "sha256": "cf1d728d250af350aabecd94fc4f388dc1e2a5dbdfebbff4a43c1889c61bd899"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/video/pmc_valor_danish.pam",
+      "size": 177020928,
+      "sha256": "7c47acebaee3fe260486516fa6977d4c3dd733b794ed19dc7a2917d03029ea0e"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/video/pmc_valor_dutch.pam",
+      "size": 176977920,
+      "sha256": "e1f8c6c01ed9dfbfcce41a62a6dd5a9ae7a8a08778e1721f61593e9b3f540fe7"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/video/pmc_valor_english.pam",
+      "size": 174489600,
+      "sha256": "24f39f2d0e48a3bb54ee1b14c56e8b7fc6c078afd6367978da512ef3f8fd722c"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/video/pmc_valor_finnish.pam",
+      "size": 176990208,
+      "sha256": "bfae9a03b080f03dd1dcfcea06338de4eb89bf3e5278f1aefbf3f6dc25190d97"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/video/pmc_valor_french.pam",
+      "size": 177012736,
+      "sha256": "780b5300b94c8c87df1073f832bd501ac09501fe3f51d0a33acfd6bf24c0c3bb"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/video/pmc_valor_german.pam",
+      "size": 177188864,
+      "sha256": "2eaa1b8c1548b775f9181cebd0d62c50cfcc261c932fd065a3a1565fac3b0e56"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/video/pmc_valor_italian.pam",
+      "size": 177008640,
+      "sha256": "ee068abf442cbe30b99a377f071938fcad2783f9e83a6ed7765845312d829b49"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/video/pmc_valor_japanese.pam",
+      "size": 177102848,
+      "sha256": "078f39efcc469e8a2a75d2d94ce4cad5c85cf84846a9007c798ce579fb354f9c"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/video/pmc_valor_korean.pam",
+      "size": 176990208,
+      "sha256": "ead6849442f3c5960f7dedcd1f088e15ee681f2906623f8c1ac2b63d5c225c0a"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/video/pmc_valor_norwegian.pam",
+      "size": 176965632,
+      "sha256": "46aed53e481805123ec861115c05318518fae0c01c77a4119ff1049434c540df"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/video/pmc_valor_polish.pam",
+      "size": 177035264,
+      "sha256": "4e1483128ab205e11282909c62008d7c6939211032103fcfaf88b2fe8a02f871"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/video/pmc_valor_portugese.pam",
+      "size": 176973824,
+      "sha256": "25d1feaad3be85fc4beec1466d81f9b84ff711d94bbfd47559e95d61db561d38"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/video/pmc_valor_russian.pam",
+      "size": 176939008,
+      "sha256": "da8f59756c76f672e0b674cb36d31d137fbd282b392ffa52bd06085b36eb8295"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/video/pmc_valor_spanish.pam",
+      "size": 177029120,
+      "sha256": "3a4531e0affb81605b59cbb86b32bac978977192dd16ebb8fc9c4b17816e75b8"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/video/pmc_valor_swedish.pam",
+      "size": 176951296,
+      "sha256": "e1c9c4f41894360fdbae4b1fc5a4b2fe4b22b7b7e310e78435c0664c285e90cc"
+    },
+    {
+      "path": "PS3_GAME/USRDIR/run/mag/ps3/video/thx.pam",
+      "size": 2732032,
+      "sha256": "13370643299e6c4f055e83796aad6f629eb23cdffc9fd18bbef98948a4c2c174"
+    }
+  ],
+  "update_pkg": {
+    "name": "UP9000-BCUS98110_00-MAGPATCH00000001-A0212-V0100-PE.pkg",
+    "size": 36198816,
+    "sha256": "428e422ef55955f8d6de4c9489250788d038c6e56bd9c5f9929358ce734670c3"
+  },
+  "update_files": [
+    {
+      "path": "ICON0.PNG",
+      "size": 49912,
+      "sha256": "4ce392800a646910de891bf664ba0c2c6fbe1e99126e45afe120dae32eb9809e"
+    },
+    {
+      "path": "PARAM.SFO",
+      "size": 408,
+      "sha256": "82f70de98aee377454e16779b228a60edb8f491b638ddb46c7d48cae5caaf1e5"
+    },
+    {
+      "path": "PIC1.PNG",
+      "size": 3232159,
+      "sha256": "18f92bbbcedd7446a85c5466345da706a5faf72d6c452fe058f489549a740972"
+    },
+    {
+      "path": "PS3LOGO.DAT",
+      "size": 5120,
+      "sha256": "e08430957ac3f4ee719dc2ed04d3443c395dd3b997d8f34f68a1b5c37d92f425"
+    },
+    {
+      "path": "TROPDIR/NPWR00380_00/TROPHY.TRP",
+      "size": 1525648,
+      "sha256": "462bbf932e3e514e512cdbd9398b9efa579a717a669325f7bab637a980f8a236"
+    },
+    {
+      "path": "USRDIR/EBOOT.BIN",
+      "size": 4252400,
+      "sha256": "aff08358d8fe4e9418c3e5065fec94b234191b3edc495d3eb15bdf2c42013317"
+    },
+    {
+      "path": "USRDIR/bin/libpacePrx_g.sprx",
+      "size": 386320,
+      "sha256": "5f5ea8397eac8115af546cea91a7a9188b398f8679a29984f6d2c7ab12282379"
+    },
+    {
+      "path": "USRDIR/bin/libpace_g.sprx",
+      "size": 386416,
+      "sha256": "f3be5bf4438da582c5482404981a8f53b61942a0cf321acd54dd9698df1b1278"
+    },
+    {
+      "path": "USRDIR/bin/mage_g.self",
+      "size": 23205712,
+      "sha256": "8e3ceada7c5b1c6b82cb1b7ae6109725bda1b5abd87e5cb42f923b5449ce332a"
+    },
+    {
+      "path": "USRDIR/edat/gear_pack_1.edat",
+      "size": 320,
+      "sha256": "13034c08419cc7be0a28341064a17149bd030077e7cd25754445fefcc475393c"
+    },
+    {
+      "path": "USRDIR/overlays/overlay_BCAS20081.png",
+      "size": 6817,
+      "sha256": "5a3de048199b9e1c09a8b61bf42a2f497c299feb0e85c57079c305875a279634"
+    },
+    {
+      "path": "USRDIR/overlays/overlay_BCES00558.png",
+      "size": 7003,
+      "sha256": "a863eb6a179ff524f044261ab0f32ef7390fd17b7a87bc7151775fed8d757fe2"
+    },
+    {
+      "path": "USRDIR/overlays/overlay_BCJS30036.png",
+      "size": 5745,
+      "sha256": "b9db75003a4b4931ab8c512fc00b69ec1b893b159148921c24af8ae546d24dc2"
+    },
+    {
+      "path": "USRDIR/overlays/overlay_BCUS98110.png",
+      "size": 5658,
+      "sha256": "aebf81fce0b596a9a1fddb8db70cfb163eb4d668958a0d322d95e76ef610acc6"
+    },
+    {
+      "path": "USRDIR/tpps.psarc.sdat",
+      "size": 3127392,
+      "sha256": "2d614e756d622927914037d1f52c77718f1e811cffc38726078a14cce6feb3b8"
+    }
+  ],
+  "patches": [
+    {
+      "name": "patch_r000000_445230.psarc",
+      "sha256": "9039e71359bb253cc64ebcb0350e7ab511b62c3fcb48164d08328cf3be65f61e",
+      "member_count": 17156,
+      "requires": 0,
+      "provides": 445230,
+      "size": 1397283797
+    },
+    {
+      "name": "patch_r445230_465304.psarc",
+      "sha256": "e257098c92b144c20fa8cb216ba48dbfd6d4ba749bb4ce6d28ed2312cbb8a7bc",
+      "member_count": 886,
+      "requires": 445230,
+      "provides": 465304,
+      "size": 163343555
+    },
+    {
+      "name": "patch_r465304_467225.psarc",
+      "sha256": "2ab2276a7c0376d908f1233b5a867dabcfc6a2b18621970fc1b9a659582216eb",
+      "member_count": 4,
+      "requires": 465304,
+      "provides": 467225,
+      "size": 684130
+    },
+    {
+      "name": "patch_r467225_489979.psarc",
+      "sha256": "b5aa3361c57ba1c021b4caf705ba549b223a9503d77b282c7562c85237964b4d",
+      "member_count": 69,
+      "requires": 467225,
+      "provides": 489979,
+      "size": 40166221
+    }
+  ],
+  "settings_source": "PS3_GAME/USRDIR/run/mag/ps3/game.psarc.sdat",
+  "pkg_extractor_sha256": "ecf4c1abc6e0ce7d88ceff5792a34cccd9b23ca37634d5049687d805ceb9104a"
+}

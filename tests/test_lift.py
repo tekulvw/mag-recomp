@@ -53,6 +53,15 @@ class LiftTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             run_generator([sys.executable, '-c', 'pass'], self.out)
 
+    def test_generator_log_retains_failed_tool_output(self):
+        with self.assertRaises(RuntimeError):
+            run_generator([sys.executable, '-c',
+                           "import sys; print('generator diagnostic'); print('unsupported input', file=sys.stderr); sys.exit(7)"],
+                          self.out)
+        log = (self.out/'generation.log').read_text()
+        self.assertIn('generator diagnostic', log)
+        self.assertIn('unsupported input', log)
+
     def hook_modules(self, **bodies):
         """Write synthetic hook modules on sys.path; return their names."""
         directory=Path(self.tmp.name)/'hooks';directory.mkdir(exist_ok=True)

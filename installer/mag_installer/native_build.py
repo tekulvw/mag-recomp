@@ -59,7 +59,8 @@ def _source_files(root, token=None):
     for name in ('profiles',):
         for path in (root / name).glob('*.json'):
             # Written per machine from the player's files (prepare_inputs, inventory).
-            if 'network' in path.name or 'account' in path.name or path.name in ('retail-v1.0.json', 'retail-v1.0-inventory.json'):
+            if ('network' in path.name or 'account' in path.name
+                    or re.fullmatch(r'retail-v[0-9]+\.[0-9]+(?:-inventory)?\.json', path.name)):
                 continue
             yield _ordinary(path, False)
 
