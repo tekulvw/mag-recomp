@@ -54,7 +54,7 @@ the setting Off nothing is passed and nothing is registered ([player-settings.md
   a ring of at most 200 ms; past that the oldest audio goes. The service's clock takes one 40 ms
   frame at a time; a frame that is not fully there yet is skipped (nothing is sent for it), and if
   the device clock runs ahead so that more than 120 ms waits, the oldest audio is dropped so the delay
-  stays short.
+  stays short. The microphone is then levelled (see "Microphone level").
 - **Push to talk.** The controls catalog's host action **Push to talk** (K by default, rebindable on
   the Controls page, a controller button only if the player binds one; [native-controls.md](native-controls.md),
   "Catalog revision 5") opens the microphone while held and for 160 ms (four frames, the 150 ms tail
@@ -74,9 +74,38 @@ the setting Off nothing is passed and nothing is registered ([player-settings.md
   run time) there is no push to talk. Rather than guess at keys from another input path, the mode is
   then receive-only: the service registers and plays talkers but never opens the microphone, and logs
   `[voice] no push to talk: ...; voice is receive-only`.
+- **Port volumes.** The encoded output carries the microphone after the microphone port's volume and
+  its own (the game leaves both at 1.0 in every capture so far), as the library's port graph does.
 - Codec, blocks and playback are those of the lab tone mode below: Opus at the port's rate in 37-byte
   blocks, talkers decoded and played on the host playback stream at `MAG_VOICE_VOLUME` (see "Playback").
 - Noise suppression is not in this stage yet.
+
+## Microphone level
+
+On the console the headset's microphone reaches the voice library already levelled by the
+microphone's own signal processing (automatic gain control), so talkers arrive at a steady speech
+level whatever the headset. A PC microphone at its system input level gives speech some 10 to 20 dB
+lower, and played beside the game's mix it is hard to hear; that was the first live test's finding
+(2026-11-27: every port volume the game sets is 1.0, and the capture, codec and playback stages are
+exact, so the loss was the missing levelling). The service levels the microphone the same way before
+push to talk and the encoder (`LevelControl`, `src/voice/mag_voice_capture.h`):
+
+- It estimates the speech level from frames that stand at least 10 dB above the background noise
+  floor (and above -55 dBFS), and steers a gain that brings speech to about -18 dBFS RMS: at most
+  +20 dB for a quiet microphone, at most -10 dB for a hot one. The gain falls at once and rises at
+  most 12.5 dB a second; it is set outright by the first speech of a voice session.
+- Between words the gain holds, so background noise is never raised more than the speech is.
+- Peaks are kept under about -1 dBFS: a loud frame gets a lower gain for that frame, and any sample
+  still above it goes through a soft knee rather than clipping.
+- It runs on every frame the microphone delivers, whether or not push to talk is held, so the level
+  is settled when a press opens the gate; nothing is kept or sent while the gate is closed.
+
+At the game's 7300 bit/s the codec costs about 2 dB of a voice's level; everything after the codec is
+exact (the talker's port volume, the headset port's volume and **Voice volume**). Raising the system
+microphone level no longer changes the level others hear much, only how far above the noise the
+voice sits. `MAG_VOICE_AGC=0` in the engine's environment sends the microphone at its own level, as
+builds before it did (for an A/B in a lab; packaged players do not pass it on); any value but `0` or
+`1` is logged and leaves the level control on.
 
 ## Lab modes
 
@@ -88,6 +117,7 @@ plays received talkers (see "Playback"), so keep lab runs muted.
 | `MAG_VOICE_TEST_TONE` | `pattern` | registers the service for the game's voice calls; the "microphone" is on for one second and off for the next, and each 40 ms frame while on becomes one voice block whose payload counts up from the frame number |
 | `MAG_VOICE_TEST_TONE` | `tone` | the same cadence carrying an Opus-coded 440 Hz tone; talkers the client receives are decoded and played on the host playback stream (see "Playback"), so a second client hears the tone; set `PS3_MUTE` or `SDL_AUDIODRIVER=dummy` in a lab |
 | `MAG_VOICE_VOLUME` | `0` to `200` | voice playback volume in percent (default 100) |
+| `MAG_VOICE_AGC` | `0` | push to talk sends the microphone at its own level, without the level control (see "Microphone level"); the default, or `1`, levels it |
 | `MAG_VOICE_TRACE` | a path under `runs/` | JSON lines of every voice call (port parameters, sizes asked and returned, port info, signal-state attributes) and a summary every five seconds and at the end: blocks sent and dropped, bytes read, blocks received, how many were intact pattern blocks, sequence gaps and skipped bytes |
 
 A lab mode wins over `MAG_VOICE_MODE` and never opens the microphone. `MAG_VOICE_MODE` values other
@@ -132,7 +162,11 @@ launch `MagRecomp` directly (or through a lab runner that sets them) for a lab s
 `python3 -m unittest tests.test_voice` (with `MAG_TEST_OPUS_ROOT` or a system Opus, and
 `MAG_TEST_SDK` for the guest glue): the capture ring and resampler with generated tones at the
 common host rates (level, frequency, the low-pass filter, overrun, underrun and clock drift both
-ways), the push-to-talk gate's tail and focus rules, a missing, refused and pending microphone, the
+ways), the microphone level control with generated speech-like signals (quiet, typical and hot
+microphones reach the speech level, a microphone already there passes at unity, the gain limit,
+noise alone gets no gain, a sudden full-scale frame is limited), the port volumes reaching the
+encoder, the level heard end to end through Opus and a second service (unity, the talker's volume,
+the voice volume, and a quiet microphone with and without the level control), the push-to-talk gate's tail and focus rules, a missing, refused and pending microphone, the
 service encoding only while the gate is open, and the guest glue in the player mode with a stand-in
 microphone and push to talk (no blocks before a press, none after the tail, none without focus, the
 device opened only between start and stop, receive-only without the controls adapter). No device or

@@ -613,7 +613,7 @@ void Service::pump() {
         return;
     }
     if (due - frames_done_ > options_.max_catch_up) frames_done_ = due - options_.max_catch_up;  // skip a stall
-    std::vector<int16_t> samples(FrameSamples);
+    std::vector<int16_t> samples(FrameSamples), scaled(FrameSamples);
     std::vector<uint8_t> payload, block;
     for (; frames_done_ < due; ++frames_done_) {
         const uint64_t index = frames_done_;
@@ -625,14 +625,26 @@ void Service::pump() {
         ++send_.frames;
         for (auto& out : ports_) {
             if (!out.used || out.params.type != uint32_t(PortType::OutVoice) || out.params.mute) continue;
-            const bool fed = std::any_of(out.edges.begin(), out.edges.end(), [&](uint32_t input) {
+            // The port carries its microphone inputs after each input's volume, at its own volume.
+            bool fed = false;
+            float gain = 0;
+            for (uint32_t input : out.edges) {
                 const Port* in = find(input);
-                return in && in->params.type == uint32_t(PortType::InMic) && !in->params.mute;
-            });
+                if (!in || in->params.type != uint32_t(PortType::InMic) || in->params.mute) continue;
+                fed = true;
+                gain += in->params.volume;
+            }
             if (!fed) continue;
+            gain *= out.params.volume;
+            const int16_t* frame = samples.data();
+            if (gain != 1.0f) {
+                for (unsigned i = 0; i < FrameSamples; ++i)
+                    scaled[i] = static_cast<int16_t>(std::clamp(std::lround(samples[i] * double(gain)), -32768L, 32767L));
+                frame = scaled.data();
+            }
             const size_t size = block_size_for_bitrate(out.params.bitrate);
             payload.assign(std::min<size_t>(size - BlockHeader, 255), 0);
-            const size_t n = options_.encoder ? options_.encoder->encode(index, samples.data(), payload.data(), payload.size()) : 0;
+            const size_t n = options_.encoder ? options_.encoder->encode(index, frame, payload.data(), payload.size()) : 0;
             if (!n) continue;
             block.resize(size);
             write_block(out.next_sequence++, payload.data(), n, size, block.data());

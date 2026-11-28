@@ -16,6 +16,8 @@
  *                              talkers are decoded and played on a host stream (the game's headset
  *                              output; PS3_MUTE keeps it silent)
  * MAG_VOICE_VOLUME=<0..200>    voice playback volume in percent (default 100)
+ * MAG_VOICE_AGC=0              send the microphone at its own level (default: levelled; see
+ *                              docs/voice-chat.md, "Microphone level")
  * MAG_VOICE_TRACE=<path>       JSON lines of the calls: sizes, counts and times, never audio
  *
  * A lab mode wins over MAG_VOICE_MODE: it never opens the microphone. */
@@ -327,8 +329,17 @@ void voice_start(const char*) {
             label = "receive-only";
         } else {
             const char* input = std::getenv("MAG_VOICE_INPUT");
-            options.source = std::make_unique<PttGate>(
-                std::make_unique<MicSource>(host_capture_devices(), input ? input : ""), push_to_talk);
+            std::unique_ptr<FrameSource> mic = std::make_unique<MicSource>(host_capture_devices(), input ? input : "");
+            // The microphone's level control (docs/voice-chat.md, "Microphone level"); 0 sends the
+            // device's own level, as builds before it did.
+            const char* agc = std::getenv("MAG_VOICE_AGC");
+            if (agc && std::strcmp(agc, "0") == 0) std::fprintf(stderr, "[voice] MAG_VOICE_AGC=0: the microphone is sent at its own level\n");
+            else {
+                if (agc && *agc && std::strcmp(agc, "1") != 0)
+                    std::fprintf(stderr, "[voice] MAG_VOICE_AGC=%s is not 0 or 1; the microphone level control stays on\n", agc);
+                mic = std::make_unique<LevelControl>(std::move(mic));
+            }
+            options.source = std::make_unique<PttGate>(std::move(mic), push_to_talk);
         }
         options.encoder = make_opus_encoder();
         options.decoder = opus_decoder_factory();

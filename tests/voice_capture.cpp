@@ -3,9 +3,11 @@
 // microphone that is missing, refused or pending. No device, no game data.
 #include "mag_voice_capture.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -427,12 +429,162 @@ static void service() {
     }
 }
 
+// --- Microphone level ---------------------------------------------------------------------------
+
+// A speech-like signal at 16 kHz: a 150 Hz voice with falling harmonics, shaped into syllables
+// (3 a second) for 1.5 s, then 0.5 s of pause, over a faint deterministic noise floor. `talk_dbfs`
+// is the RMS of the talk spans; `noise_dbfs` that of the noise.
+struct Speech {
+    std::vector<int16_t> samples;
+    std::vector<bool> talking;  // per sample
+};
+static Speech speech_like(double talk_dbfs, double seconds, double noise_dbfs = -70) {
+    const size_t n = size_t(seconds * SampleRate);
+    std::vector<double> voice(n), noise(n);
+    std::vector<bool> talking(n);
+    uint32_t seed = 12345;
+    double voice_sum = 0, noise_sum = 0;
+    size_t voice_count = 0;
+    for (size_t i = 0; i < n; ++i) {
+        const double t = double(i) / SampleRate;
+        talking[i] = std::fmod(t, 2.0) < 1.5;
+        double v = 0;
+        for (int k = 1; k <= 8; ++k) v += std::sin(2 * Pi * 150 * k * t) / k;
+        v *= talking[i] ? 0.5 * (1 - std::cos(2 * Pi * 3 * t)) : 0;
+        voice[i] = v;
+        if (talking[i]) voice_sum += v * v, ++voice_count;
+        seed = seed * 1664525u + 1013904223u;
+        noise[i] = (double(seed >> 8) / double(1u << 24)) * 2 - 1;
+        noise_sum += noise[i] * noise[i];
+    }
+    const double voice_scale = std::pow(10, talk_dbfs / 20) / std::sqrt(voice_sum / voice_count);
+    const double noise_scale = std::pow(10, noise_dbfs / 20) / std::sqrt(noise_sum / n);
+    Speech out;
+    out.samples.resize(n);
+    out.talking = talking;
+    for (size_t i = 0; i < n; ++i)
+        out.samples[i] = int16_t(std::lround(std::clamp((voice[i] * voice_scale + noise[i] * noise_scale), -1.0, 1.0) * 32767));
+    return out;
+}
+
+// Levels in dBFS of the talk spans and the pauses from `from` seconds on, and the peak (of full scale).
+struct Levels {
+    double talk = -200, pause = -200, peak = 0;
+};
+static Levels levels(const std::vector<int16_t>& s, const std::vector<bool>& talking, double from) {
+    double talk = 0, pause = 0;
+    size_t talk_n = 0, pause_n = 0;
+    Levels out;
+    for (size_t i = size_t(from * SampleRate); i < s.size(); ++i) {
+        const double x = s[i] / 32768.0;
+        (talking[i] ? talk : pause) += x * x;
+        ++(talking[i] ? talk_n : pause_n);
+        out.peak = std::max(out.peak, std::fabs(x));
+    }
+    if (talk_n) out.talk = 10 * std::log10(std::max(talk / talk_n, 1e-20));
+    if (pause_n) out.pause = 10 * std::log10(std::max(pause / pause_n, 1e-20));
+    return out;
+}
+
+static std::vector<int16_t> levelled(const std::vector<int16_t>& in, LevelControl& control) {
+    std::vector<int16_t> out(in);
+    for (size_t at = 0; at + FrameSamples <= out.size(); at += FrameSamples) control.process(out.data() + at);
+    return out;
+}
+
+static void level_control() {
+    // Quiet, typical and hot microphones all reach the target speech level (-18 dBFS) once settled;
+    // the pauses keep their distance below speech, and peaks stay under full scale.
+    for (double input : {-40.0, -30.0, -18.0, -8.0}) {
+        const Speech in = speech_like(input, 8);
+        LevelControl control(nullptr);
+        const auto out = levelled(in.samples, control);
+        const Levels before = levels(in.samples, in.talking, 4), after = levels(out, in.talking, 4);
+        std::printf("level control: speech %.1f dBFS -> %.1f dBFS (gain %.1f dB), pauses %.1f -> %.1f, peak %.3f\n",
+                    before.talk, after.talk, control.gain_db(), before.pause, after.pause, after.peak);
+        CHECK(std::fabs(after.talk - -18) < 2.5);
+        CHECK(after.peak < 0.95);
+        CHECK(after.talk - after.pause > 20);
+        CHECK(std::fabs((after.pause - before.pause) - control.gain_db()) < 3);  // noise gets no more than speech's gain
+        if (input == -18.0) {
+            // Already at the target: unity, peak in about peak out.
+            CHECK(std::fabs(control.gain_db()) < 1.0);
+            CHECK(std::fabs(20 * std::log10(after.peak / before.peak)) < 1.0);
+        }
+    }
+    // A very quiet microphone is raised by at most the gain limit (20 dB).
+    {
+        const Speech in = speech_like(-50, 8, -80);
+        LevelControl control(nullptr);
+        const auto out = levelled(in.samples, control);
+        const Levels after = levels(out, in.talking, 4);
+        CHECK(std::fabs(control.gain_db() - 20) < 0.01);
+        CHECK(std::fabs(after.talk - -30) < 1.5);
+    }
+    // Background noise alone is never mistaken for speech: no gain, silence stays silence.
+    {
+        const Speech in = speech_like(-200, 4, -60);
+        LevelControl control(nullptr);
+        const auto out = levelled(in.samples, control);
+        CHECK(control.gain_db() == 0);
+        CHECK(std::fabs(levels(out, in.talking, 0).pause - levels(in.samples, in.talking, 0).pause) < 0.1);
+        std::vector<int16_t> zeros(FrameSamples * 10, 0);
+        for (size_t at = 0; at < zeros.size(); at += FrameSamples) control.process(zeros.data() + at);
+        CHECK(std::all_of(zeros.begin(), zeros.end(), [](int16_t v) { return v == 0; }));
+    }
+    // A full-scale burst after quiet speech is limited at once, without wrapping.
+    {
+        Speech in = speech_like(-36, 4);
+        LevelControl control(nullptr);
+        auto out = levelled(in.samples, control);
+        std::vector<int16_t> burst(FrameSamples);
+        for (unsigned i = 0; i < FrameSamples; ++i) burst[i] = int16_t(std::lround(32767 * std::sin(2 * Pi * 500 * i / SampleRate)));
+        control.process(burst.data());
+        int peak = 0;
+        bool sign_kept = true;
+        for (unsigned i = 0; i < FrameSamples; ++i) {
+            peak = std::max(peak, std::abs(int(burst[i])));
+            const double ref = std::sin(2 * Pi * 500 * i / SampleRate);
+            if ((ref > 0.1 && burst[i] < 0) || (ref < -0.1 && burst[i] > 0)) sign_kept = false;
+        }
+        CHECK(peak < 32767);
+        CHECK(sign_kept);
+    }
+    // As a source: the inner source's frames, levelled; a frame the microphone missed stays silent.
+    {
+        class Quiet final : public FrameSource {
+        public:
+            bool frame(uint64_t index, int16_t* samples) override {
+                // Talk at 300 of 32768 (a quiet microphone), a near-silent frame between phrases,
+                // and now and then a frame the microphone thread missed.
+                const double level = index % 10 == 9 ? 0 : index % 10 == 0 ? 3 : 300;
+                for (unsigned i = 0; i < FrameSamples; ++i)
+                    samples[i] = int16_t(std::lround(level * std::sin(2 * Pi * 200 * i / SampleRate)));
+                return index % 10 != 9;
+            }
+        };
+        LevelControl control(std::make_unique<Quiet>());
+        control.start();
+        std::vector<int16_t> frame(FrameSamples);
+        bool missing_silent = true;
+        for (uint64_t index = 0; index < 50; ++index) {
+            const bool got = control.frame(index, frame.data());
+            if (!got && std::any_of(frame.begin(), frame.end(), [](int16_t v) { return v != 0; })) missing_silent = false;
+        }
+        CHECK(missing_silent);
+        CHECK(control.gain_db() > 10);  // 300 of 32768 is a quiet microphone
+        control.start();                // a new session learns again
+        CHECK(control.gain_db() == 0);
+    }
+}
+
 int main() {
     resampler();
     ring();
     gate();
     microphone();
     service();
+    level_control();
     if (failures) {
         std::printf("%d failures\n", failures);
         return 1;

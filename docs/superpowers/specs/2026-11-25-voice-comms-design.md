@@ -140,8 +140,9 @@ big-endian port parameter block: type, threshold, mute flag, volume, and the bit
 - **Ports and edges.** Creating, deleting, connecting, disconnecting, resetting and updating ports keep
   a real graph. An output port carries the mix of the input ports connected to it, after each port's
   mute and volume.
-- **Microphone (IN_MIC).** Host capture, resampled to the service's internal 16 kHz mono, passed
-  through noise suppression, and gated by push to talk. While the gate is closed the port is silent and
+- **Microphone (IN_MIC).** Host capture, resampled to the service's internal 16 kHz mono, levelled
+  to a steady speech level as the console's microphone processing does (docs/voice-chat.md,
+  "Microphone level"), passed through noise suppression, and gated by push to talk. While the gate is closed the port is silent and
   nothing is encoded.
 - **Encoded output (OUT_VOICE).** Encodes its input in fixed-duration frames into voice blocks (below)
   and queues them as a byte stream. Reading returns whole blocks only, up to the size the caller

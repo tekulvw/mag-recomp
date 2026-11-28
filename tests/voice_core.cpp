@@ -1,6 +1,7 @@
 // Synthetic checks for the MAG voice service core (src/voice/mag_voice_core.h). No game data.
 #include "mag_voice_core.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -509,6 +510,52 @@ static void trace_has_no_payload() {
     service.end();
 }
 
+// The microphone port's and the encoded output's volumes reach the encoder: the tone's peak (8000)
+// comes out at unity, halved at a microphone volume of 0.5, and scaled by the output's volume too.
+class PeakEncoder final : public FrameEncoder {
+public:
+    explicit PeakEncoder(int* peak) : peak_(peak) {}
+    size_t encode(uint64_t, const int16_t* samples, uint8_t* out, size_t capacity) override {
+        for (unsigned i = 0; i < FrameSamples; ++i) *peak_ = std::max(*peak_, std::abs(int(samples[i])));
+        std::memset(out, 1, capacity);
+        return capacity;
+    }
+
+private:
+    int* peak_;
+};
+
+static void port_volumes_reach_the_encoder() {
+    const struct {
+        float mic, out;
+        int peak;
+    } cases[] = {{1.0f, 1.0f, 8000}, {0.5f, 1.0f, 4000}, {1.0f, 0.25f, 2000}, {0.5f, 0.5f, 2000}, {2.0f, 3.0f, 32767}};
+    for (const auto& c : cases) {
+        Clock clock;
+        int peak = 0;
+        ServiceOptions options;
+        options.now_ms = [&clock] { return clock.ms; };
+        options.source = std::make_unique<TestToneSource>();
+        options.encoder = std::make_unique<PeakEncoder>(&peak);
+        Service service(std::move(options));
+        service.init();
+        PortParams mic_params;
+        mic_params.type = uint32_t(PortType::InMic);
+        uint32_t mic = 0, out = 0;
+        service.create_port(mic_params, mic);
+        service.create_port(voice_port(PortType::OutVoice), out);
+        service.connect(mic, out);
+        service.set_volume(mic, c.mic);
+        service.set_volume(out, c.out);
+        service.start();
+        clock.ms += 400;
+        PortInfo info;
+        service.port_info(out, info);
+        if (std::abs(peak - c.peak) > 2) std::printf("mic %.2f out %.2f: peak %d, want %d\n", c.mic, c.out, peak, c.peak);
+        CHECK(std::abs(peak - c.peak) <= 2);
+    }
+}
+
 int main() {
     block_sizes();
     parser_every_split();
@@ -522,6 +569,7 @@ int main() {
     playout_to_pcm_port();
     playout_to_secondary();
     trace_has_no_payload();
+    port_volumes_reach_the_encoder();
     if (failures) {
         std::printf("%d failures\n", failures);
         return 1;
