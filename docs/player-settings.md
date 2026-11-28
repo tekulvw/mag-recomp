@@ -128,7 +128,7 @@ Existing schema-version-1 preferences without `render_scale` load at 100% and pr
 MAG Settings → General → **Voice** holds in-match voice chat. It is **off by default**.
 
 - **Voice chat:** Off or **Push to talk**. With push to talk, hold **K** to talk in a match. K is the default; change it, or add a controller button, under **Controls → Push to talk**. Other players' voices play with voice chat on, whether or not you talk.
-- **Voice volume:** how loud other players' voices are, from Muted (0%) to 200% in steps of 25%. The file takes any whole percentage from 0 to 200; a value between the steps shows as the nearest step and is kept until you pick another.
+- **Voice volume:** how loud other players' voices are, from Muted (0%) to 200% in steps of 25%. Your own microphone is levelled automatically before it is sent, so you do not need to turn the system's microphone level up for others to hear you ([voice-chat.md](voice-chat.md#microphone-level)); a talker on a build without that still sounds quiet, and this setting is the way to bring them up. The file takes any whole percentage from 0 to 200; a value between the steps shows as the nearest step and is kept until you pick another.
 
 Changes apply at the next launch.
 

@@ -1,10 +1,14 @@
 // Opus in the MAG voice service: synthetic tone through encoder, voice blocks and decoder.
 #include "mag_voice_core.h"
 #include "mag_voice_opus.h"
+#include "mag_voice_capture.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <memory>
+#include <vector>
 
 using namespace mag::voice;
 
@@ -112,9 +116,108 @@ static void through_two_services() {
     CHECK(receiver.receive_stats().decode_errors == 0);
 }
 
+// A voice-like 16 kHz signal at `dbfs` RMS: a 150 Hz voice with falling harmonics, steady (a held
+// vowel) after a short quiet start, so levels can be compared frame for frame.
+class Vowel final : public FrameSource {
+public:
+    explicit Vowel(double dbfs) {
+        double sum = 0;
+        for (unsigned i = 0; i < SampleRate; ++i) sum += sample(i) * sample(i);
+        scale_ = std::pow(10, dbfs / 20) / std::sqrt(sum / SampleRate);
+    }
+    bool frame(uint64_t index, int16_t* samples) override {
+        // The first 200 ms are quiet: the microphone opens before the player speaks.
+        for (unsigned i = 0; i < FrameSamples; ++i)
+            samples[i] = index < 5 ? 0 : int16_t(std::lround(32767 * scale_ * sample(index * FrameSamples + i)));
+        return true;
+    }
+
+private:
+    static double sample(uint64_t n) {
+        const double t = double(n) / SampleRate;
+        double v = 0;
+        for (int k = 1; k <= 6; ++k) v += std::sin(2 * 3.14159265358979323846 * 150 * k * t) / k;
+        return v;
+    }
+    double scale_ = 1;
+};
+
+static double dbfs(const std::vector<int16_t>& s, size_t from) {
+    return 20 * std::log10(std::max(rms(s.data() + from, s.size() - from), 1e-9) / 32768.0);
+}
+
+// Microphone frames through the sender's level control and Opus, the wire, and the receiver's
+// headset output at the talker's and the port's volume and the player's voice volume: the level
+// heard in dBFS after one and a half seconds.
+static double heard_level(std::unique_ptr<FrameSource> source, float talker_volume, float player_volume) {
+    struct Clock { uint64_t ms = 0; } clock;
+    ServiceOptions send_options;
+    send_options.now_ms = [&clock] { return clock.ms; };
+    send_options.source = std::move(source);
+    send_options.encoder = make_opus_encoder();
+    Service sender(std::move(send_options));
+    ServiceOptions receive_options;
+    receive_options.now_ms = [&clock] { return clock.ms; };
+    receive_options.decoder = opus_decoder_factory();
+    receive_options.voice_gain = player_volume;
+    Service receiver(std::move(receive_options));
+    sender.init();
+    receiver.init();
+    PortParams mic, voice_out, voice_in, headset;
+    mic.type = uint32_t(PortType::InMic);
+    voice_out.type = uint32_t(PortType::OutVoice);
+    voice_out.bitrate = 7300;  // the game's encoded ports
+    voice_in.type = uint32_t(PortType::InVoice);
+    voice_in.bitrate = 7300;
+    headset.type = uint32_t(PortType::OutSecondary);
+    uint32_t m = 0, o = 0, i = 0, h = 0;
+    sender.create_port(mic, m);
+    sender.create_port(voice_out, o);
+    sender.connect(m, o);
+    receiver.create_port(voice_in, i);
+    receiver.create_port(headset, h);
+    receiver.connect(i, h);
+    receiver.set_volume(i, talker_volume);
+    sender.start();
+    receiver.start();
+    std::vector<uint8_t> wire(1024);
+    std::vector<int16_t> heard, chunk(320);
+    for (int step = 0; step < 150; ++step) {  // three seconds in 20 ms steps
+        clock.ms += 20;
+        size_t copied = 0, accepted = 0;
+        sender.read(o, wire.data(), wire.size(), copied);
+        if (copied) receiver.write(i, wire.data(), copied, accepted);
+        receiver.render_secondary(chunk.data(), chunk.size());
+        heard.insert(heard.end(), chunk.begin(), chunk.end());
+    }
+    return dbfs(heard, heard.size() / 2);
+}
+
+static void levels_end_to_end() {
+    // Unity everywhere: the level heard is the level sent.
+    const double unity = heard_level(std::make_unique<Vowel>(-18), 1.0f, 1.0f);
+    // The talker port's volume and the player's voice volume apply (-6 dB, then +6 dB).
+    const double half = heard_level(std::make_unique<Vowel>(-18), 0.5f, 1.0f);
+    const double doubled = heard_level(std::make_unique<Vowel>(-18), 0.5f, 2.0f);
+    // A quiet microphone (-34 dBFS) arrives at the speech level once the sender levels it; without
+    // the level control it stays 16 dB down.
+    const double raw = heard_level(std::make_unique<Vowel>(-34), 1.0f, 1.0f);
+    const double levelled = heard_level(std::make_unique<LevelControl>(std::make_unique<Vowel>(-34)), 1.0f, 1.0f);
+    std::printf("heard: unity %.1f, talker 0.5 %.1f, then voice volume 200%% %.1f, quiet raw %.1f, quiet levelled %.1f dBFS\n",
+                unity, half, doubled, raw, levelled);
+    // At the game's 7300 bit/s the codec keeps the voice within about 2 dB (it drops some of the
+    // upper harmonics); every gain stage is exact.
+    CHECK(std::fabs(unity - -18) < 3.0);
+    CHECK(std::fabs((unity - half) - 6.02) < 0.5);
+    CHECK(std::fabs(doubled - unity) < 0.5);
+    CHECK(std::fabs((unity - raw) - 16) < 1.0);
+    CHECK(std::fabs(levelled - unity) < 1.5);
+}
+
 int main() {
     round_trip();
     through_two_services();
+    levels_end_to_end();
     if (failures) {
         std::printf("%d failures\n", failures);
         return 1;

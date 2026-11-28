@@ -99,7 +99,8 @@ class VoiceOpus(unittest.TestCase):
     def test_tone_survives_the_codec_and_two_services(self):
         with tempfile.TemporaryDirectory() as tmp:
             binary = Path(tmp) / ('opus.exe' if sys.platform == 'win32' else 'opus')
-            build(binary, [SOURCES / 'mag_voice_core.cpp', SOURCES / 'mag_voice_opus.cpp', ROOT / 'tests/voice_opus.cpp'],
+            build(binary, [SOURCES / 'mag_voice_core.cpp', SOURCES / 'mag_voice_opus.cpp', SOURCES / 'mag_voice_capture.cpp',
+                           ROOT / 'tests/voice_opus.cpp'],
                   [SOURCES], opus())
             run = subprocess.run([str(binary)], capture_output=True, text=True, timeout=60, env=clean_env())
             self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
@@ -231,6 +232,15 @@ class VoiceGuestGlue(unittest.TestCase):
             self.assertIn('PASS voice hle ptt', run.stdout)
             self.assertIn('push to talk mode', run.stderr)
             self.assertEqual(run.stderr.count('microphone open'), 1)
+            self.assertNotIn('MAG_VOICE_AGC', run.stderr)  # the level control is on by default
+            # MAG_VOICE_AGC=0 sends the microphone at its own level; anything else but 1 is named and ignored.
+            for value, said in (('0', 'MAG_VOICE_AGC=0: the microphone is sent at its own level'),
+                                ('loud', 'MAG_VOICE_AGC=loud is not 0 or 1; the microphone level control stays on')):
+                agc = subprocess.run([str(binary), 'ptt'], capture_output=True, text=True, timeout=60,
+                                     env=clean_env(MAG_VOICE_MODE='ptt', MAG_VOICE_INPUT='Stand-in', MAG_VOICE_AGC=value))
+                self.assertEqual(agc.returncode, 0, agc.stdout + agc.stderr)
+                self.assertIn('PASS voice hle ptt', agc.stdout)
+                self.assertIn(said, agc.stderr)
             # A lab mode wins and never opens the microphone.
             lab = subprocess.run([str(binary), 'pattern'], capture_output=True, text=True, timeout=60,
                                  env=clean_env(MAG_VOICE_MODE='ptt', MAG_VOICE_TEST_TONE='pattern'))

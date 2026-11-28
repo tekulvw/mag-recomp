@@ -118,6 +118,44 @@ private:
     std::string reported_;
 };
 
+// Automatic gain control for the microphone (docs/voice-chat.md, "Microphone level"). A console
+// headset's microphone reaches the voice library already levelled by the microphone's own signal
+// processing, so talkers sit at a steady speech level whatever the hardware; a PC microphone at
+// its system input level delivers speech some 10 to 20 dB lower, far below the game's mix. This
+// stage restores the levelled signal: it estimates the speech level of frames that stand clear of
+// the background noise, steers a gain that brings that level to `target_dbfs` within the gain
+// limits (falling at once, rising at most `rise_db` a frame), holds the gain through pauses so
+// noise is never raised to speech level, and keeps peaks under `ceiling` (a per-frame limit, then
+// a soft knee on any sample still above it). Gain changes ramp across a frame. The inner source is
+// read and processed every frame, so the gain is settled when push to talk opens.
+struct LevelOptions {
+    double target_dbfs = -18;      // speech RMS the stage aims for (dB re full scale)
+    double max_gain_db = 20;       // a quiet microphone is raised at most this much
+    double min_gain_db = -10;      // a hot one is lowered at most this much
+    double rise_db = 0.5;          // gain increase per 40 ms frame (12.5 dB a second)
+    double ceiling = 0.89;         // peak limit (about -1 dBFS)
+    double speech_margin_db = 10;  // a frame is speech when this far above the noise floor...
+    double speech_min_dbfs = -55;  // ...and above this absolute level
+    double floor_rise_db = 0.15;   // the noise floor follows a rising background this fast a frame
+};
+
+class LevelControl final : public FrameSource {
+public:
+    explicit LevelControl(std::unique_ptr<FrameSource> inner, LevelOptions options = {});
+    void start() override;
+    void stop() override;
+    bool frame(uint64_t index, int16_t* samples) override;
+    // Processes one captured frame in place (what frame() does to the inner source's audio).
+    void process(int16_t* samples);
+    double gain_db() const { return gain_db_; }
+
+private:
+    std::unique_ptr<FrameSource> inner_;
+    LevelOptions options_;
+    bool have_floor_ = false, have_level_ = false;
+    double floor_db_ = 0, level_db_ = 0, gain_db_ = 0, applied_ = 1;
+};
+
 // What push to talk reads each frame: whether it can work at all (the controls adapter runs),
 // whether the action is held, and whether the game window has input focus.
 struct PttInput {
