@@ -389,6 +389,27 @@ if(MAG_RETAIL_V212)
             "v212-launcher-profile=${CMAKE_CURRENT_SOURCE_DIR}/profiles/retail-v2.12-launcher.json"
             "v212-launcher-hooks=${CMAKE_CURRENT_SOURCE_DIR}/src/v212_launcher_hooks.cpp"
             "v212-retail-handoff=${CMAKE_CURRENT_SOURCE_DIR}/src/retail_handoff.cpp")
+    else()
+        file(READ "${MAG_WORKSPACE}/profiles/retail-v2.12.json" MAG_V212_IMAGE_PROFILE)
+        string(JSON MAG_V212_ENGINE_ELF GET "${MAG_V212_IMAGE_PROFILE}" images mage_g elf)
+        execute_process(
+            COMMAND "${Python3_EXECUTABLE}" -m tools.v212_engine_profile "${MAG_V212_ENGINE_ELF}"
+            WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+            RESULT_VARIABLE MAG_V212_ENGINE_RESULT OUTPUT_QUIET ERROR_VARIABLE MAG_V212_ENGINE_ERROR)
+        if(NOT MAG_V212_ENGINE_RESULT EQUAL 0)
+            message(FATAL_ERROR "2.12 engine network profile rejected: ${MAG_V212_ENGINE_ERROR}")
+        endif()
+        target_sources(${PROJECT_NAME} PRIVATE src/v212_engine_hooks.cpp)
+        set_property(SOURCE src/v212_stubs.cpp APPEND PROPERTY COMPILE_DEFINITIONS MAG_V212_ENGINE=1)
+        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+            "${CMAKE_CURRENT_SOURCE_DIR}/profiles/retail-v2.12-engine-network.json"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tools/v212_engine_profile.py")
+        set_property(TARGET ${PROJECT_NAME} APPEND PROPERTY LINK_DEPENDS
+            "${CMAKE_CURRENT_SOURCE_DIR}/profiles/retail-v2.12-engine-network.json"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tools/v212_engine_profile.py")
+        list(APPEND MAG_RECEIPT_EXTRA
+            "v212-engine-network-profile=${CMAKE_CURRENT_SOURCE_DIR}/profiles/retail-v2.12-engine-network.json"
+            "v212-engine-network-hooks=${CMAKE_CURRENT_SOURCE_DIR}/src/v212_engine_hooks.cpp")
     endif()
     if(SPU_SOURCES)
         target_compile_definitions(${PROJECT_NAME} PRIVATE MAG_V212_SPU_PREPARED=1)
@@ -741,6 +762,12 @@ if(NOT MAG_RETAIL_V212)
 endif()
 if(MAG_RUNTIME_CANDIDATE_MANIFEST)
     set_property(TARGET ${PROJECT_NAME} APPEND PROPERTY LINK_DEPENDS "${MAG_RUNTIME_CANDIDATE_MANIFEST}")
+endif()
+if(MAG_RETAIL_V212 AND MAG_IMAGE STREQUAL "mage_g")
+    set_property(TARGET ${PROJECT_NAME} APPEND PROPERTY LINK_DEPENDS
+        "${CMAKE_CURRENT_SOURCE_DIR}/profiles/retail-v2.12-nonlocal.json"
+        "${CMAKE_CURRENT_SOURCE_DIR}/profiles/retail-v2.12-nonlocal-config.json"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tools/v212_nonlocal_profile.py")
 endif()
 list(APPEND MAG_RECEIPT_EXTRA ${MAG_INPUT_RECEIPT_EXTRA})
 list(APPEND MAG_RECEIPT_EXTRA ${MAG_RENDER_RECEIPT_EXTRA})

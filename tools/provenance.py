@@ -12,6 +12,25 @@ from tools.prepare_inputs import ROOT, sha256_file, verify_hash, data_path, load
 from tools.targets import DEFAULT_TARGET, TARGET_NAMES, get_target, validate_target_profile
 
 
+def validate_v212_lift_extensions(record: dict, elf_hash: str, *, require_nonlocal: bool = False) -> None:
+    """Accept only the independently reviewed engine nonlocal-flow exception."""
+    if any(value for key,value in record.items() if 'hooks' in key):
+        raise ValueError('2.12 cannot use stale v1 lift hooks')
+    keys={key for key in record if key.startswith('nonlocal')}
+    if not keys:
+        if require_nonlocal:
+            raise ValueError('2.12 native engine requires the reviewed nonlocal control-flow profile')
+        return
+    if keys != {'nonlocal_control_flow','nonlocal_profile_sha256'}:
+        raise ValueError('2.12 nonlocal metadata must bind its exact reviewed profile')
+    review=record['nonlocal_control_flow']
+    if (not isinstance(review,dict) or not review.get('profile_sha256') or
+            record['nonlocal_profile_sha256'] != review['profile_sha256']):
+        raise ValueError('2.12 nonlocal profile hash binding is missing or changed')
+    from tools.v212_nonlocal_profile import validate_record
+    validate_record(review,elf_hash)
+
+
 def validate_lift(directory: Path, elf_hash: str, target: str = DEFAULT_TARGET) -> dict:
     record=json.loads((directory/'provenance.json').read_text())
     get_target(target)
@@ -20,8 +39,7 @@ def validate_lift(directory: Path, elf_hash: str, target: str = DEFAULT_TARGET) 
         if (record.get('target') != target or record.get('lifter_role') != 'lifter-ppu-v212' or
                 not pin.get('commit') or record.get('sdk_revision') != pin['commit']):
             raise ValueError('2.12 lift must bind its target and reviewed lifter-ppu-v212 revision')
-        if any(value for key, value in record.items() if 'hooks' in key or key.startswith('nonlocal')):
-            raise ValueError('2.12 cannot use stale v1 lift hooks or nonlocal profiles')
+        validate_v212_lift_extensions(record,elf_hash)
     elif record.get('target', target) != target:
         raise ValueError('Lift belongs to a different retail target')
     if record.get('status') != 'complete' or record.get('exit_code') != 0 or record.get('audit_exit') != 0:
@@ -178,6 +196,8 @@ def validate_build_image(recomp: Path, image_name: str = 'EBOOT',
     image = manifest['images'][image_name]
     verify_hash(Path(image['elf']), image['elf_sha256'])
     lift=validate_lift(recomp, image['elf_sha256'], target)
+    if target != DEFAULT_TARGET and image_name == 'mage_g':
+        validate_v212_lift_extensions(lift,image['elf_sha256'],require_nonlocal=True)
     if firmware is not None or spu is not None:
         validate_modules(image,image_name,spu,firmware,target)
     return image,lift
@@ -279,6 +299,12 @@ def record_build(binary: Path, sdk: Path, recomp: Path, spu: Path | None = None,
     record.update(validate_modules(image,image_name,spu,firmware,target))
     if target != DEFAULT_TARGET and image_name == 'EBOOT':
         record['launcher_network_hooks'] = 'v212-launcher-profile' in extensions and 'v212-launcher-hooks' in extensions
+    if target != DEFAULT_TARGET and image_name == 'mage_g':
+        enabled='v212-engine-network-profile' in extensions and 'v212-engine-network-hooks' in extensions
+        if enabled:
+            from tools.v212_engine_profile import verify_engine
+            record['engine_network_profile'] = verify_engine(Path(image['elf']))
+        record['engine_network_hooks'] = enabled
     binary.with_suffix('.receipt.json').write_text(json.dumps(record,indent=2)+'\n')
     return record
 

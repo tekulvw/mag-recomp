@@ -23,7 +23,7 @@ import time
 if __package__ in (None, ''):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from tools.prepare_inputs import data_path, load_framework, sha256_file, verify_hash
-from tools.provenance import validate_receipt, runtime_identity
+from tools.provenance import validate_receipt, runtime_identity, validate_v212_lift_extensions
 from tools.targets import get_target, validate_target_profile
 from tools.verified_spu_jobs import fresh_output
 from tools.psarc import parse as parse_psarc
@@ -37,7 +37,7 @@ FIELDS = {'EnableNetwork', 'EnableServerOnClient', 'UseTestClient', 'UseNPTicket
           'MAPSServerAddr', 'MAPSServerTCPPort', 'MAPSServerUDPPort'}
 
 
-def parse_loopback_settings(text):
+def parse_literal_settings(text):
     """Accept literal configuration only, including the original table + override.
 
     Executable Lua, unknown fields, duplicate initial tables and dynamic values
@@ -45,10 +45,22 @@ def parse_loopback_settings(text):
     """
     values, table, initialized = {}, False, False
     debug_table, debug_seen, debug_tag_seen = False, False, False
+    character_table, character_seen = False, False
     literal = r'(true|false|[0-9]+|"[A-Za-z0-9._:-]+")'
     for line in text.splitlines():
         line = line.strip()
         if not line or line.startswith('--'):
+            continue
+        if character_table:
+            if line in ('}', '};'):
+                if 'PlayerName' not in values:
+                    raise ValueError('Character settings require one literal PlayerName')
+                character_table = False
+                continue
+            name = re.fullmatch(r'PlayerName\s*=\s*"([A-Za-z][A-Za-z0-9_-]{2,14})",?', line)
+            if not name or 'PlayerName' in values:
+                raise ValueError('Character settings allow only one valid literal PlayerName')
+            values['PlayerName'] = name[1]
             continue
         if re.fullmatch(r'MAGDebugSettings\s*=\s*\{', line):
             if initialized or debug_seen:
@@ -65,6 +77,11 @@ def parse_loopback_settings(text):
             if not tag or debug_tag_seen or any(not 32 <= ord(char) <= 126 for char in tag[1]):
                 raise ValueError('Debug settings allow only one bounded literal dbgTag')
             debug_tag_seen = True
+            continue
+        if not table and re.fullmatch(r'MAGCharacterData\s*=\s*\{', line):
+            if character_seen:
+                raise ValueError('Unexpected character settings table reset')
+            character_table, character_seen = True, True
             continue
         if line == 'MAGClientNetConfig = {':
             if initialized or table:
@@ -84,19 +101,32 @@ def parse_loopback_settings(text):
         word = match[2]
         values[match[1]] = (word == 'true' if word in ('true', 'false') else
                             word[1:-1] if word.startswith('"') else int(word))
-    if table or debug_table or set(values) != FIELDS:
+    if table or debug_table or character_table or set(values)-{'PlayerName'} != FIELDS:
         raise ValueError('Incomplete literal connection settings')
     expected = {'EnableNetwork': True, 'EnableServerOnClient': False,
-                'UseTestClient': False, 'UseNPTicket': False, 'MAPSServerAddr': '127.0.0.1'}
+                'UseTestClient': False, 'UseNPTicket': False}
     if any(type(values[key]) is not type(want) or values[key] != want for key, want in expected.items()):
-        raise ValueError('Probe settings must use literal loopback with no ticket or local server')
+        raise ValueError('Probe settings must disable tickets and local server modes')
     for field in ('MAPSServerTCPPort', 'MAPSServerUDPPort'):
         if type(values[field]) is not int or not 1 <= values[field] <= 65535:
-            raise ValueError('Invalid closed loopback port')
+            raise ValueError('Invalid literal connection port')
     return values
 
 
-def validate_settings(hdd_root, receipt_path):
+def parse_loopback_settings(text):
+    values = parse_literal_settings(text)
+    if (values['MAPSServerAddr'] != '127.0.0.1' or
+            values.get('PlayerName', 'Port212Test') != 'Port212Test'):
+        raise ValueError('Probe settings must use literal loopback with no ticket or local server')
+    return values
+
+
+def validate_archive_settings(hdd_root, receipt_path):
+    """Pure authoritative-archive and literal-member checks shared by probes.
+
+    Endpoint policy belongs to each caller. This helper opens no sockets and
+    does not authorize a connection or change the offline CLI's reservations.
+    """
     receipt = json.loads(receipt_path.read_text())
     if receipt.get('archive') != ARCHIVE:
         raise ValueError('Offline settings proof must name the authoritative HDD tpps archive')
@@ -111,14 +141,23 @@ def validate_settings(hdd_root, receipt_path):
     import hashlib
     if hashlib.sha256(payload).hexdigest() != receipt['after_member_sha256']:
         raise ValueError('Offline settings member identity changed')
-    values = parse_loopback_settings(payload.decode('utf-8'))
+    values = parse_literal_settings(payload.decode('utf-8'))
     if (receipt.get('members_verified') != len(entries) or
-            receipt.get('unrelated_members_unchanged') != len(entries) - 1 or
+            receipt.get('unrelated_members_unchanged') != len(entries) - 1):
+        raise ValueError('Offline settings proof does not match its archive or endpoint metadata')
+    return (dict(archive=str(archive), archive_sha256=receipt['output_sha256'],
+                 member_sha256=receipt['after_member_sha256'], receipt_sha256=sha256_file(receipt_path), values=values), receipt)
+
+
+def validate_settings(hdd_root, receipt_path):
+    proof, receipt = validate_archive_settings(hdd_root, receipt_path)
+    values = proof['values']
+    if (values['MAPSServerAddr'] != '127.0.0.1' or
+            values.get('PlayerName', 'Port212Test') != 'Port212Test' or
             values['MAPSServerTCPPort'] != receipt.get('loopback_tcp') or
             values['MAPSServerUDPPort'] != receipt.get('loopback_udp')):
-        raise ValueError('Offline settings proof does not match its archive or endpoint metadata')
-    return dict(archive=str(archive), archive_sha256=receipt['output_sha256'],
-                member_sha256=receipt['after_member_sha256'], receipt_sha256=sha256_file(receipt_path), values=values)
+        raise ValueError('Offline settings proof does not match literal closed loopback endpoints')
+    return proof
 
 
 class ClosedLoopback:
@@ -149,7 +188,7 @@ class ClosedLoopback:
         self.sockets.clear()
 
 
-def clean_environment(source, disc_root, hdd_root, output, loopback_sockets=False, image='EBOOT', latest_frame=False):
+def clean_environment(source, disc_root, hdd_root, output, loopback_sockets=False, image='EBOOT', latest_frame=False, movies=False):
     # Keep basic locale/user lookup only. No inherited game, loader, input,
     # network proxy, ticket, scripting, automation or rendering variables.
     env = {key: value for key, value in source.items() if key in
@@ -158,6 +197,8 @@ def clean_environment(source, disc_root, hdd_root, output, loopback_sockets=Fals
                    'mage_g': '/dev_hdd0/game/BCUS98110/USRDIR/bin/mage_g.self'}
     if image not in guest_paths:
         raise ValueError('Unknown 2.12 boot image')
+    if type(movies) is not bool or (movies and image != 'mage_g'):
+        raise ValueError('Movie probe mode requires an explicit engine selection')
     env.update(PS3_BOOT_PATH=guest_paths[image], PATH=os.defpath, TMPDIR=str(output / 'tmp'), XDG_CACHE_HOME=str(output / 'cache'),
                PS3_VFS_ROOT=str(disc_root), PS3_HDD0_ROOT=str(hdd_root),
                PS3RECOMP_METAL_HEADLESS='1',
@@ -175,6 +216,9 @@ def clean_environment(source, disc_root, hdd_root, output, loopback_sockets=Fals
     if loopback_sockets:
         env['PS3_NET_ONLINE'] = '1'
         env['PS3_NETCTL_IPV4_OVERRIDE'] = '127.0.0.1'
+    if movies:
+        env.update(PS3RECOMP_SAIL_TIMED_THX='1', PS3RECOMP_SAIL_ATRAC_AUDIO='1',
+                   PS3RECOMP_GCM_CHECKED_REF='1')
     return env
 
 
@@ -199,7 +243,8 @@ def validate_runtime_receipt(receipt):
     return actual
 
 
-def validate_inputs(binary, elf, image, disc_root, hdd_root, settings_receipt):
+def validate_build_inputs(binary, elf, image, disc_root, hdd_root):
+    """Pure target, source, runtime, executable pair and mount validation."""
     definition = get_target(TARGET)
     profile_path = data_path(definition.profile)
     manifest = json.loads(profile_path.read_text())
@@ -212,9 +257,9 @@ def validate_inputs(binary, elf, image, disc_root, hdd_root, settings_receipt):
     runtime = validate_runtime_receipt(receipt)
     if (receipt.get('image_name') != image or
             lift.get('target') != TARGET or lift.get('lifter_role') != 'lifter-ppu-v212' or
-            lift.get('sdk_revision') != framework['ps3recomp']['lifter-ppu-v212']['commit'] or
-            any(value for key, value in lift.items() if 'hooks' in key or key.startswith('nonlocal'))):
+            lift.get('sdk_revision') != framework['ps3recomp']['lifter-ppu-v212']['commit']):
         raise ValueError('Probe requires the exact selected 2.12 image and reviewed build receipt')
+    validate_v212_lift_extensions(lift, expected, require_nonlocal=(image == 'mage_g'))
     if (disc_root == hdd_root or disc_root.is_relative_to(hdd_root) or hdd_root.is_relative_to(disc_root) or
             not (disc_root / 'PS3_GAME').is_dir() or
             not (hdd_root / 'game/BCUS98110/PARAM.SFO').is_file()):
@@ -222,12 +267,18 @@ def validate_inputs(binary, elf, image, disc_root, hdd_root, settings_receipt):
     # Bind both original copied update executables, not just their directory name.
     for relative, (source_hash, _) in definition.executables.items():
         verify_hash(hdd_root / 'game/BCUS98110/USRDIR' / relative, source_hash)
-    settings = validate_settings(hdd_root, settings_receipt)
     return dict(target=TARGET, image=image, binary=str(binary), elf=str(elf),
                 binary_sha256=receipt['binary_sha256'], elf_sha256=expected,
                 build_receipt_sha256=sha256_file(binary.with_suffix('.receipt.json')),
                 profile_sha256=sha256_file(profile_path), disc_root=str(disc_root), hdd_root=str(hdd_root),
-                settings=settings, runtime_validation=runtime, not_runtime_verified=True)
+                runtime_validation=runtime, movie_playback_available=receipt.get('movie_playback') is True,
+                not_runtime_verified=True)
+
+
+def validate_inputs(binary, elf, image, disc_root, hdd_root, settings_receipt):
+    identity = validate_build_inputs(binary, elf, image, disc_root, hdd_root)
+    identity['settings'] = validate_settings(hdd_root, settings_receipt)
+    return identity
 
 
 def run_owned(command, environment, output, seconds, identity=None, log_limit=MAX_LOG_BYTES):
@@ -356,10 +407,15 @@ def run_owned(command, environment, output, seconds, identity=None, log_limit=MA
     return result
 
 
-def probe(binary, elf, image, disc_root, hdd_root, settings_receipt, output, seconds=15, loopback_sockets=False, latest_frame=False):
+def probe(binary, elf, image, disc_root, hdd_root, settings_receipt, output, seconds=15, loopback_sockets=False, latest_frame=False, movies=False):
+    if type(movies) is not bool or (movies and image != 'mage_g'):
+        raise ValueError('Movie probe mode requires an explicit engine selection')
     binary, elf = binary.resolve(strict=True), elf.resolve(strict=True)
     disc_root, hdd_root = disc_root.resolve(strict=True), hdd_root.resolve(strict=True)
     identity = validate_inputs(binary, elf, image, disc_root, hdd_root, settings_receipt)
+    if movies and identity.get('movie_playback_available') is not True:
+        raise ValueError('Movie probe requires a verified movie_playback=true build receipt')
+    identity['movies'] = movies
     settings = identity['settings']['values']
     retained_inputs = {str(path): sha256_file(path) for path in
                        (binary, elf, binary.with_suffix('.receipt.json'), settings_receipt,
@@ -372,7 +428,7 @@ def probe(binary, elf, image, disc_root, hdd_root, settings_receipt, output, sec
         identity['network_scope'] = 'verified loopback settings; non-serving reservations; no OS egress sandbox'
         verify_hash(binary, identity['binary_sha256'])
         verify_hash(elf, identity['elf_sha256'])
-        env = clean_environment(os.environ, disc_root, hdd_root, output.resolve(), loopback_sockets, image, latest_frame)
+        env = clean_environment(os.environ, disc_root, hdd_root, output.resolve(), loopback_sockets, image, latest_frame, movies)
         result = run_owned([str(binary), str(elf)], env, output, seconds, identity)
     result['reservations_released'] = True
     result['input_changes_after_run'] = [path for path, expected in retained_inputs.items()
@@ -395,9 +451,10 @@ def main():
     parser.add_argument('--seconds', type=int, default=15)
     parser.add_argument('--latest-frame', action='store_true', help='overwrite the owned frame.ppm every 120 SDK capture calls instead of first-nonblack capture')
     parser.add_argument('--loopback-sockets', action='store_true', help='enable native host sockets only with the proven reserved loopback settings')
+    parser.add_argument('--movies', action='store_true', help='enable the three movie switches together; requires mage_g and a verified movie_playback=true build receipt')
     args = parser.parse_args()
     result = probe(args.binary, args.elf, args.image, args.disc_root, args.hdd_root,
-                   args.settings_receipt, args.output, args.seconds, args.loopback_sockets, args.latest_frame)
+                   args.settings_receipt, args.output, args.seconds, args.loopback_sockets, args.latest_frame, args.movies)
     print(json.dumps({key: result[key] for key in ('pid', 'owned_process_group', 'exit_code', 'timed_out',
                                                   'log_limit_reached', 'reaped', 'elapsed_seconds', 'errors')}, indent=2))
     return 0 if result['exit_code'] == 0 and not result['errors'] and not result['timed_out'] and not result['log_limit_reached'] else 1

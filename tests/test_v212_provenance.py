@@ -3,6 +3,8 @@ from dataclasses import replace
 import json
 from pathlib import Path
 import tempfile
+import sys
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -60,6 +62,21 @@ class V212ProvenanceTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             provenance.validate_build_image(self.lift, target='retail-v2.12')
 
+    def test_only_reviewed_nonlocal_record_survives_build_validation(self):
+        review=dict(target='retail-v2.12',profile_sha256='b'*64)
+        self.record.update(nonlocal_control_flow=review,nonlocal_profile_sha256='b'*64)
+        self.save_lift();seen=[]
+        module=SimpleNamespace(validate_record=lambda record,elf_hash:seen.append((record,elf_hash)))
+        with patch.dict(sys.modules,{'tools.v212_nonlocal_profile':module}):
+            provenance.validate_lift(self.lift,self.images['EBOOT']['elf_sha256'],target='retail-v2.12')
+            self.assertEqual(seen,[(review,self.images['EBOOT']['elf_sha256'])])
+            self.record['nonlocal_profile_sha256']='c'*64;self.save_lift()
+            with self.assertRaises(ValueError):
+                provenance.validate_lift(self.lift,self.images['EBOOT']['elf_sha256'],target='retail-v2.12')
+            self.record.update(nonlocal_profile_sha256='b'*64,nonlocal_foreign=False);self.save_lift()
+            with self.assertRaises(ValueError):
+                provenance.validate_lift(self.lift,self.images['EBOOT']['elf_sha256'],target='retail-v2.12')
+
     def test_missing_target_stale_hooks_and_incomplete_pair_reject(self):
         for changes in [dict(target='retail-v1.0'), dict(target=None),
                         dict(render_adapter_hooks={'stages': ['draw']}), dict(nonlocal_control_flow={'old': True})]:
@@ -83,6 +100,11 @@ class V212ProvenanceTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 provenance.record_build(self.binary, self.root, self.lift, target='retail-v2.12')
         self.assertFalse(self.binary.with_suffix('.receipt.json').exists())
+
+    def test_native_engine_requires_reviewed_nonlocal_flow(self):
+        self.record['elf_sha256']=self.images['mage_g']['elf_sha256'];self.save_lift()
+        with self.assertRaisesRegex(ValueError,'nonlocal'):
+            provenance.validate_build_image(self.lift,image_name='mage_g',target='retail-v2.12')
 
     def test_v212_firmware_validation_uses_explicit_shared_profile_without_title_review(self):
         profile = dict(image_sha256='synthetic-firmware-identity')
