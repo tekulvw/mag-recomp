@@ -206,6 +206,7 @@ struct Window {
     HWND page = nullptr, parent = nullptr;  // parent: where make() puts new controls
     int page_top = 0, page_height = 0, page_scroll = 0;  // page_height: the content's, in points
     HWND focus = nullptr;  // the focus the page last scrolled to
+    SIZE frame{};  // the size layout() chose, which WM_GETMINMAXINFO allows
     UINT dpi = 96;
     HFONT body = nullptr, small = nullptr, heading = nullptr, large = nullptr;
     HBRUSH group_brush = nullptr, face_brush = nullptr;
@@ -652,6 +653,7 @@ void layout() {
     RECT now;
     GetWindowRect(s->hwnd, &now);
     const int frame_width = frame.right - frame.left, frame_height = frame.bottom - frame.top;
+    s->frame = {frame_width, frame_height};
     // A window that grew past the work area's bottom moves up into it.
     int top = now.top;
     if (frame_height != now.bottom - now.top && top + frame_height > area.bottom) top = std::max(area.top, area.bottom - frame_height);
@@ -1580,6 +1582,16 @@ LRESULT CALLBACK procedure(HWND hwnd, UINT message, WPARAM w, LPARAM l) {
                      suggested->bottom - suggested->top, SWP_NOZORDER | SWP_NOACTIVATE);
         if (s->controls_page) rebuild_rows();
         layout();
+        return 0;
+    }
+    case WM_GETMINMAXINFO: {
+        // The system's limit is the primary screen's size; the window's own is its work area's
+        // (layout()), which a taller second monitor (or a test's stand-in) may exceed.
+        auto* limits = reinterpret_cast<MINMAXINFO*>(l);
+        if (s) {
+            limits->ptMaxTrackSize.x = std::max(limits->ptMaxTrackSize.x, s->frame.cx);
+            limits->ptMaxTrackSize.y = std::max(limits->ptMaxTrackSize.y, s->frame.cy);
+        }
         return 0;
     }
     case WM_CLOSE:
