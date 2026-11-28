@@ -28,7 +28,14 @@ def load_framework():
     if WORKSPACE != ROOT and (WORKSPACE / FRAMEWORK_OVERLAY).is_file():
         path = WORKSPACE / FRAMEWORK_OVERLAY
     return json.loads(path.read_text()), path
-RETAIL = dict(get_target().executables)
+# The existing installer reads this AST literal without executing source tools.
+# tests/test_targets.py binds it to the default target registry to prevent drift.
+RETAIL = {
+    'EBOOT.BIN': ('ebe4a52656cc38483d24656029a55ddef6fd53adc7f23b4c52c42f272ac8d1f9',
+                  'eb916f92e7c32a9401739d79835630273e1f41a92e6a5d17753d9374062da7d9'),
+    'bin/mage_g.self': ('54b324a39e5453916768d8e83057ea72865cf53b23a1a8f058e25915d401840c',
+                        '0089f0d6d17e48533ce7ff8d943dddd03487b925e7b04a1a055bfb907568694c'),
+}
 # The settings archive the player-settings server overlay rewrites: the retail
 # SDATA file as on the disc, or the same archive already decrypted to PSARC. A
 # copy whose settings were changed by any earlier tool is refused before a build.
