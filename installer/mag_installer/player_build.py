@@ -14,6 +14,11 @@ Layout, in the installation location the player chooses:
 Installers before this layout kept the build files inside the MAG folder. The next Build MAG
 moves them out: a failed build's files become the build folder, ready for Retry build; a
 finished build is packaged again from its finished binaries without rebuilding (`_migrate`).
+
+An existing MAG folder is updated in place (`update`; the swap is in update.py): the new app is
+built and packaged in the build folder as for a first build, then only the app folder is swapped,
+through a journal. After a successful update the build folder keeps only its logs, the previous
+app (``MAG-build/previous``) and the journal.
 """
 from __future__ import annotations
 
@@ -21,8 +26,10 @@ import hashlib
 import json
 import os
 import shutil
+import sys
+import time
 from pathlib import Path
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 
 from .model import InstallerError, host_key
 from .native_build import FIRMWARE_SOURCE_STEPS
@@ -142,7 +149,8 @@ BUILD_SUFFIX = '-build'
 # What a build folder may hold. MAG and MAG.app are package stages of a failed build an
 # earlier installer made inside its MAG folder (adopted by _adopt_failed_legacy).
 BUILD_ENTRIES = {'logs', 'build.json', 'build-kit', 'managed-tools', 'build-settings.json', 'build-work', 'package',
-                 'MAG', 'MAG.app', '.build-work.native-lock', 'build.pending', 'build-settings.pending'}
+                 'MAG', 'MAG.app', '.build-work.native-lock', 'build.pending', 'build-settings.pending',
+                 'previous', 'previous.old'}  # the app an update replaced (update.py)
 BUILD_STAGES = ('build-kit', 'build-work', 'package', 'MAG', 'MAG.app')
 # A finished MAG folder of the earlier layout: the build folder's entries plus the player's own.
 LEGACY_ENTRIES = BUILD_ENTRIES | {'home', 'launch-error.log'}
@@ -395,18 +403,31 @@ def _publish(output, build, status, name):
     _write_json(build / 'build.json', status)
 
 
-def install(root, source, output, cache, token=None, events=None, retry=False, jobs=None, voice=None, firmware=None):
+def install(root, source, output, cache, token=None, events=None, retry=False, jobs=None, voice=None, firmware=None,
+            _update=None):
     """firmware: the decrypted firmware module the player chose, else firmware/libsre.prx next to PS3_GAME.
     jobs: the compile job count the player chose (a number, or 'auto' for this computer's
     default); None uses the remembered choice or the default (build_jobs.py). Checked first.
     voice: True or False to build with or without voice chat; None uses MAG_VOICE, else the
-    remembered choice, else off (voice_option.py). Also checked first."""
+    remembered choice, else off (voice_option.py). Also checked first.
+    _update: set only by update(), which holds the player lock, prepares the build folder and
+    swaps the new app into the existing MAG folder instead of publishing a new one."""
     token = token or Cancellation()
-    events = events or (lambda event: None)
+    reported = events or (lambda event: None)
+    stages, started = [], time.monotonic()
+    def events(event):
+        # When each stage starts, for the durations installs.json records.
+        if event.get('event') == 'stage-start' and event.get('stage'):
+            stages.append((event['stage'], time.monotonic()))
+        reported(event)
     root, source, output, cache = (Path(p).expanduser().absolute() for p in (root, source, output, cache))
     from . import build_jobs, voice_option
     jobs, jobs_source = build_jobs.resolve(cache, jobs)
-    voice, voice_source = voice_option.resolve(cache, os.environ, voice)
+    environ = _update['environ'] if _update else os.environ
+    if _update and voice is None and voice_option.from_environment(environ) is None and _update.get('voice') is not None:
+        voice, voice_source = _update['voice'], 'kept'  # the option the app being updated was built with
+    else:
+        voice, voice_source = voice_option.resolve(cache, environ, voice)
     build = build_folder(output)
     state = readiness(root)
     if not state['ready']:
@@ -414,7 +435,8 @@ def install(root, source, output, cache, token=None, events=None, retry=False, j
     if not output.parent.is_dir() or output.parent.is_symlink():
         raise InstallerError('Choose an installation location inside an existing ordinary folder')
     lock = output.with_name('.' + output.name + '.player-lock')
-    legacy = legacy_journal(output)
+    # An update (update()) has already finished any earlier move and checked the MAG folder.
+    legacy = legacy_journal(output) if _update is None else None
     if legacy is not None and legacy.get('state') == 'complete' and (build.exists() or build.is_symlink()):
         raise InstallerError(f'{output} was built by an earlier installer, and {build} already exists, so its build files '
                              'cannot move there. Move that folder aside, then Build MAG again. Existing files are preserved.')
@@ -427,7 +449,8 @@ def install(root, source, output, cache, token=None, events=None, retry=False, j
         # A finished MAG folder of the earlier layout: no inputs, tools or compile needed.
         with _exclusive_lock(lock, True, events, reclaim=True):
             return _migrate(root, output, build, legacy_journal(output) or legacy, token, events)
-    journal_now = _read_journal(build / 'build.json') if build.is_dir() and not build.is_symlink() else None
+    journal_now = (_read_journal(build / 'build.json') if _update is None and build.is_dir() and not build.is_symlink()
+                   else None)
     if journal_now is not None and journal_now.get('migration') == 'swapping' and not output.exists() and (build / 'package').is_dir():
         with _exclusive_lock(lock, True, events, reclaim=True):
             return _finish_migration(output, build, journal_now, app_name(_manifest(root)['host']), events)
@@ -442,7 +465,7 @@ def install(root, source, output, cache, token=None, events=None, retry=False, j
             return output
     if retry and legacy is None and (output.exists() or output.is_symlink()):
         raise InstallerError(f'{output} already exists; a retry creates a new MAG folder there. Move it aside, then retry. Existing files are preserved.')
-    if not retry:
+    if not retry and _update is None:
         if output.exists() or output.is_symlink():
             raise InstallerError('Output already exists. Use Retry build or build --retry for a matching failed build.')
         if build.exists() or build.is_symlink():
@@ -451,6 +474,8 @@ def install(root, source, output, cache, token=None, events=None, retry=False, j
     source_real, cache_real = source.resolve(), cache.resolve()
     for writable in (output.resolve(), build.resolve(), cache_real):
         if writable.is_relative_to(source_real) or source_real.is_relative_to(writable):
+            if _update is not None and writable == output.resolve() and source_real == (output / 'game').resolve():
+                continue  # an update may read the MAG folder's own game files, which it never changes
             raise InstallerError('Output and cache must be separate from the owned input tree')
     for folder in (output.resolve(), build.resolve()):
         if cache_real.is_relative_to(folder) or folder.is_relative_to(cache_real):
@@ -464,10 +489,10 @@ def install(root, source, output, cache, token=None, events=None, retry=False, j
     linux = host == 'linux-x86_64'
     name = app_name(host)
     # A troubleshooting override of the x86-64 code generation level; checked before any download.
-    x86_level = x86_level_override(os.environ, host)
+    x86_level = x86_level_override(environ, host)
     # Keyboard and mouse controls (mouse aim) unless MAG_GAME_CONTROLS=0; also checked before downloads.
     from .native_recipe import game_controls_enabled
-    controls = game_controls_enabled(os.environ)
+    controls = game_controls_enabled(environ)
     # The per-user build cache (build_cache.py) unless MAG_BUILD_CACHE=0; also checked before downloads.
     from . import build_cache as build_caches
     reuse = build_caches.enabled(os.environ)
@@ -488,8 +513,12 @@ def install(root, source, output, cache, token=None, events=None, retry=False, j
             reused_unestimated[0] += event.get('unestimated_hits', 0) or 0
         events(event)
     cache_store = build_caches.BuildCache.for_cache(cache, token, counted) if reuse else None
-    with _exclusive_lock(lock, retry, events, reclaim=True), (cache_store.session() if cache_store else nullcontext()):
-        if retry:
+    # An update holds the player lock already (update()).
+    with (_exclusive_lock(lock, retry, events, reclaim=True) if _update is None else nullcontext()), \
+            (cache_store.session() if cache_store else nullcontext()):
+        if _update is not None:
+            status, recovering = _update['prepare'](binding)
+        elif retry:
             if not build.exists() and not build.is_symlink():
                 legacy = legacy_journal(output)
                 if legacy is None:
@@ -546,12 +575,17 @@ def install(root, source, output, cache, token=None, events=None, retry=False, j
                                 **({'build_cache': cache_store} if cache_store else {}))
             status['managed_complete'] = True
             _write_json(journal, status)
+            if _update is not None:
+                _update['after_tools']()  # the disk-space check again, now the tools are here
             toolchain_fields = ({'msvc': {key: toolchain[key] for key in ('vcvars', 'clang_cl', 'installation', 'version', 'product')},
                                  **{key: managed[key] for key in ('ffmpeg', 'sdl2') if managed.get(key)}}
                                 if windows else {'ffmpeg': managed['ffmpeg']})
             config = {'schema_version': 1, 'source_tree': str(source_tree), **inputs,
                       **{key: managed[key] for key in ('python', 'cmake', 'ninja', 'git')}, **toolchain_fields,
                       'jobs': jobs, 'native_graphics': False,
+                      # Recorded in the app (no paths), so an update keeps the options it was built with.
+                      'build_options': {'voice': bool(voice), 'game_controls': bool(controls),
+                                        'x86_level': environ.get('MAG_X86_LEVEL') or None},
                       **({'host': host, 'linux_toolchain': {key: toolchain[key] for key in ('cc', 'cxx')}} if linux else {}),
                       'sdks': {role: {'path': str(contained(kit_root, item['path'])), 'revision': item['revision']}
                                for role, item in kit['sdks'].items()}}
@@ -610,16 +644,31 @@ def install(root, source, output, cache, token=None, events=None, retry=False, j
                 events(summary)
                 status['build_cache'] = {k: round(v, 1) for k, v in reused.items()}
             status['logs'] = str(native_output / 'logs')
-            _publish(output, build, status, name)
+            from .update import workspace_bytes
+            peak = workspace_bytes(build)  # the build folder at its fullest: the workspace and the packaged app
             app = output / name
-            done = (f'MAG was built. Start {app / "MAG.exe"}.' if windows
-                    else (f'MAG was built. Start {app / "MAG"}.' if linux else f'MAG.app was built in {output}.'))
-            done += (f' That MAG folder is self-contained: move or copy it as a whole. '
-                     f'The build files are in {build}; you may delete that folder once MAG works.')
+            if _update is not None:
+                _update['swap'](status)
+                start = app / 'MAG.exe' if windows else (app / 'MAG' if linux else app)
+                swap = status['swap']
+                done = (f'MAG was updated{" to " + swap["to_version"] if swap.get("to_version") else ""} in place, in {output}. '
+                        f'Start it as before ({start}). Your saves, settings and logs were kept. The previous version is kept in '
+                        f'{build / "previous"}; the rest of the build files were removed.')
+            else:
+                _publish(output, build, status, name)
+                done = (f'MAG was built. Start {app / "MAG.exe"}.' if windows
+                        else (f'MAG was built. Start {app / "MAG"}.' if linux else f'MAG.app was built in {output}.'))
+                done += (f' That MAG folder is self-contained: move or copy it as a whole. '
+                         f'The build files are in {build}; you may delete that folder once MAG works.')
+            _remember(cache, source, output, host, inputs, binding, app, stages, started, peak, token, events)
             events({'event': 'player-build-complete', 'output': str(output), 'app': str(app), 'build': str(build),
-                    'logs': str(native_output / 'logs'), 'message': done})
+                    'logs': status['logs'], 'message': done,
+                    **({'updated': True, 'from_version': status['swap'].get('from_version'),
+                        'to_version': status['swap'].get('to_version')} if _update is not None else {})})
             return output
         except BaseException as exc:
+            if (status.get('swap') or {}).get('phase') in ('keeping', 'cleaning', 'done'):
+                raise  # the new app is in place and verified; the next run finishes (update.run_swap)
             status['state'] = 'incomplete'
             if checking_inputs:
                 status['preflight_rejected'] = True
@@ -633,3 +682,338 @@ def install(root, source, output, cache, token=None, events=None, retry=False, j
             except OSError:
                 pass  # Preserve the original build/cancellation error.
             raise
+
+
+def _remember(cache, source, output, host, inputs, binding, app, stages, started, peak, token, events):
+    """installs.json and the private firmware copy, after a successful build or update. A failure
+    here never fails the build: it is reported, and the next update asks for what it lacks."""
+    from . import installs
+    from .update import app_version
+    now = time.monotonic()
+    durations = {}
+    for index, (stage, began) in enumerate(stages):
+        ended = stages[index + 1][1] if index + 1 < len(stages) else now
+        durations[stage] = round(durations.get(stage, 0) + ended - began, 1)
+    try:
+        kept = installs.keep_firmware(cache, inputs['firmware'], binding['inputs']['firmware']['sha256'], token)
+        installs.record(cache, output, host=host, game_folder=str(source), firmware=str(inputs['firmware']),
+                        firmware_copy=kept, version=app_version(app, host), build_seconds=round(now - started, 1),
+                        stage_seconds=durations, peak_build_bytes=peak)
+    except (OSError, InstallerError, KeyError, TypeError) as exc:
+        events({'event': 'install-record-failed',
+                'message': f'Could not remember this build\'s inputs for later updates ({exc}). The next update asks for them.'})
+
+
+def installer_version(root):
+    """This installer's release version ("0.16.0"), or None when it does not know it."""
+    candidates = []
+    if getattr(sys, 'frozen', False):
+        executable = Path(sys.executable).resolve()
+        # PROVENANCE.json sits beside mag-installer(.exe), or beside MAG Installer.app on macOS.
+        candidates += [executable.parent / 'PROVENANCE.json', *[parent / 'PROVENANCE.json' for parent in executable.parents[3:4]]]
+    candidates.append(Path(root).parent / '.release-please-manifest.json')
+    for path in candidates:
+        try:
+            data = json.loads(path.read_text(encoding='utf-8'))
+        except (OSError, ValueError):
+            continue
+        version = data.get('version', data.get('.')) if isinstance(data, dict) else None
+        if isinstance(version, str) and version:
+            return version.removeprefix('v')
+    return None
+
+
+def update_plan(root, output, cache=None):
+    """What updating an existing MAG folder in place would do, for the wizard; None when output is
+    not one (it does not exist, or it is not a complete self-contained MAG folder)."""
+    from . import installs
+    from . import update as updating
+    try:
+        host = _manifest(root)['host']
+    except InstallerError:
+        return None
+    output = Path(output).expanduser().absolute()
+    if not updating.is_mag_folder(output, host):
+        return None
+    app = output / app_name(host)
+    remembered = installs.entry(cache, output) if cache is not None else None
+    return {'output': output, 'app': app, 'host': host,
+            'from_version': updating.app_version(app, host) or (remembered or {}).get('version'),
+            'to_version': installer_version(root), 'remembered': remembered or {},
+            'options': updating.app_options(app, host)}
+
+
+@contextmanager
+def _session_guard(output, host, events):
+    """Refuse while MAG runs from output, and hold its session lock (when MAG made one) so MAG does
+    not start from it until the update ends. The lock file is never created here."""
+    from . import update as updating
+    reason = updating.running_reason(output, host, events)
+    if reason:
+        raise InstallerError(reason)
+    path = Path(output) / updating.SESSION_LOCK
+    flags = os.O_RDWR | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0)
+    try:
+        handle = os.open(path, flags)
+    except FileNotFoundError:
+        handle = None
+    if handle is None:
+        yield
+        return
+    try:
+        try:
+            if os.name == 'nt':
+                import msvcrt
+                msvcrt.locking(handle, msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as exc:
+            raise InstallerError(reason or f'MAG is running from {output}. Close MAG, then update again. Nothing was changed.') from exc
+        yield
+    finally:
+        os.close(handle)  # closing releases the lock
+
+
+def _resolve_update_inputs(root, output, cache, source, firmware, host, token, events):
+    """The game folder and firmware file for an update: the player's choice, else what was
+    remembered, else the MAG folder's own game files and the private firmware copy, else RPCS3's.
+    Each candidate must pass the reviewed-identity checks; nothing is guessed."""
+    from . import input_guide, installs
+    reviewed = input_guide.load_reviewed(root)
+    remembered = installs.entry(cache, output) or {}
+    def accepted(findings):
+        return bool(findings) and all(finding.level == input_guide.DONE for finding in findings)
+    def game_ok(path):
+        try:
+            check = input_guide.check_game(path, reviewed, ['rpcs3'], host, token)
+        except (OSError, InstallerError, ValueError):
+            return False
+        return check.disc is not None and accepted(check.findings)
+    def firmware_ok(path):
+        try:
+            return accepted(input_guide.check_firmware(path, reviewed, ['rpcs3'], host, token))
+        except (OSError, InstallerError, ValueError):
+            return False
+    detection = []
+    def detected():
+        if not detection:
+            from . import rpcs3_detect
+            try:
+                found = input_guide.survey(rpcs3_detect.detect(), reviewed, None, None, token)
+                detection.append((found[3], found[4]))
+            except Exception:  # detection is a convenience; a missing input is reported below
+                detection.append((None, None))
+        return detection[0]
+    if source is None:
+        candidates = [(remembered.get('game_folder'), 'the game folder used last time'),
+                      (output / 'game', 'the game files in the MAG folder'),
+                      (lambda: detected()[0], 'RPCS3')]
+        for candidate, where in candidates:
+            path = candidate() if callable(candidate) else candidate
+            if path and game_ok(Path(path)):
+                source = Path(path)
+                events({'event': 'update-input', 'input': 'game', 'path': str(source),
+                        'message': f'Game files: {where} ({source})'})
+                break
+        else:
+            raise InstallerError('Choose your MAG game folder to continue the update: the one used last time has moved '
+                                 'or changed, and the MAG folder\'s own game files are missing or changed. Nothing was changed.')
+    if firmware is None:
+        copy = installs.firmware_copy(cache, reviewed, token)
+        default = input_guide.default_firmware(source)
+        candidates = [(copy, 'the copy the installer keeps'), (remembered.get('firmware'), 'the file used last time'),
+                      (default if default and default.is_file() else None, 'beside the game folder'),
+                      (lambda: detected()[1], 'RPCS3')]
+        for candidate, where in candidates:
+            path = candidate() if callable(candidate) else candidate
+            if path and firmware_ok(Path(path)):
+                firmware = Path(path)
+                events({'event': 'update-input', 'input': 'firmware', 'path': str(firmware),
+                        'message': f'Firmware module: {where} ({firmware})'})
+                break
+        else:
+            raise InstallerError('Choose your firmware file (libsre.prx) again to continue the update. Nothing was changed.\n'
+                                 + FIRMWARE_SOURCE_STEPS)
+    return Path(source), Path(firmware)
+
+
+def _archive_build(build, status, token):
+    """Set an earlier build's work aside before a new one: keep its journal and logs under
+    logs/attempts/<n>, remove its workspace. Returns the next attempt number."""
+    from . import update as updating
+    attempt = status.get('attempt') if type(status.get('attempt')) is int and status['attempt'] >= 1 else 1
+    folder = build / 'logs' / 'attempts' / str(attempt)
+    folder.mkdir(parents=True, exist_ok=True)
+    if not (folder / 'build.json').exists():
+        _write_json(folder / 'build.json', status)
+    for stage in ('build-work', 'managed-tools'):
+        logs = build / stage / 'logs'
+        if logs.is_dir() and not logs.is_symlink() and not (folder / stage).exists():
+            logs.rename(folder / stage)
+    for name in ('build-settings.json',):
+        if (build / name).is_file() and not (folder / name).exists():
+            shutil.copy2(build / name, folder / name)
+    for name in updating.WORKSPACE_STAGES:
+        token.check()
+        if (build / name).exists():
+            updating._remove(build / name)
+    for name in updating.WORKSPACE_FILES:
+        if (build / name).exists():
+            (build / name).unlink()
+    return attempt + 1
+
+
+def _prepare_update_folder(build, output, binding, token, events):
+    """The build folder an update builds in, and its journal: new, a retry of this update's own
+    failed attempt, or a fresh attempt after an earlier finished (or other) build. Returns
+    (status, retrying)."""
+    fresh = {'schema_version': 2, 'layout': 2, 'state': 'building', 'output': str(output), 'build': str(build),
+             'binding': binding, 'attempt': 1, 'managed_complete': False, 'tools_started': False}
+    if build.is_symlink():
+        raise InstallerError(f'{build} is a symlink. Move it aside, then update again. Nothing was changed.')
+    if not build.exists():
+        private_directory(build)
+        return fresh, False
+    if build.is_dir() and not any(build.iterdir()):
+        return fresh, False  # made by an update that stopped before writing its journal
+    if not build.is_dir():
+        raise InstallerError(f'{build} is not a folder. Move it aside, then update again. Nothing was changed.')
+    unknown = sorted(p.name for p in build.iterdir() if p.name not in BUILD_ENTRIES or p.is_symlink())
+    if unknown:
+        raise InstallerError(f'{build} holds files this installer does not know ({", ".join(unknown)}). Move them aside, '
+                             'then update again. Nothing was changed.')
+    status = _read_journal(build / 'build.json')
+    if status is None:
+        raise InstallerError(f'{build} has no MAG build journal this installer knows. Move it aside, then update again. '
+                             'Nothing was changed.')
+    if status.get('output') != str(output):
+        raise InstallerError(f'{build} belongs to another MAG folder ({status.get("output")}). Move it aside, then update '
+                             'again. Nothing was changed.')
+    if status.get('state') in ('incomplete', 'building') and status.get('binding') == binding:
+        events({'event': 'update-retry', 'message': 'Continuing the earlier update attempt, reusing its work'})
+        return _retry_status(build, output, binding), True
+    if status.get('state') not in ('complete', 'incomplete', 'building'):
+        raise InstallerError(f'{build} holds a build in an unknown state. Move it aside, then update again. Nothing was changed.')
+    fresh['attempt'] = _archive_build(build, status, token)
+    return fresh, False
+
+
+def update(root, output, cache, source=None, firmware=None, token=None, events=None, jobs=None, voice=None,
+           restore_previous=False):
+    """Update the MAG folder output in place, or (restore_previous) put back the previous app kept
+    by the last update. Only the app folder is replaced; game/, home/ and logs/ stay as they are.
+
+    source and firmware: the player's choice, or None for the remembered inputs and their fallbacks
+    (_resolve_update_inputs). The build options are the ones the app was built with, unless the
+    player chooses otherwise (voice) or sets MAG_GAME_CONTROLS or MAG_X86_LEVEL."""
+    from . import installs
+    from . import update as updating
+    token = token or Cancellation()
+    events = events or (lambda event: None)
+    root, output, cache = (Path(p).expanduser().absolute() for p in (root, output, cache))
+    record = _manifest(root)
+    host = record['host']
+    if host_key() != host:
+        raise InstallerError(f'This build of the MAG installer supports {PLAYER_HOSTS[host]}. Download the installer for this computer.')
+    if not restore_previous:
+        state = readiness(root)
+        if not state['ready']:
+            raise InstallerError(state['reason'])
+    if not output.parent.is_dir() or output.parent.is_symlink():
+        raise InstallerError('Choose an installation location inside an existing ordinary folder')
+    if output.is_symlink() or not output.is_dir():
+        raise InstallerError(f'There is no MAG folder to update at {output}. Choose the folder that holds MAG, or build a new one.')
+    build = build_folder(output)
+    journal = build / 'build.json'
+    def write(status):
+        _write_json(journal, status)
+    lock = output.with_name('.' + output.name + '.player-lock')
+    with _exclusive_lock(lock, True, events, reclaim=True):
+        # An interrupted swap is finished before anything else, whichever installer started it.
+        status = _read_journal(journal) if build.is_dir() and not build.is_symlink() else None
+        if status is not None and updating.recover(output, build, status, host, write, token, events) is not None:
+            swap = status['swap']
+            message = (f'Finished the interrupted update: MAG{" " + swap["to_version"] if swap.get("to_version") else ""} '
+                       f'is in {output}.' if swap.get('kind') == 'update' else f'Finished putting back the previous MAG in {output}.')
+            events({'event': 'player-build-complete', 'output': str(output), 'app': str(output / app_name(host)),
+                    'build': str(build), 'logs': str(build / 'logs'), 'updated': True, 'message': message})
+            return output
+        legacy = legacy_journal(output)
+        if legacy is not None and legacy.get('state') == 'complete' and not restore_previous:
+            if build.exists() or build.is_symlink():
+                raise InstallerError(f'{output} was built by an earlier installer, and {build} already exists, so its build '
+                                     'files cannot move there. Move that folder aside, then update again. Nothing was changed.')
+            _migrate(root, output, build, legacy, token, events)  # the earlier layout first, then the update
+        updating.validate_mag_folder(output, host)
+        if restore_previous:
+            return _restore_previous(output, build, host, cache, write, token, events)
+        plan = update_plan(root, output, cache)
+        options = plan['options'] or {}
+        environ = dict(os.environ)
+        if not environ.get('MAG_GAME_CONTROLS') and options.get('game_controls') is False:
+            environ['MAG_GAME_CONTROLS'] = '0'
+        if not environ.get('MAG_X86_LEVEL') and options.get('x86_level'):
+            environ['MAG_X86_LEVEL'] = options['x86_level']
+        kept_voice = options.get('voice') if isinstance(options.get('voice'), bool) else None
+        if kept_voice is None and status is not None and isinstance(status.get('binding'), dict):
+            kept_voice = status.get('voice') is True  # an app made before build_options: its build's journal
+        with _session_guard(output, host, events):
+            source, firmware = _resolve_update_inputs(root, output, cache, None if source is None else Path(source),
+                                                      None if firmware is None else Path(firmware), host, token, events)
+            app = output / app_name(host)
+            app_bytes = updating.tree_bytes(app)
+            peak = (plan['remembered'] or {}).get('peak_build_bytes')
+            peak = peak if type(peak) is int and peak > 0 else None
+            def prepare(binding):
+                # Before anything is written: a shortfall changes nothing, not even the build folder.
+                updating.check_space(output, peak, app_bytes, updating.workspace_bytes(build))
+                status, retrying = _prepare_update_folder(build, output, binding, token, events)
+                status['update'] = {'from_version': plan['from_version'], 'to_version': plan['to_version'],
+                                    'requested': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}
+                return status, retrying
+            def swap(status):
+                # MAG built before the session lock is found by its processes; check again just before.
+                reason = updating.running_reason(output, host, events, check_lock=False)
+                if reason:
+                    raise InstallerError(reason)
+                events({'event': 'stage-start', 'stage': 'update-swap'})
+                updating.start_swap(output, build, status, host, 'update')
+                return updating.run_swap(output, build, status, host, write, token, events)
+            events({'event': 'update-start', 'output': str(output), 'from_version': plan['from_version'],
+                    'to_version': plan['to_version'],
+                    'message': f'Updating MAG in {output} ({plan["from_version"] or "an earlier MAG"} → '
+                               f'{plan["to_version"] or "this version"}). It stays as it is until the update finishes.'})
+            return install(root, source, output, cache, token=token, events=events, jobs=jobs, voice=voice, firmware=firmware,
+                           _update={'environ': environ, 'voice': kept_voice, 'prepare': prepare, 'swap': swap,
+                                    'after_tools': lambda: updating.check_space(output, peak, app_bytes,
+                                                                                updating.workspace_bytes(build))})
+
+
+def _restore_previous(output, build, host, cache, write, token, events):
+    """Put back the app the last update kept in MAG-build/previous; the newer one is kept there instead."""
+    from . import installs
+    from . import update as updating
+    kept, record = updating.kept_previous(build, host)
+    status = _read_journal(build / 'build.json') if build.is_dir() and not build.is_symlink() else None
+    if kept is None or status is None:
+        raise InstallerError(f'No previous version of MAG is kept in {build / updating.PREVIOUS}. Nothing was changed.')
+    with _session_guard(output, host, events):
+        updating.verify_app(kept, host, output, token)
+        events({'event': 'stage-start', 'stage': 'update-swap'})
+        record = updating.start_swap(output, build, status, host, 'restore')
+        app = updating.run_swap(output, build, status, host, write, token, events)
+    version = updating.app_version(app, host)
+    try:
+        entry = installs.entry(cache, output)
+        if entry is not None:
+            installs.record(cache, output, **{**{k: v for k, v in entry.items() if k not in ('output', 'recorded')},
+                                              'version': version})
+    except (OSError, InstallerError) as exc:
+        events({'event': 'install-record-failed', 'message': f'Could not update the record of this MAG folder ({exc}).'})
+    message = (f'MAG{" " + version if version else ""} is back in {output}, as before the last update. The newer version '
+               f'{record.get("from_version") or ""} is kept in {build / updating.PREVIOUS}; going back again puts it back. '
+               'Settings the newer version wrote stay as they are; this version may ignore or reset options it does not know.')
+    events({'event': 'player-build-complete', 'output': str(output), 'app': str(app), 'build': str(build),
+            'logs': str(build / 'logs'), 'updated': True, 'restored': True, 'message': message.replace('  ', ' ')})
+    return output

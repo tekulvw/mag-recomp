@@ -8,6 +8,7 @@ import queue
 import subprocess
 import sys
 import threading
+import time
 
 from .console import write_line
 from .model import InstallerError, Profile
@@ -152,9 +153,10 @@ def open_folder(path):
 
 class PlayerBuildController(WizardController):
     """One player action owns prerequisites through final application output."""
-    def __init__(self, root, readiness=None, installer=None, detector=None, reviewed=None):
+    def __init__(self, root, readiness=None, installer=None, detector=None, reviewed=None, updater=None):
         self.root = Path(root)
         self._installer = installer
+        self._updater = updater
         self._detector, self._reviewed = detector, reviewed
         self.detection = None
         self.guide_events = queue.Queue()
@@ -282,7 +284,25 @@ class PlayerBuildController(WizardController):
     VOICE_HINT = ('Builds in-match voice chat (push to talk, being tested). After the build, turn it on in MAG Settings '
                   '→ General → Voice and hold K to talk. Your choice is remembered for later builds.')
 
-    def start(self, source, parent, cache, retry=False, jobs=None, voice=None, firmware=None):
+    def update_plan(self, parent, cache):
+        """What Update MAG would do for the MAG folder in parent (player_build.update_plan), or None
+        when parent holds no complete MAG folder to update."""
+        if self.blocked:
+            return None
+        try:
+            from .player_build import update_plan
+            return update_plan(self.root, ux.destination(parent), cache)
+        except (InstallerError, OSError):
+            return None
+
+    @staticmethod
+    def update_label(plan):
+        """The main button while an existing MAG folder is chosen: "Update MAG (0.15.0 → 0.16.0)"."""
+        return f'Update MAG ({plan.get("from_version") or "an earlier MAG"} → {plan.get("to_version") or "this version"})'
+
+    def start(self, source, parent, cache, retry=False, jobs=None, voice=None, firmware=None, update=False):
+        """update: update the existing MAG folder in parent in place (player_build.update); source and
+        firmware may then be empty, for the remembered ones."""
         if self.blocked:
             raise InstallerError(self.blocked)
         if self.busy:
@@ -292,19 +312,33 @@ class PlayerBuildController(WizardController):
             jobs = parse(jobs)  # a clear error before anything starts
         from .player_build import build_folder
         output = ux.destination(parent).absolute()
-        if (output.exists() or output.is_symlink()) and not retry and not self.legacy_install(parent):
+        if (output.exists() or output.is_symlink()) and not retry and not update and not self.legacy_install(parent):
             raise InstallerError('Output already exists; choose another installation parent. Existing files are preserved.')
+        if not update and not str(source or '').strip():
+            raise InstallerError('Choose your game folder and installation location.')
         self.output, self.logs = output, build_folder(output)/'logs'
+        self.updating = update
         self.token = Cancellation()
         self.error = ''
         self.state = 'installing'
         def run():
             try:
+                self.token.check()
+                if update:
+                    upgrade = self._updater
+                    if upgrade is None:
+                        from . import player_build
+                        upgrade = player_build.update
+                    result = upgrade(self.root, output, Path(cache).expanduser(), token=self.token, events=self.events.put,
+                                     source=Path(source).expanduser() if str(source or '').strip() else None,
+                                     firmware=Path(firmware).expanduser() if firmware else None,
+                                     **({'jobs': jobs} if jobs is not None else {}), **({'voice': voice} if voice is not None else {}))
+                    self.events.put({'event':'_complete','output':str(result or output)})
+                    return
                 build = self._installer
                 if build is None:
                     from . import player_build
                     build = player_build.install
-                self.token.check()
                 result = build(self.root, Path(source).expanduser(), output, Path(cache).expanduser(), token=self.token, events=self.events.put,
                                **({'retry': True} if retry else {}), **({'jobs': jobs} if jobs is not None else {}),
                                **({'voice': voice} if voice is not None else {}),
@@ -482,8 +516,43 @@ def open_window(window, root: Path, synthetic: bool = False, controller=None):
                          f'{where}. Follow the steps marked "To do" or "Problem", then choose the files below.'))
     def append(text):
         details.configure(state='normal');details.insert('end',text+'\n');details.see('end');details.configure(state='disabled')
+    plan_cache={'key':None,'time':0.0,'plan':None,'shown':None}
+    def update_plan():
+        """The Update MAG plan for the chosen location (rechecked at most every 2 s), or None."""
+        if synthetic:return None
+        key=parent.get().strip()
+        if not key:return None
+        now=time.monotonic()
+        if plan_cache['key']!=key or now-plan_cache['time']>2:
+            plan_cache.update(key=key,time=now,plan=controller.update_plan(Path(key).expanduser(),ux.default_cache()))
+        return plan_cache['plan']
+    def show_plan(plan):
+        """When a MAG folder to update is chosen: its remembered inputs fill empty fields, and the voice
+        chat box shows the option it was built with."""
+        nonlocal voice_initial
+        output=str(plan['output']) if plan else None
+        if plan_cache['shown']==output:return
+        plan_cache['shown']=output
+        if not plan:return
+        remembered=plan.get('remembered') or {}
+        filled=False
+        if not source.get().strip() and remembered.get('game_folder') and Path(remembered['game_folder']).is_dir():
+            source.set(remembered['game_folder']);filled=True
+        if not firmware.get().strip() and remembered.get('firmware') and Path(remembered['firmware']).is_file():
+            firmware.set(remembered['firmware']);filled=True
+        options=plan.get('options') or {}
+        if voice is not None and isinstance(options.get('voice'),bool):
+            voice.set(options['voice']);voice_initial=options['voice']
+        if filled:survey()
     def start():
         try:
+            plan=update_plan()
+            if plan:
+                controller.start(source.get().strip(),Path(parent.get()).expanduser(),ux.default_cache(),update=True,
+                                 jobs=controller.jobs_request(jobs.get(),jobs_choice['default']),
+                                 voice=(voice.get() if voice.get()!=voice_initial else None),
+                                 firmware=firmware.get().strip() or None)
+                progress.start(12);refresh();return
             if not source.get().strip() or not parent.get().strip():raise InstallerError('Choose your game folder and installation location.')
             if synthetic:
                 resume=controller.has_journal(Path(parent.get()).expanduser())
@@ -522,13 +591,22 @@ def open_window(window, root: Path, synthetic: bool = False, controller=None):
         for widget in controls:widget.configure(state='disabled' if controller.busy else 'normal')
         build.configure(state='disabled' if controller.busy or controller.blocked else 'normal')
         legacy=False
+        plan=None
         if not synthetic:
-            build.configure(text='Retry build' if controller.has_journal(Path(parent.get()).expanduser()) else 'Build MAG')
-            legacy=not controller.busy and controller.legacy_install(Path(parent.get()).expanduser())
+            plan=update_plan() if not controller.busy else None
+            if not controller.busy:show_plan(plan)
+            build.configure(text=controller.update_label(plan) if plan else
+                            ('Retry build' if controller.has_journal(Path(parent.get()).expanduser()) else 'Build MAG'))
+            legacy=not controller.busy and not plan and controller.legacy_install(Path(parent.get()).expanduser())
         cancel.configure(state='normal' if controller.busy else 'disabled')
         if clear_cache is not None:clear_cache.configure(state='disabled' if controller.busy else 'normal')
         output=controller.display_output(Path(parent.get()).expanduser())
-        destination_label.configure(text=(f'{output} was built by an earlier installer. Build MAG moves its build files beside it, to {output}{BUILD_SUFFIX}, without rebuilding.'
+        destination_label.configure(text=(f'{output} holds MAG. {controller.update_label(plan)} builds the new version in {output}{BUILD_SUFFIX}, '
+                                           'then replaces only the app: the folder, its paths, your saves, settings and logs stay, and the '
+                                           f'previous version is kept in {output}{BUILD_SUFFIX}{os.sep}previous. Leave the game folder and '
+                                           'firmware file empty to use the ones from last time.'
+                                           if plan else
+                                           f'{output} was built by an earlier installer. Build MAG moves its build files beside it, to {output}{BUILD_SUFFIX}, without rebuilding.'
                                            if legacy else f'New output folder: {output}' + ('' if synthetic else f' (build files: {output}{BUILD_SUFFIX})')))
         open_output.configure(state='normal' if output.is_dir() else 'disabled')
         open_logs.configure(state='normal' if controller.logs and controller.logs.is_dir() else 'disabled')
@@ -536,7 +614,9 @@ def open_window(window, root: Path, synthetic: bool = False, controller=None):
         for event in controller.poll():
             name=event.get('event','')
             if name=='_complete':
-                status.set('Synthetic demonstration complete. No MAG application was built.' if synthetic else 'Build finished. Open output to inspect the application. No game was launched.')
+                status.set('Synthetic demonstration complete. No MAG application was built.' if synthetic else
+                           'Update finished. Start MAG as before; your saves, settings and logs were kept.' if getattr(controller,'updating',False) else
+                           'Build finished. Open output to inspect the application. No game was launched.')
                 append(status.get()+f'\nOutput: {controller.output}\nLogs: {controller.logs}')
             elif name in ('_failed','_cancelled'):
                 status.set(controller.error);append(controller.error+f'\nLogs: {controller.logs}')

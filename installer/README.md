@@ -101,7 +101,7 @@ Inside the installation location you chose:
 | Folder | Holds | Needed to play |
 | --- | --- | --- |
 | `MAG` | `MAG.app` (macOS), `MAG\MAG.exe` (Windows) or `MAG/MAG` (Linux) with its libraries; `game/`, the game files the game reads; `home/` and `logs/` once you play | yes |
-| `MAG-build` | the build journal (`build.json`) and settings, the source kit, the managed tools, the build workspace and the build logs | no |
+| `MAG-build` | the build journal (`build.json`) and settings, the source kit, the managed tools, the build workspace and the build logs; after an [update](#updating-mag), only the journal, the logs and the previous version (`previous/`) | no |
 
 Each launch writes its logs to `MAG/logs/launch-*`: `launcher.log`, `engine.log`, `supervisor.log`,
 and the engine's session summaries (`session-launcher.json`, `session-engine.json`: frame pacing,
@@ -127,7 +127,57 @@ edited in place changes in all of them; MAG checks its executables' identities a
 links are not possible (another drive, a file system without them, or a read-only file on Windows),
 they are copied. A **Retry build** reuses `MAG-build`. A build that ended, or an installer that was closed or
 crashed, never blocks the next Build MAG there; only an installer that is still running does. Once MAG works you may delete `MAG-build` to reclaim
-space. The firmware module is only used to build, so it stays in `MAG-build`.
+space. The firmware module is only used to build, so it never goes into `MAG`. The installer keeps a
+private copy of it in its cache folder (`firmware/libsre.prx`, beside `installs.json`; see
+[Updating MAG](#updating-mag)), so that an update never asks for it again.
+
+### Updating MAG
+
+To move to a newer MAG, run the newer installer and choose the same **Install inside** location.
+When it holds a MAG folder, the main button becomes **Update MAG (0.15.0 → 0.16.0)** ("an earlier
+MAG" for a folder that does not record its version). Leave the game folder and firmware fields empty
+to use the ones from last time, or choose them again. Then:
+
+1. The installer checks that MAG is not running from that folder (close MAG and its settings window
+   first), that the folder holds nothing it does not know, and that the drive has room: the build
+   folder's size at its fullest (measured by the last build on this computer, else about 40 GB), one
+   more copy of the app and 2 GB to spare. Any of these stops the update with nothing changed.
+2. It finds your inputs: the game folder used last time, else the game files already in `MAG/game`,
+   else the ones RPCS3 holds; the firmware module from the copy it keeps, else the file used last
+   time, else RPCS3's. Each must pass the same checks as a first build. If one is missing, it asks
+   for it and changes nothing.
+3. It builds the new version in `MAG-build` with the [build cache](#build-cache), with the options
+   this MAG was built with (voice chat, game controls), unless you change them.
+4. It replaces only the app (`MAG.app`, or `MAG\MAG` on Windows and `MAG/MAG` on Linux). The
+   `MAG` folder, `game/`, `home/` and `logs/` stay where they are, so MAG starts from the same path,
+   your shortcuts keep working and Windows asks no new firewall questions. On Windows the new app
+   gets exactly the previous app's permissions; if they cannot be matched, the update is undone.
+5. The previous version is kept in `MAG-build/previous`, and the rest of `MAG-build` is removed
+   except its logs and journal. Deleting `MAG-build` afterwards only removes that copy.
+
+Until the new app is in place and has passed its checks, the previous one is not changed: a failed or
+cancelled update leaves MAG as it was, and **Update MAG** again continues from where it stopped. If
+the computer loses power during the swap, run the installer again for the same location: it
+finishes the swap (or undoes it) before anything else, without rebuilding.
+
+From the command line, `build --output <MAG folder>` (or `--parent`) on an existing MAG folder
+updates it the same way, and `update --output <MAG folder>` does so with every input optional:
+
+```sh
+mag-installer update --output ~/MAG                          # remembered inputs
+mag-installer update --output ~/MAG --source ~/MAG-game     # choose the game folder again
+mag-installer update --output ~/MAG --restore-previous       # go back to the version the update replaced
+```
+
+`--restore-previous` builds nothing: it swaps the kept previous version back in and keeps the newer
+one in `MAG-build/previous` instead, so running it again goes forward. Settings the newer version
+wrote stay as they are; the older one may ignore or reset options it does not know.
+
+What the installer remembers lives in its cache folder, never in the `MAG` folder: `installs.json`
+holds, per MAG folder, the game folder and firmware paths, the version built, how long each build
+stage took and the build folder's peak size; `firmware/libsre.prx` is the private firmware copy.
+Both stay on this computer. The app itself records only the options it was built with
+(`build_options` in its `runtime.json`), so a moved MAG folder updates the same way.
 
 ### Backing up or zipping the MAG folder
 

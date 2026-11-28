@@ -394,6 +394,9 @@ def package(config, workspace, destination, token=None, events=None):
                    'engine_self_sha256':manifest['images']['mage_g']['source_sha256'],
                    'signing':'local-ad-hoc','adjustments':adjustments,
                    'environment':playback_environment(records)}
+        if isinstance(config.get('build_options'), dict):
+            # What this app was built with (no paths), so updating it keeps the same options.
+            runtime['build_options'] = config['build_options']
         for role, name in [('launcher','MagRecomp'),('engine','MagEngine')]:
             # A distinct package receipt binds transformed bytes and the build's
             # immutable source receipt; it does not rewrite the source build.

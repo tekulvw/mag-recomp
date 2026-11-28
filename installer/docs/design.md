@@ -41,6 +41,39 @@ works on an installation location at a time. The specification:
 The transaction pipeline below (`.<output>.mag-lock`) and the native build lock keep their stable
 lock files and explicit resume.
 
+### Updating a MAG folder in place
+
+`player_build.update` (the wizard's **Update MAG**, `update`, and `build` on an existing MAG folder)
+rebuilds an existing MAG folder without moving it. Its specification is
+[the launcher updates design](../../docs/superpowers/specs/2026-11-28-launcher-updates-design.md),
+"In-place update in the installer"; this phase has no network, signing or launcher check.
+
+- Under the player build lock, a swap an earlier run left open is finished or undone first. Then
+  the MAG folder must be complete (its app, `game/`, and only `home/`, `logs/` and
+  `launch-error.log` besides), MAG must not run from it (`home/.session-lock` held, or a process
+  whose executable is inside the app folder), and the drive must have room.
+- The inputs resolve in order: the player's choice; the recorded paths in `installs.json`; the MAG
+  folder's own `game/` (the rule that the source is separate from the output is relaxed for exactly
+  `<output>/game`, which the update only reads); the private firmware copy; RPCS3 detection. Every
+  candidate passes the wizard's checks before it is used, and the build checks the kit's identities.
+- The build folder is reused when it holds this update's own failed attempt with the same binding
+  (the retry rules), else its journal and logs are archived under `logs/attempts/<n>` and its
+  workspace is removed. Unknown entries, a journal for another folder or an unknown state stop it.
+- The build and packaging steps are those of a first build. Packaging writes `version` and
+  `build_options` (voice, game controls, x86-64 level) into the app's `runtime.json`.
+- The swap (update.py) is journaled in `build.json` as `swap.phase`: `staging` (the new app to
+  `<MAG>/.MAG-new`; if the staged game files differ from `game/`, they are swapped as well, through
+  `.game-previous`), `swapping` (the app folder to `.MAG-previous`, `.MAG-new` to the app folder's
+  name), `verifying` (the installer's self-check of the receipts, the launcher and the game
+  executables' identities, then the previous app folder's permissions: its mode on macOS and
+  Linux, its explicit DACL entries and protection on Windows, verified entry by entry with the
+  player's full access on every file), `keeping` (the previous app to `MAG-build/previous` with
+  `previous.json`) and `cleaning` (the workspace removed, logs kept). Renames never replace
+  anything. A failure up to `verifying` reverses the renames that happened; a later run that finds
+  one of these phases open reverses them and runs the swap again from the staged app. From
+  `keeping` on, the new app is in place and the next run only finishes keeping and cleaning.
+- `--restore-previous` runs the same swap with `MAG-build/previous` as the staged app.
+
 The synthetic demonstration (`install --synthetic`) exercises this transaction core and creates a clearly labelled text artifact; it is not a MAG build. Building MAG is the separate player route (`player_build.py`), which runs the BUILDING.md recipe from the embedded source kit with pinned managed tools.
 
 A lightweight Tkinter wizard now consumes the shared pipeline through a background worker and main-thread event queue. No arguments opens the wizard; explicit CLI commands stay accessible without Tk. The wizard selects source and an existing parent, shows blocked-host and exact-input information, reports known storage lower bounds with unknown build scratch clearly identified, and offers safe cancellation/retry and output/log access. Existing output is protected and never treated as verified merely because it exists. Synthetic mode remains explicitly labelled.
