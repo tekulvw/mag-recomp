@@ -449,7 +449,10 @@ def package(config, workspace, destination, token=None, events=None):
         engine_self = manifest['images']['mage_g']['source_sha256']
         runtime = {'schema_version': 2, 'game': game_relative,
                    'launcher': 'bin/MagRecomp', 'engine': 'bin/MagEngine',
-                   'engine_self_sha256': engine_self, 'signing': 'unsigned-local'}
+                   'engine_self_sha256': engine_self, 'signing': 'unsigned-local', 'version': product_version(workspace)}
+        if isinstance(config.get('build_options'), dict):
+            # What this app was built with (no paths), so updating it keeps the same options.
+            runtime['build_options'] = config['build_options']
         scratch = destination / '.supervisor-build'; scratch.mkdir()
         definitions = {
             'MAG_GAME_ROOT': game_relative,

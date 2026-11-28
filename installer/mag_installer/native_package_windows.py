@@ -580,7 +580,10 @@ def package(config, workspace, destination, token=None, events=None, environment
         runtime = {'schema_version': 2, 'game': Path(game_relative).as_posix(),
                    'launcher': 'bin/MagRecomp.exe', 'engine': 'bin/MagEngine.exe',
                    'engine_self_sha256': engine_self, 'signing': 'unsigned-local',
-                   'environment': playback_environment(records)}
+                   'environment': playback_environment(records), 'version': product_version(workspace)}
+        if isinstance(config.get('build_options'), dict):
+            # What this app was built with (no paths), so updating it keeps the same options.
+            runtime['build_options'] = config['build_options']
         (resources / 'runtime.json').write_text(json.dumps(runtime, indent=2) + '\n', encoding='utf-8')
         scratch = destination / '.supervisor-build'; scratch.mkdir()
         (scratch / 'supervisor_config.h').write_text(

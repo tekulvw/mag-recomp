@@ -45,23 +45,44 @@ def main(argv=None):
     wizard = commands.add_parser('wizard', help='Open the guided installer')
     wizard.add_argument('--synthetic', action='store_true', help='Show the labelled demonstration, which does not build MAG')
     presentation(wizard, True)
-    player = commands.add_parser('build', help='Automatically download tools, build MAG and package the final app')
+    player = commands.add_parser('build', help='Automatically download tools, build MAG and package the final app; '
+                                 'an existing MAG folder is updated in place')
     presentation(player, True)
-    player.add_argument('--source', type=Path, required=True, help='Folder containing your supported prepared game files')
+    player.add_argument('--source', type=Path, help='Folder containing your supported prepared game files (required for a new '
+                        'MAG folder; an update uses the remembered one when it is left out)')
     target = player.add_mutually_exclusive_group(required=True)
-    target.add_argument('--parent', type=Path, help='Existing folder in which to create the MAG installation')
-    target.add_argument('--output', type=Path, help='Exact new MAG installation folder')
+    target.add_argument('--parent', type=Path, help='Existing folder in which to create (or update) the MAG installation')
+    target.add_argument('--output', type=Path, help='Exact MAG installation folder: a new one, or an existing one to update')
     player.add_argument('--firmware', type=Path, help='The decrypted firmware module (libsre.prx) to use, for example the one '
-                        'RPCS3\'s --decrypt wrote beside its libsre.sprx; without it, firmware/libsre.prx next to PS3_GAME')
+                        'RPCS3\'s --decrypt wrote beside its libsre.sprx; without it, firmware/libsre.prx next to PS3_GAME '
+                        '(an update first uses the copy the installer keeps)')
     player.add_argument('--retry', action='store_true', help='Retry a matching failed or cancelled build in the same folder, retaining earlier logs')
+    player.add_argument('--update', action='store_true', help='Require an existing MAG folder and update it in place '
+                        '(the default whenever the folder already holds MAG)')
     player.add_argument('--cache', type=Path, help='Optional download cache override')
     player.add_argument('--jobs', metavar='N', help='How many compile jobs run at once: a whole number from 1 to 64, or auto for '
                         'this computer\'s default (set by its memory and CPUs). Remembered for later builds; '
                         'works with --retry. Without it, the remembered choice or the default is used')
     player.add_argument('--voice', action=argparse.BooleanOptionalAction, default=None,
                         help='Build with (--voice) or without (--no-voice) in-match voice chat, push to talk. Remembered for '
-                             'later builds. Without either, MAG_VOICE=1 or 0 in the environment, else the remembered choice, '
-                             'else without voice chat')
+                             'later builds. Without either, MAG_VOICE=1 or 0 in the environment, else (an update) the '
+                             'option the MAG being updated was built with, else the remembered choice, else without voice chat')
+    upgrade = commands.add_parser('update', help='Update an existing MAG folder in place: same paths, saves, settings and logs '
+                                  'kept, the previous version kept in MAG-build/previous')
+    presentation(upgrade, True)
+    target = upgrade.add_mutually_exclusive_group(required=True)
+    target.add_argument('--parent', type=Path, help='Folder holding the MAG folder to update')
+    target.add_argument('--output', type=Path, help='The MAG folder to update')
+    upgrade.add_argument('--source', type=Path, help='Your game folder; without it, the one used last time, else the MAG '
+                         'folder\'s own game files, else the one RPCS3 holds')
+    upgrade.add_argument('--firmware', type=Path, help='The decrypted firmware module (libsre.prx); without it, the copy the '
+                         'installer keeps, else the one used last time, else the one RPCS3 holds')
+    upgrade.add_argument('--restore-previous', action='store_true', help='Put back the version the last update replaced '
+                         '(no build); the newer one is kept in its place')
+    upgrade.add_argument('--cache', type=Path, help='Optional download cache override')
+    upgrade.add_argument('--jobs', metavar='N', help='How many compile jobs run at once (1 to 64, or auto)')
+    upgrade.add_argument('--voice', action=argparse.BooleanOptionalAction, default=None,
+                         help='Build with or without voice chat; without either, the option this MAG was built with')
     guide = commands.add_parser('guide', help='Find your RPCS3 files and MAG game folder, check them, and show what is left to prepare')
     presentation(guide, True)
     guide.add_argument('--source', type=Path, help='Check this game folder instead of the one found')
@@ -141,9 +162,27 @@ def main(argv=None):
             for signum in (signal.SIGINT, signal.SIGTERM):
                 handlers[signum] = signal.signal(signum, lambda number, frame: token.cancel())
             output = args.output if args.output is not None else destination(args.parent)
-            player_build.install(ROOT, args.source, output, args.cache or default_cache(), token=token, events=report, retry=args.retry,
+            cache = args.cache or default_cache()
+            if args.update or player_build.update_plan(ROOT, output, cache) is not None:
+                # An existing MAG folder: update it in place instead of refusing it.
+                player_build.update(ROOT, output, cache, source=args.source, firmware=args.firmware, token=token,
+                                    events=report, jobs=args.jobs, voice=args.voice)
+                return 0
+            if args.source is None:
+                raise InstallerError('Choose your game folder with --source to build a new MAG folder.')
+            player_build.install(ROOT, args.source, output, cache, token=token, events=report, retry=args.retry,
                                  jobs=args.jobs, **({'voice': args.voice} if args.voice is not None else {}),
                                  **({'firmware': args.firmware} if args.firmware is not None else {}))
+            return 0
+        if args.command == 'update':
+            from . import player_build
+            from .ux import default_cache, destination
+            for signum in (signal.SIGINT, signal.SIGTERM):
+                handlers[signum] = signal.signal(signum, lambda number, frame: token.cancel())
+            output = args.output if args.output is not None else destination(args.parent)
+            player_build.update(ROOT, output, args.cache or default_cache(), source=args.source, firmware=args.firmware,
+                                token=token, events=report, jobs=args.jobs, voice=args.voice,
+                                restore_previous=args.restore_previous)
             return 0
         if args.command == 'guide':
             from . import input_guide, rpcs3_detect

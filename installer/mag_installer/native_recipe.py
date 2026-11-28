@@ -27,8 +27,10 @@ _REQUIRED = {'schema_version', 'source_tree', 'disc_root', 'eboot_elf', 'engine_
 # build_cache: the per-user build cache folder, ccache's base_dir and (optionally) the pinned ccache (build_cache.py,
 # compile_cache.py and lift_cache.py).
 # opus: the install prefix of the pinned Opus a voice build (-DMAG_VOICE=ON, docs/voice-chat.md) links.
+# build_options: what packaging records in the app's runtime.json (voice, game_controls, x86_level), so
+# an in-place update keeps the options the app was built with; the build itself ignores it.
 _OPTIONAL = {'jobs', 'cmake_args', 'native_graphics', 'managed_prefix', 'ffmpeg', 'sdl2', 'msvc', 'host', 'linux_toolchain',
-             'game_controls', 'build_cache', 'opus'}
+             'game_controls', 'build_cache', 'opus', 'build_options'}
 
 
 def is_windows(config):
@@ -154,6 +156,12 @@ def load_config(path):
         result['opus'] = {'root': _path(raw['opus']['root'], path.parent, 'opus.root', directory=True)}
     if raw.get('managed_prefix'):
         result['managed_prefix'] = _path(raw['managed_prefix'], path.parent, 'managed_prefix', directory=True)
+    if 'build_options' in raw:
+        _object(raw['build_options'], set(), {'voice', 'game_controls', 'x86_level'}, 'build_options')
+        options = raw['build_options']
+        if any(key in options and type(options[key]) is not bool for key in ('voice', 'game_controls')) or \
+                options.get('x86_level') not in (None, 'auto', 'v4', 'v3', 'baseline'):
+            raise InstallerError('build_options holds an unsupported value')
     if 'build_cache' in raw:
         _object(raw['build_cache'], {'root', 'base_dir'}, {'ccache'}, 'build_cache')
         result['build_cache'] = {'root': _path(raw['build_cache']['root'], path.parent, 'build_cache.root', directory=True),

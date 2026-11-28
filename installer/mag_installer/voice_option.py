@@ -78,10 +78,12 @@ def describe(enabled, source):
     if source == 'default':
         return None
     if not enabled:
-        return 'Building without voice chat (' + ('MAG_VOICE=0' if source == 'environment' else 'your choice') + ').'
+        return 'Building without voice chat (' + {'environment': 'MAG_VOICE=0', 'kept': 'as this MAG was built'}.get(
+            source, 'your choice') + ').'
     why = {'chosen': 'your choice, remembered for later builds',
            'environment': 'MAG_VOICE=1, remembered for later builds',
-           'remembered': 'your earlier choice'}[source]
+           'remembered': 'your earlier choice',
+           'kept': 'as this MAG was built'}[source]
     return (f'Building with voice chat ({why}). Once MAG is built, turn it on in MAG Settings → General → Voice '
             'and hold K to talk in a match. To build without it again, untick Voice chat, or use build --no-voice '
             'or MAG_VOICE=0.')
