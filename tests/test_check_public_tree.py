@@ -1,3 +1,5 @@
+import shutil
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -32,6 +34,44 @@ class PublicTreeCheckTests(unittest.TestCase):
         self.assertIn('absolute user path', self.check('a.py', b"p='/Users/someone/x'\n"))
         self.assertIn('absolute user path', self.check('b.c', b'char d[]="/private/tmp/x-XXXXXX";\n'))
         self.assertEqual(self.check('c.c', b'char d[]="/tmp/x-XXXXXX";\n'), set())
+
+    def test_signing_secret_keys(self):
+        # Built at run time so no secret-key shape appears in this file.
+        header = 'untrusted comment: minisign ' + 'encrypted secret key'
+        line = 'RWRT' + 'Y0Iy' + 'A' * 204 + '='
+        self.assertIn('signing secret key', self.check('k1', (header + '\nx\n').encode()))
+        self.assertIn('signing secret key', self.check('k2', b'untrusted comment: minisign ' + b'secret key\n'))
+        self.assertIn('signing secret key', self.check('k3', ('c\n' + line + '\n').encode()))
+        unencrypted = 'RWQA' + 'AEIy' + 'B' * 120
+        self.assertIn('signing secret key', self.check('k4', unencrypted.encode()))
+        # Public keys and signatures, and prose naming the header mid-line, are fine.
+        public = b'untrusted comment: minisign public key 0123456789ABCDEF\nRWQBI0VniavN7wAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n'
+        self.assertEqual(self.check('k.pub', public), set())
+        self.assertEqual(self.check('doc.md', ('Refuse the `' + header + '` header.\n').encode()), set())
+
+    def test_key_beside_public_key(self):
+        for name in ('keys/release.key', 'keys/release.pub', 'other.key'):
+            (self.root / name).parent.mkdir(parents=True, exist_ok=True)
+            (self.root / name).write_bytes(b'opaque\n')
+        found = list(findings(self.root, ['keys/release.key', 'keys/release.pub', 'other.key']))
+        self.assertEqual(found, [('keys/release.key', 'signing key pair (.key beside .pub)')])
+
+    @unittest.skipUnless(shutil.which('minisign'), 'the minisign command is not installed')
+    def test_real_minisign_secret_keys_are_refused(self):
+        for options in ([], ['-W']):
+            with self.subTest(options=options), tempfile.TemporaryDirectory() as temp:
+                # A throwaway key; an encrypted one reads a throwaway password from standard input.
+                result = subprocess.run(['minisign', '-G', *options, '-p', str(Path(temp) / 't.pub'), '-s',
+                                         str(Path(temp) / 't.key')], input=b'throwaway\nthrowaway\n',
+                                        timeout=60, check=False, capture_output=True)
+                if result.returncode and not options:
+                    self.skipTest('this minisign reads passwords only from a terminal')
+                self.assertEqual(result.returncode, 0, result.stderr)
+                data = (Path(temp) / 't.key').read_bytes()
+                self.assertIn('signing secret key', self.check('t.key', data))
+                self.assertNotIn('signing secret key', self.check('t.pub', (Path(temp) / 't.pub').read_bytes()))
+                key_line = data.decode().splitlines()[1]
+                self.assertIn('signing secret key', self.check('only-line.txt', key_line.encode()))
 
 
 if __name__ == '__main__':

@@ -327,6 +327,9 @@ echo test > t.txt && minisign -S -s mag-release.key -m t.txt -t "test" && minisi
 cat mag-release.pub mag-recovery.pub
 ```
 
+Where each line goes is in
+[release-packaging.md](../../../installer/docs/release-packaging.md#update-signing-keys).
+
 Neither key ever goes into CI or a GitHub secret. Agents must never run `minisign -G` or `-S` with a real key,
 read a `.key` file, or ask for its password. `tools/check_public_tree.py` gains a rule that refuses
 minisign secret-key files: their `untrusted comment: minisign encrypted secret key` header, or a

@@ -50,7 +50,8 @@
     "mag_installer/input_guide.py",
     "mag_installer/console.py",
     "mag_installer/update.py",
-    "mag_installer/installs.py"
+    "mag_installer/installs.py",
+    "mag_installer/minisign.py"
   ],
   "excludes": [
     "original game and firmware files",

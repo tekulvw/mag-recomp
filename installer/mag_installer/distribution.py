@@ -27,7 +27,7 @@ SHIPPABLE_FILES = (
     'mag_installer/build_cache.py', 'mag_installer/compile_cache.py', 'mag_installer/lift_cache.py',
     'mag_installer/build_jobs.py', 'mag_installer/shader_warm.py', 'mag_installer/voice_option.py',
     'mag_installer/rpcs3_detect.py', 'mag_installer/input_guide.py', 'mag_installer/console.py',
-    'mag_installer/update.py', 'mag_installer/installs.py',
+    'mag_installer/update.py', 'mag_installer/installs.py', 'mag_installer/minisign.py',
     'profiles/mag-unconfigured.json', 'profiles/synthetic-demonstration.json',
     'docs/design.md', 'docs/testing.md', 'docs/profile-format.md',
     'mag_installer/releasing.py', 'scripts/release_installer.py',
