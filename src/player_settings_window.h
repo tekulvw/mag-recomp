@@ -28,5 +28,8 @@ SettingsWindowResult settings_window_run(SettingsForm& form, const std::filesyst
 #ifdef _WIN32
 // Opens the account portal's page (the default: the browser); tests replace it.
 extern void (*settings_window_open_page)(const std::string& url);
+// Stores the area the window must fit in, as left, top, right and bottom in the window's pixels
+// (the default, null: its monitor's work area); tests replace it to stand in for a smaller screen.
+extern void (*settings_window_work_area)(void* window, long area[4]);
 #endif
 }  // namespace mag

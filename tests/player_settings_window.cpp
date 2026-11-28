@@ -61,6 +61,19 @@ static SDL_Event mouse(Uint8 button, int x = 5, int y = 5) {
     e.button.y = y;
     return e;
 }
+static SDL_Event motion(int x, int y, Uint32 state = 0) {
+    SDL_Event e{};
+    e.type = SDL_MOUSEMOTION;
+    e.motion.x = x;
+    e.motion.y = y;
+    e.motion.state = state;
+    return e;
+}
+static SDL_Event release(int x, int y) {
+    SDL_Event e = mouse(SDL_BUTTON_LEFT, x, y);
+    e.type = SDL_MOUSEBUTTONUP;
+    return e;
+}
 static SDL_Event wheel(int y) {
     SDL_Event e{};
     e.type = SDL_MOUSEWHEEL;
@@ -87,7 +100,8 @@ static std::string read(const fs::path& path) {
     text << in.rdbuf();
     return text.str();
 }
-static void draw(SettingsPanel& panel) {
+// `background`: points that must show the window's background (where clipping keeps the page out).
+static void draw(SettingsPanel& panel, const std::vector<SDL_Point>& background = {}) {
     const int height = panel.height();
     SDL_Surface* surface = SDL_CreateRGBSurfaceWithFormat(0, SettingsPanel::width, height, 32, SDL_PIXELFORMAT_RGBA32);
     SDL_Renderer* renderer = SDL_CreateSoftwareRenderer(surface);
@@ -100,6 +114,13 @@ static void draw(SettingsPanel& panel) {
     Uint8 r, g, b, a;
     SDL_GetRGBA(pixel(2, 2), surface->format, &r, &g, &b, &a);
     CHECK(r == 236 && g == 236 && b == 236);
+    for (const SDL_Point& p : background) {
+        CHECK(p.x >= 0 && p.y >= 0 && p.x < SettingsPanel::width && p.y < height);
+        if (p.x < 0 || p.y < 0 || p.x >= SettingsPanel::width || p.y >= height) continue;
+        SDL_GetRGBA(pixel(p.x, p.y), surface->format, &r, &g, &b, &a);
+        if (r != 236 || g != 236 || b != 236) std::printf("not background at %d,%d: %d %d %d\n", p.x, p.y, r, g, b);
+        CHECK(r == 236 && g == 236 && b == 236);
+    }
     SDL_DestroyTexture(font);
     SDL_DestroyRenderer(renderer);
     SDL_FreeSurface(surface);
@@ -630,6 +651,155 @@ static void controls(const fs::path& folder) {
     std::printf("controls: capture, conflict, clear, scope, groups and scrolling, mouse, controller, reset, apply, recovery\n");
 }
 
+// A screen shorter than the panel: the page scrolls between the segments and the footer, which
+// stay in the window. With no view height, or one the layout fits in, nothing moves.
+static bool same(const SDL_Rect& a, const SDL_Rect& b) { return a.x == b.x && a.y == b.y && a.w == b.w && a.h == b.h; }
+static void scrolling(const fs::path& folder) {
+    fs::create_directories(folder);
+    const fs::path settings = folder / "settings.json";
+    std::ofstream(settings) << "{\"server_address\": \"play.magtest.online\", \"player_name\": \"Rook_7\"}";
+    SettingsForm form;
+    std::string error;
+    CHECK(settings_form_load(settings, form, error) && form.controls);
+    SettingsWindowOptions setup;
+    setup.setup = true;
+    SettingsPanel panel(form, settings, setup);
+    const std::vector<std::string> names = {"segment:general", "text:server", "text:name", "choice:display", "choice:voice_volume",
+                                            "check:reports", "note:report", "button:cancel", "button:apply", "button:play"};
+    auto rects = [&] {
+        std::vector<SDL_Rect> out;
+        for (const auto& name : names) out.push_back(panel.rect(name));
+        return out;
+    };
+    auto unchanged = [&](const std::vector<SDL_Rect>& before) {
+        const auto now = rects();
+        for (size_t i = 0; i < now.size(); ++i)
+            if (!same(now[i], before[i])) return false;
+        return true;
+    };
+    const int natural = panel.height();
+    const auto unlimited = rects();
+    const SDL_Rect segments = unlimited[0];
+    CHECK(panel.natural_height() == natural && panel.page_scroll_limit() == 0 && panel.page_thumb().w == 0);
+    CHECK(natural > 720);  // the General page outgrows a 720-pixel screen, which is why it scrolls
+    for (const int view : {natural, natural + 100}) {
+        panel.set_view_height(view);
+        CHECK(panel.height() == natural && panel.page_scroll_limit() == 0 && unchanged(unlimited));
+    }
+    constexpr int margin = MAG_SETTINGS_MARGIN;
+    for (const int view : {720 - 2 * MAG_SETTINGS_WORK_AREA_MARGIN, 400}) {
+        panel.set_view_height(view);
+        panel.set_page_scroll(0);
+        CHECK(panel.focus("text:server") && panel.page_scroll() == 0);
+        const int height = panel.height(), limit = panel.page_scroll_limit();
+        const SDL_Rect page = panel.page_rect(), bottom = panel.rect("button:cancel");
+        CHECK(height <= view && panel.natural_height() == natural && limit > 0 && limit == natural - height);
+        CHECK(page.y == segments.y + segments.h + 10 && page.h >= MAG_SETTINGS_MIN_PAGE_HEIGHT && page.y + page.h < bottom.y);
+        CHECK(same(panel.rect("segment:general"), segments));  // pinned at the top
+        for (const char* name : {"button:cancel", "button:apply", "button:play"}) {  // pinned at the bottom
+            const SDL_Rect r = panel.rect(name);
+            CHECK(r.y >= page.y + page.h && r.y >= 0 && r.y + r.h <= height && r.h == 24);
+        }
+        CHECK(panel.visible("text:server") && panel.shown("note:report") && !panel.visible("note:report"));
+        CHECK(same(panel.rect("text:server"), unlimited[1]));  // not scrolled: where it was
+        draw(panel, {{margin + 4, page.y + page.h + 4}, {margin + 4, bottom.y + 2}});  // nothing drawn below the page
+        // The wheel over the page scrolls it, down to its end, where the comment box is in view.
+        send(panel, motion(page.x + 100, page.y + 20));
+        send(panel, wheel(-1));
+        CHECK(panel.page_scroll() == std::min(40, limit));
+        for (int i = 0; i < 100; ++i) send(panel, wheel(-1));
+        CHECK(panel.page_scroll() == limit && panel.visible("note:report") && !panel.visible("text:server"));
+        const SDL_Rect note = panel.rect("note:report"), thumb = panel.page_thumb();
+        CHECK(note.y == unlimited[6].y - limit && note.y + note.h <= page.y + page.h);
+        CHECK(thumb.w > 0 && thumb.y + thumb.h == page.y + page.h - 2);
+        draw(panel, {{margin + 4, page.y - 4}, {margin + 200, page.y - 4}, {margin + 4, bottom.y + 2}});  // nothing over the segments
+        send(panel, wheel(3));
+        CHECK(panel.page_scroll() == std::max(0, limit - 120));
+        // Tab and focus() bring what they reach into view.
+        panel.set_page_scroll(0);
+        for (int i = 0; i < 40 && panel.focused() != "check:reports"; ++i) send(panel, key(SDL_SCANCODE_TAB));
+        CHECK(panel.focused() == "check:reports" && panel.visible("check:reports") && panel.page_scroll() > 0);
+        for (int i = 0; i < 40 && panel.focused() != "text:server"; ++i) send(panel, key(SDL_SCANCODE_TAB, KMOD_SHIFT));
+        CHECK(panel.focused() == "text:server" && panel.visible("text:server"));
+        CHECK(panel.focus("note:report") && panel.visible("note:report") && panel.page_scroll() > 0);
+        CHECK(panel.focus("button:apply") && panel.visible("button:apply"));  // the footer is always in view
+        // A click where an item has scrolled out (under the segments, over the footer) does nothing.
+        CHECK(panel.focus("text:server"));
+        panel.set_page_scroll(0);
+        const SDL_Rect name0 = panel.rect("text:name"), reports0 = panel.rect("check:reports");
+        panel.set_page_scroll(name0.y + name0.h / 2 - page.y);
+        const SDL_Rect name = panel.rect("text:name");
+        CHECK(panel.page_scroll() == name0.y + name0.h / 2 - page.y && name.y < page.y && name.y + name.h > page.y);
+        send(panel, mouse(SDL_BUTTON_LEFT, name.x + 5, page.y - 3));
+        CHECK(panel.focused() == "text:server");
+        send(panel, mouse(SDL_BUTTON_LEFT, name.x + 5, page.y + 3));
+        CHECK(panel.focused() == "text:name" && panel.visible("text:name"));  // and the rest of it comes in
+        panel.set_page_scroll(reports0.y + reports0.h / 2 - (page.y + page.h));
+        const SDL_Rect reports = panel.rect("check:reports");
+        CHECK(reports.y < page.y + page.h && reports.y + reports.h > page.y + page.h);
+        const bool sending = form.send_reports;
+        send(panel, mouse(SDL_BUTTON_LEFT, reports.x + 5, page.y + page.h + 3));
+        CHECK(form.send_reports == sending && panel.focused() == "text:name");
+        send(panel, mouse(SDL_BUTTON_LEFT, reports.x + 5, page.y + page.h - 3));
+        CHECK(form.send_reports != sending && panel.focused() == "check:reports" && panel.visible("check:reports"));
+        click(panel, "check:reports");
+        CHECK(form.send_reports == sending);
+        // The scrollbar: a click on its track moves the thumb there, and the thumb drags.
+        panel.set_page_scroll(0);
+        const SDL_Rect top = panel.page_thumb();
+        send(panel, mouse(SDL_BUTTON_LEFT, top.x + 2, page.y + page.h - 3));
+        send(panel, release(top.x + 2, page.y + page.h - 3));
+        CHECK(panel.page_scroll() == limit && panel.page_thumb().y + panel.page_thumb().h == page.y + page.h - 2);
+        const SDL_Rect end = panel.page_thumb();
+        send(panel, mouse(SDL_BUTTON_LEFT, end.x + 2, end.y + 2));
+        CHECK(panel.page_scroll() == limit);  // grabbing the thumb does not move it
+        send(panel, motion(end.x + 2, end.y + 2 - (end.y - top.y) / 2, SDL_BUTTON_LMASK));
+        CHECK(panel.page_scroll() > 0 && panel.page_scroll() < limit);
+        send(panel, motion(end.x + 2, 0, SDL_BUTTON_LMASK));
+        CHECK(panel.page_scroll() == 0);
+        send(panel, release(end.x + 2, 0));
+        send(panel, motion(end.x + 2, end.y + 2));
+        CHECK(panel.page_scroll() == 0);  // released
+        // Page Down and Page Up.
+        send(panel, key(SDL_SCANCODE_PAGEDOWN));
+        CHECK(panel.page_scroll() == std::min(limit, page.h - 40));
+        send(panel, key(SDL_SCANCODE_PAGEUP));
+        CHECK(panel.page_scroll() == 0);
+        // A choice low in the window: its list draws over the footer, then closes.
+        CHECK(panel.focus("choice:voice_volume"));
+        send(panel, key(SDL_SCANCODE_SPACE));
+        CHECK(panel.choosing());
+        draw(panel);
+        send(panel, key(SDL_SCANCODE_ESCAPE));
+        CHECK(!panel.choosing() && panel.visible("choice:voice_volume"));
+    }
+    // The Controls page: the wheel over the bindings list scrolls the list, elsewhere the page.
+    panel.set_view_height(400);
+    click(panel, "segment:controls");
+    CHECK(panel.controls_page() && panel.page_scroll() == 0 && panel.page_scroll_limit() > 0 && panel.height() <= 400);
+    const SDL_Rect page = panel.page_rect(), slot = panel.rect("slot:0:0");
+    send(panel, motion(slot.x + 4, slot.y + 4));
+    send(panel, wheel(-1));
+    CHECK(panel.scroll() == 24 && panel.page_scroll() == 0);
+    send(panel, motion(page.x + 4, page.y + 4));
+    send(panel, wheel(-1));
+    CHECK(panel.scroll() == 24 && panel.page_scroll() == std::min(40, panel.page_scroll_limit()));
+    const std::string last = "slot:" + std::to_string(2 + 16) + ":0";
+    CHECK(panel.focus(last) && panel.visible(last) && panel.scroll() > 24);
+    CHECK(panel.focus("button:reset") && panel.visible("button:reset"));
+    draw(panel, {{margin + 4, page.y - 4}});
+    click(panel, "button:reset");
+    CHECK(panel.asking());
+    draw(panel);  // the question over a scrolled page
+    send(panel, key(SDL_SCANCODE_ESCAPE));
+    CHECK(!panel.asking());
+    // No view height again: the General page is laid out as before.
+    panel.set_view_height(0);
+    click(panel, "segment:general");
+    CHECK(!panel.controls_page() && panel.height() == natural && panel.page_scroll_limit() == 0 && unchanged(unlimited));
+    std::printf("scrolling: view height, pinned segments and footer, wheel, focus, clipped clicks, scrollbar, controls list\n");
+}
+
 // The window comes forward: SDL's raise, then on X11 alone a second, pager-style request.
 static void forward() {
     struct Fake {
@@ -686,6 +856,7 @@ int main(int argc, char** argv) {
     debug(folder / "debug");
     fs::create_directories(folder / "controls");
     controls(folder / "controls");
+    scrolling(folder / "scrolling");  // after controls(): the catalog it registers gives a Controls page
     forward();
     if (failures) { std::printf("%d failure(s)\n", failures); return 1; }
     std::printf("settings window checks passed\n");
