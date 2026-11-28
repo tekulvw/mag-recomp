@@ -57,6 +57,12 @@ class DesktopCaptureCoreTests(unittest.TestCase):
     def test_clicks_do_not_reacquire_a_held_lock(self):
         self.run_case('click')
 
+    def test_lost_releases_are_reconciled_from_physical_state(self):
+        self.run_case('lost-release')
+
+    def test_macos_key_codes_for_physical_state(self):
+        self.run_case('macos-keys')
+
     def test_wheel_steps_are_presses_and_releases_while_ready(self):
         self.run_case('wheel')
 

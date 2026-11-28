@@ -176,11 +176,34 @@ void menu_mode() {
     require(mag_win32_withholds_menu_message(0x0100 /* WM_KEYDOWN */, MAG_WIN32_VK_F10) == 0, "plain key messages pass");
 }
 
+// The inverse table the backend reads physical key state through (lost-release reconciliation).
+void scan_codes() {
+    uint16_t codes[4];
+    require(mag_win32_usage_scan_codes(14, codes) == 1 && codes[0] == 0x25, "K is scan code 25");
+    require(mag_win32_usage_scan_codes(74, codes) == 1 && codes[0] == 0xE047, "Home carries E0");
+    const unsigned print = mag_win32_usage_scan_codes(70, codes);
+    require(print == 2 && codes[0] == 0x54 && codes[1] == 0xE037, "Print Screen has two reports");
+    require(mag_win32_usage_scan_codes(0, codes) == 0 && mag_win32_usage_scan_codes(227, codes) == 0 &&
+            mag_win32_usage_scan_codes(300, codes) == 0, "no codes for uncaptured usages");
+    // Every scan code the forward table reports is among its usage's codes.
+    for (uint16_t e0 = 0; e0 < 2; ++e0)
+        for (uint16_t code = 1; code < 0x80; ++code) {
+            const uint32_t usage = key(code, e0 ? MAG_WIN32_KEY_E0 : 0);
+            if (!usage) continue;
+            const unsigned count = mag_win32_usage_scan_codes(usage, codes);
+            const uint16_t want = e0 ? uint16_t(0xE000 | code) : code;
+            bool found = false;
+            for (unsigned i = 0; i < count; ++i) found = found || codes[i] == want;
+            require(found, "the inverse covers every forward entry");
+        }
+}
+
 int main(int argc, char** argv) {
     if (argc != 2) return 2;
     const std::string name = argv[1];
     try {
         if (name == "keys") keys();
+        else if (name == "scan-codes") scan_codes();
         else if (name == "repeats") repeats();
         else if (name == "mouse") mouse();
         else if (name == "xinput") xinput();

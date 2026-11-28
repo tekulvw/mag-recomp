@@ -27,6 +27,7 @@ class RustControlsBridgeTests(unittest.TestCase):
         else:args+=['-ldl','-lm']
         subprocess.run(args,check=True)
     def test_held_movement_survives_frame_retirement_without_new_edges(self):subprocess.run([str(self.binary),'held'],check=True)
+    def test_source_and_input_releases_end_push_to_talk(self):subprocess.run([str(self.binary),'host-release'],check=True)
     def test_interaction_hold_and_release_reach_two_independent_consumers(self):subprocess.run([str(self.binary),'interaction'],check=True)
     def test_provisional_ui_reads_do_not_mark_accepted_gameplay(self):subprocess.run([str(self.binary),'policy'],check=True)
     def test_actual_c_abi_rejects_stale_handles_and_serializes_concurrent_calls(self):subprocess.run([str(self.binary),'abi'],check=True)

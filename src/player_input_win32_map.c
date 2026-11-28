@@ -83,6 +83,17 @@ uint32_t mag_win32_raw_key_usage(uint16_t make_code, uint16_t flags, uint16_t vk
     return usage;
 }
 
+unsigned mag_win32_usage_scan_codes(uint32_t usage, uint16_t out[4])
+{
+    unsigned count = 0;
+    if (!usage || usage > 255) return 0;
+    for (uint16_t code = 1; code < 0x80 && count < 4; ++code)
+        if (k_plain[code] == usage) out[count++] = code;
+    for (uint16_t code = 1; code < 0x80 && count < 4; ++code)
+        if (k_e0[code] == usage) out[count++] = (uint16_t)(0xE000u | code);
+    return count;
+}
+
 unsigned mag_win32_raw_mouse_edges(uint16_t button_flags, MagWin32MouseEdge out[10])
 {
     static const uint16_t down[5] = {MAG_WIN32_MOUSE_LEFT_DOWN, MAG_WIN32_MOUSE_RIGHT_DOWN,

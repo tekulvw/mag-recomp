@@ -5,11 +5,13 @@
 #include "player_settings_runtime.h"
 #include "player_controls.h"
 #include "player_desktop_capture.h"
+#include "player_input_macos_keys.h"
 #include <algorithm>
 #include <atomic>
 #include <cstdlib>
 #include <memory>
 #include <chrono>
+#include <cstdio>
 #include <set>
 using namespace mag;
 namespace {
@@ -27,12 +29,14 @@ void mainQueue(void (^block)(void)) {if(NSThread.isMainThread)block();else dispa
 @property(strong) NSMutableArray* observers;
 @property(strong) NSMutableArray* restorers;
 @property(strong) GCKeyboardInput* keyboard;
+@property(strong) dispatch_source_t reconcileTimer;
 - (void)refresh;
 - (void)requestRecapture;
 - (void)rebuild;
 - (void)button:(PhysicalControl)control down:(BOOL)down epoch:(uint64_t)epoch time:(uint64_t)time;
 - (void)mouseButton:(uint32_t)code device:(uintptr_t)device down:(BOOL)down epoch:(uint64_t)epoch time:(uint64_t)time;
 - (void)wheel:(int)steps device:(uintptr_t)device time:(uint64_t)time;
+- (void)reconcile;
 @end
 @implementation MAGRawDesktopInput {
     std::set<PhysicalControl> held;
@@ -40,6 +44,10 @@ void mainQueue(void (^block)(void)) {if(NSThread.isMainThread)block();else dispa
 #if MAG_INPUT_RUST
     std::set<std::pair<uint32_t,uint64_t>> rustMouseHeld;
 #endif
+    // Lost-release reconciliation (player_desktop_capture_core.h describes the rule): held keys
+    // found up at the last check, and whether the host's readings have confirmed a held key yet.
+    std::set<uint32_t> keysUp;
+    bool physicalTrusted;
 @public
     DesktopCaptureGate gate;
 
@@ -52,7 +60,32 @@ void mainQueue(void (^block)(void)) {if(NSThread.isMainThread)block();else dispa
     if(down && !self.ready)return;
     if(!down && !held.contains(control))return;
     if(down)held.insert(control);else held.erase(control);
+    if(control.source==InputSource::Keyboard)keysUp.erase(control.code);  // an edge restarts its check
     mag_controls_push_event({control,bool(down),time});
+}
+// Every ReconcileInterval while ready: a held key that the HID system reports up on two checks in a
+// row lost its release (GameController can miss one) and is released here. Readings count only once
+// one has confirmed a held key as down, so a host that cannot read key state releases nothing.
+- (void)reconcile {
+    if(!self.installed || !self.ready) {keysUp.clear();return;}
+    std::set<uint32_t> up;
+    for(auto control:held) {
+        if(control.source!=InputSource::Keyboard)continue;
+        const int code=mag_macos_key_code(control.code);
+        if(code<0)continue;
+        if(CGEventSourceKeyState(kCGEventSourceStateHIDSystemState,CGKeyCode(code)))physicalTrusted=true;
+        else up.insert(control.code);
+    }
+    if(physicalTrusted) {
+        for(uint32_t usage:std::set<uint32_t>(up)) {
+            if(!keysUp.contains(usage))continue;
+            const PhysicalControl control{InputSource::Keyboard,usage};
+            held.erase(control);up.erase(usage);
+            std::fprintf(stderr,"[game-controls] released key %u: up on the device but its release was never reported\n",usage);
+            try {mag_controls_push_event({control,false,now()});} catch(...) {mag_controls_release_source(InputSource::Keyboard);}
+        }
+    }
+    keysUp=std::move(up);
 }
 - (void)mouseButton:(uint32_t)code device:(uintptr_t)device down:(BOOL)down epoch:(uint64_t)epoch time:(uint64_t)time {
     if(!self.installed || epoch!=self.epoch)return;
@@ -207,8 +240,16 @@ void mainQueue(void (^block)(void)) {if(NSThread.isMainThread)block();else dispa
             }]];
             for(NSNotificationName name in @[GCMouseDidConnectNotification,GCMouseDidDisconnectNotification,GCKeyboardDidConnectNotification,GCKeyboardDidDisconnectNotification])
                 [self.observers addObject:[center addObserverForName:name object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification*){[weakSelf rebuild];}]];
+            if(!self.reconcileTimer) {
+                dispatch_source_t timer=dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER,0,0,dispatch_get_main_queue());
+                dispatch_source_set_timer(timer,dispatch_time(DISPATCH_TIME_NOW,250*NSEC_PER_MSEC),250*NSEC_PER_MSEC,50*NSEC_PER_MSEC);
+                dispatch_source_set_event_handler(timer,^{[weakSelf reconcile];});
+                dispatch_resume(timer);self.reconcileTimer=timer;
+            }
             [self rebuild];return;
         }
+        if(self.reconcileTimer){dispatch_source_cancel(self.reconcileTimer);self.reconcileTimer=nil;}
+        keysUp.clear();
         for(id token in self.observers)[NSNotificationCenter.defaultCenter removeObserver:token];[self.observers removeAllObjects];
         if(self.clickMonitor){[NSEvent removeMonitor:self.clickMonitor];self.clickMonitor=nil;}
         [self restoreCallbacks];rawMouse.store(false,std::memory_order_release);

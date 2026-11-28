@@ -456,11 +456,12 @@ void mag_controls_retire_frame(InputFrameKey key) {
 }
 void mag_controls_release_input(InputResetReason reason) {
     auto& state=controls(); std::lock_guard lock(state.mutex);
-    if(reason==InputResetReason::Device) release_locked(state,InputSource::Controller); else release_locked(state);
+    if(reason==InputResetReason::Device) release_locked(state,InputSource::Controller), state.host.release(InputSource::Controller);
+    else release_locked(state), state.host.release();
 }
 void mag_controls_release_source(InputSource source) {
     if(source!=InputSource::Keyboard && source!=InputSource::Mouse && source!=InputSource::Controller) throw std::invalid_argument("invalid physical source");
-    auto& state=controls();std::lock_guard lock(state.mutex);release_locked(state,source);
+    auto& state=controls();std::lock_guard lock(state.mutex);release_locked(state,source);state.host.release(source);
 }
 bool mag_controls_frame_valid(InputFrameKey key,uint64_t generation) {
     auto& state=controls(); std::lock_guard lock(state.mutex);

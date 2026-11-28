@@ -99,4 +99,17 @@ static void abi_handles(){
     require(replacement!=handle,"destroyed handle was reused without a generation");
     require(mag_input_destroy(replacement)==0,"replacement destroy failed");
 }
-int main(int argc,char** argv){try{if(argc!=2)return 2;std::string which=argv[1];if(which=="held")held_frames();else if(which=="interaction")interaction();else if(which=="policy")policy_acceptance();else if(which=="abi")abi_handles();else if(which=="focus")focus_retirement();else if(which=="jump-key")independent_jump_key();else return 2;return 0;}catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}
+// Push to talk (a host action) through the Rust facade: a source release or an input release
+// forgets the held key, so a release the backend never reports cannot keep it open.
+static void host_release(){
+    constexpr ActionId Talk=77;ControlsProfile p;p.mode=InputMode::Auto;p.bindings={{{InputSource::Keyboard,14},Talk}};
+    mag_controls_configure(p);mag_controls_set_window_capture(true,true);mag_controls_set_supported_context(true);
+    const PhysicalControl k{InputSource::Keyboard,14};
+    mag_controls_push_event({k,true,time_ns()});require(mag_controls_host_action(Talk).held,"a press talks");
+    mag_controls_release_source(InputSource::Keyboard);require(!mag_controls_host_action(Talk).held,"a keyboard release ends push to talk");
+    mag_controls_push_event({k,false,time_ns()});mag_controls_push_event({k,true,time_ns()});
+    require(mag_controls_host_action(Talk).held,"a fresh press talks again");
+    mag_controls_release_input(InputResetReason::Context);require(!mag_controls_host_action(Talk).held,"an input release ends push to talk");
+    mag_controls_push_event({k,false,time_ns()});require(!mag_controls_host_action(Talk).held,"released");
+}
+int main(int argc,char** argv){try{if(argc!=2)return 2;std::string which=argv[1];if(which=="held")held_frames();else if(which=="host-release")host_release();else if(which=="interaction")interaction();else if(which=="policy")policy_acceptance();else if(which=="abi")abi_handles();else if(which=="focus")focus_retirement();else if(which=="jump-key")independent_jump_key();else return 2;return 0;}catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}

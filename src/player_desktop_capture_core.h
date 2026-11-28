@@ -20,6 +20,12 @@
 // - An intentional mouse-mode change (menu versus gameplay) changes relative motion only; held
 //   keys and buttons stay held.
 // - System shortcut keys (left and right GUI) are never captured.
+// - A release the window system never delivers (focus juggling, a modal loop that read the
+//   message, a lost raw-input report) must not keep a control held. While ready, the core asks the
+//   platform every ReconcileIntervalNs whether each held key and button is still physically down;
+//   one reported up on two checks in a row is released as if its release had arrived. Readings
+//   count only once the platform has confirmed some held control as down, so a host that cannot
+//   read physical state (or reads nothing without a permission) never releases anything.
 //
 // Threads: the request_* functions, stamp(), enabled_requested() and raw_mouse_available() may be
 // called from any thread. Everything else runs on the one thread that owns the backend's window.
@@ -27,6 +33,7 @@
 #include "player_desktop_capture.h"
 #include <atomic>
 #include <cstdint>
+#include <cstdio>
 #include <optional>
 #include <set>
 #include <utility>
@@ -55,6 +62,13 @@ public:
     // Physical keys and mouse buttons held right now.
     virtual DesktopPressedState pressed() = 0;
     virtual uint64_t now_ns() = 0;
+    // Whether one key (a USB HID usage) or mouse button is physically down now; nullopt when the
+    // platform cannot tell. The defaults cannot tell, which turns reconciliation off.
+    virtual std::optional<bool> key_down(uint32_t) { return std::nullopt; }
+    virtual std::optional<bool> button_down(uint32_t, uint64_t) { return std::nullopt; }
+    // The core released a key whose release never arrived: forget any per-key state (auto-repeat
+    // tracking) so the next press is a press.
+    virtual void key_forgotten(uint32_t) {}
 };
 
 // Where accepted input goes. Production uses DesktopCaptureEngineSink.
@@ -121,6 +135,12 @@ public:
     // require a fresh activation.
     void interrupt();
 
+    static constexpr uint64_t ReconcileIntervalNs = 250'000'000;
+    // Controls released because the platform found them up although no release arrived.
+    uint64_t lost_releases() const { return lost_releases_; }
+    // The most recent of them, for a log line.
+    std::optional<PhysicalControl> last_lost_release() const { return last_lost_; }
+
     bool installed() const { return installed_; }
     bool ready() const { return ready_; }
     bool relative() const { return relative_; }
@@ -133,6 +153,7 @@ private:
     void activate();
     void release_held();
     void apply_relative(bool desired);
+    void reconcile();
     void publish_capture(bool focused, bool mouse_captured);
 
     DesktopCapturePlatform& platform_;
@@ -144,6 +165,13 @@ private:
     std::optional<std::pair<bool, bool>> published_;
     std::set<uint32_t> keys_;
     std::set<Button> buttons_;
+    // Reconciliation: held controls found up at the last check, whether the platform's readings
+    // are trusted yet, when the next check is due and what it released.
+    std::set<uint32_t> keys_up_;
+    std::set<Button> buttons_up_;
+    bool physical_trusted_ = false;
+    uint64_t next_reconcile_ = 0, lost_releases_ = 0;
+    std::optional<PhysicalControl> last_lost_;
 };
 
 // Whether the backend withholds the host's quit key (Escape) from the SDK's window pump. The SDK's
@@ -171,6 +199,16 @@ constexpr const char* desktop_capture_transition(bool was_ready, bool was_relati
     if (ready && !was_relative && relative) return "mouse locked to the game window";
     if (ready && was_relative && !relative) return "mouse released (menu, or the lock could not be applied)";
     return nullptr;
+}
+
+// The backend's log line for a release the core reconciled (one per release; `reported` is the
+// count already logged).
+inline void desktop_capture_report_lost_releases(const DesktopCaptureCore& core, uint64_t& reported) {
+    if (core.lost_releases() == reported) return;
+    reported = core.lost_releases();
+    if (const auto lost = core.last_lost_release())
+        std::fprintf(stderr, "[game-controls] released %s %u: up on the device but its release was never reported\n",
+                     lost->source == InputSource::Keyboard ? "key" : "mouse button", lost->code);
 }
 
 }  // namespace mag
