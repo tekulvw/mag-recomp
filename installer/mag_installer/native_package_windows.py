@@ -47,10 +47,20 @@ _SUPERVISOR = r'''
 #endif
 
 static wchar_t g_root[MAX_PATH] = L".";
+/* MAG.exe --mag-verify-install: the installer's check of an updated app (installer update.py). It
+ * shows no window and writes no launch-error.log: a failure goes to standard error and exit code 1. */
+static int g_verify = 0;
+
+static void write_standard(DWORD which, const wchar_t *text) {
+    HANDLE out = GetStdHandle(which); char utf8[8192]; DWORD written;
+    int n = WideCharToMultiByte(CP_UTF8, 0, text, -1, utf8, sizeof utf8, NULL, NULL);
+    if (out && out != INVALID_HANDLE_VALUE && n > 1) WriteFile(out, utf8, (DWORD)(n - 1), &written, NULL);
+}
 
 static void fail(const wchar_t *message, const wchar_t *detail) {
     wchar_t text[4096];
     swprintf(text, 4096, L"MAG could not start: %ls%ls%ls\n", message, detail ? L": " : L"", detail ? detail : L"");
+    if (g_verify) { write_standard(STD_ERROR_HANDLE, text); ExitProcess(1); }
     /* The session's report (player_reports_win32.h) is decided before the message waits for the player. */
     mag_reports_end(text);
     wchar_t path[MAX_PATH + 32];
@@ -262,6 +272,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR arguments, int
     for (int i = 1; i < argc; i++) {
         const wchar_t *a = argv[i], **target = NULL; size_t prefix = 0;
         if (!wcscmp(a, L"--no-prompt")) { prompt = 0; continue; }
+        if (!wcscmp(a, L"--mag-verify-install")) { g_verify = 1; continue; }
         if (!wcscmp(a, L"--link")) { account = 1; continue; }
         if (!wcscmp(a, L"--unlink")) { account = 2; continue; }
         if (!wcscmp(a, L"--link-token")) { account = 3; continue; }
@@ -323,6 +334,18 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR arguments, int
     check(launcher_elf, MAG_LAUNCHER_ELF_SHA256); check(engine_elf, MAG_ENGINE_ELF_SHA256);
     check(engine_self, MAG_ENGINE_SELF_SHA256);
     char key[65]; key_hash(launcher_elf, key);
+    /* The installer's check of an updated app: the identity checks above, then nothing else. */
+    if (g_verify) { write_standard(STD_OUTPUT_HANDLE, L"MAG install verified\n"); return 0; }
+    /* Held (shared) for this launch's whole life. An in-place update takes it exclusively, so it never
+     * replaces the app while MAG runs, and MAG does not start while it does (installer update.py). */
+    { wchar_t home_folder[MAX_PATH], session_lock[MAX_PATH]; OVERLAPPED first = {0};
+      join(home_folder, g_root, L"home"); CreateDirectoryW(home_folder, NULL);
+      join(session_lock, home_folder, L".session-lock");
+      HANDLE session = CreateFileW(session_lock, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                   NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+      if (session != INVALID_HANDLE_VALUE && !LockFileEx(session, LOCKFILE_FAIL_IMMEDIATELY, 0, 1, 0, &first)
+          && GetLastError() == ERROR_LOCK_VIOLATION)
+          fail(L"MAG is being updated. Start it again when the update has finished", NULL); }
 
     unsigned char random[16]; char token[33];
     if (BCryptGenRandom(NULL, random, 16, BCRYPT_USE_SYSTEM_PREFERRED_RNG) < 0) fail(L"No system random source", NULL);
@@ -527,7 +550,8 @@ def _compile(clang_cl, environment, source_dir, output, token):
 
 def package(config, workspace, destination, token=None, events=None, environment=None):
     """Build the MAG folder's MAG and game subfolders from a finished workspace; launches nothing."""
-    from .native_package import _ordinary, _digest, check_workspace, stage_game, package_receipt, product_version, GAME_FOLDER, WORKSPACE_GAME
+    from .native_package import (_ordinary, _digest, check_workspace, stage_game, package_receipt, product_version, GAME_FOLDER,
+                                 WORKSPACE_GAME, SUPERVISOR_FEATURES)
     token = token or Cancellation(); events = events or (lambda event: None)
     workspace, destination = Path(workspace).absolute(), Path(destination).absolute()
     if destination.exists() or destination.is_symlink(): raise InstallerError('MAG folder destination already exists')
@@ -580,7 +604,8 @@ def package(config, workspace, destination, token=None, events=None, environment
         runtime = {'schema_version': 2, 'game': Path(game_relative).as_posix(),
                    'launcher': 'bin/MagRecomp.exe', 'engine': 'bin/MagEngine.exe',
                    'engine_self_sha256': engine_self, 'signing': 'unsigned-local',
-                   'environment': playback_environment(records), 'version': product_version(workspace)}
+                   'environment': playback_environment(records), 'version': product_version(workspace),
+                   'supervisor': SUPERVISOR_FEATURES}
         if isinstance(config.get('build_options'), dict):
             # What this app was built with (no paths), so updating it keeps the same options.
             runtime['build_options'] = config['build_options']

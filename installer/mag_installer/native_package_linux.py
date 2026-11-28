@@ -30,6 +30,7 @@ _SUPERVISOR = r'''
 #include <cerrno>
 #include <cstring>
 #include <fcntl.h>
+#include <sys/file.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <sys/prctl.h>
@@ -49,6 +50,8 @@ _SUPERVISOR = r'''
 #endif
 namespace fs=std::filesystem;
 static fs::path root;
+// --mag-verify-install: the installer's check after an update; a failure writes no launch-error.log.
+static bool verifying=false;
 static volatile sig_atomic_t child=0;
 // Performance and error reports (src/player_reports.h): this launch's session, ended once.
 static mag::reports::Session report;static bool reporting=false;static fs::path self_path;
@@ -264,6 +267,7 @@ int main(int argc,char** argv) {
  for(int i=1;i<argc;i++){std::string a=argv[i];
   if(a=="--help"||a=="-h"){std::cout<<usage<<"\n";return 0;}
   if(a=="--no-prompt"){prompt=false;continue;}
+  if(a=="--mag-verify-install"){account=a;verifying=true;continue;}
   if(a=="--link"||a=="--unlink"||a=="--link-token"){account=a;continue;}
   // The detached report sender this supervisor starts (src/player_reports.h): MAG --send-reports <launch log folder>.
   if(a=="--send-reports"&&i+1<argc){account=a;choices["send_reports_logs"]=argv[++i];continue;}
@@ -289,6 +293,13 @@ int main(int argc,char** argv) {
  {std::error_code none;if(!fs::is_directory(vfs/"PS3_GAME",none))fail("The game files are missing. Keep the game folder beside the folder that holds MAG: "+(vfs/"PS3_GAME").string());}
  auto launcher=app/"bin/MagRecomp",engine=app/"bin/MagEngine",le=vfs/"PS3_GAME/USRDIR/EBOOT.elf",ee=vfs/"PS3_GAME/USRDIR/bin/mage_g.elf",es=vfs/"PS3_GAME/USRDIR/bin/mage_g.self";
  check(launcher,MAG_LAUNCHER_SHA256);check(engine,MAG_ENGINE_SHA256);check(le,MAG_LAUNCHER_ELF_SHA256);check(ee,MAG_ENGINE_ELF_SHA256);check(es,MAG_ENGINE_SELF_SHA256);auto key=key_hash(le);
+ // The installer's check of an updated app: the identity checks above, then nothing else.
+ if(verifying){std::cout<<"MAG install verified\n";return 0;}
+ // Held (shared) for this launch's whole life. An in-place update takes it exclusively, so it never
+ // replaces the app while MAG runs, and MAG does not start while it does (installer update.py).
+ private_directory(root/"home");
+ {int session=open((root/"home/.session-lock").c_str(),O_RDWR|O_CREAT|O_NOFOLLOW|O_CLOEXEC,0600);
+  if(session>=0&&flock(session,LOCK_SH|LOCK_NB)!=0&&errno==EWOULDBLOCK)fail("MAG is being updated. Start it again when the update has finished.");}
  unsigned char random[16];int rng=open("/dev/urandom",O_RDONLY|O_CLOEXEC);if(rng<0)fail("No system random source");size_t got=0;while(got<16){auto c=read(rng,random+got,16-got);if(c<0&&errno==EINTR)continue;if(c<=0)fail("No system randomness");got+=c;}close(rng);auto token=hex(random,16);
  auto logs=root/"logs"/("launch-"+token);private_directory(logs.parent_path());if(!fs::create_directory(logs))fail("Cannot create private launch directory");auto request=logs/"handoff-request.json";private_directory(root/"home");private_directory(root/"home/gamedata");private_directory(root/"home/player");{std::error_code none;fs::remove(root/"home/player/launch-message.txt",none);}
  std::map<std::string,std::string> env={{"PATH","/usr/bin:/bin"},{"HOME",(root/"home").string()},{"LANG","C.UTF-8"},{"LD_LIBRARY_PATH",(app/"lib").string()},{"PS3_VFS_ROOT",vfs.string()},{"PS3_BOOT_PATH","/dev_bdvd/PS3_GAME/USRDIR/EBOOT.BIN"},{"PS3RECOMP_VK_WINDOW","1"},{"PS3RECOMP_VK_GUEST_PROGRAMS","1"},{"PS3_HLE_UNRESOLVED","halt"},{"PS3_SYSCALL_UNRESOLVED","halt"},{"MAG_HANDOFF_REQUEST",request.string()},{"MAG_HANDOFF_TOKEN",token},{"MAG_ENGINE_BINARY",engine.string()},{"MAG_ENGINE_ELF",ee.string()},{"MAG_ENGINE_SELF",es.string()},{"MAG_ENGINE_BINARY_SHA256",MAG_ENGINE_SHA256},{"MAG_ENGINE_ELF_SHA256",MAG_ENGINE_ELF_SHA256},{"MAG_ENGINE_SELF_SHA256",MAG_ENGINE_SELF_SHA256},{"MAG_ENGINE_KEY_SHA256",key},
@@ -357,7 +368,7 @@ int main(int argc,char** argv) {
   portal_ticket(env,link_file,ticket,engine_settings,false);social_start(env,link_file,ticket,engine_settings);}
  env["PS3_BOOT_PATH"]="/dev_bdvd/PS3_GAME/USRDIR/bin/mage_g.self";
  report.engine_exit=run(engine,ee,logs,env,"engine.log");social.reset();show_sign_in_notice(ticket,logs,interactive);end_report();return int(report.engine_exit);
- }catch(const std::exception& e){if(reporting&&report.launch_error.empty())report.launch_error=e.what();end_report();std::string msg="MAG could not start: "+std::string(e.what())+"\n";std::cerr<<msg;if(!root.empty()){int fd=open((root/"launch-error.log").c_str(),O_WRONLY|O_CREAT|O_TRUNC|O_NOFOLLOW,0600);if(fd>=0){write(fd,msg.data(),msg.size());close(fd);}}return 1;}
+ }catch(const std::exception& e){if(reporting&&report.launch_error.empty())report.launch_error=e.what();end_report();std::string msg="MAG could not start: "+std::string(e.what())+"\n";std::cerr<<msg;if(!root.empty()&&!verifying){int fd=open((root/"launch-error.log").c_str(),O_WRONLY|O_CREAT|O_TRUNC|O_NOFOLLOW,0600);if(fd>=0){write(fd,msg.data(),msg.size());close(fd);}}return 1;}
 }
 '''
 
@@ -447,7 +458,8 @@ def package(config, workspace, destination, token=None, events=None):
             (package_receipts / (role + '.json')).write_text(json.dumps(record, indent=2) + '\n', encoding='utf-8')
         game_relative = Path(os.path.relpath(game, destination)).as_posix()
         engine_self = manifest['images']['mage_g']['source_sha256']
-        runtime = {'schema_version': 2, 'game': game_relative,
+        from .native_package import SUPERVISOR_FEATURES
+        runtime = {'schema_version': 2, 'game': game_relative, 'supervisor': SUPERVISOR_FEATURES,
                    'launcher': 'bin/MagRecomp', 'engine': 'bin/MagEngine',
                    'engine_self_sha256': engine_self, 'signing': 'unsigned-local', 'version': product_version(workspace)}
         if isinstance(config.get('build_options'), dict):

@@ -122,6 +122,13 @@ def main():
     (scratch / 'supervisor.c').write_text(native_package_windows._SUPERVISOR)
     native_package_windows.copy_supervisor_sources(ROOT, scratch)  # the account link and settings rules
     native_package_windows._compile(toolchain['clang_cl'], env, scratch, scratch / 'MAG.exe', token)
+    # The installer's check of an updated app (installer update.py) never opens a window: without
+    # game files it fails on standard error with exit code 1 and writes no launch-error.log. A
+    # message box would instead hold this run until its timeout.
+    check = subprocess.run([str(scratch / 'MAG.exe'), '--mag-verify-install'], capture_output=True, text=True, timeout=120)
+    if check.returncode != 1 or 'game files are missing' not in check.stderr or (work / 'launch-error.log').exists():
+        raise SystemExit(f'MAG.exe --mag-verify-install: exit {check.returncode}, stderr {check.stderr!r}')
+    print('MAG.exe --mag-verify-install fails without a window, as it should', flush=True)
     print('Windows toolchain route verified (no game data)', flush=True)
     return 0
 

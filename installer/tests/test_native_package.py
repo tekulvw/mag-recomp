@@ -310,6 +310,37 @@ int main(int argc,char**argv) {
             self.assertIn('game files are missing',(moved/'launch-error.log').read_text())
 
     @unittest.skipUnless(platform.system() == 'Darwin', 'native supervisor fixture')
+    def test_supervisor_verifies_an_install_and_holds_the_session_lock(self):
+        """--mag-verify-install checks the identities and starts nothing; a normal start holds
+        home/.session-lock shared, and an update holding it exclusively keeps MAG from starting."""
+        import fcntl
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp).resolve();workspace=self.supervisor_workspace(root);mag=self.mag_folder(root)
+            app=package({},workspace,mag/'MAG.app');supervisor=str(app/'Contents/MacOS/MAG')
+            self.assertEqual(json.loads((app/'Contents/Resources/runtime.json').read_text())['supervisor'],
+                             ['mag-verify-install','session-lock'])
+            check=subprocess.run([supervisor,'--mag-verify-install'],capture_output=True,text=True,timeout=15)
+            self.assertEqual(check.returncode,0,check.stderr);self.assertIn('MAG install verified',check.stdout)
+            self.assertEqual(sorted(p.name for p in mag.iterdir()),['MAG.app','game'])  # no logs, no home
+            # The update holds the lock: MAG says so instead of starting.
+            (mag/'home').mkdir();lock=os.open(mag/'home/.session-lock',os.O_RDWR|os.O_CREAT,0o600)
+            try:
+                fcntl.flock(lock,fcntl.LOCK_EX)
+                held=subprocess.run([supervisor,'--no-prompt'],capture_output=True,text=True,timeout=15)
+                self.assertEqual(held.returncode,1);self.assertIn('MAG is being updated',held.stderr)
+                self.assertFalse((mag/'logs').exists())
+            finally:
+                os.close(lock)
+            started=subprocess.run([supervisor,'--no-prompt'],capture_output=True,text=True,timeout=15)
+            self.assertEqual(started.returncode,17,started.stderr)
+            (mag/'launch-error.log').unlink()
+            # A changed image fails the check, on standard error only.
+            engine=app/'Contents/MacOS/MagEngine';engine.chmod(0o755);engine.write_bytes(b'changed')
+            check=subprocess.run([supervisor,'--mag-verify-install'],capture_output=True,text=True,timeout=15)
+            self.assertEqual(check.returncode,1);self.assertIn('identity changed',check.stderr)
+            self.assertFalse((mag/'launch-error.log').exists())
+
+    @unittest.skipUnless(platform.system() == 'Darwin', 'native supervisor fixture')
     def test_supervisor_reports_a_crash_to_the_linked_portal(self):
         """The fixture engine exits 17: the supervisor queues a crash report and a detached sender posts
         it to a fake portal with the linked token. A settings file of its own; no real account."""

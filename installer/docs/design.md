@@ -65,7 +65,9 @@ rebuilds an existing MAG folder without moving it. Its specification is
   `<MAG>/.MAG-new`; if the staged game files differ from `game/`, they are swapped as well, through
   `.game-previous`), `swapping` (the app folder to `.MAG-previous`, `.MAG-new` to the app folder's
   name), `verifying` (the installer's self-check of the receipts, the launcher and the game
-  executables' identities, then the previous app folder's permissions: its mode on macOS and
+  executables' identities; the new supervisor's own `--mag-verify-install` when its `runtime.json`
+  lists it under `supervisor`, run without the caller's `MAG_` variables; then the previous app
+  folder's permissions: its mode on macOS and
   Linux, its explicit DACL entries and protection on Windows, verified entry by entry with the
   player's full access on every file), `keeping` (the previous app to `MAG-build/previous` with
   `previous.json`) and `cleaning` (the workspace removed, logs kept). Renames never replace
@@ -73,6 +75,12 @@ rebuilds an existing MAG folder without moving it. Its specification is
   one of these phases open reverses them and runs the swap again from the staged app. From
   `keeping` on, the new app is in place and the next run only finishes keeping and cleaning.
 - `--restore-previous` runs the same swap with `MAG-build/previous` as the staged app.
+- Supervisors packaged by this installer hold `home/.session-lock` shared for the whole launch
+  (`flock` on macOS and Linux, `LockFileEx` on the first byte on Windows) after their identity
+  checks; when the lock is held exclusively, they stop with "MAG is being updated". The update
+  holds it exclusively while it runs (when the file exists; it never creates it, so `home/` is not
+  written). `--mag-verify-install` returns before the lock, so the update can run it while holding
+  it. A lock file that cannot be opened never stops MAG from starting.
 
 The synthetic demonstration (`install --synthetic`) exercises this transaction core and creates a clearly labelled text artifact; it is not a MAG build. Building MAG is the separate player route (`player_build.py`), which runs the BUILDING.md recipe from the embedded source kit with pinned managed tools.
 
