@@ -11,6 +11,8 @@ any step that does not work as written.
 For the separate offline 2.12 data-preparation investigation, see
 [retail 2.12 preparation](docs/retail-v2.12-preparation.md). That opt-in tool assembles and
 verifies local disc/update inputs; native compilation and execution still target v1.0.
+The [2.12 branch foundation and audit guide](docs/retail-v2.12-branch.md) documents
+the explicit offline target, separate generated outputs and current lift findings.
 
 ## Development baseline and normal defaults
 

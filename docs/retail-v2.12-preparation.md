@@ -9,6 +9,7 @@ verified layout at APP_VER `02.12`, content level `489979`.
 build profiles, decrypt/lift executables, configure an emulator or boot the game.
 No PS3 or access to the former game download servers is needed for this preparation.
 Runtime installation behavior and gameplay acceptance still require separate work.
+The next stage is documented in the [2.12 branch foundation and lift audit](retail-v2.12-branch.md).
 
 ## Inputs
 
