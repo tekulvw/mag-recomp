@@ -65,6 +65,44 @@ Smoke checks run the frozen executable with an empty program `PATH`: `--help`, `
 synthetic installation. A checksum inventory is integrity metadata, not a signature: installers
 are unsigned, so macOS Gatekeeper and Windows SmartScreen warn on first launch.
 
+## Update signing keys
+
+`profiles/update-signing.json` (at the repository root) lists the public keys that may sign a
+release's `SHA256SUMS.txt` ([launcher updates](../../docs/superpowers/specs/2026-11-28-launcher-updates-design.md#release-signing)).
+It ships with no keys, so nothing checks or requires a signature until the user adds them:
+
+```json
+{
+  "schema_version": 1,
+  "repository": "tekulvw/mag-recomp",
+  "keys": [
+    {"id": "<release key id>", "role": "release", "public_key": "<release key line>"},
+    {"id": "<recovery key id>", "role": "recovery", "public_key": "<recovery key line>"}
+  ]
+}
+```
+
+Each `.pub` file minisign writes has two lines:
+
+```
+untrusted comment: minisign public key 0123456789ABCDEF
+RWQ...(56 base64 characters)
+```
+
+- `id` is the 16 hex digits at the end of the **first** line (`0123456789ABCDEF` above).
+- `public_key` is the whole **second** line, exactly as written.
+- `role` is `release` for the key that signs releases and `recovery` for the offline recovery key.
+
+Only public keys go here. A `.key` file is the secret half: it never enters the repository, CI, an
+agent session or a GitHub secret. `tools/check_public_tree.py` refuses minisign secret keys and a
+`.key` file beside a `.pub` file.
+
+The list is checked strictly (`mag_installer/minisign.py`, `load_trusted_keys`): only the three
+top-level fields and the three per-key fields; `id` must be the key id that the `public_key` line
+embeds; roles are `release` or `recovery`; ids and keys are unique; at most two keys per role and
+four in all (room for a rotation). Signatures must use minisign's prehashed `ED` algorithm (the
+default since minisign 0.11); the legacy `Ed` algorithm is refused.
+
 ## Commands
 
 ```sh

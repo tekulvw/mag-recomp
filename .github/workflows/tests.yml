@@ -150,8 +150,9 @@ jobs:
       - uses: ./.github/actions/self-hosted-linux
         with:
           rust: 'true'
-          # Opus for the voice service's codec tests (tests/test_voice.py).
-          packages: libopus-dev
+          # Opus for the voice service's codec tests (tests/test_voice.py); minisign for the
+          # release-signing tests that use real minisign keys and signatures.
+          packages: libopus-dev minisign
       - uses: ./.github/actions/sccache
         with:
           prefix: mag-recomp/tests-python
