@@ -13,6 +13,7 @@ import time
 
 from .model import InstallerError, host_key
 from .pipeline import _exclusive_lock, _write_json, run_command
+from .platforms import private_directory
 from .safety import Cancellation
 
 SOURCE_DIRS = ('src', 'tools', 'cmake')
@@ -453,7 +454,7 @@ def install(config_path, output, resume=False, token=None, events=None, retry_lo
     config = report['config']; output = Path(output).absolute()
     lock = output.with_name('.' + output.name + '.native-lock')
     with _exclusive_lock(lock, retry_lock, events):
-        output.mkdir(mode=0o700)
+        private_directory(output)
         journal = output / 'native-build.json'
         state = {'schema_version': 1, 'kind': 'experimental-private-native-build', 'status': 'incomplete', 'output': str(output)}
         _write_json(journal, state)
