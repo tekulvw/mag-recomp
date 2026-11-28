@@ -35,7 +35,11 @@ void ps3_hle_register_ctx(uint32_t nid, const char* name, void (*fn)(ppu_context
 }
 
 namespace {
+#ifdef MAG_RETAIL_V212
+constexpr char guest_path[]="/dev_hdd0/game/BCUS98110/USRDIR/bin/mage_g.self";
+#else
 constexpr char guest_path[]="/dev_bdvd/PS3_GAME/USRDIR/bin/mage_g.self";
+#endif
 constexpr const char* required_env[]={
     "MAG_HANDOFF_REQUEST", "MAG_HANDOFF_TOKEN", "MAG_ENGINE_BINARY",
     "MAG_ENGINE_ELF", "MAG_ENGINE_SELF", "MAG_ENGINE_BINARY_SHA256",
@@ -222,11 +226,13 @@ void validate_mapping(ppu_context* ctx) {
     check_file("MAG_ENGINE_SELF",std::getenv("MAG_ENGINE_SELF_SHA256"));
 }
 
+#ifndef MAG_RETAIL_V212
 void available(ppu_context* ctx) {
     validate_mapping(ctx);
     std::fprintf(stderr,"[mag-handoff] exact prepared engine is available\n");
     ctx->gpr[3]=0;
 }
+#endif
 
 std::string request_body() {
     // Token is lowercase hex and the other fields are constants: no escaping needed.
@@ -304,7 +310,12 @@ extern "C" void mag_register_handoff(void) {
         const char* value=std::getenv(key);
         if (!value || !*value) return;
     }
+#ifndef MAG_RETAIL_V212
     ps3_hle_register_ctx(0xAD218FAF,"sceNpDrmIsAvailable [MAG prepared image]",available);
+#endif
+    // 2.12's availability2 worker checks both the engine and libpace. Preserve
+    // its runtime key registration and PRX checks; validate the exact prepared
+    // engine at the actual process replacement request below.
     ps3_hle_register_ctx(0xE6C8F3F9,"sceNpDrmProcessExitSpawn2 [MAG prepared image]",spawn);
 #endif
 }

@@ -65,6 +65,8 @@ def main():
     for role, pin in pins(framework).items():
         if args.role and role not in args.role:
             continue
+        if not args.role and pin.get('optional', False):
+            continue
         path = fetch(target, url, role, pin)
         print(f"{role}: {pin['tag']} = {pin['commit'][:12]} at {path.relative_to(target)}")
 

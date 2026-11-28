@@ -104,6 +104,28 @@ class NativeRecipeTests(unittest.TestCase):
                     self.assertEqual(splice_pins(pins['lifter-ppu']), extra if isinstance(extra, list) else [extra])
             self.assertEqual(splice_pins(PINS['runtime']), [])
 
+    def test_default_recipe_ignores_only_the_recognized_optional_target_lifter(self):
+        optional = {'tag': 'mag-recomp/v212-fixture', 'commit': 'e'*40,
+                    'path': 'local/ps3recomp-lifter-v212', 'optional': True}
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = self.workspace(Path(tmp))
+            table = {**PINS, 'lifter-ppu-v212': optional}
+            (workspace/'profiles/framework.json').write_text(json.dumps({'ps3recomp': table}))
+            self.assertEqual(framework_pins(workspace), PINS)
+            self.assertEqual(set(framework_pins(workspace)), set(ROLES))
+
+    def test_default_recipe_rejects_unknown_or_mandatory_additional_roles(self):
+        pin = {'tag': 'mag-recomp/extra-fixture', 'commit': 'e'*40, 'path': 'local/extra'}
+        for name, extra in [('unknown', pin), ('unknown', {**pin, 'optional': True}),
+                            ('lifter-ppu-v212', pin), ('lifter-ppu-v212', {**pin, 'optional': False}),
+                            ('lifter-ppu-v212', {**pin, 'optional': 'true'}),
+                            ('lifter-ppu-v212', {**pin, 'optional': 1})]:
+            with self.subTest(name=name, extra=extra), tempfile.TemporaryDirectory() as tmp:
+                workspace = self.workspace(Path(tmp))
+                (workspace/'profiles/framework.json').write_text(json.dumps({'ps3recomp': {**PINS, name: extra}}))
+                with self.assertRaises(InstallerError):
+                    framework_pins(workspace)
+
     def test_plan_follows_building_md_with_sdks_at_their_pinned_paths(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp); config = self.load(root, self.config(root)); workspace = self.workspace(root)

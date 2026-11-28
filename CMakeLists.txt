@@ -16,13 +16,17 @@ set(MAG_FRAMEWORK_FILE "${CMAKE_CURRENT_SOURCE_DIR}/profiles/framework.json")
 if(NOT MAG_WORKSPACE STREQUAL CMAKE_CURRENT_SOURCE_DIR AND EXISTS "${MAG_WORKSPACE}/profiles/framework.json")
     set(MAG_FRAMEWORK_FILE "${MAG_WORKSPACE}/profiles/framework.json")
 endif()
-include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/MagExtensions.cmake")
-include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/MagInput.cmake")
-include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/MagControls.cmake")
-include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/MagRender.cmake")
-include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/MagX86Level.cmake")
-include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/MagNativeEdgeGeom.cmake")
-include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/MagVoice.cmake")
+if(NOT MAG_RETAIL_V212)
+    include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/MagExtensions.cmake")
+    include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/MagInput.cmake")
+    include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/MagControls.cmake")
+    include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/MagRender.cmake")
+    include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/MagX86Level.cmake")
+    include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/MagNativeEdgeGeom.cmake")
+    include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/MagVoice.cmake")
+else()
+    include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/MagX86Level.cmake")
+endif()
 
 # ---------------------------------------------------------------------------
 # Standards
@@ -92,8 +96,13 @@ endif()
 list(LENGTH RECOMP_SOURCES RECOMP_SOURCE_COUNT)
 message(STATUS "Lifted sources:  ${RECOMP_SOURCE_COUNT} file(s)")
 
-set(SPU_DIR "${CMAKE_CURRENT_SOURCE_DIR}/spu" CACHE PATH
-    "Directory holding the lifted SPU images (<SPU_DIR>/<image>/spu_recomp.c)")
+if(MAG_RETAIL_V212)
+    set(SPU_DIR "${MAG_WORKSPACE}/generated/retail-v2.12/spu-original" CACHE PATH
+        "Checked original-code 2.12 SPU preparation directory")
+else()
+    set(SPU_DIR "${CMAKE_CURRENT_SOURCE_DIR}/spu" CACHE PATH
+        "Directory holding the lifted SPU images (<SPU_DIR>/<image>/spu_recomp.c)")
+endif()
 option(PORT_ENABLE_SPU "Compile and register the title's lifted SPU images" ON)
 
 # Fail before compiling if the selected executable and lifted sources disagree.
@@ -102,23 +111,27 @@ set(MAG_RUNTIME_CANDIDATE_MANIFEST "" CACHE FILEPATH
     "Explicit experimental SDK revision/tree manifest; leaves normal framework pins unchanged")
 set(MAG_RUNTIME_CANDIDATE_ARGS "")
 if(MAG_RUNTIME_CANDIDATE_MANIFEST)
-    if(NOT MAG_RENDER_FRONTEND_RUST)
-        message(FATAL_ERROR "A candidate SDK requires the explicit non-default Rust frontend build")
+    if(NOT MAG_RENDER_FRONTEND_RUST AND NOT MAG_RETAIL_V212)
+        message(FATAL_ERROR "A candidate SDK requires an explicit non-default Rust frontend or experimental 2.12 build")
     endif()
     list(APPEND MAG_RUNTIME_CANDIDATE_ARGS --runtime-candidate "${MAG_RUNTIME_CANDIDATE_MANIFEST}")
+endif()
+if(MAG_RUNTIME_CANDIDATE_MANIFEST OR MAG_RETAIL_V212)
     execute_process(
         COMMAND ${MAG_TOOL_ENV} "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/provenance.py"
-            --validate-runtime --sdk "${PS3RECOMP_DIR}" --recomp "${RECOMP_DIR}" ${MAG_RUNTIME_CANDIDATE_ARGS}
+            --validate-runtime --target "${MAG_RETAIL_TARGET}" --sdk "${PS3RECOMP_DIR}" --recomp "${RECOMP_DIR}" ${MAG_RUNTIME_CANDIDATE_ARGS}
         RESULT_VARIABLE MAG_RUNTIME_CANDIDATE_RESULT ERROR_VARIABLE MAG_RUNTIME_CANDIDATE_ERROR)
     if(NOT MAG_RUNTIME_CANDIDATE_RESULT EQUAL 0)
-        message(FATAL_ERROR "Candidate SDK validation failed: ${MAG_RUNTIME_CANDIDATE_ERROR}")
+        message(FATAL_ERROR "Runtime SDK validation failed: ${MAG_RUNTIME_CANDIDATE_ERROR}")
     endif()
 endif()
 set(MAG_MODULE_VALIDATION_ARGS "")
 if(MAG_FIRMWARE_DIR)
     list(APPEND MAG_MODULE_VALIDATION_ARGS --firmware "${MAG_FIRMWARE_DIR}")
 endif()
-if(PORT_ENABLE_SPU)
+if(PORT_ENABLE_SPU AND MAG_RETAIL_V212)
+    list(APPEND MAG_MODULE_VALIDATION_ARGS --spu "${SPU_DIR}")
+elseif(PORT_ENABLE_SPU)
     file(GLOB MAG_VALIDATED_SPU_SOURCES "${SPU_DIR}/*/spu_recomp.c")
     if(MAG_VALIDATED_SPU_SOURCES)
         list(APPEND MAG_MODULE_VALIDATION_ARGS --spu "${SPU_DIR}")
@@ -126,7 +139,7 @@ if(PORT_ENABLE_SPU)
 endif()
 execute_process(
     COMMAND ${MAG_TOOL_ENV} "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/provenance.py"
-            --validate-image --image "${MAG_IMAGE}" --recomp "${RECOMP_DIR}" ${MAG_MODULE_VALIDATION_ARGS}
+            --validate-image --target "${MAG_RETAIL_TARGET}" --image "${MAG_IMAGE}" --recomp "${RECOMP_DIR}" ${MAG_MODULE_VALIDATION_ARGS}
     RESULT_VARIABLE MAG_IMAGE_VALIDATION_RESULT
     ERROR_VARIABLE MAG_IMAGE_VALIDATION_ERROR)
 if(NOT MAG_IMAGE_VALIDATION_RESULT EQUAL 0)
@@ -212,7 +225,19 @@ set(PS3RECOMP_SCAFFOLD
 # that has not lifted its SPU images yet configures and links without them.
 
 set(SPU_SOURCES "")
-if(PORT_ENABLE_SPU)
+if(PORT_ENABLE_SPU AND MAG_RETAIL_V212)
+    execute_process(
+        COMMAND ${MAG_TOOL_ENV} "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/v212_spu_prepare.py"
+            --check "${SPU_DIR}" --sources-out "${CMAKE_BINARY_DIR}/mag-v212-spu-sources.cmake"
+        RESULT_VARIABLE MAG_V212_SPU_RESULT ERROR_VARIABLE MAG_V212_SPU_ERROR)
+    if(NOT MAG_V212_SPU_RESULT EQUAL 0)
+        message(FATAL_ERROR "2.12 original SPU preparation failed validation: ${MAG_V212_SPU_ERROR}")
+    endif()
+    include("${CMAKE_BINARY_DIR}/mag-v212-spu-sources.cmake")
+    list(APPEND SPU_SOURCES ${MAG_V212_SPU_SOURCES} "${PS3RECOMP_DIR}/runtime/spu/spu_dispatch_mt.c")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+        "${SPU_DIR}/provenance.json" "${CMAKE_CURRENT_SOURCE_DIR}/profiles/retail-v2.12-spu-programs.json")
+elseif(PORT_ENABLE_SPU)
     file(GLOB SPU_LIFTED CONFIGURE_DEPENDS "${SPU_DIR}/*/spu_recomp.c")
     if(SPU_LIFTED)
         list(LENGTH SPU_LIFTED SPU_IMAGE_COUNT)
@@ -269,15 +294,22 @@ if(PORT_ENABLE_SPU)
     endif()
 endif()
 
+set(MAG_TITLE_SOURCES "")
+if(MAG_RETAIL_V212)
+    set(MAG_STUB_SOURCE src/v212_stubs.cpp)
+else()
+    set(MAG_STUB_SOURCE src/stubs.cpp)
+    list(APPEND MAG_TITLE_SOURCES src/mag_jobio_selector.cpp src/mag_timer_gcm_pump_diagnostics.cpp)
+endif()
 set(MAG_FIRMWARE_SOURCES "")
 if(MAG_FIRMWARE_DIR)
     file(GLOB MAG_FIRMWARE_SOURCES CONFIGURE_DEPENDS
         "${MAG_FIRMWARE_DIR}/*.cpp" "${MAG_FIRMWARE_DIR}/*.c")
     set(MAG_STUB_DEFINITIONS MAG_QUEUE_FIRMWARE)
-    if(MAG_IMAGE STREQUAL "EBOOT")
+    if(MAG_IMAGE STREQUAL "EBOOT" AND NOT MAG_RETAIL_V212)
         list(APPEND MAG_STUB_DEFINITIONS MAG_LAUNCHER_HOOKS)
     endif()
-    set_source_files_properties(src/stubs.cpp PROPERTIES COMPILE_DEFINITIONS "${MAG_STUB_DEFINITIONS}")
+    set_source_files_properties(${MAG_STUB_SOURCE} PROPERTIES COMPILE_DEFINITIONS "${MAG_STUB_DEFINITIONS}")
     # clang-cl ignores -O0 (and would keep the Release /O2); MSVC spells it /Od.
     if(MSVC)
         set(MAG_FIRMWARE_OPTIONS "/Od;/w")
@@ -297,9 +329,8 @@ add_executable(${PROJECT_NAME}
     src/mag_session_host.cpp
     src/mag_stall_reporter.cpp
     src/mag_stall_probe.cpp
-    src/mag_jobio_selector.cpp
-    src/mag_timer_gcm_pump_diagnostics.cpp
-    src/stubs.cpp
+    ${MAG_TITLE_SOURCES}
+    ${MAG_STUB_SOURCE}
     ${PS3RECOMP_SCAFFOLD}
     ${HLE_NID_TABLE}
     ${RECOMP_SOURCES}
@@ -307,10 +338,67 @@ add_executable(${PROJECT_NAME}
     ${MAG_FIRMWARE_SOURCES}
 )
 
-set_source_files_properties(src/mag_timer_gcm_pump_diagnostics.cpp src/mag_jobio_selector.cpp PROPERTIES INCLUDE_DIRECTORIES "${PS3RECOMP_DIR}")
+if(MAG_RETAIL_V212)
+    target_compile_definitions(${PROJECT_NAME} PRIVATE MAG_RETAIL_V212=1)
+    file(STRINGS "${PS3RECOMP_DIR}/runtime/prx/prx_loader.h" MAG_V212_TYPED_PRX_API
+        REGEX "^#define PRX_LOADED_EXPORT_LIMIT ")
+    if(NOT MAG_V212_TYPED_PRX_API)
+        message(FATAL_ERROR "2.12 original PACE linkage requires the typed loaded-library API from ps3recomp PR192; provide its explicit source-bound runtime candidate")
+    endif()
+    set(MAG_V212_PACE_DIR "${MAG_WORKSPACE}/generated/retail-v2.12/pace-native" CACHE PATH
+        "Checked original 2.12 libpace preparation directory")
+    execute_process(
+        COMMAND ${MAG_TOOL_ENV} "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/v212_pace_prepare.py"
+            --check "${MAG_V212_PACE_DIR}" --sources-out "${CMAKE_BINARY_DIR}/mag-v212-pace-sources.cmake"
+        RESULT_VARIABLE MAG_V212_PACE_RESULT ERROR_VARIABLE MAG_V212_PACE_ERROR)
+    if(NOT MAG_V212_PACE_RESULT EQUAL 0)
+        message(FATAL_ERROR "2.12 original libpace preparation rejected: ${MAG_V212_PACE_ERROR}")
+    endif()
+    include("${CMAKE_BINARY_DIR}/mag-v212-pace-sources.cmake")
+    target_sources(${PROJECT_NAME} PRIVATE src/v212_pace.cpp ${MAG_V212_PACE_SOURCES})
+    set_source_files_properties(src/v212_pace.cpp ${MAG_V212_PACE_SOURCES} PROPERTIES
+        INCLUDE_DIRECTORIES "${MAG_V212_PACE_INCLUDE_DIRS};${PS3RECOMP_DIR}/runtime/prx")
+    set_property(SOURCE src/v212_stubs.cpp APPEND PROPERTY COMPILE_DEFINITIONS MAG_V212_PACE_PREPARED=1)
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+        "${MAG_V212_PACE_DIR}/provenance.json"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tools/v212_pace_prepare.py"
+        "${CMAKE_CURRENT_SOURCE_DIR}/profiles/retail-v2.12-pace.json")
+    list(APPEND MAG_RECEIPT_EXTRA
+        "v212-pace-prepared=${MAG_V212_PACE_DIR}"
+        "v212-pace-profile=${CMAKE_CURRENT_SOURCE_DIR}/profiles/retail-v2.12-pace.json"
+        "v212-pace-adapter=${CMAKE_CURRENT_SOURCE_DIR}/src/v212_pace.cpp")
+    set_property(TARGET ${PROJECT_NAME} APPEND PROPERTY LINK_DEPENDS
+        "${MAG_V212_PACE_DIR}/provenance.json"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tools/v212_pace_prepare.py"
+        "${CMAKE_CURRENT_SOURCE_DIR}/profiles/retail-v2.12-pace.json")
+    if(MAG_IMAGE STREQUAL "EBOOT")
+        file(READ "${MAG_WORKSPACE}/profiles/retail-v2.12.json" MAG_V212_IMAGE_PROFILE)
+        string(JSON MAG_V212_LAUNCHER_ELF GET "${MAG_V212_IMAGE_PROFILE}" images EBOOT elf)
+        execute_process(
+            COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/v212_launcher_profile.py" "${MAG_V212_LAUNCHER_ELF}"
+            RESULT_VARIABLE MAG_V212_LAUNCHER_RESULT OUTPUT_QUIET ERROR_VARIABLE MAG_V212_LAUNCHER_ERROR)
+        if(NOT MAG_V212_LAUNCHER_RESULT EQUAL 0)
+            message(FATAL_ERROR "2.12 launcher semantic profile rejected: ${MAG_V212_LAUNCHER_ERROR}")
+        endif()
+        target_sources(${PROJECT_NAME} PRIVATE src/v212_launcher_hooks.cpp)
+        set_property(SOURCE src/v212_stubs.cpp APPEND PROPERTY COMPILE_DEFINITIONS MAG_V212_LAUNCHER=1)
+        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+            "${CMAKE_CURRENT_SOURCE_DIR}/profiles/retail-v2.12-launcher.json"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tools/v212_launcher_profile.py")
+        list(APPEND MAG_RECEIPT_EXTRA
+            "v212-launcher-profile=${CMAKE_CURRENT_SOURCE_DIR}/profiles/retail-v2.12-launcher.json"
+            "v212-launcher-hooks=${CMAKE_CURRENT_SOURCE_DIR}/src/v212_launcher_hooks.cpp"
+            "v212-retail-handoff=${CMAKE_CURRENT_SOURCE_DIR}/src/retail_handoff.cpp")
+    endif()
+    if(SPU_SOURCES)
+        target_compile_definitions(${PROJECT_NAME} PRIVATE MAG_V212_SPU_PREPARED=1)
+    endif()
+else()
+    set_source_files_properties(src/mag_timer_gcm_pump_diagnostics.cpp src/mag_jobio_selector.cpp PROPERTIES INCLUDE_DIRECTORIES "${PS3RECOMP_DIR}")
+endif()
 
 # Source-scoped includes avoid rebuilding untouched generated PPU units.
-if(MAG_IMAGE STREQUAL "mage_g")
+if(MAG_IMAGE STREQUAL "mage_g" AND NOT MAG_RETAIL_V212)
     # Give the exact SDK prepare body a private name so an opt-in MAG-only
     # wrapper can measure both screen arms without changing its arithmetic.
     set_property(SOURCE "${PS3RECOMP_DIR}/libs/video/rsx_vertex_compact.c"
@@ -338,10 +426,12 @@ endif()
 # Cached getenv for every statically linked caller (src/mag_env_cache.cpp).
 if(APPLE)
     target_sources(${PROJECT_NAME} PRIVATE src/mag_env_cache.cpp)
-    enable_language(OBJC OBJCXX)
-    include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/MagPlayerSettings.cmake")
-    mag_enable_player_settings(${PROJECT_NAME} "${PS3RECOMP_DIR}")
-else()
+    if(NOT MAG_RETAIL_V212)
+        enable_language(OBJC OBJCXX)
+        include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/MagPlayerSettings.cmake")
+        mag_enable_player_settings(${PROJECT_NAME} "${PS3RECOMP_DIR}")
+    endif()
+elseif(NOT MAG_RETAIL_V212)
     # Windows and Linux players choose their server and name in a settings file. Inert unless
     # the packaged supervisor supplies MAG_PLAYER_SETTINGS_PATH (src/player_settings_portable.cpp).
     # The supervisor fetches portal tickets (src/player_portal.cpp); the game only checks the
@@ -412,7 +502,7 @@ endif()
 # Friends and presence in the engine (docs/player-social.md): the runtime's NP social provider,
 # fed from the portal. Installed at start only for a linked account (MAG_SOCIAL_SPOOL from the
 # Linux and Windows supervisors, the account link on macOS); MAG_SOCIAL=0 leaves it out.
-if(MAG_IMAGE STREQUAL "mage_g")
+if(MAG_IMAGE STREQUAL "mage_g" AND NOT MAG_RETAIL_V212)
     target_sources(${PROJECT_NAME} PRIVATE src/mag_social_bridge.cpp src/player_social.cpp)
     set_property(SOURCE src/main.cpp TARGET_DIRECTORY ${PROJECT_NAME}
         APPEND PROPERTY COMPILE_DEFINITIONS MAG_SOCIAL_BRIDGE=1)
@@ -432,8 +522,12 @@ endif()
 #                          thousands of warnings (tens of MB of build log) and
 #                          several times its warning-free compile time.
 if(SPU_SOURCES)
+    set(MAG_SPU_INCLUDE_DIRS "${PS3RECOMP_DIR}/runtime/spu")
+    if(MAG_RETAIL_V212)
+        list(APPEND MAG_SPU_INCLUDE_DIRS ${MAG_V212_SPU_INCLUDE_DIRS})
+    endif()
     set_source_files_properties(${SPU_SOURCES} PROPERTIES
-        INCLUDE_DIRECTORIES "${PS3RECOMP_DIR}/runtime/spu"
+        INCLUDE_DIRECTORIES "${MAG_SPU_INCLUDE_DIRS}"
         COMPILE_DEFINITIONS SPU_USE_DISPATCH_MT)
     if(NOT MSVC OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
         set_source_files_properties(${SPU_SOURCES} PROPERTIES COMPILE_OPTIONS "-O2;-w")
@@ -538,6 +632,12 @@ endif()
 #     switch there.
 set(MAG_GENERATED_PPU_OPT "1" CACHE STRING "Generated title PPU optimization level (0 for diagnostics)")
 set_property(CACHE MAG_GENERATED_PPU_OPT PROPERTY STRINGS 0 1 2)
+set(MAG_GENERATED_PPU_SOURCES ${RECOMP_SOURCES})
+foreach(_pace_source IN LISTS MAG_V212_PACE_SOURCES)
+    if(_pace_source MATCHES "/ppu_recomp_[0-9]+\\.cpp$")
+        list(APPEND MAG_GENERATED_PPU_SOURCES "${_pace_source}")
+    endif()
+endforeach()
 if(NOT MAG_GENERATED_PPU_OPT MATCHES "^[012]$")
     message(FATAL_ERROR "MAG_GENERATED_PPU_OPT must be0,1,or2")
 endif()
@@ -547,10 +647,10 @@ if(MSVC)
     else()
         set(MAG_GENERATED_PPU_MSVC_OPT "/O${MAG_GENERATED_PPU_OPT}")
     endif()
-    set_source_files_properties(${RECOMP_SOURCES} PROPERTIES
+    set_source_files_properties(${MAG_GENERATED_PPU_SOURCES} PROPERTIES
         COMPILE_OPTIONS "/w;/bigobj;${MAG_GENERATED_PPU_MSVC_OPT}")
 else()
-    set_source_files_properties(${RECOMP_SOURCES} PROPERTIES
+    set_source_files_properties(${MAG_GENERATED_PPU_SOURCES} PROPERTIES
         COMPILE_OPTIONS "-w;-ffp-contract=off;-O${MAG_GENERATED_PPU_OPT}")
 endif()
 
@@ -564,7 +664,7 @@ if(WIN32 AND MSVC)
     set(MAG_ENV_CACHE_INCLUDE "/FI${CMAKE_CURRENT_SOURCE_DIR}/src/mag_env_cache_win.h")
     target_compile_options(ps3recomp_runtime PRIVATE "${MAG_ENV_CACHE_INCLUDE}")
     get_target_property(MAG_ENV_CACHE_SOURCES ${PROJECT_NAME} SOURCES)
-    list(REMOVE_ITEM MAG_ENV_CACHE_SOURCES ${RECOMP_SOURCES} ${MAG_FIRMWARE_SOURCES})
+    list(REMOVE_ITEM MAG_ENV_CACHE_SOURCES ${MAG_GENERATED_PPU_SOURCES} ${MAG_FIRMWARE_SOURCES})
     set_property(SOURCE ${MAG_ENV_CACHE_SOURCES} APPEND PROPERTY COMPILE_OPTIONS "${MAG_ENV_CACHE_INCLUDE}")
 endif()
 
@@ -573,7 +673,7 @@ endif()
 # engine's translator key and glslang version. Vulkan engine builds only; not built by default
 # (the installer builds it after MagRecomp). Only the runtime's decompilers, text builders,
 # translator and SDATA reader are linked in.
-if(PS3RECOMP_RSX_VULKAN AND MAG_IMAGE STREQUAL "mage_g" AND EXISTS "${PS3RECOMP_DIR}/libs/video/rsx_shader_prewarm.h")
+if(NOT MAG_RETAIL_V212 AND PS3RECOMP_RSX_VULKAN AND MAG_IMAGE STREQUAL "mage_g" AND EXISTS "${PS3RECOMP_DIR}/libs/video/rsx_shader_prewarm.h")
     add_executable(MagShaderWarm EXCLUDE_FROM_ALL
         src/mag_shader_warm.cpp src/mag_shader_programs.cpp src/player_inflate.cpp)
     target_include_directories(MagShaderWarm PRIVATE
@@ -599,17 +699,28 @@ install(TARGETS ${PROJECT_NAME} RUNTIME DESTINATION bin)
 find_package(Python3 3.11 COMPONENTS Interpreter REQUIRED)
 set_property(TARGET ${PROJECT_NAME} APPEND PROPERTY LINK_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/tools/provenance.py"
-    "${MAG_WORKSPACE}/profiles/retail-v1.0.json"
+    "${MAG_WORKSPACE}/profiles/${MAG_RETAIL_TARGET}.json"
     "${MAG_FRAMEWORK_FILE}"
-    "${CMAKE_CURRENT_SOURCE_DIR}/profiles/retail-v1.0-engine-modules.json"
     "${RECOMP_DIR}/provenance.json")
+if(NOT MAG_RETAIL_V212)
+    set_property(TARGET ${PROJECT_NAME} APPEND PROPERTY LINK_DEPENDS
+        "${CMAKE_CURRENT_SOURCE_DIR}/profiles/retail-v1.0-engine-modules.json")
+endif()
 set(MAG_SPU_RECEIPT_ARGS "")
 if(SPU_SOURCES)
     set(MAG_SPU_RECEIPT_ARGS --spu "${SPU_DIR}")
     set_property(TARGET ${PROJECT_NAME} APPEND PROPERTY LINK_DEPENDS
-        "${SPU_DIR}/provenance.json"
-        "${CMAKE_CURRENT_SOURCE_DIR}/profiles/retail-v1.0-spu.json")
-    if(MAG_IMAGE STREQUAL "mage_g")
+        "${SPU_DIR}/provenance.json")
+    if(MAG_RETAIL_V212)
+        set_property(TARGET ${PROJECT_NAME} APPEND PROPERTY LINK_DEPENDS
+            "${CMAKE_CURRENT_SOURCE_DIR}/profiles/retail-v2.12-spu-programs.json"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tools/v212_spu_prepare.py"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tools/targets.py")
+    else()
+        set_property(TARGET ${PROJECT_NAME} APPEND PROPERTY LINK_DEPENDS
+            "${CMAKE_CURRENT_SOURCE_DIR}/profiles/retail-v1.0-spu.json")
+    endif()
+    if(MAG_IMAGE STREQUAL "mage_g" AND NOT MAG_RETAIL_V212)
         set_property(TARGET ${PROJECT_NAME} APPEND PROPERTY LINK_DEPENDS
             "${CMAKE_CURRENT_SOURCE_DIR}/profiles/retail-v1.0-engine-spu.json")
     endif()
@@ -620,12 +731,14 @@ if(MAG_FIRMWARE_SOURCES)
         "${MAG_FIRMWARE_DIR}/provenance.json"
         "${CMAKE_CURRENT_SOURCE_DIR}/profiles/retail-v1.0-firmware.json")
 endif()
-mag_enable_input(${PROJECT_NAME})
-mag_enable_render_frontend(${PROJECT_NAME})
-mag_enable_game_controls(${PROJECT_NAME})
-mag_enable_native_edgegeom(${PROJECT_NAME} "${PS3RECOMP_DIR}" "${SPU_DIR}" "${MAG_IMAGE}")
-mag_enable_voice(${PROJECT_NAME} "${PS3RECOMP_DIR}" "${MAG_IMAGE}")
-mag_apply_extensions(${PROJECT_NAME})
+if(NOT MAG_RETAIL_V212)
+    mag_enable_input(${PROJECT_NAME})
+    mag_enable_render_frontend(${PROJECT_NAME})
+    mag_enable_game_controls(${PROJECT_NAME})
+    mag_enable_native_edgegeom(${PROJECT_NAME} "${PS3RECOMP_DIR}" "${SPU_DIR}" "${MAG_IMAGE}")
+    mag_enable_voice(${PROJECT_NAME} "${PS3RECOMP_DIR}" "${MAG_IMAGE}")
+    mag_apply_extensions(${PROJECT_NAME})
+endif()
 if(MAG_RUNTIME_CANDIDATE_MANIFEST)
     set_property(TARGET ${PROJECT_NAME} APPEND PROPERTY LINK_DEPENDS "${MAG_RUNTIME_CANDIDATE_MANIFEST}")
 endif()
@@ -649,7 +762,7 @@ add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
     COMMAND ${MAG_TOOL_ENV} "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/provenance.py"
             --binary "$<TARGET_FILE:${PROJECT_NAME}>"
             --sdk "${PS3RECOMP_DIR}" --recomp "${RECOMP_DIR}"
-            --image "${MAG_IMAGE}" ${MAG_SPU_RECEIPT_ARGS} ${MAG_EXTENSION_RECEIPT_ARGS} ${MAG_RUNTIME_CANDIDATE_ARGS}
+            --target "${MAG_RETAIL_TARGET}" --image "${MAG_IMAGE}" ${MAG_SPU_RECEIPT_ARGS} ${MAG_EXTENSION_RECEIPT_ARGS} ${MAG_RUNTIME_CANDIDATE_ARGS}
     VERBATIM)
 
 if(APPLE)

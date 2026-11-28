@@ -9,10 +9,21 @@ from pathlib import Path
 if __package__ in (None, ''):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from tools.prepare_inputs import ROOT, sha256_file, verify_hash, data_path, load_framework
+from tools.targets import DEFAULT_TARGET, TARGET_NAMES, get_target, validate_target_profile
 
 
-def validate_lift(directory: Path, elf_hash: str) -> dict:
+def validate_lift(directory: Path, elf_hash: str, target: str = DEFAULT_TARGET) -> dict:
     record=json.loads((directory/'provenance.json').read_text())
+    get_target(target)
+    if target != DEFAULT_TARGET:
+        pin = load_framework()[0].get('ps3recomp', {}).get('lifter-ppu-v212', {})
+        if (record.get('target') != target or record.get('lifter_role') != 'lifter-ppu-v212' or
+                not pin.get('commit') or record.get('sdk_revision') != pin['commit']):
+            raise ValueError('2.12 lift must bind its target and reviewed lifter-ppu-v212 revision')
+        if any(value for key, value in record.items() if 'hooks' in key or key.startswith('nonlocal')):
+            raise ValueError('2.12 cannot use stale v1 lift hooks or nonlocal profiles')
+    elif record.get('target', target) != target:
+        raise ValueError('Lift belongs to a different retail target')
     if record.get('status') != 'complete' or record.get('exit_code') != 0 or record.get('audit_exit') != 0:
         raise ValueError('Lift generation and audit must both have completed successfully')
     if record['elf_sha256'] != elf_hash or not record.get('outputs'):
@@ -27,15 +38,20 @@ def validate_lift(directory: Path, elf_hash: str) -> dict:
     return record
 
 
-def validate_receipt(binary: Path, elf_hash: str) -> dict:
+def validate_receipt(binary: Path, elf_hash: str, target: str = DEFAULT_TARGET) -> dict:
     record=json.loads(binary.with_suffix('.receipt.json').read_text())
+    get_target(target)
+    if record.get('target', DEFAULT_TARGET) != target:
+        raise ValueError('Native receipt belongs to a different retail target')
+    if target != DEFAULT_TARGET and (record.get('experimental') is not True or record.get('not_runtime_verified') is not True):
+        raise ValueError('2.12 receipt must retain experimental/unverified scope')
     if record['elf_sha256'] != elf_hash:
         raise ValueError('Native binary was built for a different ELF')
     verify_hash(binary, record['binary_sha256'])
     return record
 
 
-def validate_generated(directory: Path, profile: dict, kind: str) -> dict:
+def validate_generated(directory: Path, profile: dict, kind: str, target: str = DEFAULT_TARGET) -> dict:
     record=json.loads((directory/'provenance.json').read_text())
     if record.get('status') != 'complete':
         raise ValueError('Generated module must be complete')
@@ -79,12 +95,30 @@ def validate_generated(directory: Path, profile: dict, kind: str) -> dict:
     return record
 
 
-def validate_spu(directory: Path, profile: dict) -> dict:
+def validate_spu(directory: Path, profile: dict, target: str = DEFAULT_TARGET) -> dict:
+    if target != DEFAULT_TARGET:
+        from tools.v212_spu_prepare import check
+        return check(directory)[0]
     return validate_generated(directory,profile,'spu')
 
 
 def validate_modules(image: dict, image_name: str, spu: Path | None,
-                     firmware: Path | None) -> dict:
+                     firmware: Path | None, target: str = DEFAULT_TARGET) -> dict:
+    if target != DEFAULT_TARGET:
+        selected = get_target(target)
+        expected = {Path(name).stem: pair[1] for name, pair in selected.executables.items()}
+        if image.get('elf_sha256') != expected.get(image_name):
+            raise ValueError('2.12 module carrier does not match selected image')
+        result = {'launcher_network_hooks': False}
+        if spu is not None:
+            from tools.v212_spu_prepare import check
+            result['spu_provenance'] = check(spu)[0]
+        if firmware is not None:
+            # This explicitly shared firmware profile is independently hash-bound;
+            # no v1 title SPU/engine profile or title address is applied here.
+            profile = json.loads((ROOT/'profiles/retail-v1.0-firmware.json').read_text())
+            result['firmware_provenance'] = validate_generated(firmware, profile, 'firmware', target)
+        return result
     result={'launcher_network_hooks': image_name == 'EBOOT' and firmware is not None}
     if spu is None and firmware is None:
         return result
@@ -134,14 +168,18 @@ def validate_modules(image: dict, image_name: str, spu: Path | None,
 
 def validate_build_image(recomp: Path, image_name: str = 'EBOOT',
                          firmware: Path | None = None,
-                         spu: Path | None = None) -> tuple[dict, dict]:
+                         spu: Path | None = None, target: str = DEFAULT_TARGET) -> tuple[dict, dict]:
     if image_name not in ('EBOOT', 'mage_g'):
         raise ValueError('Image must be EBOOT or mage_g')
-    image=json.loads((data_path('profiles/retail-v1.0.json')).read_text())['images'][image_name]
+    definition = get_target(target)
+    manifest = json.loads(data_path(definition.profile).read_text())
+    if target != DEFAULT_TARGET:
+        validate_target_profile(manifest, target)
+    image = manifest['images'][image_name]
     verify_hash(Path(image['elf']), image['elf_sha256'])
-    lift=validate_lift(recomp, image['elf_sha256'])
+    lift=validate_lift(recomp, image['elf_sha256'], target)
     if firmware is not None or spu is not None:
-        validate_modules(image,image_name,spu,firmware)
+        validate_modules(image,image_name,spu,firmware,target)
     return image,lift
 
 
@@ -162,7 +200,7 @@ def extension_record(extras: dict | None) -> dict:
 
 
 def runtime_identity(sdk: Path, framework: dict, framework_path: Path,
-                     candidate: Path | None = None) -> dict:
+                     candidate: Path | None = None, target: str = DEFAULT_TARGET) -> dict:
     """Validate normal pins, or an explicit source-bound experimental exception.
 
     The candidate manifest is a local build input, not a change to the normal
@@ -176,6 +214,10 @@ def runtime_identity(sdk: Path, framework: dict, framework_path: Path,
     if dirty:
         raise ValueError('Runtime SDK must be clean')
     result=dict(sdk_revision=revision, sdk_path=str(sdk))
+    if target != DEFAULT_TARGET:
+        get_target(target)
+        if candidate is None and revision != framework['ps3recomp']['runtime']['commit']:
+            raise ValueError('2.12 requires the exact reviewed runtime role revision')
     if candidate is None:
         if revision not in framework['allowed_runtime_revisions']:
             raise ValueError('Runtime SDK must be recorded in profiles/framework.json')
@@ -187,19 +229,32 @@ def runtime_identity(sdk: Path, framework: dict, framework_path: Path,
             or data.get('sdk_tree') != tree
             or data.get('framework_sha256') != sha256_file(framework_path)):
         raise ValueError('Runtime candidate does not match SDK revision/tree and framework baseline')
+    if target != DEFAULT_TARGET:
+        base = framework['ps3recomp']['runtime']['commit']
+        if (data.get('target') != target or data.get('base_runtime_revision') != base
+                or data.get('integration_branch') != 'codex/retail-v2.12'
+                or not re.fullmatch(r'https://github\.com/tekulvw/ps3recomp/pull/[1-9][0-9]*',
+                                    str(data.get('source_pr', '')))):
+            raise ValueError('2.12 runtime candidate requires its target, reviewed base and integration source PR')
+        if subprocess.run(['git', '-C', str(sdk), 'merge-base', '--is-ancestor', base, revision],
+                          capture_output=True).returncode != 0:
+            raise ValueError('2.12 runtime candidate must descend from the reviewed runtime baseline')
     result['runtime_candidate']=dict(experimental=True, purpose=data['purpose'], sdk_tree=tree,
         manifest_path=str(candidate.resolve()), manifest_sha256=sha256_file(candidate),
         framework_sha256=data['framework_sha256'])
+    if target != DEFAULT_TARGET:
+        result['runtime_candidate'].update(target=target, base_runtime_revision=base,
+            integration_branch=data['integration_branch'], source_pr=data['source_pr'])
     return result
 
 
 def record_build(binary: Path, sdk: Path, recomp: Path, spu: Path | None = None,
                  firmware: Path | None = None, image_name: str = 'EBOOT', extras: dict | None = None,
                  runtime_candidate: Path | None = None, movie_playback: bool = False,
-                 x86_level: str | None = None) -> dict:
-    image,lift=validate_build_image(recomp,image_name)
+                 x86_level: str | None = None, target: str = DEFAULT_TARGET) -> dict:
+    image,lift=validate_build_image(recomp,image_name,target=target)
     framework,framework_path=load_framework()
-    runtime=runtime_identity(sdk,framework,framework_path,runtime_candidate)
+    runtime=runtime_identity(sdk,framework,framework_path,runtime_candidate,target)
     extensions=extension_record(extras)
     record=dict(binary_sha256=sha256_file(binary), image_name=image_name, elf_sha256=image['elf_sha256'],
                 **runtime, lift_provenance=lift,
@@ -216,7 +271,14 @@ def record_build(binary: Path, sdk: Path, recomp: Path, spu: Path | None = None,
         if x86_level not in ('v4','v3','baseline'):
             raise ValueError(f'Unknown x86-64 level: {x86_level!r}')
         record['x86_level']=x86_level
-    record.update(validate_modules(image,image_name,spu,firmware))
+    if target != DEFAULT_TARGET:
+        record.update(target=target, experimental=True, not_runtime_verified=True)
+        if extras and 'v212-pace-prepared' in extras:
+            from tools.v212_pace_prepare import check
+            record['pace_provenance'] = check(Path(extras['v212-pace-prepared']))[0]
+    record.update(validate_modules(image,image_name,spu,firmware,target))
+    if target != DEFAULT_TARGET and image_name == 'EBOOT':
+        record['launcher_network_hooks'] = 'v212-launcher-profile' in extensions and 'v212-launcher-hooks' in extensions
     binary.with_suffix('.receipt.json').write_text(json.dumps(record,indent=2)+'\n')
     return record
 
@@ -227,6 +289,7 @@ if __name__=='__main__':
     parser.add_argument('--sdk',type=Path)
     parser.add_argument('--recomp',type=Path,required=True)
     parser.add_argument('--image',choices=['EBOOT','mage_g'],default='EBOOT')
+    parser.add_argument('--target',choices=TARGET_NAMES,default=DEFAULT_TARGET)
     parser.add_argument('--validate-image',action='store_true',help='Validate the selected ELF and lift without creating a receipt')
     parser.add_argument('--validate-runtime',action='store_true',help='Validate runtime identity without creating a receipt')
     parser.add_argument('--runtime-candidate',type=Path,help='Explicit experimental SDK revision/tree manifest; normal pins stay unchanged')
@@ -240,9 +303,9 @@ if __name__=='__main__':
         if args.sdk is None:
             parser.error('--sdk is required to validate runtime identity')
         framework,framework_path=load_framework()
-        runtime_identity(args.sdk,framework,framework_path,args.runtime_candidate)
+        runtime_identity(args.sdk,framework,framework_path,args.runtime_candidate,args.target)
     elif args.validate_image:
-        validate_build_image(args.recomp,args.image,args.firmware,args.spu)
+        validate_build_image(args.recomp,args.image,args.firmware,args.spu,args.target)
     else:
         if args.binary is None or args.sdk is None:
             parser.error('--binary and --sdk are required when recording a build')
@@ -252,4 +315,4 @@ if __name__=='__main__':
             if not sep: parser.error('--receipt-extra needs NAME=PATH')
             extras[name]=Path(value)
         record_build(args.binary,args.sdk,args.recomp,args.spu,args.firmware,args.image,extras,args.runtime_candidate,
-                     args.movie_playback,args.x86_level)
+                     args.movie_playback,args.x86_level,args.target)

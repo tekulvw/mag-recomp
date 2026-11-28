@@ -225,6 +225,15 @@ def framework_pins(workspace):
     """The pinned ps3recomp table: {role: {tag, commit, path}} (read-only)."""
     try:
         table = json.loads(contained(Path(workspace), 'profiles/framework.json').read_text(encoding='utf-8'))['ps3recomp']
+        # The experimental 2.12 branch's SDK is not part of the v1 player kit
+        # or its build plan. Only this explicitly optional role may be ignored;
+        # an unknown or mandatory role still signals an incompatible recipe.
+        additional = set(table) - set(ROLES)
+        if (additional - {'lifter-ppu-v212'} or any(
+                not isinstance(table[role], dict) or table[role].get('optional') is not True
+                for role in additional)):
+            raise ValueError('roles')
+        table = {role: pin for role, pin in table.items() if role in ROLES}
         if set(table) != set(ROLES): raise ValueError('roles')
         for role, pin in table.items():
             if (re.fullmatch('[0-9a-f]{40}', str(pin.get('commit', ''))) is None

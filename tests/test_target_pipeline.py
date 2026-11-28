@@ -72,7 +72,7 @@ class TargetPipelineTests(unittest.TestCase):
             stack.enter_context(patch('tools.lift.ROOT', self.root))
             stack.enter_context(patch('tools.inventory.ROOT', self.root))
             stack.enter_context(patch('tools.lift.load_framework', return_value=(
-                {'ps3recomp': {'lifter-ppu': {'commit': 'reviewed-ppu'}},
+                {'ps3recomp': {'lifter-ppu-v212': {'commit': 'reviewed-ppu'}},
                  'allowed_lifter_revisions': ['reviewed-ppu']}, self.root/'framework.json')))
             yield
 
@@ -92,7 +92,8 @@ class TargetPipelineTests(unittest.TestCase):
              patch('tools.lift.instrument_source', side_effect=AssertionError('v1 movie hook')), \
              patch('tools.lift.instrument_graphics', side_effect=AssertionError('v1 graphics hook')):
             result = self.generate()
-        check.assert_called_once_with(self.root/'sdk', expected_revision='reviewed-ppu')
+        check.assert_called_once_with(self.root/'sdk', expected_revision='reviewed-ppu', role='lifter-ppu-v212')
+        self.assertEqual(result['lifter_role'], 'lifter-ppu-v212')
         self.assertEqual(result['target'], self.target)
         self.assertEqual(result['sdk_revision'], 'reviewed-ppu')
         self.assertEqual(result['analysis_sdk_revision'], inventory.SDK_REVISION)

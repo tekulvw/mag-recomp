@@ -44,9 +44,18 @@ int main(int argc,char** argv) {
     const char* mode=argc>1?argv[1]:"available";
     mag_register_handoff();
     if(!strcmp(mode,"disabled")) return available||spawn?1:0;
+#ifdef MAG_RETAIL_V212
+    if(available||!spawn) return 2;
+    if(!strcmp(mode,"registration"))return 0;
+#else
     if(!available||!spawn) return 2;
+#endif
     for(unsigned i=0;i<16;i++) memory[0x100+i]=(uint8_t)i;
+#ifdef MAG_RETAIL_V212
+    strcpy((char*)memory+0x200,"/dev_hdd0/game/BCUS98110/USRDIR/bin/mage_g.self");
+#else
     strcpy((char*)memory+0x200,"/dev_bdvd/PS3_GAME/USRDIR/bin/mage_g.self");
+#endif
     ppu_context ctx{};
     ctx.gpr[3]=0x100;ctx.gpr[4]=0x200;
     if(!strcmp(mode,"bad-key"))memory[0x100]^=1;
@@ -60,8 +69,10 @@ int main(int argc,char** argv) {
     if(!strcmp(mode,"full-vm-oob")) { ppu_vm_size=0;ctx.gpr[3]=0x100000000ull; }
     if(!strcmp(mode,"full-vm-crossing")) { ppu_vm_size=0;ctx.gpr[3]=0xfffffff8ull; }
     if(!strcmp(mode,"null-vm"))vm_base=nullptr;
+#ifndef MAG_RETAIL_V212
     available(&ctx);
     assert(ctx.gpr[3]==0);
+#endif
     if(!strcmp(mode,"available") || !strcmp(mode,"full-vm"))return 0;
     if(!strcmp(mode,"changed-file") || !strcmp(mode,"changed-before-spawn")) {
         FILE* f=fopen(getenv("MAG_ENGINE_ELF"),"ab");assert(f);fputc('x',f);fclose(f);
@@ -69,7 +80,10 @@ int main(int argc,char** argv) {
             ctx.gpr[3]=0x100;available(&ctx);return 3;
         }
     }
-    ctx.gpr[3]=0x100;ctx.gpr[5]=0x300;ctx.gpr[9]=1001;
+#ifndef MAG_RETAIL_V212
+    ctx.gpr[3]=0x100;
+#endif
+    ctx.gpr[5]=0x300;ctx.gpr[9]=1001;
     ctx.gpr[10]=0x4000000000000000ull;
     if(!strcmp(mode,"null-argv"))ctx.gpr[5]=0;
     if(!strcmp(mode,"argv-oob"))ctx.gpr[5]=65534;
@@ -85,7 +99,7 @@ int main(int argc,char** argv) {
 ''')
         cls.binary=root/'adapter-test'
         subprocess.run(['c++','-std=c++17','-UNDEBUG','-I'+str(root),'-I'+str(ROOT/'src'),
-            str(root/'main.cpp'),str(ROOT/'src/retail_handoff.cpp'),'-o',str(cls.binary)]+(['-lcrypto'] if sys.platform=='linux' else []),check=True,timeout=30)
+            str(root/'main.cpp'),str(ROOT/'src/retail_handoff.cpp'),'-o',str(cls.binary)]+(['-DMAG_RETAIL_V212=1'] if getattr(cls,'v212',False) else [])+(['-lcrypto'] if sys.platform=='linux' else []),check=True,timeout=30)
 
     def setUp(self):
         self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup)
@@ -160,4 +174,42 @@ int main(int argc,char** argv) {
         self.env['MAG_HANDOFF_TOKEN']='0'*32
         self.env['MAG_ENGINE_ELF']='relative.elf'
         self.run_adapter('spawn',89)
+        self.assertFalse(self.request.exists())
+
+
+@unittest.skipUnless(sys.platform in ('darwin','linux'),'native POSIX handoff test')
+class RetailV212HandoffTests(unittest.TestCase):
+    v212=True
+    @classmethod
+    def setUpClass(cls):
+        RetailHandoffTests.setUpClass.__func__(cls)
+    setUp=RetailHandoffTests.setUp
+
+    def run_mode(self, mode):
+        return subprocess.run([str(self.binary),mode],env=self.env,capture_output=True,text=True)
+
+    def test_v212_registers_only_spawn_and_keeps_availability2_unmodified(self):
+        self.assertEqual(self.run_mode('registration').returncode,0)
+        self.assertFalse(self.request.exists())
+
+    def test_v212_exact_hdd_spawn_and_file_identity(self):
+        result=self.run_mode('spawn')
+        self.assertEqual(result.returncode,90,result.stderr)
+        self.assertEqual(json.loads(self.request.read_text()),dict(version=1,
+            token=self.env['MAG_HANDOFF_TOKEN'],kind='mage_g',
+            guest_path='/dev_hdd0/game/BCUS98110/USRDIR/bin/mage_g.self'))
+        self.request.unlink()
+        for name in ('BINARY','ELF','SELF'):
+            key='MAG_ENGINE_'+name+'_SHA256';saved=self.env[key];self.env[key]='0'*64
+            self.assertEqual(self.run_mode('spawn').returncode,89,name)
+            self.env[key]=saved
+        self.assertFalse(self.request.exists())
+
+    def test_v212_retains_guest_memory_and_spawn_contract_guards(self):
+        for mode in ('bad-key','bad-path','null-key','key-oob','wide-pointer','path-oob',
+                     'unterminated','full-vm-oob','full-vm-crossing','null-vm','argv-oob',
+                     'nonempty-argv','envp','data','data-size','priority','flags'):
+            with self.subTest(mode=mode):
+                result=self.run_mode(mode)
+                self.assertEqual(result.returncode,89,result.stderr)
         self.assertFalse(self.request.exists())

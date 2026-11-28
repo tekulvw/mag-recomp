@@ -1,0 +1,71 @@
+{
+  "schema_version": 1,
+  "target": "retail-v2.12",
+  "title_id": "BCUS98110",
+  "module_name": "pace",
+  "library": "libpace",
+  "base": 555745280,
+  "reserved_bytes": 1048576,
+  "toc": 556040144,
+  "lifter_role": "lifter-ppu-v212",
+  "sdk_tools": {
+    "tools/lift_prx.py": "39b66d5bd5c08a8720d6839f483aecc7586f18ad8c1bd3a79dbe39e827a44bc5",
+    "tools/ppu_lifter.py": "d1473eaa146b2f630fd127b425d6cafacbaae0d58f06dc17e5bd1cc070dd8773",
+    "tools/ppu_disasm.py": "d744d559db7156ed59183c75438838471ec1ba9d172927cf798e05ec8ecbbf42",
+    "tools/elf_parser.py": "4430264c27410598d3714c21707b9cd7c65ba23a85c3b6c26a2b1f11089903eb"
+  },
+  "variants": {
+    "libpace_g": {
+      "elf_sha256": "f27c16c7f3126b9b41b2c3b357dc92258156a3ccb8b98c0b1a4d1d66c0fca4b8",
+      "self_sha256": "f3be5bf4438da582c5482404981a8f53b61942a0cf321acd54dd9698df1b1278",
+      "code_end_offset": 223592,
+      "guest_path": "/dev_hdd0/game/BCUS98110/USRDIR/bin/libpace_g.sprx",
+      "runtime_path_proven": true,
+      "image_size": 263752,
+      "relocated_image_sha256": "ab1611d6838da7d49a5f8de58160b884455c8b7592a638c6123f7aa370c5e27e",
+      "module_info_offset": 224200,
+      "import_linkage": {
+        "descriptor_count": 12,
+        "function_imports": 125,
+        "variable_imports": 1,
+        "tls_imports": 0,
+        "function_references": 6,
+        "variable_references": 1
+      }
+    },
+    "libpacePrx_g": {
+      "elf_sha256": "a8e2aaf80d4dd7de031f1507d0e7d68229d26c0dd4c63814be59889d03077254",
+      "self_sha256": "5f5ea8397eac8115af546cea91a7a9188b398f8679a29984f6d2c7ab12282379",
+      "code_end_offset": 223496,
+      "guest_path": "",
+      "runtime_path_proven": false,
+      "image_size": 263752,
+      "relocated_image_sha256": "4a7e040bf1ea146d3316d988b77fe553e2fe6091f23995fdc1d913cfad0dfe85"
+    }
+  },
+  "required_nids": [
+    "0x02F04025",
+    "0x253E5152",
+    "0x2738220C",
+    "0x30837CE2",
+    "0x5149F4EA",
+    "0x5C178554",
+    "0x5F05609F",
+    "0x6D7969CA",
+    "0x765DBFAA",
+    "0x7EAB014C",
+    "0x845BFB2E",
+    "0x8CCC20FB",
+    "0x97B4CC8F",
+    "0x9BD039B7",
+    "0xAF323DE9",
+    "0xBAECE181",
+    "0xCAE6D9DA",
+    "0xE5789057",
+    "0xFA77821A"
+  ],
+  "relocation_reference": "https://github.com/RPCS3/rpcs3/blob/master/rpcs3/Emu/Cell/PPUModule.cpp",
+  "runtime_verified": false,
+  "import_linkage_reference": "RPCS3 PPUModule.cpp: real guest function exports publish their OPD address; ADDR32 references write the resolved export value. Primary module references use type1 and zero addends only.",
+  "required_runtime_api": "typed guest library registry: prx_resolve_library_export"
+}

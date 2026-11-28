@@ -81,6 +81,32 @@ class RuntimeCandidateTests(unittest.TestCase):
         self.assertEqual(result['sdk_revision'], self.revision)
         self.assertNotIn('runtime_candidate', result)
 
+    def test_v212_candidate_requires_source_bound_integration_and_baseline(self):
+        self.framework['ps3recomp'] = {'runtime': {'commit': self.revision}}
+        self.framework_path.write_text(json.dumps(self.framework))
+        self.data.update(framework_sha256=sha256_file(self.framework_path), target='retail-v2.12',
+                         base_runtime_revision=self.revision, integration_branch='codex/retail-v2.12',
+                         source_pr='https://github.com/tekulvw/ps3recomp/pull/123')
+        self.write_manifest()
+        def validate():
+            return provenance.runtime_identity(self.sdk, self.framework, self.framework_path,
+                                                self.manifest, target='retail-v2.12')
+        self.assertEqual(validate()['runtime_candidate']['target'], 'retail-v2.12')
+        for field in ('target', 'base_runtime_revision', 'integration_branch', 'source_pr'):
+            with self.subTest(field=field):
+                saved = self.data.pop(field)
+                self.write_manifest()
+                with self.assertRaises(ValueError):
+                    validate()
+                self.data[field] = saved
+        self.data['base_runtime_revision'] = '0' * 40
+        self.framework['ps3recomp']['runtime']['commit'] = '0' * 40
+        self.framework_path.write_text(json.dumps(self.framework))
+        self.data['framework_sha256'] = sha256_file(self.framework_path)
+        self.write_manifest()
+        with self.assertRaisesRegex(ValueError, 'descend'):
+            validate()
+
 
 if __name__ == '__main__':
     unittest.main()

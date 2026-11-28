@@ -46,6 +46,12 @@ inline std::size_t mag_thread_stack_overhead()
 // On Linux they took an installer build from 4.6 to 21.5 guest fps.
 inline int mag_apply_runtime_defaults()
 {
+#ifdef MAG_RETAIL_V212
+    // Start from pinned SDK defaults. The settings below were accepted for v1;
+    // re-enable each for 2.12 only after source-bound runtime validation.
+    // Explicit caller settings remain intact for bounded diagnostics.
+    return 0;
+#endif
     struct Setting { const char* name; const char* value; };
     for (const auto& setting : {
              // SPU caches and rounding mode.

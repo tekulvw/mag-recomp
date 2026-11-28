@@ -1,0 +1,736 @@
+{
+  "schema": 1,
+  "target": "retail-v2.12",
+  "description": "Exact content and occurrence identities for original-code SPU preparation. Unknown roles and ABI remain unknown; generated unsupported instructions halt if executed. No v1 image IDs or source EAs are reused.",
+  "carriers": {
+    "EBOOT": "feb5ed5a3e8f3aab74601ae3edc737e3c010208523d3eb322be997cbe3d79318",
+    "mage_g": "705a6ec6a25458b2401b869e75e2904597304e2c06d9534a171a1dcd54aca2b3"
+  },
+  "programs": [
+    {
+      "kind": "embedded_elf",
+      "sha256": "7ddd76579ecaf1bb29f2d23242e3d0b593315f5362c6570794578c71facd7bb4",
+      "size": 52916,
+      "entry": 12368,
+      "occurrences": [
+        {
+          "image": "EBOOT",
+          "file_offset": 2950144,
+          "guest_ea": 3015680
+        }
+      ],
+      "role": null,
+      "abi_verified": false,
+      "expected_unsupported_count": 93
+    },
+    {
+      "kind": "embedded_elf",
+      "sha256": "ce7320a99a9d86c1e065df797cdd5ab96491fa37382ba845ee8203957bd7ac23",
+      "size": 38116,
+      "entry": 12368,
+      "occurrences": [
+        {
+          "image": "EBOOT",
+          "file_offset": 3003136,
+          "guest_ea": 3068672
+        },
+        {
+          "image": "mage_g",
+          "file_offset": 21652608,
+          "guest_ea": 21718144
+        }
+      ],
+      "role": null,
+      "abi_verified": false,
+      "expected_unsupported_count": 213
+    },
+    {
+      "kind": "embedded_elf",
+      "sha256": "734d10ff713729f66b98bd07e5036be6410e369888faa43d0187bd7a53e2aef4",
+      "size": 51536,
+      "entry": 12400,
+      "occurrences": [
+        {
+          "image": "mage_g",
+          "file_offset": 19688832,
+          "guest_ea": 19754368
+        }
+      ],
+      "role": null,
+      "abi_verified": false,
+      "expected_unsupported_count": 0
+    },
+    {
+      "kind": "embedded_elf",
+      "sha256": "951efea200bb902603433b033fd6929f081b3af7395214c1cab43dbee5f19746",
+      "size": 151696,
+      "entry": 12400,
+      "occurrences": [
+        {
+          "image": "mage_g",
+          "file_offset": 19740416,
+          "guest_ea": 19805952
+        }
+      ],
+      "role": null,
+      "abi_verified": false,
+      "expected_unsupported_count": 0
+    },
+    {
+      "kind": "embedded_elf",
+      "sha256": "ba07ed75179ef11ad7731a8de6fdf7d2d7c6b311f68adaba49f7802f3a964d83",
+      "size": 106080,
+      "entry": 12400,
+      "occurrences": [
+        {
+          "image": "mage_g",
+          "file_offset": 19892224,
+          "guest_ea": 19957760
+        }
+      ],
+      "role": null,
+      "abi_verified": false,
+      "expected_unsupported_count": 0
+    },
+    {
+      "kind": "embedded_elf",
+      "sha256": "cc639e33ff98e993146b383d735f354222f221704a8d984694204fda447ee38c",
+      "size": 132072,
+      "entry": 12400,
+      "occurrences": [
+        {
+          "image": "mage_g",
+          "file_offset": 19998336,
+          "guest_ea": 20063872
+        }
+      ],
+      "role": null,
+      "abi_verified": false,
+      "expected_unsupported_count": 0
+    },
+    {
+      "kind": "embedded_elf",
+      "sha256": "21dea45653835a9729e071c36e36a1c8b77ba23bcaba1ca625b10e515cbc09d9",
+      "size": 130572,
+      "entry": 12400,
+      "occurrences": [
+        {
+          "image": "mage_g",
+          "file_offset": 20130432,
+          "guest_ea": 20195968
+        }
+      ],
+      "role": null,
+      "abi_verified": false,
+      "expected_unsupported_count": 0
+    },
+    {
+      "kind": "embedded_elf",
+      "sha256": "ebe05fd542ccade16957ebf08dd17fada26b7b4a32e445f7aad04b1ec8422d43",
+      "size": 78376,
+      "entry": 16512,
+      "occurrences": [
+        {
+          "image": "mage_g",
+          "file_offset": 21776512,
+          "guest_ea": 21842048
+        }
+      ],
+      "role": null,
+      "abi_verified": false,
+      "expected_unsupported_count": 0
+    },
+    {
+      "kind": "embedded_elf",
+      "sha256": "e8143a832741b27a45bc695ab804932e33bd25747055e37fdc439c8f96270c0e",
+      "size": 146080,
+      "entry": 16512,
+      "occurrences": [
+        {
+          "image": "mage_g",
+          "file_offset": 21854976,
+          "guest_ea": 21920512
+        }
+      ],
+      "role": null,
+      "abi_verified": false,
+      "expected_unsupported_count": 0
+    },
+    {
+      "kind": "embedded_elf",
+      "sha256": "2183036b16fcacee567d53bd35c497fbb27088c020d85286961c8c25120811f9",
+      "size": 97016,
+      "entry": 16512,
+      "occurrences": [
+        {
+          "image": "mage_g",
+          "file_offset": 22001152,
+          "guest_ea": 22066688
+        }
+      ],
+      "role": null,
+      "abi_verified": false,
+      "expected_unsupported_count": 0
+    },
+    {
+      "kind": "embedded_elf",
+      "sha256": "6f872eb718f61ea414a202cccececb2406ee76cd4a370e1d98b567a04f3a1b8e",
+      "size": 33996,
+      "entry": 16512,
+      "occurrences": [
+        {
+          "image": "mage_g",
+          "file_offset": 22098176,
+          "guest_ea": 22163712
+        }
+      ],
+      "role": null,
+      "abi_verified": false,
+      "expected_unsupported_count": 0
+    },
+    {
+      "kind": "raw_wws",
+      "sha256": "f44eb30ebcf28063ad7d68adc60dbdbccc59db591106145fdcdbf8a0eb9e4de1",
+      "size": 37536,
+      "entry": 51760,
+      "occurrences": [
+        {
+          "image": "mage_g",
+          "guest_ea": 19624960,
+          "file_offset": 19559424
+        }
+      ],
+      "role": null,
+      "abi_verified": false,
+      "expected_unsupported_count": 0
+    },
+    {
+      "kind": "raw_wws",
+      "sha256": "de7743f9188affebd9115f74865a4e149c98c60b2ca9c562ef60a78652a31038",
+      "size": 11072,
+      "entry": 25568,
+      "occurrences": [
+        {
+          "image": "mage_g",
+          "guest_ea": 19662464,
+          "file_offset": 19596928
+        }
+      ],
+      "role": null,
+      "abi_verified": false,
+      "expected_unsupported_count": 0
+    },
+    {
+      "kind": "raw_wws",
+      "sha256": "b521e28529ac00e48ee6235758ff6dc715027f92ed8c7d1bcca35fc485da8b67",
+      "size": 32928,
+      "entry": 46024,
+      "occurrences": [
+        {
+          "image": "mage_g",
+          "guest_ea": 19673600,
+          "file_offset": 19608064
+        }
+      ],
+      "role": null,
+      "abi_verified": false,
+      "expected_unsupported_count": 0
+    },
+    {
+      "kind": "raw_wws",
+      "sha256": "6444841576293cfb524663ceb7422d0f3acc8e1194c4ffe71711f3326d646d85",
+      "size": 47808,
+      "entry": 61280,
+      "occurrences": [
+        {
+          "image": "mage_g",
+          "guest_ea": 19706496,
+          "file_offset": 19640960
+        }
+      ],
+      "role": null,
+      "abi_verified": false,
+      "expected_unsupported_count": 0
+    },
+    {
+      "kind": "raw_wws",
+      "sha256": "6211be0ae19526fe140110a4667503f26355491add6563961efe33c6a2225bdb",
+      "size": 91648,
+      "entry": 96648,
+      "occurrences": [
+        {
+          "image": "mage_g",
+          "guest_ea": 20326656,
+          "file_offset": 20261120
+        }
+      ],
+      "role": null,
+      "abi_verified": false,
+      "expected_unsupported_count": 0
+    },
+    {
+      "kind": "raw_wws",
+      "sha256": "404fb6e77301f15d4257ff5112ed8a9892925e5b2e5071278bbd949d15e8db53",
+      "size": 68592,
+      "entry": 75800,
+      "occurrences": [
+        {
+          "image": "mage_g",
+          "guest_ea": 20418304,
+          "file_offset": 20352768
+        }
+      ],
+      "role": null,
+      "abi_verified": false,
+      "expected_unsupported_count": 0
+    },
+    {
+      "kind": "raw_wws",
+      "sha256": "709b45837fe07ec1dd3ea933a580bf5f324a5b66c3afbb862b8874f95198fdb7",
+      "size": 68720,
+      "entry": 76264,
+      "occurrences": [
+        {
+          "image": "mage_g",
+          "guest_ea": 20486912,
+          "file_offset": 20421376
+        }
+      ],
+      "role": null,
+      "abi_verified": false,
+      "expected_unsupported_count": 0
+    },
+    {
+      "kind": "raw_wws",
+      "sha256": "5a19b87a1a19bdac263f9f59dae3fca66fd5728fffddec4bc1210a2c01ac401b",
+      "size": 69872,
+      "entry": 77112,
+      "occurrences": [
+        {
+          "image": "mage_g",
+          "guest_ea": 20555648,
+          "file_offset": 20490112
+        }
+      ],
+      "role": null,
+      "abi_verified": false,
+      "expected_unsupported_count": 0
+    },
+    {
+      "kind": "raw_wws",
+      "sha256": "315ae5ec256c5be714e23bf9170b01038b6ebb3994edde38408a0225ae990d5b",
+      "size": 90032,
+      "entry": 65432,
+      "occurrences": [
+        {
+          "image": "mage_g",
+          "guest_ea": 20625536,
+          "file_offset": 20560000
+        }
+      ],
+      "role": null,
+      "abi_verified": false,
+      "expected_unsupported_count": 0
+    },
+    {
+      "kind": "raw_wws",
+      "sha256": "5c39e019dee40619db9defe7ebf37cd2e5693707a62471d3e0903729c2957e3b",
+      "size": 111088,
+      "entry": 86896,
+      "occurrences": [
+        {
+          "image": "mage_g",
+          "guest_ea": 20715648,
+          "file_offset": 20650112
+        }
+      ],
+      "role": null,
+      "abi_verified": false,
+      "expected_unsupported_count": 0
+    },
+    {
+      "kind": "raw_wws",
+      "sha256": "8c41f8b6b4a017e7a30068e24993a317131b9a1259b5ec1705ff05c3a874248a",
+      "size": 15936,
+      "entry": 30248,
+      "occurrences": [
+        {
+          "image": "mage_g",
+          "guest_ea": 20826752,
+          "file_offset": 20761216
+        }
+      ],
+      "role": null,
+      "abi_verified": false,
+      "expected_unsupported_count": 0
+    },
+    {
+      "kind": "raw_wws",
+      "sha256": "84b3324dc89e348d24d53fb172c79e3f08cdb4118dc453bcdc2b5c12042ef29d",
+      "size": 15296,
+      "entry": 29592,
+      "occurrences": [
+        {
+          "image": "mage_g",
+          "guest_ea": 20842752,
+          "file_offset": 20777216
+        }
+      ],
+      "role": null,
+      "abi_verified": false,
+      "expected_unsupported_count": 0
+    },
+    {
+      "kind": "raw_wws",
+      "sha256": "e19f4144de348cfb6bd6ffa45c3f551858e6a792a38c668c48dab431ad3715ad",
+      "size": 19808,
+      "entry": 33336,
+      "occurrences": [
+        {
+          "image": "mage_g",
+          "guest_ea": 20858112,
+          "file_offset": 20792576
+        }
+      ],
+      "role": null,
+      "abi_verified": false,
+      "expected_unsupported_count": 0
+    },
+    {
+      "kind": "raw_wws",
+      "sha256": "0abd2bb506391feea967c5d80007888b0320671bfbf0218f5445ef37f5c69277",
+      "size": 77120,
+      "entry": 60088,
+      "occurrences": [
+        {
+          "image": "mage_g",
+          "guest_ea": 20877952,
+          "file_offset": 20812416
+        }
+      ],
+      "role": null,
+      "abi_verified": false,
+      "expected_unsupported_count": 0
+    },
+    {
+      "kind": "raw_wws",
+      "sha256": "78d9e7188647160360cf904693c9c77270805d206d8a5299665e582c0cc4e558",
+      "size": 20016,
+      "entry": 33584,
+      "occurrences": [
+        {
+          "image": "mage_g",
+          "guest_ea": 20955136,
+          "file_offset": 20889600
+        }
+      ],
+      "role": null,
+      "abi_verified": false,
+      "expected_unsupported_count": 0
+    },
+    {
+      "kind": "raw_wws",
+      "sha256": "b963e788009a68264e38d03f142e268897ab0d528b0861dc1a4fe40fc9f3fdc5",
+      "size": 47984,
+      "entry": 59064,
+      "occurrences": [
+        {
+          "image": "mage_g",
+          "guest_ea": 20975232,
+          "file_offset": 20909696
+        }
+      ],
+      "role": null,
+      "abi_verified": false,
+      "expected_unsupported_count": 0
+    },
+    {
+      "kind": "raw_wws",
+      "sha256": "4b0c50ec84f3cfc11badd16b24c133a6adc63efedb4e3068cdeed8f8718b42cd",
+      "size": 27328,
+      "entry": 29872,
+      "occurrences": [
+        {
+          "image": "mage_g",
+          "guest_ea": 21023232,
+          "file_offset": 20957696
+        }
+      ],
+      "role": null,
+      "abi_verified": false,
+      "expected_unsupported_count": 0
+    },
+    {
+      "kind": "raw_wws",
+      "sha256": "eb83c19317a8d9a215026be8866f3a25992f3961e4fd3cbe7de2f6339234ab9c",
+      "size": 15120,
+      "entry": 30296,
+      "occurrences": [
+        {
+          "image": "mage_g",
+          "guest_ea": 21050624,
+          "file_offset": 20985088
+        }
+      ],
+      "role": null,
+      "abi_verified": false,
+      "expected_unsupported_count": 0
+    },
+    {
+      "kind": "raw_wws",
+      "sha256": "319949940aae320c574470160c63f1a608d952dbd57b646e2923a26ac99acecc",
+      "size": 5424,
+      "entry": 20984,
+      "occurrences": [
+        {
+          "image": "mage_g",
+          "guest_ea": 21065728,
+          "file_offset": 21000192
+        }
+      ],
+      "role": null,
+      "abi_verified": false,
+      "expected_unsupported_count": 0
+    },
+    {
+      "kind": "raw_wws",
+      "sha256": "0814b9317e6a040248c0f26eb564fe591fcc3a2ffd6e75de1db5e9d1e6fb34e9",
+      "size": 10672,
+      "entry": 25584,
+      "occurrences": [
+        {
+          "image": "mage_g",
+          "guest_ea": 21071232,
+          "file_offset": 21005696
+        }
+      ],
+      "role": null,
+      "abi_verified": false,
+      "expected_unsupported_count": 0
+    },
+    {
+      "kind": "raw_wws",
+      "sha256": "25fcc2bfde6a6825a737c942bd36db0b62a66346d539d048150ee59774c314aa",
+      "size": 2992,
+      "entry": 18392,
+      "occurrences": [
+        {
+          "image": "mage_g",
+          "guest_ea": 21081984,
+          "file_offset": 21016448
+        }
+      ],
+      "role": null,
+      "abi_verified": false,
+      "expected_unsupported_count": 0
+    },
+    {
+      "kind": "raw_wws",
+      "sha256": "d0969d79765f180ebfcb883d006a6f1ea722058171bde824c63a31886d16e4c7",
+      "size": 1328,
+      "entry": 17080,
+      "occurrences": [
+        {
+          "image": "mage_g",
+          "guest_ea": 21085056,
+          "file_offset": 21019520
+        }
+      ],
+      "role": null,
+      "abi_verified": false,
+      "expected_unsupported_count": 0
+    },
+    {
+      "kind": "raw_wws",
+      "sha256": "258f5119952fef671c7c5b56a824aeef1cf2ac57a8d9bccc9704be9c497be301",
+      "size": 12464,
+      "entry": 27184,
+      "occurrences": [
+        {
+          "image": "mage_g",
+          "guest_ea": 21086464,
+          "file_offset": 21020928
+        }
+      ],
+      "role": null,
+      "abi_verified": false,
+      "expected_unsupported_count": 0
+    },
+    {
+      "kind": "raw_wws",
+      "sha256": "369dd54c169ef995350a1a22c075c582913d636d9ebf7017ccba222a703effe6",
+      "size": 198560,
+      "entry": 37256,
+      "occurrences": [
+        {
+          "image": "mage_g",
+          "guest_ea": 21099008,
+          "file_offset": 21033472
+        }
+      ],
+      "role": null,
+      "abi_verified": false,
+      "expected_unsupported_count": 0
+    },
+    {
+      "kind": "raw_wws",
+      "sha256": "7fbd8372c1ce13dab9381ba3e50f2cfcd58e1f3f9c723dc440df0d871c3fa7bf",
+      "size": 198560,
+      "entry": 37320,
+      "occurrences": [
+        {
+          "image": "mage_g",
+          "guest_ea": 21297664,
+          "file_offset": 21232128
+        }
+      ],
+      "role": null,
+      "abi_verified": false,
+      "expected_unsupported_count": 0
+    },
+    {
+      "kind": "raw_wws",
+      "sha256": "0274f25759863a4f994395175b0c3e3707f4d2a9e0262985f367b6d56407758e",
+      "size": 214048,
+      "entry": 25696,
+      "occurrences": [
+        {
+          "image": "mage_g",
+          "guest_ea": 21496320,
+          "file_offset": 21430784
+        }
+      ],
+      "role": null,
+      "abi_verified": false,
+      "expected_unsupported_count": 0
+    },
+    {
+      "kind": "raw_wws",
+      "sha256": "6c39c8000dea747dd4a8df980658d4477454fe32195ae7374513b183713283ee",
+      "size": 7600,
+      "entry": 22880,
+      "occurrences": [
+        {
+          "image": "mage_g",
+          "guest_ea": 21710464,
+          "file_offset": 21644928
+        }
+      ],
+      "role": null,
+      "abi_verified": false,
+      "expected_unsupported_count": 0
+    },
+    {
+      "kind": "raw_wws",
+      "sha256": "3a08141beb842bfdf52e3cd5c53a95cb2b8fea16ae4190486dd31aa933214077",
+      "size": 58304,
+      "entry": 73616,
+      "occurrences": [
+        {
+          "image": "mage_g",
+          "guest_ea": 21756288,
+          "file_offset": 21690752
+        }
+      ],
+      "role": null,
+      "abi_verified": false,
+      "expected_unsupported_count": 0
+    },
+    {
+      "kind": "raw_wws",
+      "sha256": "dad91e293057c652bd83cc24eadf54fc2bd45fb2c4fff498bddfa141efe1a664",
+      "size": 14512,
+      "entry": 24504,
+      "occurrences": [
+        {
+          "image": "mage_g",
+          "guest_ea": 21814656,
+          "file_offset": 21749120
+        }
+      ],
+      "role": null,
+      "abi_verified": false,
+      "expected_unsupported_count": 0
+    },
+    {
+      "kind": "raw_wws",
+      "sha256": "7f332665c0545c68937ae7172af6bd60778b52ab983deb5e71de5f996a4b7391",
+      "size": 75296,
+      "entry": 16512,
+      "occurrences": [
+        {
+          "image": "mage_g",
+          "guest_ea": 21842176,
+          "file_offset": 21776640
+        }
+      ],
+      "role": null,
+      "abi_verified": false,
+      "expected_unsupported_count": 0
+    },
+    {
+      "kind": "raw_wws",
+      "sha256": "2c743e24ffe67041ef1e45f53474315b5c51fb29f21108caccc8427ed4d0a7fb",
+      "size": 141472,
+      "entry": 16512,
+      "occurrences": [
+        {
+          "image": "mage_g",
+          "guest_ea": 21920640,
+          "file_offset": 21855104
+        }
+      ],
+      "role": null,
+      "abi_verified": false,
+      "expected_unsupported_count": 0
+    },
+    {
+      "kind": "raw_wws",
+      "sha256": "3ee34f04574ef5beb721aaa248caae08369bad29f6ce8c84f11074aeceed699d",
+      "size": 95216,
+      "entry": 16512,
+      "occurrences": [
+        {
+          "image": "mage_g",
+          "guest_ea": 22066816,
+          "file_offset": 22001280
+        }
+      ],
+      "role": null,
+      "abi_verified": false,
+      "expected_unsupported_count": 0
+    },
+    {
+      "kind": "raw_wws",
+      "sha256": "4a632c27965c30ccb531e58a2a6a8982871671ddc9120c6a8f2527b8352f9a09",
+      "size": 32320,
+      "entry": 16512,
+      "occurrences": [
+        {
+          "image": "mage_g",
+          "guest_ea": 22163840,
+          "file_offset": 22098304
+        }
+      ],
+      "role": null,
+      "abi_verified": false,
+      "expected_unsupported_count": 0
+    },
+    {
+      "kind": "known_policy",
+      "sha256": "6a3af90518af72ed790b36b2081ab2040237d378bf3644d4461356b44bcfc58a",
+      "size": 12032,
+      "entry": 2560,
+      "occurrences": [
+        {
+          "image": "mage_g",
+          "file_offset": 21763712,
+          "guest_ea": 21829248
+        }
+      ],
+      "role": "Exact-byte identity with reviewed v1 policy; target ABI unknown",
+      "abi_verified": false,
+      "expected_unsupported_count": 4
+    }
+  ]
+}
