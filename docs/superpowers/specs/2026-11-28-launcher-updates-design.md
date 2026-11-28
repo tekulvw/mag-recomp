@@ -2,17 +2,18 @@
 
 The user approved the outline of this design on November 27, 2026: MAG finds, downloads and applies
 new releases itself, with the player's consent each time. This document specifies it before any
-implementation. Nothing here is built yet, and the user reviews this spec before any of it is.
-Decisions still open are collected in [Open questions](#open-questions).
+implementation. The user approved the spec on November 28, 2026, together with the answers to its
+open questions, which are recorded in [Decisions (2026-11-28)](#decisions-2026-11-28).
 
 An update today is a manual rebuild. You move the old `MAG` folder's contents aside, run the new
 installer with the same game folder, firmware and voice choice, and move `home/` and `logs/` back.
 Then you put back the access-control entry the fresh build dropped, and delete `MAG-build`. This
 design automates that process, adds verification, and makes it safe to interrupt.
 
-## Decisions
+## Outline decisions (2026-11-27)
 
-These are the user's and bind the design.
+These are the user's and bind the design. The answers to the spec's open questions are in
+[Decisions (2026-11-28)](#decisions-2026-11-28).
 
 1. **Check.** When MAG starts, it asks the GitHub Releases API for the latest stable release (never
    a prerelease or a draft) and compares it with its own version. The check works offline, fails
@@ -38,7 +39,8 @@ These are the user's and bind the design.
   three installers and their checksum files (AGENTS.md). The updater downloads the same installer
   a player would download by hand. A built launcher or engine is never published, downloaded or
   cached anywhere but the player's own machine. The only new asset is one signature file, which
-  needs an AGENTS.md change ([Release signing](#release-signing), open question 3).
+  the user allowed (decision 3). The AGENTS.md rule changes in the signing phase's PR
+  ([Release signing](#release-signing)).
 - **The MAG folder is self-contained.** Nothing in it refers to anything outside it
   ([installer/README.md](../../../installer/README.md#what-goes-where)). The remembered build
   inputs are therefore kept in the installer's per-user folder, not in the MAG folder.
@@ -142,7 +144,8 @@ that is published but not signed, or signed with the wrong key, is never offered
 - The state file is `update-state.json`, next to `settings.json`: `%APPDATA%\MAG`,
   `~/Library/Application Support/MAG`, or `$XDG_CONFIG_HOME/MAG` (`~/.config/MAG`). It holds the
   ETag, the time of the last check, the earliest next check, the last accepted release (tag, asset
-  names, sizes, sums hash) and any pending or failed update, keyed by the resolved MAG folder path.
+  names, sizes, sums hash), the time **Later** was last chosen, the skipped tag, and any pending or
+  failed update, keyed by the resolved MAG folder path.
   The file is written atomically through `src/player_preferences_file.cpp` and its reads are
   bounded. A damaged state file is ignored and replaced.
 
@@ -172,7 +175,11 @@ The banner sits at the top of the settings window, above **Play MAG**:
   build's duration in the app's `runtime.json` (`last_build_seconds`). It is rounded up to 5 minutes
   and includes a download estimate from the asset size. Without a record, it uses a
   per-platform default (Windows: 20 minutes; macOS and Linux: measured in phase C).
-- **Later** dismisses the banner for this launch. It comes back at the next launch (open question 6).
+- **Later** hides the banner. It comes back at the first launch at least 24 hours later, so MAG
+  asks again at most once a day (decision 6). The time is kept in the state file.
+- **Skip this version** (a link beside **Later**) hides the banner until a release newer than the
+  skipped one is published. The skipped tag is kept in the state file. **Check now** and the
+  Updates row still show the skipped release and offer **Update now**.
 - **Play MAG** works as always. The banner never blocks playing.
 - If the MAG folder lacks the free space the update needs
   ([Disk space](#disk-space)), the banner replaces **Update now** with "MAG 0.16.0 needs about
@@ -267,45 +274,32 @@ with or without it. When it is present, they check it against the public keys in
 `profiles/update-signing.json`. `publish_release.py` still never replaces or deletes an asset, and
 it allows exactly one later upload of `SHA256SUMS.txt.minisig`.
 
-The private key can be held in one of two ways, and the user chooses (open question 1):
+The private key is held offline, by the user (decision 1). There is no CI secret. CI publishes the
+release as it does today. The user then runs `tools/sign_release.py --tag vX.Y.Z --key <path>` on
+their own computer:
+1. It downloads `SHA256SUMS.txt` and `RELEASE-ASSETS.json` with `gh release download`.
+2. It checks that `RELEASE-ASSETS.json` names exactly this tag and this `kind: release`, and that
+   its hash for `SHA256SUMS.txt` and the archive lines agree.
+3. It prints the lines to be signed.
+4. It runs `minisign -S -s <key> -m SHA256SUMS.txt -t "mag-recomp release <tag> source <sha>"`.
+   minisign itself asks for the password, so the script never reads the key or the password.
+5. It verifies the result with the committed public key.
+6. It uploads the signature with `gh release upload <tag> SHA256SUMS.txt.minisig`.
 
-- **A. Offline, by the user (recommended).** CI publishes the release as it does today. The user
-  then runs `tools/sign_release.py --tag vX.Y.Z --key <path>` on their own computer:
-  1. It downloads `SHA256SUMS.txt` and `RELEASE-ASSETS.json` with `gh release download`.
-  2. It checks that `RELEASE-ASSETS.json` names exactly this tag and this `kind: release`, and that
-     its hash for `SHA256SUMS.txt` and the archive lines agree.
-  3. It prints the lines to be signed.
-  4. It runs `minisign -S -s <key> -m SHA256SUMS.txt -t "mag-recomp release <tag> source <sha>"`.
-     minisign itself asks for the password, so the script never reads the key or the password.
-  5. It verifies the result with the committed public key.
-  6. It uploads the signature with `gh release upload <tag> SHA256SUMS.txt.minisig`.
+Until the user signs, launchers stay silent. That fits the existing rule that releases are human
+actions. If the user later turns on GitHub's immutable releases, signing has to move before
+publication, and `publish_release.py` already requires a mutable release.
 
-  Until the user signs, launchers stay silent. That fits the existing rule that releases are human
-  actions. If the user later turns on GitHub's immutable releases, signing has to move before
-  publication, and `publish_release.py` already requires a mutable release.
-- **B. In CI, with an Actions secret.** A `sign` job runs between `verify` and `publish` in
-  `installers.yml`, for releases only:
-  - It runs on a GitHub-hosted `ubuntu-latest` runner, never on the shared self-hosted `mag-recomp`
-    runner.
-  - It uses the protected environment `release-signing`, which has the user as its required
-    reviewer and allows only `main`.
-  - It downloads a minisign release binary pinned by SHA-256, runs the same `verify-set`, and signs
-    with the secret `MAG_UPDATE_SIGNING_KEY` (the password-encrypted key file). The password,
-    `MAG_UPDATE_SIGNING_PASSWORD`, is passed on standard input. Phase B confirms that minisign
-    reads it there, using an ephemeral key.
-  - `publish` attaches the signature with the installers.
+Signing in CI with an Actions secret in a protected environment was considered and not chosen:
+anyone who controls the user's GitHub account can approve such an environment, so it does not
+protect against a compromised account ([Threat model](#threat-model)).
 
-  This saves a manual step. But anyone who controls the user's GitHub account can approve the
-  environment, so it does not protect against a compromised account
-  ([Threat model](#threat-model)).
-
-Whichever option is chosen, every preview run (pull requests and `main`) signs its preview set with
+Every preview run (pull requests and `main`) signs its preview set with
 an ephemeral key generated in the job and verifies it. The signing and verification code is
 therefore exercised constantly without the real key. Preview installers embed no public key, so the
 apps they build never check for updates.
 
-**Key steps for the user** (from a terminal on the user's own computer, never in an agent session).
-These are the same for options A and B:
+**Key steps for the user** (from a terminal on the user's own computer, never in an agent session):
 
 ```sh
 # 1. Install minisign (0.11 or later; check with `minisign -v`).
@@ -317,7 +311,7 @@ mkdir -m 700 "$HOME/mag-release-signing" && cd "$HOME/mag-release-signing"
 # 3. The release key. Choose a strong password when asked.
 minisign -G -p mag-release.pub -s mag-release.key
 
-# 4. A recovery key with a different password (open question 2). Store it apart from the release key.
+# 4. A recovery key with a different password (decision 2). Store it apart from the release key.
 minisign -G -p mag-recovery.pub -s mag-recovery.key
 chmod 600 mag-release.key mag-recovery.key
 
@@ -333,16 +327,7 @@ echo test > t.txt && minisign -S -s mag-release.key -m t.txt -t "test" && minisi
 cat mag-release.pub mag-recovery.pub
 ```
 
-Only for option B, after step 7:
-
-```sh
-# A protected environment: in GitHub, Settings → Environments → New environment "release-signing".
-# Set Required reviewers to yourself and Deployment branches to "Selected: main". Then:
-gh secret set MAG_UPDATE_SIGNING_KEY --env release-signing --repo tekulvw/mag-recomp < mag-release.key
-gh secret set MAG_UPDATE_SIGNING_PASSWORD --env release-signing --repo tekulvw/mag-recomp   # type the password at the prompt
-```
-
-The recovery key never goes into CI. Agents must never run `minisign -G` or `-S` with a real key,
+Neither key ever goes into CI or a GitHub secret. Agents must never run `minisign -G` or `-S` with a real key,
 read a `.key` file, or ask for its password. `tools/check_public_tree.py` gains a rule that refuses
 minisign secret-key files: their `untrusted comment: minisign encrypted secret key` header, or a
 `.key` file beside a `.pub` file.
@@ -356,8 +341,9 @@ installer ([Inert outside release builds](#inert-outside-release-builds)). Until
 key, the file lists none and updates stay off everywhere. Early phases can therefore merge without
 the key.
 
-**Key rotation.** To rotate, a release signed by the current key ships a new key list. The launcher
-accepts either key in the list. If the release key is lost or compromised, the next release is
+**Key rotation.** Launchers carry two keys: the release key and an offline recovery key
+(decision 2). To rotate, a release signed by the current key ships a new key list. The launcher
+accepts any key in the list. If the release key is lost or compromised, the next release is
 signed with the recovery key and drops the old key from the list. Launchers too old to know the
 recovery key need one manual installer download.
 
@@ -419,9 +405,10 @@ shares the build steps:
       Windows the installer also runs the ACL check ([Windows](#windows)).
    4. `keeping`: move `.MAG-previous` to `MAG-build/previous/` with a `previous.json` that records
       its version, then update the install record.
-   5. `done`: remove the build workspace (`build-kit`, `build-work`, `managed-tools`). Keep
-      `MAG-build/logs` and `MAG-build/previous`. The build cache and the downloads stay in the
-      per-user cache, so the next update is as fast as this one.
+   5. `done`: remove the build workspace (`build-kit`, `build-work`, `managed-tools`, `package`
+      and the build settings), keeping only `MAG-build/logs`, `MAG-build/previous` and the journal
+      (decision 13). The build cache and the downloads stay in the per-user cache, so the next
+      update is as fast as this one.
 
    `home/`, `logs/` and `game/` are never moved or rewritten. Settings, the portal link, reports and
    the Windows shader and pipeline caches live outside the MAG folder and are never touched.
@@ -447,8 +434,35 @@ accepts this rare case, because Windows cannot swap directories atomically. The 
 the recovery.
 
 After a successful update, `MAG-build/previous/` holds one previous app (about 300 MB on Windows).
-Each later update replaces it. Whether Settings offers **Go back to MAG 0.15.0** is open question 5.
-Deleting `MAG-build` remains safe, and only removes that rollback copy.
+Each later update replaces it. Deleting `MAG-build` remains safe, and only removes that rollback
+copy.
+
+### Go back to the previous version
+
+The previous app is kept (decision 5), and MAG can return to it:
+
+- **MAG Settings → General → Updates → Go back to the previous version (MAG 0.15.0)** appears when
+  `MAG-build/previous/previous.json` names a version and the installer that made the update is
+  still in the update folder. It asks for confirmation, then hands off like an update
+  ([Hand off](#4-hand-off)), with `--restore-previous` in place of `--expect-version`.
+- `mag-installer update --output <MAG folder> --restore-previous` is the installer's half and the
+  command-line form. It needs no game files, firmware, tools or build: it validates the previous app
+  (its `runtime.json`, receipts and supervisor), then runs the same journaled swap with the
+  previous app as the new one. The newer app moves into `MAG-build/previous/` in its place, so
+  going forward again is the same action. A failure reverses the swap as for an update.
+- The confirmation says that settings written by the newer version stay as they are, and that the
+  older version may ignore or reset options it does not know. `settings.json` and the rest of the
+  per-user state are not touched.
+
+### Failure reports
+
+When an update fails or is rolled back, and reports are on (`send_reports`) and an account is
+linked, MAG sends an `update_failed` report to the portal (decision 7), through the existing
+report queue (`/api/v1/reports`). It holds the platform, the version from and to, the journal
+phase that failed, a short error class (for example `build`, `verify`, `acl`, `disk-space`,
+`locked`) and the stage durations. It holds no paths, no file names from the player's computer
+and no log text. The launcher sends it at the next start, from the failure the installer recorded
+in its log folder, so the installer itself never talks to the portal.
 
 ## Remembered build inputs
 
@@ -464,6 +478,15 @@ The installer already remembers the compile job count and the voice choice per u
   stores no hashes: each update checks the inputs against the kit's reviewed identities
   (`input_identities`), as every build already does. The paths never leave the computer and never
   enter the MAG folder.
+- **A private firmware copy** (decision 4). After a successful build or update, the installer
+  copies the firmware module it used to `firmware/libsre.prx` beside `installs.json`, so later
+  updates never ask for it again. The folder is owner-only on macOS and Linux and inherits the
+  cache folder's permissions on Windows, as the build cache does. The copy is written to a
+  temporary name and renamed once its size and SHA-256 match the reviewed identity. It is checked
+  against that identity again every time it is used; a copy that fails is deleted and the next
+  source is tried. It is the player's own file and never leaves their computer: it is never in
+  the MAG folder, never in the repository, a release or a report, and **Clear build cache…**
+  leaves it alone. `installs.json` records only that the copy exists, not its contents.
 - **Build options in the app.** Packaging writes `build_options` into the app's `runtime.json`:
   `voice`, `game_controls` (false when `MAG_GAME_CONTROLS=0`) and the x86-64 level override. These
   hold no paths, so the MAG folder stays movable. An update therefore keeps exactly the options the
@@ -476,7 +499,7 @@ The installer looks for the inputs in this order:
 | Input | Where it looks |
 | --- | --- |
 | Game folder | (1) the recorded path, if every file passes the reviewed-identity check; (2) the MAG folder's own `game/`, which holds the full `PS3_GAME` tree with both decrypted executables and is checked at every start. In update mode it is read-only, and the rule "source must be separate from output" is relaxed for exactly `<output>/game`; (3) RPCS3 detection (`rpcs3_detect.py`) |
-| Firmware module | (1) the recorded path; (2) `MAG-build`'s copy, if it still exists; (3) RPCS3 detection of a decrypted `dev_flash/sys/external/libsre.prx` (open question 4) |
+| Firmware module | (1) the installer's private copy (below); (2) the recorded path; (3) RPCS3 detection of a decrypted `dev_flash/sys/external/libsre.prx` |
 | Voice, controls, x86 level | the app's `build_options`; for an app made before that field existed: the old `MAG-build/build.json` `voice` flag if present, then `preferences.json` |
 | Compile jobs | `preferences.json`, else this computer's default |
 
@@ -594,11 +617,10 @@ today's manual move:
   keeps its path, so the existing rules apply and Windows asks nothing. The staged app at `.MAG-new`
   never runs before the swap. `--mag-verify-install` runs only after the swap, and it opens no
   socket. The acceptance run compares the rules that name the MAG folder before and after.
-- **ACL (depends on the separate fix in progress).** A fresh build today leaves `MAG\` and
-  `MAG\MAG\` without the player's own full-access entry. In the manual updates, that entry had to be
-  put back by hand. This design depends on that fix, which another change is making: a build gives
-  those folders the player's own entry. On top of it, update mode keeps `MAG\` in place, so its
-  descriptor is untouched. It records the SDDL of `MAG\` and the app folder before the swap. After
+- **ACL.** Builds before #355 left `MAG\` and `MAG\MAG\` without the player's own full-access
+  entry. In the manual updates, that entry had to be put back by hand. #355 fixed this: the
+  installer makes its folders inheriting the parent's permissions (`platforms.private_directory`).
+  On top of it, update mode keeps `MAG\` in place, so its descriptor is untouched. It records the SDDL of `MAG\` and the app folder before the swap. After
   the swap, it gives the new app folder the previous app folder's explicit entries and lets its
   children inherit. It then checks that the player's SID has full access on `MAG\`, the app folder
   and every file under it. A difference rolls the update back. The check uses the fix's own helper
@@ -627,7 +649,8 @@ today's manual move:
   computer, as today. Its code-signing identity is its hash, so it changes with every build. macOS
   therefore asks again for permissions tied to that identity, such as the microphone for voice
   builds, after each update. A manual rebuild does the same today. Avoiding this needs a stable
-  signing identity (open question 9).
+  signing identity, and the user accepted the prompt after each update for now (decision 9). The
+  "MAG was updated" notice on macOS voice builds says that macOS will ask for the microphone again.
 - **Command Line Tools.** If a release needs newer Apple Command Line Tools, the existing
   `ensure_apple_sdk` flow opens Apple's installer, and the update window explains why.
 - **The app path** `MAG/MAG.app` stays the same, so Dock items and Finder aliases keep working.
@@ -674,26 +697,24 @@ installer docs.
 
 | Threat | What stops it | What remains |
 | --- | --- | --- |
-| **A compromised GitHub account or token** publishes a release with malicious installers | With option A, the attacker has no offline key, so no valid signature exists and launchers refuse the release. With option B, a token without environment approval cannot reach the secret. | With option B, whoever controls the user's account can approve the `release-signing` environment and sign anything. This is the main reason option A is recommended. |
+| **A compromised GitHub account or token** publishes a release with malicious installers | The signing key is offline (decision 1), so the attacker has no valid signature and launchers refuse the release. | None for the account itself. This is why signing stays offline instead of in CI. |
 | **Asset replacement** on an existing release | The SHA-256 is bound by the signed sums. `publish_release.py` never replaces assets. | None for signed releases. |
 | **MITM** (a hostile network, or a TLS-intercepting proxy with its own root) | TLS with the system trust store. Even if TLS is bypassed, a changed archive fails the signature. Redirects go only to allowlisted hosts. | An attacker can block updates (a freeze), but MAG keeps working on its current version. |
 | **Replay or downgrade** (an old signed release served as new) | The trusted comment binds the tag, the tag must equal `tag_name`, and the version must be greater than the installed one. | None. |
 | **Malformed responses** (huge JSON, path traversal in the archive, links) | Bounded reads and sizes; exact asset names; the system extractor (which refuses absolute paths and `..`) into an empty folder, then an exact `INVENTORY.json` match with no links or extra files. | None known. |
 | **A tampered local cache** (`.part`, the archive or an extracted folder changed after the check) | Everything is verified again just before execution, by the process that executes. On Windows the file is held without write sharing from hashing until extraction, and extraction goes into a new random folder. | Malware already running as the player can change anything the player can, including MAG itself. That is out of scope. |
-| **A compromised build** (the self-hosted runner or a pinned dependency builds a bad kit) | Not by signatures: with either option, the signer signs what CI built. The existing pins, the kit inventory, `verify-set`, and the user's review at release time apply. | Reproducible builds are later work. Option A lets the user compare `RELEASE-ASSETS.json` with the CI run before signing. |
+| **A compromised build** (the self-hosted runner or a pinned dependency builds a bad kit) | Not by signatures: the signer signs what CI built. The existing pins, the kit inventory, `verify-set`, and the user's review at release time apply. | Reproducible builds are later work. Signing offline lets the user compare `RELEASE-ASSETS.json` with the CI run before signing. |
 | **A lost or leaked signing key** | A recovery key built into launchers; rotation through a signed release. | Launchers too old to know the recovery key need one manual installer download. |
 | **Privacy** | One unauthenticated GET to `api.github.com` at most every 6 hours, with a generic User-Agent and no identifiers. Opt-out setting. | GitHub sees the player's IP address, as it does for any download. player-settings.md says so. |
 
 ## Later: "Update required"
 
 Once updates have shipped, the server may advertise a minimum client version. The design goal is
-recorded here, and its details are left to that later spec (open question 10):
+recorded here, and its details are left to that later spec (decision 10):
 
-- The portal, or the Medius login reply, advertises `min_client_version` for each server. The
-  launcher already talks to the portal before each phase on Windows and Linux. On macOS the game
-  fetches the ticket itself.
+- Medius advertises `min_client_version` for each server, in its login reply. The portal does not.
 - Below the minimum, the banner becomes **Update required to play online: MAG X**, with **Update
-  now** and **Quit**. Training and offline play may stay available.
+  now** and **Quit**. Training stays playable below the minimum.
 - The server keeps the authority. A client that is too old is refused at login with a clear reason,
   so an old launcher that has no such banner still gets a readable message.
 
@@ -727,6 +748,7 @@ All tests are synthetic, need no game files and never use the real key.
 - **Signing tools:**
   - `tools/sign_release.py` with a fake `gh` and a fake `minisign`, checking the commands and their
     order, and that it never reads the key;
+  - the `update_failed` report's fields, with no paths or account data;
   - `verify-set` and `publish_release.py` with and without the signature;
   - check_public_tree's new secret-key rule.
 
@@ -772,13 +794,13 @@ All tests are synthetic, need no game files and never use the real key.
   "What goes where" (`MAG-build/previous`, the update folder) and the wizard's **Update MAG**.
 - `docs/player-settings.md`: the Updates row, `check_updates`, `MAG_UPDATE_CHECK`, what the check
   sends and how often, and the macOS quarantine note.
-- `installer/docs/release-packaging.md`: the signature asset, the signing flow (A or B), the
-  preview-run ephemeral signing, and key rotation.
+- `installer/docs/release-packaging.md`: the signature asset, the offline signing flow, the
+  preview-run ephemeral signing, and key rotation with the recovery key.
 - `installer/docs/design.md`: the update transaction, its journal phases and the relaxed
   source-in-output rule.
 - `installer/docs/testing.md`: what to report from an update.
 - `AGENTS.md`: release assets include `SHA256SUMS.txt.minisig`, and agents never create, read or
-  handle signing keys. This needs the user's approval.
+  handle signing keys. The user approved this (decision 3); the change lands in phase B.
 - `BUILDING.md`: developer builds have no updater.
 - `NOTICE.md`: Monocypher.
 - `CHANGELOG.md` is generated by release-please.
@@ -790,13 +812,15 @@ Each phase is one PR from current `main`, with a conventional title. A phase is 
 adds a public key.
 
 0. **This spec** (`docs(spec): ...`). The user reviews it.
-1. **The ACL fix** (separate, already in progress): a build keeps the player's own entry on `MAG\`
-   and `MAG\MAG\`. Phase A depends on it on Windows.
+1. **The ACL fix** (#355, merged): a build keeps the player's own entry on `MAG\` and `MAG\MAG\`.
+   Phase A builds on it on Windows.
 2. **A. `feat(installer): update an existing MAG folder in place`:**
    - update mode: the transaction, the journal, the swap, keeping the previous app, rollback,
      locks, disk check and the inputs fallback;
    - the wizard's **Update MAG**, and `build --update`;
-   - `installs.json` and `build_options`;
+   - `installs.json`, `build_options` and the private firmware copy;
+   - `update --restore-previous`, the installer's half of going back;
+   - cleanup after success, keeping only `MAG-build/logs` and `MAG-build/previous`;
    - `--mag-verify-install` in all three supervisors;
    - the session lock;
    - measuring the peak size.
@@ -804,15 +828,15 @@ adds a public key.
    No network and no launcher UI. It is useful at once: it replaces the manual process, and it is
    what players who installed before this feature use once.
 3. **B. `feat(release): sign the installer set`:**
-   - `profiles/update-signing.json`, empty until the user adds keys;
-   - `tools/sign_release.py` (option A), or the `sign` job (option B);
+   - `profiles/update-signing.json`, empty until the user adds the release and recovery keys;
+   - `tools/sign_release.py`, run offline by the user;
    - the signature in `verify-set` and `publish_release.py`;
    - ephemeral signing in preview runs;
    - the check_public_tree secret-key rule;
    - the AGENTS.md wording.
 
-   This needs open questions 1–3 answered. The user then generates the keys and adds the public
-   halves (the steps above).
+   Decisions 1–3 settle it. The user then generates the keys and adds the public halves (the steps
+   above).
 4. **C. `feat(launcher): check for updates`:**
    - `src/player_update` core and the vendored Monocypher;
    - the GET-with-redirects transport method on the three platforms;
@@ -826,42 +850,44 @@ adds a public key.
    - the download with progress, cancel and resume;
    - the supervisor's re-verification, extraction and detached start;
    - `mag-installer update --wait-pid --relaunch --expect-version`;
-   - the update window, keeping the computer awake, and the relaunch notices.
+   - the update window, keeping the computer awake, and the relaunch notices;
+   - **Later** once a day and **Skip this version**;
+   - **Go back to the previous version** in Settings;
+   - the `update_failed` report ([Failure reports](#failure-reports)).
 6. **E. `docs: launcher updates`.** The docs above, plus the acceptance runs on all three platforms,
    recorded outside the repository. The first release with phase D is cut only after the Windows
-   lab acceptance passes (open question 12).
-7. **Later:** "Update required" (a separate spec, with the server repository), Go back to the previous
-   version (if chosen), and an update-failure report (if chosen).
+   lab acceptance passes (decision 12).
+7. **Later:** "Update required", advertised by Medius (a separate spec, with the server repository).
 
-## Open questions
+## Decisions (2026-11-28)
 
-1. **How the key is held:** offline by you, with `tools/sign_release.py` after each release
-   (recommended, because it protects against a compromised GitHub account), or an Actions secret in
-   a protected `release-signing` environment (automatic, but not safe against account compromise)?
-2. **A recovery key:** generate a second offline key now and build it into launchers, so a lost or
-   leaked release key does not strand players (recommended)?
-3. **AGENTS.md:** may `SHA256SUMS.txt.minisig` join the release assets? The rule currently says
-   "Never attach anything else". `SHA256SUMS.txt` and `RELEASE-ASSETS.json` already go beyond its
-   wording, so the change would name all of them.
-4. **Firmware for later updates:** re-locate `libsre.prx` each time (the recorded path, then RPCS3
-   detection, then ask), or keep a private owner-only copy beside `installs.json` so updates never
-   ask for it again? It is the player's own file and stays on their computer either way.
-5. **The previous app:** keep it in `MAG-build/previous/` (proposed), and should Settings offer **Go
-   back to MAG 0.15.0**? Going back is limited by settings written by the newer version, which an
-   older one may treat as unsupported.
-6. **Later:** ask again at every launch (proposed), or at most once a day? Add **Skip this
-   version**?
-7. **Failed updates:** send an `update_failed` report to the portal when reports are on and an
-   account is linked?
-8. **Defaults:** is a 6-hour check interval, on by default in release builds, right?
-9. **macOS signing:** accept that macOS asks for the microphone again after each update (as manual
-   rebuilds do now), or invest in a stable signing identity (Developer ID with notarization, or a
-   per-computer local identity)?
-10. **"Update required":** advertised by the portal or by Medius, and should Training stay playable
-    below the minimum?
-11. **Test lanes:** confirm that `--no-prompt` and `MAG_SKIP_SETUP=1` never check (proposed), so lab
-    automation never reaches GitHub.
-12. **Gating:** must the first release with in-launcher updates wait for the Windows lab
-    acceptance (firewall, ACL, data byte-identical) to pass (proposed)?
-13. **Cleanup:** after a successful update, remove the build workspace and keep only
-    `MAG-build/logs` and `MAG-build/previous` (proposed)?
+The user approved this spec on November 28, 2026, and answered its open questions as follows. The
+body above already reflects each answer.
+
+1. **Signing:** offline, by the user, with `tools/sign_release.py` after each release. There is no
+   CI secret and no signing job ([Release signing](#release-signing)).
+2. **Recovery key:** a second, offline key is generated by the user and built into launchers beside
+   the release key, so a lost or leaked release key does not strand players.
+3. **Signature asset:** `SHA256SUMS.txt.minisig` may be a release asset. The AGENTS.md rule on
+   release assets changes accordingly in the signing phase's PR (phase B), naming all the assets.
+4. **Firmware:** the installer keeps a private copy of the firmware module beside `installs.json`,
+   so updates never ask for it again ([Remembered build inputs](#remembered-build-inputs)).
+5. **Previous version:** it is kept in `MAG-build/previous/`, and Settings offers **Go back to the
+   previous version** ([Go back to the previous version](#go-back-to-the-previous-version)).
+6. **"Later":** MAG asks again at most once a day, and the banner also offers **Skip this
+   version** ([Prompt](#2-prompt)).
+7. **Failures:** a failed or rolled-back update sends an `update_failed` report to the portal when
+   reports are on and an account is linked ([Failure reports](#failure-reports)).
+8. **Check interval:** every 6 hours, on by default in release builds
+   ([Offline-safe, silent and rate-limit aware](#offline-safe-silent-and-rate-limit-aware)).
+9. **macOS:** the microphone prompt after each update is accepted for now. A stable signing
+   identity is not pursued in this design ([macOS](#macos)).
+10. **"Update required":** advertised by Medius later, with Training still playable below the
+    minimum ([Later: "Update required"](#later-update-required)).
+11. **Automation:** `--no-prompt` and `MAG_SKIP_SETUP=1` never check, so lab automation never
+    reaches GitHub ([Where it runs](#where-it-runs)).
+12. **Rollout:** the first release with in-launcher updates (phase D) waits for the Windows lab
+    acceptance to pass ([Implementation plan](#implementation-plan)).
+13. **Cleanup:** after a successful update, the installer removes the build workspace and keeps only
+    `MAG-build/logs` and `MAG-build/previous`
+    ([In-place update in the installer](#in-place-update-in-the-installer)).
