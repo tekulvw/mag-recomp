@@ -332,10 +332,16 @@ def _keep_permissions(app, output, record):
     from . import platforms
     previous = permissions['app']
     platforms.apply_explicit_dacl(app, previous)
-    if platforms.dacl_parts(platforms.folder_dacl(app)) != platforms.dacl_parts(previous):
-        raise InstallerError('The new app folder\'s permissions differ from the previous one\'s; the update was undone.')
-    if platforms.dacl_parts(platforms.folder_dacl(output)) != platforms.dacl_parts(permissions['folder']):
-        raise InstallerError('The MAG folder\'s permissions changed during the update; the update was undone.')
+    # The entries the folder was given and whether it inherits; inherited entries come from the MAG
+    # folder, which is checked to be unchanged.
+    now = platforms.folder_dacl(app)
+    if platforms.explicit_dacl(now) != platforms.explicit_dacl(previous):
+        raise InstallerError('The new app folder\'s permissions differ from the previous one\'s; the update was undone. '
+                             f'Previous: {previous} New: {now}')
+    folder = platforms.folder_dacl(output)
+    if platforms.dacl_parts(folder) != platforms.dacl_parts(permissions['folder']):
+        raise InstallerError('The MAG folder\'s permissions changed during the update; the update was undone. '
+                             f'Before: {permissions["folder"]} Now: {folder}')
     sid = platforms.current_user_sid()
     if platforms.grants_full_control(platforms.dacl_parts(previous)[1], sid):
         for path in [app, *app.rglob('*')]:

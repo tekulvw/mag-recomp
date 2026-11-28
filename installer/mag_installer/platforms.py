@@ -310,6 +310,13 @@ def dacl_parts(sddl):
     return body.split('(', 1)[0], sorted(re.findall(r'\(([^)]*)\)', body))
 
 
+def explicit_dacl(sddl):
+    """(protected, sorted explicit ACE strings) of a DACL SDDL string: what apply_explicit_dacl sets.
+    The auto-inherit bookkeeping flags (AI, AR) and the inherited entries are left out."""
+    flags, aces = dacl_parts(sddl)
+    return 'P' in flags.replace('AI', '').replace('AR', ''), [ace for ace in aces if 'ID' not in ace.split(';')[1]]
+
+
 def apply_explicit_dacl(path, sddl):
     """Windows: give `path` the explicit (not inherited) entries and the protection of `sddl`.
 
