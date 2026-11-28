@@ -16,10 +16,18 @@ from tools.targets import (DEFAULT_TARGET, TARGET_NAMES, get_target,
 SDK_REVISION = '5244db92669b54831c6d3ebb7a96d58c4dbfa6df'
 
 
-def check_sdk(sdk_root: Path, expected_revision: str = SDK_REVISION):
+def check_sdk(sdk_root: Path, expected_revision: str = SDK_REVISION, role: str | None = None):
     revision = subprocess.check_output(['git', '-C', str(sdk_root), 'rev-parse', 'HEAD'], text=True).strip()
     dirty = subprocess.check_output(['git', '-C', str(sdk_root), 'status', '--porcelain', '--untracked-files=no'], text=True)
-    if expected_revision != SDK_REVISION:
+    if role is not None:
+        pin = load_framework()[0].get('ps3recomp', {}).get(role, {})
+        if pin.get('commit') != expected_revision or not pin.get('tag'):
+            raise ValueError('Generator revision does not match its reviewed SDK role')
+        tagged = subprocess.check_output(['git', '-C', str(sdk_root), 'rev-parse', '--verify',
+                                          f"refs/tags/{pin['tag']}^{{commit}}"], text=True).strip()
+        if tagged != expected_revision:
+            raise ValueError('Generator tag does not match its reviewed SDK role')
+    elif expected_revision != SDK_REVISION:
         framework=load_framework()[0]
         if expected_revision not in framework.get('allowed_lifter_revisions',[]):
             raise ValueError('Generator revision is not reviewed')

@@ -91,8 +91,12 @@ def generate_lift(elf_path: Path, functions_path: Path, imports_path: Path, sdk_
     extension_hooks = load_hooks(hooks)
     config=None; control_profile=None; generator_revision=SDK_REVISION
     if target != DEFAULT_TARGET:
-        generator_revision = load_framework()[0]['ps3recomp']['lifter-ppu']['commit']
-        check_sdk(sdk_root, expected_revision=generator_revision)
+        generator_role = 'lifter-ppu-v212'
+        pin = load_framework()[0].get('ps3recomp', {}).get(generator_role)
+        if not pin:
+            raise ValueError('The selected target requires its reviewed lifter-ppu-v212 SDK role')
+        generator_revision = pin['commit']
+        check_sdk(sdk_root, expected_revision=generator_revision, role=generator_role)
     elif nonlocal_profile is None:
         check_sdk(sdk_root)
     else:
@@ -121,6 +125,7 @@ def generate_lift(elf_path: Path, functions_path: Path, imports_path: Path, sdk_
                   analysis_sdk_revision=SDK_REVISION)
     if target != DEFAULT_TARGET:
         result['target'] = target
+        result['lifter_role'] = generator_role
     if control_profile is not None:
         result['nonlocal_control_flow']=control_profile
         result['nonlocal_profile_sha256']=sha256_file(nonlocal_profile)

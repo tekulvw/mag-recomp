@@ -10,7 +10,8 @@ any step that does not work as written.
 
 For the separate offline 2.12 data-preparation investigation, see
 [retail 2.12 preparation](docs/retail-v2.12-preparation.md). That opt-in tool assembles and
-verifies local disc/update inputs; native compilation and execution still target v1.0.
+verifies local disc/update inputs. The default native target remains v1.0;
+an explicit experimental 2.12 build is available on its integration branch.
 The [2.12 branch foundation and audit guide](docs/retail-v2.12-branch.md) documents
 the explicit offline target, separate generated outputs and current lift findings.
 
@@ -62,6 +63,7 @@ python3 -m venv .venv
 | `local/ps3recomp-runtime` | `mag-recomp/runtime-2026.11.27-depthsnap` | `e01945e` | Runtime SDK passed to CMake as `PS3RECOMP_DIR` |
 | `local/ps3recomp-lifter-5244db9` | `mag-recomp/lifter-spu-2026.10.07` | `5244db9` | Inventory and launcher/engine SPU lifting |
 | `local/ps3recomp-lifter-dfa7073` | `mag-recomp/lifter-ppu-2026.10.12` | `dfa7073` | PPU and firmware lifting |
+| `local/ps3recomp-lifter-v212` | `mag-recomp/runtime-2026.11.27-depthsnap` | `e01945e` | Explicit optional 2.12 PPU lifter; fetch with `--role lifter-ppu-v212` |
 | `local/ps3recomp-spu-programs` | `mag-recomp/spu-programs-2026.10.21` | `4c5c05f` | Lifting every embedded engine SPU program |
 
 The PPU lifter checkout must also hold two more tagged commits, pinned as `splice_after` of

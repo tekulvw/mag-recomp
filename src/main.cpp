@@ -1,4 +1,7 @@
 #include "mag_runtime_defaults.h"
+#ifdef MAG_RETAIL_V212
+#include "v212_boot.h"
+#endif
 /*
  * ps3recomp game project -- entry point template.
  *
@@ -528,9 +531,19 @@ int main(int argc, char** argv)
     if (strstr(argv[1], "mage_g")) mag_stall_reporter_start();
     derive_vfs_root(argv[1]);
     printf("[boot] VFS root: %s\n", ppu_vfs_root);
-    /* Our runner always uses a private disc-layout overlay. */
+    /* The 2.12 branch uses explicit disc/HDD roots; v1 keeps its disc overlay. */
     char sfo[4096];
+#ifdef MAG_RETAIL_V212
+    mag::V212BootPaths mounts;
+    std::string mount_error;
+    if (!mag::v212_boot_paths(getenv("PS3_VFS_ROOT"), getenv("PS3_HDD0_ROOT"), mounts, mount_error)) {
+        fprintf(stderr, "[mag-2.12] %s\n", mount_error.c_str());
+        return 89;
+    }
+    snprintf(sfo, sizeof(sfo), "%s", mounts.paramsfo.c_str());
+#else
     snprintf(sfo, sizeof(sfo), "%s/PS3_GAME/PARAM.SFO", ppu_vfs_root);
+#endif
     cellGame_init_from_paramsfo(sfo);
 
     ppu_recomp_register();   /* lifted function table -> address map */

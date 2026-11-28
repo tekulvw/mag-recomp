@@ -9,13 +9,13 @@ ROOT = Path(__file__).resolve().parents[1]
 
 @unittest.skipUnless(shutil.which('cmake'), 'CMake required')
 class RetailTargetCmakeTests(unittest.TestCase):
-    def configure_guard(self, target=None):
+    def configure_guard(self, target=None, experimental=False, extra=()):
         with tempfile.TemporaryDirectory() as tmp:
             script = Path(tmp) / 'guard.cmake'
             script.write_text(f'include("{(ROOT / "cmake/MagRetailTarget.cmake").as_posix()}")\n'
                               'message(STATUS "selected=${MAG_RETAIL_TARGET}")\n')
             args = ['cmake'] + ([f'-DMAG_RETAIL_TARGET={target}'] if target else [])
-            return subprocess.run(args + ['-P', str(script)], capture_output=True, text=True)
+            return subprocess.run(args + (['-DMAG_V212_EXPERIMENTAL_BUILD=ON'] if experimental else []) + list(extra) + ['-P', str(script)], capture_output=True, text=True)
 
     def test_default_and_explicit_v1_build_contract(self):
         for target in (None, 'retail-v1.0'):
@@ -29,6 +29,19 @@ class RetailTargetCmakeTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('audit-only', result.stderr)
         self.assertIn('tools/lift.py', result.stderr)
+
+    def test_v212_requires_explicit_experimental_gate(self):
+        result = self.configure_guard('retail-v2.12', experimental=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('selected=retail-v2.12', result.stdout)
+
+    def test_v212_rejects_unported_adapter_switches(self):
+        for switch in ('MAG_RENDER_FRONTEND_RUST', 'MAG_RENDER_ADAPTER', 'MAG_GAME_CONTROLS',
+                       'MAG_NATIVE_EDGEGEOM', 'MAG_VOICE', 'MAG_INPUT_RUST'):
+            with self.subTest(switch=switch):
+                result = self.configure_guard('retail-v2.12', experimental=True, extra=[f'-D{switch}=ON'])
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('not ported', result.stderr)
 
     def test_unknown_target_fails_before_runtime_configuration(self):
         result = self.configure_guard('guess')

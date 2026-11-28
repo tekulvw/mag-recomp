@@ -28,6 +28,12 @@
         }
       ]
     },
+    "lifter-ppu-v212": {
+      "tag": "mag-recomp/runtime-2026.11.27-depthsnap",
+      "commit": "e01945ed11bb63989066e0be9e711b4d33621013",
+      "path": "local/ps3recomp-lifter-v212",
+      "optional": true
+    },
     "spu-programs": {
       "tag": "mag-recomp/spu-programs-2026.10.21",
       "commit": "4c5c05f60a6ae428b16e5ff7075c24a5e4d282ab",

@@ -1,5 +1,10 @@
 # ps3recomp switches mag-recomp uses
 
+The experimental 2.12 branch build defines `MAG_RETAIL_V212` and returns from
+`mag_apply_runtime_defaults()` before applying the v1 optimization defaults below.
+It starts with the pinned SDK defaults; explicit diagnostic environment values are
+preserved. These v1 performance settings are not assumed validated for 2.12.
+
 The ps3recomp runtime keeps most of its behaviour behind opt-in switches: environment variables
 it reads at run time and CMake options it reads at configure time. This page lists every one
 mag-recomp sets, with the value, the platforms, the file that sets it, the reason and how to turn

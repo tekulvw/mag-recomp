@@ -101,3 +101,152 @@ class PreparedFileTypeTests(unittest.TestCase):
             binary=root/'binary';os.mkfifo(binary.with_suffix('.receipt.json'))
             with self.assertRaises(ValueError):checked_receipt(binary,'0'*64)
             self.assertLess(time.monotonic()-started,1)
+
+
+class V212HandoffTests(unittest.TestCase):
+    def setUp(self):
+        from dataclasses import replace
+        from tools import targets
+        import hashlib
+        self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup)
+        self.root=Path(self.tmp.name);self.vfs=self.root/'disc';self.hdd=self.root/'hdd'
+        self.vfs.mkdir();self.hdd.mkdir();(self.root/'profiles').mkdir()
+        self.source=self.hdd/'game/BCUS98110/USRDIR/bin/mage_g.self'
+        self.source.parent.mkdir(parents=True);self.source.write_bytes(b'synthetic engine SELF')
+        self.engine=self.root/'engine.elf';self.engine.write_bytes(b'synthetic engine ELF')
+        self.launcher=self.root/'launcher.elf';self.launcher.write_bytes(bytes(range(16)))
+        self.binary=self.root/'engine';self.binary.write_bytes(b'synthetic native engine')
+        digest=lambda p:hashlib.sha256(p.read_bytes()).hexdigest()
+        self.images={'EBOOT':dict(elf=str(self.launcher),elf_sha256=digest(self.launcher),source_sha256='a'*64),
+                     'mage_g':dict(elf=str(self.engine),elf_sha256=digest(self.engine),source_sha256=digest(self.source))}
+        self.profile=dict(target='retail-v2.12',title_id='BCUS98110',app_version='02.12',images=self.images)
+        (self.root/'profiles/retail-v2.12.json').write_text(json.dumps(self.profile))
+        self.receipt=dict(image_name='mage_g',target='retail-v2.12',experimental=True,not_runtime_verified=True,
+                          sdk_revision='strict',elf_sha256=digest(self.engine),binary_sha256=digest(self.binary))
+        self.save_receipt()
+        identities={'EBOOT.BIN':('a'*64,digest(self.launcher)),
+                    'bin/mage_g.self':(digest(self.source),digest(self.engine))}
+        selected=replace(targets.get_target('retail-v2.12'),executables=identities)
+        self.addCleanup(patch.stopall)
+        patch('tools.targets._TARGETS',{**targets._TARGETS,'retail-v2.12':selected}).start()
+        patch('tools.handoff.data_path',side_effect=lambda rel:self.root/rel).start()
+        patch('tools.handoff.load_framework',return_value=({'strict_runtime_revisions':['strict'],
+              'strict_hle_runtime_revisions':['strict']},None)).start()
+        patch('tools.handoff.validate_ppu_elf',return_value={'load_segments':[dict(vaddr=0x2c0828,offset=0,filesz=16)]}).start()
+        patch('tools.v212_launcher_profile.verify_launcher',return_value={}).start()
+        patch('tools.v212_launcher_profile.load_profile',return_value={'handoff':{'key_source':dict(address=0x2c0828,length=16,sha256=digest(self.launcher))}}).start()
+
+    def save_receipt(self):
+        self.binary.with_suffix('.receipt.json').write_text(json.dumps(self.receipt))
+
+    def provision(self,**kw):
+        from tools.handoff import provision_handoff
+        return provision_handoff(self.vfs,self.root,self.binary,target='retail-v2.12',hdd0_root=self.hdd,**kw)
+
+    def test_hdd_handoff_pins_pair_target_and_key_without_v1_path(self):
+        from tools.handoff import validate_mapping
+        mapping,env=self.provision()
+        self.assertEqual(mapping['target'],'retail-v2.12')
+        self.assertEqual(mapping['hdd0_root'],str(self.hdd.resolve()))
+        self.assertEqual(mapping['guest_path'],'/dev_hdd0/game/BCUS98110/USRDIR/bin/mage_g.self')
+        self.assertEqual(mapping['self'],str(self.source.resolve()))
+        self.assertEqual(mapping['launcher_elf_sha256'],self.images['EBOOT']['elf_sha256'])
+        self.assertEqual(env['MAG_ENGINE_KEY_SHA256'],mapping['key_sha256'])
+        self.assertEqual(validate_mapping(mapping),self.receipt)
+        self.launcher.write_bytes(b'changed launcher')
+        with self.assertRaises(ValueError):validate_mapping(mapping)
+
+    def test_explicit_hdd_root_and_pinned_complete_pair_required(self):
+        from tools.handoff import provision_handoff
+        with self.assertRaisesRegex(ValueError,'HDD'):
+            provision_handoff(self.vfs,self.root,self.binary,target='retail-v2.12')
+        self.profile['images'].pop('EBOOT')
+        (self.root/'profiles/retail-v2.12.json').write_text(json.dumps(self.profile))
+        with self.assertRaises(ValueError):self.provision()
+
+    def test_v212_candidate_transition_revalidates_exact_source_manifest(self):
+        from tools.handoff import validate_mapping
+        from tools.prepare_inputs import sha256_file
+        manifest=self.root/'candidate.json';manifest.write_text('synthetic candidate')
+        candidate=dict(base_runtime_revision='strict',manifest_path=str(manifest),
+                       manifest_sha256=sha256_file(manifest))
+        self.receipt.update(sdk_revision='candidate',sdk_path=str(self.root/'sdk'),runtime_candidate=candidate)
+        self.save_receipt()
+        actual=dict(sdk_revision='candidate',runtime_candidate=candidate)
+        with patch('tools.provenance.runtime_identity',return_value=actual) as check:
+            mapping,_=self.provision()
+            self.assertEqual(validate_mapping(mapping),self.receipt)
+            self.assertEqual(check.call_count,2)
+            manifest.write_text('modified')
+            with self.assertRaisesRegex(ValueError,'identity'):
+                validate_mapping(mapping)
+        manifest.write_text('synthetic candidate')
+        with patch('tools.provenance.runtime_identity',return_value={**actual,'sdk_revision':'other'}):
+            with self.assertRaisesRegex(ValueError,'changed'):
+                validate_mapping(mapping)
+        candidate['base_runtime_revision']='unreviewed';self.save_receipt()
+        with self.assertRaisesRegex(ValueError,'strict'):
+            validate_mapping(mapping)
+
+    def test_wrong_target_receipt_or_pair_or_fallback_path_rejected(self):
+        from tools.handoff import validate_mapping
+        for changes in ({'target':'retail-v1.0'},{'experimental':False},{'not_runtime_verified':False}):
+            with self.subTest(changes=changes):
+                saved=self.receipt.copy();self.receipt.update(changes);self.save_receipt()
+                with self.assertRaises(ValueError):self.provision()
+                self.receipt=saved;self.save_receipt()
+        mapping,_=self.provision()
+        for changes in ({'launcher_elf_sha256':'b'*64},{'elf_sha256':'b'*64},
+                        {'self_sha256':'b'*64},{'launcher_source_sha256':'b'*64},
+                        {'target':'retail-v1.0'},
+                        {'guest_path':'/dev_bdvd/PS3_GAME/USRDIR/bin/mage_g.self'}):
+            with self.subTest(changes=changes),self.assertRaises(ValueError):validate_mapping({**mapping,**changes})
+
+    def test_legacy_three_argument_provision_keeps_original_mapping_shape(self):
+        from tools.handoff import provision_handoff
+        source=self.vfs/'PS3_GAME/USRDIR/bin/mage_g.self'
+        source.parent.mkdir(parents=True);source.write_bytes(b'legacy SELF fixture')
+        self.engine.write_bytes(b'legacy ELF fixture');self.launcher.write_bytes(b'legacy key bytes')
+        import hashlib
+        images=json.loads(json.dumps(self.images))
+        images['EBOOT'].update(source_sha256='c'*64,elf_sha256=hashlib.sha256(self.launcher.read_bytes()).hexdigest())
+        images['mage_g'].update(source_sha256=hashlib.sha256(source.read_bytes()).hexdigest(),elf_sha256=hashlib.sha256(self.engine.read_bytes()).hexdigest())
+        self.receipt['elf_sha256']=images['mage_g']['elf_sha256']
+        (self.root/'profiles/retail-v1.0.json').write_text(json.dumps({'images':images}))
+        for key in ('target','experimental','not_runtime_verified'):self.receipt.pop(key)
+        self.save_receipt()
+        with patch('tools.handoff.validate_ppu_elf',return_value={'load_segments':[dict(vaddr=0x32a660,offset=0,filesz=16)]}):
+            mapping,env=provision_handoff(self.vfs,self.root,self.binary)
+        self.assertEqual(set(mapping),{'version','token','request','vfs','guest_path','self','elf','binary',
+            'self_sha256','elf_sha256','binary_sha256','key_sha256','strict_revisions','command'})
+        self.assertEqual(mapping['guest_path'],'/dev_bdvd/PS3_GAME/USRDIR/bin/mage_g.self')
+        self.assertNotIn('PS3_HDD0_ROOT',env)
+
+    def test_launcher_change_and_key_identity_mismatch_reject(self):
+        from tools.handoff import validate_mapping
+        mapping,_=self.provision()
+        self.launcher.write_bytes(b'changed launcher')
+        with self.assertRaises(ValueError):validate_mapping(mapping)
+        self.launcher.write_bytes(bytes(range(16)))
+        with patch('tools.v212_launcher_profile.load_profile',return_value={'handoff':{'key_source':{'address':0x2c0828,'sha256':'0'*64}}}):
+            with self.assertRaisesRegex(ValueError,'key identity'):self.provision()
+
+    def test_v212_engine_transition_preserves_roots_and_strips_launcher_identity(self):
+        from tools.handoff import capture_handoff
+        mapping,_=self.provision()
+        req=dict(version=1,token=mapping['token'],guest_path=mapping['guest_path'],kind='mage_g')
+        Path(mapping['request']).write_text(json.dumps(req))
+        env=dict(os.environ,PS3_HDD0_ROOT=str(self.hdd),PS3_VFS_ROOT=str(self.vfs),
+                 MAG_LOCAL_NO_TICKET='1',MAG_LOCAL_ACCOUNT_NAME='FixtureUser',MAG_TRACE_NETWORK='1',PS3_ARGV='fixture')
+        calls=[]
+        def capture(command,cwd,child_env,log_path,seconds,limit):
+            calls.append(child_env);log_path.write_text('fixture')
+            return dict(returncode=90 if len(calls)==1 else 0,stop_reason=None)
+        with patch('tools.boot.capture_process',side_effect=capture):
+            result=capture_handoff(['fixture'],self.root,env,self.root/'console.log',2,mapping)
+        self.assertTrue(result['engine_process_started'])
+        self.assertEqual(calls[1]['PS3_BOOT_PATH'],mapping['guest_path'])
+        self.assertEqual(calls[1]['PS3_HDD0_ROOT'],str(self.hdd.resolve()))
+        self.assertEqual(calls[1]['PS3_VFS_ROOT'],str(self.vfs.resolve()))
+        for key in ('MAG_LOCAL_NO_TICKET','MAG_LOCAL_ACCOUNT_NAME','MAG_TRACE_NETWORK','PS3_ARGV'):
+            self.assertNotIn(key,calls[1])

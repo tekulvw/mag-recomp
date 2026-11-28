@@ -3,8 +3,9 @@ import json
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
-from tools.fetch_ps3recomp import fetch
+from tools.fetch_ps3recomp import fetch, main
 
 ROOT = Path(__file__).resolve().parents[1]
 PROFILES = ROOT / 'profiles'
@@ -67,6 +68,19 @@ class PinTableTests(unittest.TestCase):
 
 
 class FetchTests(unittest.TestCase):
+    def test_optional_target_lifter_is_fetched_only_when_explicitly_selected(self):
+        framework = {'fork': 'https://example.invalid/sdk', 'ps3recomp': {
+            'runtime': {'tag': 'runtime-tag', 'commit': 'runtime-revision', 'path': 'local/runtime'},
+            'lifter-ppu-v212': {'tag': 'target-tag', 'commit': 'target-revision',
+                                'path': 'local/target', 'optional': True}}}
+        for selected, expected in [(None, ['runtime']), ('lifter-ppu-v212', ['lifter-ppu-v212'])]:
+            argv = ['fetch_ps3recomp.py'] + (['--role', selected] if selected else [])
+            with self.subTest(selected=selected), patch('sys.argv', argv), \
+                 patch('tools.fetch_ps3recomp.load_framework', return_value=(framework, Path('framework.json'))), \
+                 patch('tools.fetch_ps3recomp.fetch', side_effect=lambda root, url, role, pin: root/pin['path']) as fetcher:
+                main()
+            self.assertEqual([call.args[2] for call in fetcher.call_args_list], expected)
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)

@@ -1,0 +1,187 @@
+{
+  "version": 1,
+  "target": "retail-v2.12",
+  "image_name": "EBOOT",
+  "elf_sha256": "feb5ed5a3e8f3aab74601ae3edc737e3c010208523d3eb322be997cbe3d79318",
+  "authority": "Offline control-flow and operand inspection of the exact launcher; no runtime acceptance.",
+  "runtime_accepted": false,
+  "symbols": {
+    "settings_reader": 86992,
+    "account_getter": 363444,
+    "account_setter": 365768,
+    "configured_ticket_getter": 363512,
+    "ticket_use": 2555392,
+    "launcher_event": 69768,
+    "spawn_wrapper": 338112,
+    "spawn_caller": 71200
+  },
+  "layout": {
+    "config_root": 4362212,
+    "config_offset": 40,
+    "configured_ticket": 213,
+    "account_name": 76,
+    "account_locked": 221,
+    "short_string_data": 8,
+    "short_string_length": 24,
+    "short_string_capacity": 28,
+    "short_string_capacity_value": 15,
+    "effective_ticket": 8841,
+    "launcher_state": 536,
+    "spawn_key_object_offset": 72
+  },
+  "guard_spans": [
+    {
+      "name": "settings_reader",
+      "address": 86992,
+      "length": 32,
+      "sha256": "89fec370cfaea1b7f82e8ba71bf7b1aa7d605cd33f60e930ab87d4bb33895375"
+    },
+    {
+      "name": "account_getter",
+      "address": 363444,
+      "length": 8,
+      "sha256": "a303bf91d7098b22cb939adce35f0bf27b30a25ba488f1c10c8b6695e00242e2"
+    },
+    {
+      "name": "account_setter",
+      "address": 365768,
+      "length": 32,
+      "sha256": "9fd554404b55e9dabe9aed998885af12d3c5c17f612dd8f02b6e4cd2b83abc45"
+    },
+    {
+      "name": "configured_ticket_getter",
+      "address": 363512,
+      "length": 8,
+      "sha256": "d28897f721032caa199cb0ad68847630541fdf81ef791e4d5834d1675a5ac4ef"
+    },
+    {
+      "name": "retail_ticket_override",
+      "address": 79744,
+      "length": 8,
+      "sha256": "c04d57cc24f3522a71c0bd7a465e8ebae13262d6fe011272f17f87f260acb521"
+    },
+    {
+      "name": "effective_ticket_getter",
+      "address": 2555392,
+      "length": 8,
+      "sha256": "7fb83ff1ec3593ba28047d4a39ca795f4c1b1e6b694cce53b2450e0fd00c0a3f"
+    },
+    {
+      "name": "launcher_event",
+      "address": 69768,
+      "length": 32,
+      "sha256": "6885106c1daa4788c6c740203fc6a6167ece584dc37c4c6be246ea2c5adc9114"
+    },
+    {
+      "name": "spawn_wrapper",
+      "address": 338112,
+      "length": 100,
+      "sha256": "842f3f4b9756fbfa4eba33cb5188af9d021def62dfe8bbe6dff3f40d4cbe4ed8"
+    },
+    {
+      "name": "key_source_pointer",
+      "address": 3210564,
+      "length": 4,
+      "sha256": "5e2aef007901479921302264f7a4d0122be2674ab0af40719b657e5d64473eaf"
+    },
+    {
+      "name": "key_identity",
+      "address": 2885672,
+      "length": 16,
+      "sha256": "86717d397d97b50efabf5aa55cdedd4a35d58aacc586fd060b3a5b1cbd148f05"
+    },
+    {
+      "name": "pace_load_start",
+      "address": 307564,
+      "length": 276,
+      "sha256": "39d305df214738aaed23cd540290888ac01ba5bb52b7b578978ed997172d7c72"
+    },
+    {
+      "name": "pace_filename_pointer",
+      "address": 4290536,
+      "length": 4,
+      "sha256": "340fc8a429fe13e836713fa2a619f8f142cd88047c0eb4a2759328fa091d2bc2"
+    },
+    {
+      "name": "root_initialization",
+      "address": 815172,
+      "length": 36,
+      "sha256": "f5392842e18caf97edd61fe5105eb3af8b302766894d6d9160c513ba806fcdca"
+    },
+    {
+      "name": "root_getter",
+      "address": 750708,
+      "length": 64,
+      "sha256": "40b59c10de8ce648a33deaa118d139578b5ce838026af3b063398814b8447bb8"
+    }
+  ],
+  "handoff": {
+    "spawn_nid": "0xE6C8F3F9",
+    "spawn_import": 2803248,
+    "priority": 1001,
+    "flags": "0x4000000000000000",
+    "key_source": {
+      "pointer_slot": 3210564,
+      "address": 2885672,
+      "length": 16,
+      "sha256": "86717d397d97b50efabf5aa55cdedd4a35d58aacc586fd060b3a5b1cbd148f05",
+      "initializer": 343184,
+      "destination_object_offset": 72
+    },
+    "guest_path": "/dev_hdd0/game/BCUS98110/USRDIR/bin/mage_g.self",
+    "evidence": "Original initializer copies16 bytes from pinned key source into object+0x48. Availability2 worker and spawn use that field. Root3 comes from game-data ContentPermit; root1 from boot ContentPermit. The engine selector tests HDD first, falls back to root1 only after open failure. Exact2.12 profile accepts only the prepared HDD selection.",
+    "availability_nid": "0xF042B14F",
+    "availability_import": 2803344,
+    "path_selection": {
+      "function": 80872,
+      "root_getter": 750708,
+      "relative_path": "bin/mage_g.self",
+      "first_root_selector": 3,
+      "fallback_root_selector": 1,
+      "first_selection_condition": "cellFsOpen succeeds for first root plus relative engine path",
+      "root_table_global_pointer": 3217092,
+      "first_root_string_offset": 116,
+      "fallback_root_string_offset": 148,
+      "root_initializer": 815172,
+      "root_setter": 751644,
+      "first_root": "/dev_hdd0/game/BCUS98110/USRDIR",
+      "first_root_source": "Second cellGameContentPermit following cellGameDataCheck(type3, titleID) or type2 fallback on error0x8002CB05",
+      "fallback_root_source": "First cellGameContentPermit following cellGameBootCheck; normal disc boot uses /dev_bdvd/PS3_GAME/USRDIR",
+      "accepted_condition": "Prepared exact2.12 engine exists at HDD path; original first-path cellFsOpen succeeds; actual spawn path must equal guest_path",
+      "fallback_accepted": false,
+      "required_absent_guest_overrides": [
+        "rootpath",
+        "hddgame",
+        "bd"
+      ]
+    }
+  },
+  "unresolved": [
+    "libpace lifecycle and reachable ABI",
+    "Native boot and account lifecycle acceptance"
+  ],
+  "guest_modules": {
+    "filename": "bin/libpace_g.sprx",
+    "path_builder": 307856,
+    "normal_root_selector": 3,
+    "special_boot_type": 2,
+    "special_root_selector": 0,
+    "load_start_wrapper": 307564,
+    "load_nid": "0x26090058",
+    "start_nid": "0x9F18429D",
+    "load_flags": 0,
+    "load_options": 0,
+    "start_args_size": 0,
+    "start_args": 0,
+    "start_flags": 0,
+    "start_options": 0,
+    "result_pointer": "private guest stack",
+    "accept_condition": "Both load handle and start API return are nonnegative",
+    "shutdown_wrapper": 300384,
+    "alternate_filename_found": false,
+    "limitation": "Filename confirmed in both exact images; lifecycle control flow inspected in launcher only. Alternate module not aliased.",
+    "normal_guest_path": "/dev_hdd0/game/BCUS98110/USRDIR/bin/libpace_g.sprx",
+    "load_start_function": 307564,
+    "unload_nid": "0xF0AECE0D"
+  }
+}
