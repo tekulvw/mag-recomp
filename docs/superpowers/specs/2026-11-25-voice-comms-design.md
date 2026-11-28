@@ -52,9 +52,12 @@ its code is arranged.
   it to every client that listens to that group, marked with the sender's DME client index (U1: which
   transport message carries the group-addressed send, and the delivery form; U10).
 - The game server takes no part in audio. It only decides which groups each client listens to.
-- The game reads one microphone-port signal-state attribute (number 11) and adjusts the microphone
-  port's volume when the value changes (U5: its meaning). The talk indicators come from the game's own
-  voice events, not from that attribute.
+- The game reads one microphone-port signal-state attribute (number 11) while the microphone port is
+  running: a speech level on a 0 to 10 scale that it compares with its microphone sensitivity, and
+  when the level passes it keeps the microphone active and may set the microphone port's volume (U5).
+  Its talk indicators follow the port graph: its own goes off once the microphone port stops running
+  and a short hold passes, and a remote talker ends when that talker's encoded input port is ready
+  (docs/voice-chat.md, "Talk state").
 
 ### Channels
 
@@ -163,7 +166,10 @@ big-endian port parameter block: type, threshold, mute flag, volume, and the bit
   (2026-11-27) showed the game routes in-match talkers there and reads no talker PCM port, so this is
   how received voice is heard (docs/voice-chat.md, "Playback").
 - **Signal state.** The energy and voice-activity attributes report the microphone's real level while
-  the gate is open and silence otherwise. Attribute 11 keeps the stub's answer until U5 is settled.
+  the gate is open and silence otherwise. Attribute 11 reports the top of its scale while the service
+  transmits and 0 otherwise. The microphone port runs only while voice goes out, and a talker's
+  encoded input only while it has voice (with a short linger for packet gaps), so the game's talk
+  indicators end (docs/voice-chat.md, "Talk state").
 - **Unsupported use stays visible.** A port type, edge or attribute the service does not handle logs
   once and answers as the stub does.
 
@@ -285,7 +291,8 @@ channel to it. The server documents how its routing keeps room for this.
   the trace confirms it.
 - **U4** How the game assigns talkers to input ports, the bytes per write, its frame-size and free-space
   checks, and whether it resets a port when its talker changes.
-- **U5** The meaning of signal-state attribute 11.
+- **U5** Settled: a speech level the game compares with its microphone sensitivity (docs/voice-chat.md,
+  "Talk state").
 - **U6** Settled for the menu (table above); the listen sets follow the retail delivery rule in the
   companion document. Remaining: the member menu's "none" on open in larger modes.
 - **U7** Settled: one byte, sent on menu open and each change.

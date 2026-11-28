@@ -253,6 +253,7 @@ uint32_t Service::reset_port(uint32_t id) {
     port->queue.clear();
     if (port->parser) port->parser->reset();
     port->have_sequence = false;
+    port->have_voice = false;  // a new talker: not talking until its first block
     // A new talker on the port: forget the old one's audio and decoder state.
     port->pending.clear();
     port->ready.clear();
@@ -360,7 +361,7 @@ uint32_t Service::port_info(uint32_t id, PortInfo& info) {
     Port* port = find(id);
     if (!port) return status::Topology;
     info.type = port->params.type;
-    info.state = uint32_t(started_ ? PortState::Running : PortState::Idle);
+    info.state = port_state(*port, now());
     info.edges = port->edges;
     if (voice_type(port->params.type)) {
         info.frame_bytes = static_cast<uint32_t>(block_size_for_bitrate(port->params.bitrate));
@@ -477,6 +478,8 @@ uint32_t Service::write(uint32_t id, const uint8_t* data, size_t bytes, size_t& 
         decode_block(*port, block);
         port->have_sequence = true;
         port->last_sequence = block.sequence;
+        port->have_voice = true;
+        port->last_voice = now();
     }
     port->last_write = now();
     if (started_) advance_playout(port->last_write);  // a talker that reaches its hold starts now
@@ -500,7 +503,15 @@ uint32_t Service::signal_state(uint32_t id, uint32_t attr, float& energy, uint32
         is_float = false;
         return status::Ok;
     }
-    return status::DeviceNotPresent;  // as the runtime stub answers every attribute
+    if (attr == AttrSpeechLevel) {
+        // The game keeps its microphone active (and sends what it reads) only while this level is at
+        // or above its sensitivity threshold; push to talk has already decided, so report the top of
+        // the scale while transmitting.
+        vad = live ? SpeechLevelTop : 0;
+        is_float = false;
+        return status::Ok;
+    }
+    return status::DeviceNotPresent;  // as the runtime stub answers every other attribute
 }
 
 void Service::decode_block(Port& port, const Block& block) {
@@ -673,6 +684,22 @@ void Service::pump() {
     }
     expire_output(t);
     summary(t);
+}
+
+// Port state as the game reads it (docs/voice-chat.md, "Talk state"). The microphone runs only while
+// it transmits and is otherwise ready, so the game's talk state ends shortly after push to talk
+// closes. An encoded input runs while its talker is talking and is otherwise ready, so the game ends
+// the talker once its voice has played out. Other ports run while the service runs.
+uint32_t Service::port_state(const Port& port, uint64_t t) const {
+    if (!started_) return uint32_t(PortState::Idle);
+    if (port.params.type == uint32_t(PortType::InMic))
+        return uint32_t(transmitting(t) ? PortState::Running : PortState::Ready);
+    if (port.params.type == uint32_t(PortType::InVoice)) {
+        const bool talking = port.playing || !port.pending.empty() ||
+                             (port.have_voice && t - port.last_voice < options_.talker_linger_ms);
+        return uint32_t(talking ? PortState::Running : PortState::Ready);
+    }
+    return uint32_t(PortState::Running);
 }
 
 bool Service::transmitting(uint64_t t) const {

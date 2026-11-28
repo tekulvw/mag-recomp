@@ -237,8 +237,9 @@ void voice_get_port_info(ppu_context* c) {
         store32(out + 16, info.bytes);
         store32(out + 20, info.frame_bytes);
     }
-    trace("port_info", "\"port\":%u,\"edge_room\":%u,\"edge_array\":%u,\"edges\":%zu,\"bytes\":%u,\"frame\":%u,\"status\":%u",
-          arg(c, 0), room, edges ? 1u : 0u, info.edges.size(), info.bytes, info.frame_bytes, r);
+    trace("port_info",
+          "\"port\":%u,\"state\":%u,\"edge_room\":%u,\"edge_array\":%u,\"edges\":%zu,\"bytes\":%u,\"frame\":%u,\"status\":%u",
+          arg(c, 0), info.state, room, edges ? 1u : 0u, info.edges.size(), info.bytes, info.frame_bytes, r);
     ret(c, r);
 }
 void voice_read(ppu_context* c) {
@@ -270,7 +271,8 @@ void voice_signal_state(ppu_context* c) {
     if (r == status::Ok && out) {
         if (is_float) storef(out, energy); else store32(out, vad);
     }
-    trace("signal_state", "\"port\":%u,\"attr\":%u,\"status\":%u", arg(c, 0), attr, r);
+    trace("signal_state", "\"port\":%u,\"attr\":%u,\"value\":%.4f,\"status\":%u", arg(c, 0), attr,
+          is_float ? double(energy) : double(vad), r);
     ret(c, r);
 }
 

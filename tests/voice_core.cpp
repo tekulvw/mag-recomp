@@ -679,6 +679,165 @@ static void unread_output_expires() {
     service.end();
 }
 
+// The talk state the game derives from the port graph (docs/voice-chat.md, "Talk state"), modelled
+// from that description: each game frame (20 ms) it reads the microphone port's state; while it runs
+// it reads the speech level (attribute 11) and keeps the microphone active, for a hold, when the level
+// reaches its sensitivity threshold; once the port is not running and the hold has run out, the
+// microphone goes inactive. Encoded voice it reads while active is sent, and the talk indicator is on
+// from the first send until the microphone goes inactive.
+struct GameMicModel {
+    Service& service;
+    uint32_t mic, out;
+    int threshold = 5;        // 10 minus the sensitivity
+    uint64_t hold_ms = 250;   // the game's own release hold
+    bool active = true;       // the game starts with the microphone active
+    bool indicator = false;
+    uint64_t hold_left = 250;
+    size_t sent = 0;
+    void frame() {
+        PortInfo info;
+        CHECK(service.port_info(mic, info) == status::Ok);
+        if (info.state == uint32_t(PortState::Running)) {
+            float energy = 0;
+            uint32_t level = 0;
+            bool is_float = true;
+            if (service.signal_state(mic, AttrSpeechLevel, energy, level, is_float) == status::Ok && !is_float &&
+                int(level) >= threshold) {
+                active = true;
+                hold_left = hold_ms;
+            }
+        } else if (hold_left == 0 || info.state == uint32_t(PortState::Idle)) {
+            active = false;
+        }
+        hold_left = hold_left > 20 ? hold_left - 20 : 0;
+        uint8_t buffer[1024];
+        size_t copied = 0;
+        CHECK(service.read(out, buffer, sizeof buffer, copied) == status::Ok);
+        if (copied && active) {
+            sent += copied;
+            indicator = true;
+        }
+        if (!active) indicator = false;
+    }
+};
+
+// The microphone port runs only while voice goes out, and the speech level follows it, so the game's
+// talk indicator goes off shortly after push to talk closes instead of staying on.
+static void microphone_state_ends_talking() {
+    Clock clock;
+    ServiceOptions options;
+    options.now_ms = [&clock] { return clock.ms; };
+    options.source = std::make_unique<TestToneSource>();  // one second on, one second off
+    options.encoder = std::make_unique<PatternEncoder>();
+    Service service(std::move(options));
+    service.init();
+    PortParams mic_params;
+    mic_params.type = uint32_t(PortType::InMic);
+    uint32_t mic = 0, out = 0;
+    service.create_port(mic_params, mic);
+    service.create_port(voice_port(PortType::OutVoice), out);
+    service.connect(mic, out);
+    PortInfo info;
+    CHECK(service.port_info(mic, info) == status::Ok && info.state == uint32_t(PortState::Idle));  // not started
+    service.start();
+    GameMicModel game{service, mic, out};
+    uint64_t on_ms = 0, off_after_release = 0;
+    size_t sent_first = 0;
+    for (int f = 0; f < 200; ++f) {  // four seconds: two talk spurts
+        clock.ms += 20;
+        const uint64_t t = clock.ms - 1000;  // since start
+        game.frame();
+        const bool talking = (t / 1000) % 2 == 0;
+        if (talking && game.indicator) on_ms += 20;
+        if (!talking && game.indicator && t % 1000 > off_after_release) off_after_release = t % 1000;
+        if (f == 99) sent_first = game.sent;
+    }
+    std::printf("talk indicator: on %llu ms of 2000 talking, still on %llu ms after release; sent %zu then %zu bytes\n",
+                (unsigned long long)on_ms, (unsigned long long)off_after_release, sent_first, game.sent - sent_first);
+    CHECK(on_ms >= 1900);               // on for the talk spurts
+    CHECK(off_after_release <= 460);    // off within the gate's tail, a frame and the game's hold
+    CHECK(sent_first > 20 * 37);        // the first spurt was sent...
+    CHECK(game.sent - sent_first > 20 * 37);  // ...and so was the second, after the microphone went inactive
+    // Between spurts the port is ready and the level reads 0; while talking it runs at the top.
+    clock.ms += 2000 - (clock.ms - 1000) % 2000 + 1100;  // 100 ms into a silent second
+    float energy = 0;
+    uint32_t level = 9;
+    bool is_float = true;
+    CHECK(service.port_info(mic, info) == status::Ok && info.state == uint32_t(PortState::Ready));
+    CHECK(service.signal_state(mic, AttrSpeechLevel, energy, level, is_float) == status::Ok && !is_float && level == 0);
+    clock.ms += 1000;  // 100 ms into a talking second; the game reads on
+    uint8_t buffer[1024];
+    size_t copied = 0;
+    service.read(out, buffer, sizeof buffer, copied);
+    CHECK(service.port_info(mic, info) == status::Ok && info.state == uint32_t(PortState::Running));
+    CHECK(service.signal_state(mic, AttrSpeechLevel, energy, level, is_float) == status::Ok && level == SpeechLevelTop);
+    service.stop();
+    CHECK(service.port_info(mic, info) == status::Ok && info.state == uint32_t(PortState::Idle));
+    service.end();
+}
+
+// A talker's encoded input runs while it holds or plays voice and briefly after its newest block, so
+// the game ends the talker (and its talk indicator) soon after the talker's packets stop, but not in
+// the gaps between packets.
+static void talker_state_ends_after_packets_stop() {
+    Clock clock;
+    ServiceOptions options;
+    options.now_ms = [&clock] { return clock.ms; };
+    options.decoder = [] { return std::unique_ptr<FrameDecoder>(std::make_unique<FakeDecoder>()); };
+    Service service(std::move(options));
+    service.init();
+    uint32_t in = 0, headset = 0;
+    service.create_port(voice_port(PortType::InVoice), in);
+    PortParams head_params;
+    head_params.type = uint32_t(PortType::OutSecondary);
+    service.create_port(head_params, headset);
+    service.connect(in, headset);
+    service.start();
+    const auto state = [&] {
+        PortInfo info;
+        CHECK(service.port_info(in, info) == status::Ok);
+        return info.state;
+    };
+    std::vector<int16_t> pcm(320);
+    const auto play = [&](unsigned ms) {  // the host stream pulls 20 ms at a time
+        for (unsigned t = 0; t < ms; t += 20) {
+            clock.ms += 20;
+            service.render_secondary(pcm.data(), pcm.size());
+        }
+    };
+    CHECK(state() == uint32_t(PortState::Ready));  // no talker yet
+    // Packets of five blocks (200 ms) every 200 ms, with up to 120 ms of extra jitter.
+    uint8_t sequence = 0;
+    size_t accepted = 0;
+    bool always_running = true;
+    for (int packet = 0; packet < 10; ++packet) {
+        for (int b = 0; b < 5; ++b) {
+            const auto block = one_block(sequence++, 10);
+            service.write(in, block.data(), block.size(), accepted);
+        }
+        for (unsigned t = 0; t < 200u + unsigned(packet % 3) * 60u; t += 20) {
+            play(20);
+            if (state() != uint32_t(PortState::Running)) always_running = false;
+        }
+    }
+    CHECK(always_running);
+    // The packets stop: the talker plays out what it holds and is ready (gone) within the linger.
+    unsigned until_ready = 0;
+    while (state() == uint32_t(PortState::Running) && until_ready < 2000) {
+        play(20);
+        until_ready += 20;
+    }
+    std::printf("talker: ready %u ms after the last packet's playout window\n", until_ready);
+    CHECK(until_ready > 0 && until_ready <= 520);
+    // A reset (the game giving the slot to a new talker) is ready until that talker's first block.
+    const auto block = one_block(sequence++, 10);
+    service.write(in, block.data(), block.size(), accepted);
+    CHECK(state() == uint32_t(PortState::Running));
+    service.reset_port(in);
+    CHECK(state() == uint32_t(PortState::Ready));
+    service.end();
+}
+
 int main() {
     block_sizes();
     parser_every_split();
@@ -695,6 +854,8 @@ int main() {
     port_volumes_reach_the_encoder();
     signal_state_follows_transmission();
     unread_output_expires();
+    microphone_state_ends_talking();
+    talker_state_ends_after_packets_stop();
     if (failures) {
         std::printf("%d failures\n", failures);
         return 1;
