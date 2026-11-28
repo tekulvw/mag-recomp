@@ -86,8 +86,10 @@ def hook_records(hooks) -> list:
 def generate_lift(elf_path: Path, functions_path: Path, imports_path: Path, sdk_root: Path, output_dir: Path, nonlocal_profile: Path | None = None, hooks=(), target: str = DEFAULT_TARGET) -> dict:
     definition = get_target(target)
     validate_target_output(output_dir, target, workspace=prepare_inputs.WORKSPACE)
-    if target != DEFAULT_TARGET and (nonlocal_profile is not None or hooks):
-        raise ValueError('The selected target cannot use v1 nonlocal profiles or lift hooks')
+    if target != DEFAULT_TARGET and hooks:
+        raise ValueError('The selected target cannot use v1 lift hooks')
+    if target != DEFAULT_TARGET and nonlocal_profile is not None and elf_path.stem != 'mage_g':
+        raise ValueError('2.12 nonlocal control flow is reviewed only for the exact engine')
     extension_hooks = load_hooks(hooks)
     config=None; control_profile=None; generator_revision=SDK_REVISION
     if target != DEFAULT_TARGET:
@@ -97,6 +99,9 @@ def generate_lift(elf_path: Path, functions_path: Path, imports_path: Path, sdk_
             raise ValueError('The selected target requires its reviewed lifter-ppu-v212 SDK role')
         generator_revision = pin['commit']
         check_sdk(sdk_root, expected_revision=generator_revision, role=generator_role)
+        if nonlocal_profile is not None:
+            from tools.v212_nonlocal_profile import validate_profile
+            config,control_profile=validate_profile(nonlocal_profile,sdk_root,elf_path,elf_path.stem)
     elif nonlocal_profile is None:
         check_sdk(sdk_root)
     else:

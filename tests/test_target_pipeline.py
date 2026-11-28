@@ -3,6 +3,7 @@ import contextlib
 import json
 import runpy
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -108,6 +109,31 @@ class TargetPipelineTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, '2.12|target|v1'):
                     self.generate(**options)
                 generator.assert_not_called()
+
+    def test_updated_engine_uses_only_independently_validated_nonlocal_profile(self):
+        self.elf=self.root/'mage_g.elf'
+        self.analysis=self.root/self.definition.analysis/'mage_g';self.analysis.mkdir()
+        self.functions=self.analysis/'reviewed-functions.json';self.functions.write_text('[]')
+        self.imports=self.analysis/'mage_g.imports.json';self.imports.write_text('[]')
+        self.summary.update(image='mage_g',elf_sha256=sha256_file(self.elf))
+        self.write_summary();self.output=self.root/self.definition.generated/'mage_g'
+        selected=self.root/'review.json';selected.write_text('synthetic reviewed profile')
+        config=self.root/'config.json';config.write_text('synthetic nonlocal configuration')
+        review=dict(target=self.target,image_name='mage_g',sdk_revision='reviewed-ppu')
+        calls=[]
+        def validate(*args):
+            calls.append(args);return config,review
+        module=SimpleNamespace(validate_profile=validate)
+        with self.environment(), patch('tools.lift.check_sdk'), \
+             patch.dict(sys.modules, {'tools.v212_nonlocal_profile':module}), \
+             patch('tools.lift.run_generator',side_effect=self.fake_generate), \
+             patch('tools.lift.subprocess.run',return_value=subprocess.CompletedProcess([],0)):
+            result=self.generate(nonlocal_profile=selected)
+        self.assertEqual(calls,[(selected,self.root/'sdk',self.elf,'mage_g')])
+        self.assertEqual(result['nonlocal_control_flow'],review)
+        self.assertEqual(result['nonlocal_profile_sha256'],sha256_file(selected))
+        at=result['command'].index('--nonlocal-control-flow')
+        self.assertEqual(result['command'][at+1],str(config))
 
     def test_wrong_profile_target_version_or_pair_binding_is_rejected(self):
         for field, value in [('target', 'retail-v1.0'), ('target', None),

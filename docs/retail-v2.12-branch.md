@@ -7,8 +7,10 @@ working v1.0 baseline separate while the new port is prepared and audited.
 
 The supported default remains retail v1.0. The 2.12 branch now has an explicit
 experimental native build, with separate original-code modules and source-bound
-launcher adapters. Its launcher and engine compile and link; boot, character
-creation and login acceptance remain unproven. Do not apply v1 sign-in, controls,
+launcher adapters. Its launcher and engine compile and link. The original launcher has completed
+authentication, all four patch-level checks and its engine-spawn request against
+an isolated protocol-1793 server. The engine renders its initial Sony intro;
+menu progression, character creation and login acceptance remain unproven. Do not apply v1 sign-in, controls,
 native SPU/Edge or renderer adapters to the new images.
 
 ## Inputs and isolated paths
@@ -53,7 +55,8 @@ Fetch the analysis pin and the separately selected 2.12 PPU lifter:
 .venv/bin/python tools/lift.py --target retail-v2.12 --image EBOOT \
   --sdk local/ps3recomp-lifter-v212
 .venv/bin/python tools/lift.py --target retail-v2.12 --image mage_g \
-  --sdk local/ps3recomp-lifter-v212
+  --sdk local/ps3recomp-lifter-v212 \
+  --nonlocal-profile profiles/retail-v2.12-nonlocal.json
 ```
 
 Inventory uses the clean pinned analysis SDK. The 2.12 generator uses the clean
@@ -64,6 +67,12 @@ overlap v1 working roots. Existing evidence is never automatically deleted.
 
 Target and manifest hashes bind each inventory and receipt. The 2.12 path rejects
 v1 nonlocal-control-flow profiles and lift hooks, including `MAG_LIFT_HOOKS`.
+The independently reviewed 2.12 engine nonlocal profile is accepted only for its
+exact ELF, lifter source, restore function and protected continuation. It keeps
+Lua's original register restore, then transfers to the saved guest continuation
+through the lifter's existing context- and thread-qualified support. An ordinary
+host return from this restore corrupts the throwing path. Generation without this
+profile remains useful for comparison and audit, rather than engine boot acceptance.
 Unsupported generated PPU instructions and unresolved targets retain explicit
 execution guards. The normal CMake build defaults to v1.0;
 `-DMAG_RETAIL_TARGET=retail-v2.12` also requires the explicit
@@ -89,13 +98,15 @@ and module start/stop functions. The alternative `libpacePrx_g` image is retaine
 for investigation and is rejected as a substitute by native build validation.
 The generated source and embedded module image remain private.
 
-Configure a separate directory for each image, replacing `EBOOT` with `mage_g`
-for the engine:
+Select the published SDK candidate and its source-bound manifest as absolute
+paths in `SDK_CANDIDATE_DIR` and `SDK_CANDIDATE_MANIFEST`. Configure a separate
+directory for each image, replacing `EBOOT` with `mage_g` for the engine:
 
 ```sh
 cmake -S . -B build/retail-v2.12/EBOOT -G Ninja \
   -DMAG_RETAIL_TARGET=retail-v2.12 -DMAG_V212_EXPERIMENTAL_BUILD=ON \
-  -DMAG_IMAGE=EBOOT -DPS3RECOMP_DIR="$PWD/local/ps3recomp-runtime" \
+  -DMAG_IMAGE=EBOOT -DPS3RECOMP_DIR="$SDK_CANDIDATE_DIR" \
+  -DMAG_RUNTIME_CANDIDATE_MANIFEST="$SDK_CANDIDATE_MANIFEST" \
   -DRECOMP_DIR="$PWD/generated/retail-v2.12/EBOOT" \
   -DMAG_FIRMWARE_DIR="$PWD/generated/retail-v2.12/firmware"
 cmake --build build/retail-v2.12/EBOOT --parallel 2
@@ -109,6 +120,10 @@ SDK commit and tree, framework hash, reviewed ancestor revision, target,
 `codex/retail-v2.12` integration branch and a focused SDK source PR. This leaves
 the ordinary runtime allowlist unchanged. Candidate manifests and local SDK paths
 belong in ignored working data; no release tag is required or created by this flow.
+The engine also queries optional upgrade licenses. [SDK PR193](https://github.com/tekulvw/ps3recomp/pull/193)
+provides the native missing-license result and preserves an explicit error for
+present files whose EDAT verification is unsupported. The base-game preparation
+does not supply optional-content entitlements.
 
 Native receipts retain `experimental: true` and `not_runtime_verified: true` and
 bind the PPU, SPU, firmware, PACE and adapter sources. Execution requires separate
@@ -122,6 +137,10 @@ over the same member in `game.psarc.sdat`. A bounded headless bootstrap uses
 literal closed-loopback endpoints. It checks ownership and stops/reaps its exact
 process group; logs and receipts stay ignored. This tool exposes no live-host or
 input-injection option. Its loopback settings checks are not an OS egress sandbox.
+The engine has a separately qualified settings callback and original account
+setter with its own TOC. Local mode requires configured `UseNPTicket=false` and
+an empty, unlocked name. A process handoff must select that fresh engine profile;
+the launcher's in-memory identity is not transferred implicitly.
 
 ## Offline SPU audit
 
@@ -179,9 +198,18 @@ continuations. The three engine fallthrough candidates were input-map boundary
 errors; their actual next functions are emitted and registered. Word-marker
 censuses and executed halt guards remain. All 46 prepared SPU C units also compile.
 
-The first bounded native launcher probe reached original startup and firmware
-loading, then halted at missing SDK `sys_prx_register_library`. Correct registration
-of the game's shared-library exports is required before PACE can use them. No live
-2.12 server connection, game boot or real-match acceptance is established by these
-build and bootstrap findings. Protocol 1793 server work proceeds independently on
-its integration branch with isolated accounts and service endpoints.
+Source-bound native launcher probes now verify the original local account setter,
+configured no-ticket mode, and the rendered three-faction background. Against a
+reserved nonserving loopback endpoint, the original SCERT client reaches its
+generic connection-failure/retry path. The selected TCP setting reaches the actual
+MAPS connect method; later UDP behavior remains unclassified.
+
+The engine probes execute original SPURS work. The optional-license query
+was qualified separately; Lua's nonlocal-return gap is handled by the exact
+profile above. The engine identity policy runs at the original connection
+consumer, after all authored settings tables have been parsed. A private literal
+`MAGCharacterData.PlayerName` selects the isolated actor through the original
+settings reader. The bounded engine probe now renders its initial Sony intro.
+These findings do not establish menu progression, character creation, login or
+real-match acceptance. Further connected engine and character probes require
+the isolated server owner's availability and source-bound capture handoff.

@@ -38,6 +38,35 @@ MAGClientNetConfig.MAPSServerUDPPort = 63326
 
 
 class BootProbeTests(unittest.TestCase):
+    def test_movie_environment_is_explicit_engine_only_and_enables_three_flags_together(self):
+        switches = ('PS3RECOMP_SAIL_TIMED_THX', 'PS3RECOMP_SAIL_ATRAC_AUDIO', 'PS3RECOMP_GCM_CHECKED_REF')
+        inherited = {key: '1' for key in switches}
+        args = (inherited, Path('/disc'), Path('/hdd'), Path('/output'))
+        default = probe.clean_environment(*args, image='mage_g')
+        self.assertTrue(all(key not in default for key in switches))
+        movies = probe.clean_environment(*args, image='mage_g', movies=True)
+        self.assertTrue(all(movies[key] == '1' for key in switches))
+        self.assertEqual(movies['PS3RECOMP_METAL_HEADLESS'], '1')
+        self.assertEqual(movies['PAD_NO_KEYBOARD'], '1')
+        for image, selected in [('EBOOT', True), ('mage_g', '1')]:
+            with self.assertRaises(ValueError):
+                probe.clean_environment(*args, image=image, movies=selected)
+
+    def test_movie_probe_rejects_wrong_image_or_unqualified_receipt_before_run(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            files = [root/name for name in ('runner', 'engine.elf', 'settings.json')]
+            for path in files: path.write_text('synthetic')
+            disc, hdd = root/'disc', root/'hdd'; disc.mkdir(); hdd.mkdir()
+            for image, available in [('EBOOT', True), ('mage_g', False), ('mage_g', None), ('mage_g', 'true')]:
+                identity = dict(movie_playback_available=available, settings={'values': {}})
+                with patch.object(probe, 'validate_inputs', return_value=identity), \
+                     patch.object(probe, 'ClosedLoopback') as ports, patch.object(probe, 'run_owned') as run:
+                    with self.subTest(image=image, available=available), self.assertRaises(ValueError):
+                        probe.probe(files[0], files[1], image, disc, hdd, files[2], root/'output', movies=True)
+                    ports.assert_not_called(); run.assert_not_called()
+            self.assertFalse((root/'output').exists())
+
     def test_environment_scrubs_inherited_game_input_network_and_loader_controls(self):
         source = {'PATH': '/unexpected', 'HOME': '/synthetic-home', 'MAG_LOCAL_ACCOUNT_NAME': 'wrong',
                   'PS3_NET_ONLINE': '1', 'PAD_SCRIPT': '0:CROSS', 'PAD_FILE': '/input',
@@ -308,6 +337,33 @@ class InputValidationTests(unittest.TestCase):
         self.assertEqual(result['settings']['values']['MAPSServerAddr'], '127.0.0.1')
         self.assertEqual(result['binary_sha256'], probe.sha256_file(self.binary))
         self.assertTrue(result['not_runtime_verified'])
+
+    def test_movie_capability_uses_exact_boolean_build_receipt_field(self):
+        for value in [None, False, 'true', 1, True]:
+            self.receipt['movie_playback'] = value
+            self.binary.with_suffix('.receipt.json').write_text(json.dumps(self.receipt))
+            self.assertIs(self.validate()['movie_playback_available'], value is True)
+
+    def test_qualified_synthetic_engine_movie_probe_records_mode_and_keeps_owned_cleanup(self):
+        self.binary.write_text('#!'+sys.executable+'\nimport os\n'
+            'assert all(os.environ.get(k)=="1" for k in '
+            '("PS3RECOMP_SAIL_TIMED_THX","PS3RECOMP_SAIL_ATRAC_AUDIO","PS3RECOMP_GCM_CHECKED_REF"))\n'
+            'assert os.environ["PAD_NO_KEYBOARD"]=="1"\n'
+            'print("synthetic movie mode only")\nraise SystemExit(88)\n')
+        self.receipt.update(image_name='mage_g', movie_playback=True,
+            binary_sha256=probe.sha256_file(self.binary),
+            elf_sha256=self.manifest['images']['mage_g']['elf_sha256'])
+        self.binary.with_suffix('.receipt.json').write_text(json.dumps(self.receipt))
+        # Nonlocal extension identity is covered by its own source-bound tests;
+        # this synthetic executable contains no guest unwind implementation.
+        with patch.object(probe, 'validate_v212_lift_extensions') as extensions:
+            result = probe.probe(self.binary, self.root/'mage_g.elf', 'mage_g', self.disc,
+                self.hdd, self.settings, self.root/'movie-probe', seconds=1, movies=True)
+        self.assertTrue(extensions.call_args.kwargs['require_nonlocal'])
+        self.assertTrue(result['movies']); self.assertTrue(result['movie_playback_available'])
+        self.assertEqual(result['exit_code'], 88)
+        self.assertTrue(result['reaped']); self.assertTrue(result['group_cleanup_verified'])
+        self.assertTrue(result['reservations_released'])
 
     def test_lower_priority_game_archive_proof_cannot_authorize_probe(self):
         lower = self.hdd / 'game/BCUS98110/USRDIR/game.psarc.sdat'

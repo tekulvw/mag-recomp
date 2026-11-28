@@ -1,0 +1,196 @@
+{
+  "version": 1,
+  "target": "retail-v2.12",
+  "image_name": "mage_g",
+  "elf_sha256": "705a6ec6a25458b2401b869e75e2904597304e2c06d9534a171a1dcd54aca2b3",
+  "authority": "Offline original engine operands, callback/vtable descriptors, complete direct branch census and authored private Lua table/key evidence.",
+  "runtime_accepted": false,
+  "symbols": {
+    "settings_reader": 4497288,
+    "account_getter": 1086396,
+    "account_setter": 1089448,
+    "configured_ticket_getter": 1086480,
+    "ticket_initialization": 1385972,
+    "ticket_use": 12741296,
+    "account_request_consumer": 1406940,
+    "account_setter_toc": 22989328,
+    "account_setter_thunk": 12071028,
+    "final_connect": 1404084,
+    "player_name_reader": 4509068
+  },
+  "layout": {
+    "config_root": 23314808,
+    "config_offset": 40,
+    "configured_ticket": 213,
+    "account_name": 76,
+    "account_locked": 221,
+    "short_string_data": 8,
+    "short_string_length": 24,
+    "short_string_capacity": 28,
+    "short_string_capacity_value": 15,
+    "effective_ticket": 8841,
+    "account_random_name": 221
+  },
+  "dispatch": {
+    "settings_opd": 22781864,
+    "settings_toc": 23054740,
+    "settings_opd_toc_reference": 22957816,
+    "direct_branch_references": 0,
+    "policy": "Settings callback runs the original reader and observes handled results only. Evaluate account policy at the original final connect virtual entry, then call that original routine exactly once.",
+    "registration_callsite": 90264,
+    "registration_function": 964996,
+    "settings_event_hash": "0x03B9CDAB",
+    "connect": {
+      "code": 1404084,
+      "opd": 22683240,
+      "toc": 22989328,
+      "vtable_base": 22276600,
+      "vtable_slot": 80,
+      "vtable_reference": 22276680,
+      "direct_branch_references": 0,
+      "code_start": 65536,
+      "code_end": 18227020
+    }
+  },
+  "policy": {
+    "rewrite_effective_ticket": false,
+    "fabricate_np_status": false,
+    "account": "Validate only at original connect after settings application: configured tickets false, RandomName false, short selected identity matching, or use original setter only for an empty configuration. Reject conflicting nonempty names.",
+    "ticket": "Validate original configured false value after Lua reader. Original engine setup copies that flag; do not rewrite its connection object.",
+    "settings": "Run original settings callback unchanged; log handled results only. Do not supply or reject identity from intermediate settings reads."
+  },
+  "guard_spans": [
+    {
+      "name": "settings_reader",
+      "address": 4497288,
+      "length": 32,
+      "sha256": "c1f706416da44731cb74bc7b211d5ef1c9caf6ccc640fcc54a45097c7dc8c4b7"
+    },
+    {
+      "name": "settings_callback_opd",
+      "address": 22781864,
+      "length": 8,
+      "sha256": "986c2d8ab282fd343e9b87d48ce48c100a93623f32c90ed15c32adc7bb1825a9"
+    },
+    {
+      "name": "settings_callback_toc_reference",
+      "address": 22957816,
+      "length": 4,
+      "sha256": "ed0618dc48596a7ff484b1ea7cb769d4d68e64eef7a33ef69a6d39ef26d461b8"
+    },
+    {
+      "name": "config_root_toc",
+      "address": 23060756,
+      "length": 4,
+      "sha256": "c33c5b93caa0773a4b6f170a43f44afca0f8c12234e027d6e9be823075db0c8f"
+    },
+    {
+      "name": "account_getter",
+      "address": 1086396,
+      "length": 12,
+      "sha256": "c16f39c08a32ede6416c029f74176186b7e20eb054e07d7081381d8949399a16"
+    },
+    {
+      "name": "account_setter_lock",
+      "address": 1089448,
+      "length": 128,
+      "sha256": "bf7f4feb57bbfc39fe9bdb4f912ec962b5a3e2549590a9f78ead316665d3bf8c"
+    },
+    {
+      "name": "configured_ticket_getter",
+      "address": 1086480,
+      "length": 8,
+      "sha256": "d28897f721032caa199cb0ad68847630541fdf81ef791e4d5834d1675a5ac4ef"
+    },
+    {
+      "name": "ticket_initialization",
+      "address": 1386020,
+      "length": 84,
+      "sha256": "5aba27cddf6aa737a90924f072137372afcd9668c7e815db4f3af017dd9db979"
+    },
+    {
+      "name": "effective_ticket_getter",
+      "address": 12741296,
+      "length": 8,
+      "sha256": "7fb83ff1ec3593ba28047d4a39ca795f4c1b1e6b694cce53b2450e0fd00c0a3f"
+    },
+    {
+      "name": "account_request_consumer",
+      "address": 1407148,
+      "length": 36,
+      "sha256": "d23918db2749603b24314898b2b485197475a4083c4ff6842405bbfcb88ec50b"
+    },
+    {
+      "name": "settings_callback_registration",
+      "address": 90252,
+      "length": 36,
+      "sha256": "96d582ea7789860e53ab6244e3bfd0cfc435a623a7173851067a5733498cc761"
+    },
+    {
+      "name": "callback_list_insertion",
+      "address": 964996,
+      "length": 112,
+      "sha256": "6ae77c2ab90af10450f34f26beac22d4b2ea41cbac0e8ffa16fd65a0fd354c9a"
+    },
+    {
+      "name": "account_setter_cross_toc_thunk",
+      "address": 12071028,
+      "length": 16,
+      "sha256": "f349edc3707507afe1843cff7bb558b81848133d507c2c1ad799f8527a236a9e"
+    },
+    {
+      "name": "final_connect",
+      "address": 1404084,
+      "length": 32,
+      "sha256": "a76b7e7fd0d7436617de18306a5525a65b6347c761f5917db8106db224aaad12"
+    },
+    {
+      "name": "final_connect_opd",
+      "address": 22683240,
+      "length": 8,
+      "sha256": "f35b1cb7037c45d73071b0ee7cd1db09f5c848cc3e0c0de3194c7efa082fc513"
+    },
+    {
+      "name": "final_connect_vtable_reference",
+      "address": 22276680,
+      "length": 4,
+      "sha256": "68e2403d6861ecbd0351eb26ccc566552dfe866f1ff1881555a554a913b33f8d"
+    },
+    {
+      "name": "player_name_reader",
+      "address": 4509068,
+      "length": 48,
+      "sha256": "a25fe3dd6bf8e464349c16d57e524d4c1cbeac41db6f5be1c05829d2f7139aaa"
+    },
+    {
+      "name": "player_name_setter_call",
+      "address": 4509308,
+      "length": 24,
+      "sha256": "814e3c0b1a645cc2c3edb737b39f74e7a7a5404c418898b26db00cc4ed2b809c"
+    },
+    {
+      "name": "player_name_key_toc",
+      "address": 23061804,
+      "length": 4,
+      "sha256": "8c8e38a7091637cc518c7bc988565d2c2dfc58462a114bdef66be238fc381363"
+    }
+  ],
+  "authored_lua": {
+    "member": "/run/mag/ps3/settings/magrootsettings.lua",
+    "table": "MAGCharacterData",
+    "field": "PlayerName",
+    "original_default_length": 6,
+    "reader": 4509068,
+    "setter_callsite": 4509324,
+    "sources": [
+      {
+        "archive_sha256": "f139102f4c51fdf9ea8ce85b8211c30c013dd8cde164fccaccd1b6f17e4f1a40",
+        "member_sha256": "d985309994699b0d06ef63f5ddb643feb588773a8738fcc17832fe71dee7d1ea"
+      },
+      {
+        "archive_sha256": "b49c9435be729832029ad7019874d478080dc9764ebde1809b2851d353bc769f",
+        "member_sha256": "60a72a3646d4873d20183e8bf402be0f77346a254901a8dd56aa424729ebd0bf"
+      }
+    ]
+  }
+}

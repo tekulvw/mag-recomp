@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "target": "retail-v2.12",
+  "image_name": "mage_g",
+  "elf_sha256": "705a6ec6a25458b2401b869e75e2904597304e2c06d9534a171a1dcd54aca2b3",
+  "sdk_role": "lifter-ppu-v212",
+  "sdk_revision": "e01945ed11bb63989066e0be9e711b4d33621013",
+  "lifter_sha256": "d1473eaa146b2f630fd127b425d6cafacbaae0d58f06dc17e5bd1cc070dd8773",
+  "configuration": "retail-v2.12-nonlocal-config.json",
+  "configuration_sha256": "5e6531d6bcacc8a5b582397620854439fec5219a3017ea0564464bd52c0b9156",
+  "expected_changed_functions": [
+    "func_007BF600",
+    "func_00AF96E0"
+  ],
+  "guard_spans": [
+    {
+      "name": "continuation_owner",
+      "address": "0x007BF600",
+      "length": 144,
+      "sha256": "c4f63f07023aa156ec2832fe0d4f3ee6ddc512e2ca59723451f315c089191ae5"
+    },
+    {
+      "name": "original_setjmp",
+      "address": "0x00AF95BC",
+      "length": 292,
+      "sha256": "0dce7cc4380002cbb29fc1a9fd282e8a75090fc2e1d966525cb6367d63aeb314"
+    },
+    {
+      "name": "original_longjmp",
+      "address": "0x00AF96E0",
+      "length": 328,
+      "sha256": "895acc397cb9f80367de22069057019f3b9794ac83e1f3a7a9396a412b44aa85"
+    },
+    {
+      "name": "setjmp_toc_stub",
+      "address": "0x00B8A684",
+      "length": 16,
+      "sha256": "deea357e835fd97cbf33c7057de890f50e3e66fdb1dee874c60fb4a737903863"
+    },
+    {
+      "name": "longjmp_toc_stub",
+      "address": "0x00B8A694",
+      "length": 16,
+      "sha256": "d4b53cc91dc2d12f9a10802af3d0f9a8c21f1f812dc232e0eeef99fc99bb3a06"
+    }
+  ],
+  "direct_linked_call_census": {
+    "0x00B8A684": [
+      "0x007BF638"
+    ],
+    "0x00B8A694": [
+      "0x007BF6E0"
+    ],
+    "0x00AF95BC": [],
+    "0x00AF96E0": []
+  },
+  "reason": "Preserve original guest setjmp/longjmp register semantics and transfer to the matching live protected continuation instead of returning into the throwing caller."
+}
