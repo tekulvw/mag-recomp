@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 
 namespace mag::voice {
@@ -159,7 +160,7 @@ uint32_t Service::end() {
     if (started_ && options_.source) options_.source->stop();
     initialized_ = false;
     started_ = false;
-    gate_ = false;
+    gate_ = sent_ = false;
     energy_ = 0;
     ports_.clear();
     return status::Ok;
@@ -170,8 +171,9 @@ uint32_t Service::start() {
     if (!initialized_) return status::NotInitialized;
     if (!started_) {
         started_ = true;
-        started_at_ = now();
+        started_at_ = last_output_read_ = now();
         frames_done_ = 0;
+        sent_ = stall_reported_ = expiry_reported_ = false;
         if (options_.source) options_.source->start();
     }
     return status::Ok;
@@ -182,7 +184,7 @@ uint32_t Service::stop() {
     if (!initialized_) return status::NotInitialized;
     if (started_ && options_.source) options_.source->stop();
     started_ = false;
-    gate_ = false;
+    gate_ = sent_ = false;
     energy_ = 0;
     return status::Ok;
 }
@@ -416,6 +418,11 @@ uint32_t Service::read(uint32_t id, uint8_t* out, size_t capacity, size_t& copie
         return status::Ok;
     }
     if (port->params.type == uint32_t(PortType::OutVoice)) {
+        last_output_read_ = now();
+        if (stall_reported_) {
+            stall_reported_ = false;
+            note("the game reads the voice output again");
+        }
         const size_t block = block_size_for_bitrate(port->params.bitrate);
         const size_t whole = std::min(capacity, port->queue.size()) / block * block;
         if (whole && out) {
@@ -482,13 +489,14 @@ uint32_t Service::signal_state(uint32_t id, uint32_t attr, float& energy, uint32
     if (!initialized_) return status::NotInitialized;
     pump();
     if (!find(id)) return status::Topology;
+    const bool live = transmitting(now());
     if (attr == AttrEnergyLevel) {
-        energy = gate_ ? energy_ : 0.0f;
+        energy = live ? energy_ : 0.0f;
         is_float = true;
         return status::Ok;
     }
     if (attr == AttrVad) {
-        vad = gate_ ? 1 : 0;
+        vad = live ? 1 : 0;
         is_float = false;
         return status::Ok;
     }
@@ -621,6 +629,9 @@ void Service::pump() {
         double sum = 0;
         for (int16_t s : samples) sum += double(s) * double(s);
         energy_ = static_cast<float>(std::sqrt(sum / FrameSamples) / 32768.0);
+        last_frame_at_ = t;
+        const bool was_sent = sent_;
+        sent_ = false;
         if (!gate_) continue;
         ++send_.frames;
         for (auto& out : ports_) {
@@ -649,6 +660,9 @@ void Service::pump() {
             block.resize(size);
             write_block(out.next_sequence++, payload.data(), n, size, block.data());
             out.queue.insert(out.queue.end(), block.begin(), block.end());
+            out.last_block = t;
+            if (!sent_ && !was_sent) sending_since_ = t;
+            sent_ = true;
             ++send_.blocks;
             const size_t cap = std::max<size_t>(size, size * (options_.queue_ms / FrameMs));
             while (out.queue.size() > cap) {
@@ -657,7 +671,35 @@ void Service::pump() {
             }
         }
     }
+    expire_output(t);
     summary(t);
+}
+
+bool Service::transmitting(uint64_t t) const {
+    if (!started_ || !sent_ || t - last_frame_at_ > options_.signal_fresh_ms) return false;
+    return t - std::max(last_output_read_, sending_since_) <= options_.read_stall_ms;
+}
+
+void Service::expire_output(uint64_t t) {
+    if (sent_ && !stall_reported_ && t - std::max(last_output_read_, sending_since_) > options_.read_stall_ms) {
+        stall_reported_ = true;
+        char line[160];
+        std::snprintf(line, sizeof line, "voice is being encoded but the game has not read it for %u ms; nothing is being sent",
+                      options_.read_stall_ms);
+        note(line);
+    }
+    for (auto& out : ports_) {
+        if (!out.used || out.params.type != uint32_t(PortType::OutVoice) || out.queue.empty()) continue;
+        if (t - out.last_block <= options_.stale_output_ms) continue;
+        const size_t block = block_size_for_bitrate(out.params.bitrate);
+        send_.blocks_expired += out.queue.size() / block;
+        out.queue.clear();
+        if (expiry_reported_) continue;  // once per start; the trace summary counts every one
+        expiry_reported_ = true;
+        char line[160];
+        std::snprintf(line, sizeof line, "discarded voice the game did not read within %u ms", options_.stale_output_ms);
+        note(line);
+    }
 }
 
 void Service::summary(uint64_t t, bool force) {
@@ -669,7 +711,7 @@ void Service::summary(uint64_t t, bool force) {
                   "\"write_calls\":%llu,\"bytes_written\":%llu,\"received_blocks\":%llu,\"pattern_ok\":%llu,"
                   "\"pattern_bad\":%llu,\"sequence_gaps\":%llu,\"skipped_bytes\":%llu,\"frames_decoded\":%llu,"
                   "\"frames_concealed\":%llu,\"decode_errors\":%llu,\"samples_played\":%llu,\"samples_dropped\":%llu,"
-                  "\"underruns\":%llu",
+                  "\"underruns\":%llu,\"blocks_expired\":%llu",
                   (unsigned long long)send_.frames, (unsigned long long)send_.blocks, (unsigned long long)send_.blocks_dropped,
                   (unsigned long long)send_.read_calls, (unsigned long long)send_.bytes_read,
                   (unsigned long long)receive_.write_calls, (unsigned long long)receive_.bytes_written,
@@ -678,7 +720,7 @@ void Service::summary(uint64_t t, bool force) {
                   (unsigned long long)receive_.skipped_bytes, (unsigned long long)receive_.frames_decoded,
                   (unsigned long long)receive_.frames_concealed, (unsigned long long)receive_.decode_errors,
                   (unsigned long long)receive_.samples_played, (unsigned long long)receive_.samples_dropped,
-                  (unsigned long long)receive_.underruns);
+                  (unsigned long long)receive_.underruns, (unsigned long long)send_.blocks_expired);
     options_.trace->event(t - epoch_, "summary", fields);
 }
 

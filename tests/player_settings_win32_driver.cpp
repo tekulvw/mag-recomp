@@ -47,7 +47,7 @@ enum {
     IdDebugPage = 120, IdDebugNote, IdDebugItem = 400, IdDebugHint = 450, IdVoiceChat = 130, IdVoiceVolume,
     IdKeyboardMouse = 200, IdController, IdMode, IdScope, IdSensitivity, IdInvert, IdReset, IdRows, IdHint,
     IdError = 300, IdRevert, IdKeep, IdCancel, IdApply, IdPlay, IdStatus, IdAccountStatus, IdReportStatus,
-    IdBinding = 1000,
+    IdPage = 320, IdBinding = 1000,
 };
 
 static std::atomic<int> failures{0};
@@ -76,7 +76,12 @@ static std::string text(HWND h) {
     WideCharToMultiByte(CP_UTF8, 0, buffer, -1, out, sizeof out, nullptr, nullptr);
     return out;
 }
-static std::string item(HWND window, int id) { return text(GetDlgItem(window, id)); }
+// A control of the window: the footer's are its own, the pages' are the scrolling page's.
+static HWND control(HWND window, int id) {
+    if (HWND h = GetDlgItem(window, id)) return h;
+    return GetDlgItem(GetDlgItem(window, IdPage), id);
+}
+static std::string item(HWND window, int id) { return text(control(window, id)); }
 static bool contains(HWND window, int id, const char* wanted) { return item(window, id).find(wanted) != std::string::npos; }
 static bool wait_until(const std::function<bool()>& ready, int milliseconds = 5000) {
     for (int i = 0; i < milliseconds / 10; ++i) {
@@ -92,19 +97,19 @@ static bool wait_text(HWND window, int id, const char* wanted, int milliseconds 
 }
 // The control's own WS_VISIBLE: IsWindowVisible is always false in a non-interactive session.
 static bool shown(HWND h) { return h && (GetWindowLongPtrW(h, GWL_STYLE) & WS_VISIBLE) != 0; }
-static bool visible(HWND window, int id) { return shown(GetDlgItem(window, id)); }
-static bool enabled(HWND window, int id) { return IsWindowEnabled(GetDlgItem(window, id)) != FALSE; }
+static bool visible(HWND window, int id) { return shown(control(window, id)); }
+static bool enabled(HWND window, int id) { return IsWindowEnabled(control(window, id)) != FALSE; }
 static void click(HWND window, int id) { SendMessageW(window, WM_COMMAND, MAKEWPARAM(id, BN_CLICKED), 0); }
 // For what opens a question (a modal dialog): the driver must not wait inside it.
 static void post_click(HWND window, int id) { PostMessageW(window, WM_COMMAND, MAKEWPARAM(id, BN_CLICKED), 0); }
-static void type(HWND window, int id, const wchar_t* value) { SetWindowTextW(GetDlgItem(window, id), value); settle(window); }
+static void type(HWND window, int id, const wchar_t* value) { SetWindowTextW(control(window, id), value); settle(window); }
 static void choose(HWND window, int id, int index) {
-    HWND box = GetDlgItem(window, id);
+    HWND box = control(window, id);
     SendMessageW(box, CB_SETCURSEL, WPARAM(index), 0);
     SendMessageW(window, WM_COMMAND, MAKEWPARAM(id, CBN_SELCHANGE), LPARAM(box));
 }
 static std::string binding(HWND window, int row, int slot) {
-    return text(GetDlgItem(GetDlgItem(window, IdRows), IdBinding + row * 4 + slot * 2));
+    return text(GetDlgItem(control(window, IdRows), IdBinding + row * 4 + slot * 2));
 }
 // Answers the question the window shows (a task dialog titled MAG Settings): IDOK confirms.
 static bool answer(HWND owner, int button) {
@@ -177,8 +182,8 @@ static void in_game(const fs::path& folder) {
         CHECK(!enabled(window, IdRendering) && !enabled(window, IdAntiAliasing));  // the Metal renderer's
 #endif
         // Voice: Off at 100% by default; disabled where the build has no voice service.
-        CHECK(visible(window, IdVoiceChat) && SendMessageW(GetDlgItem(window, IdVoiceChat), CB_GETCURSEL, 0, 0) == 0);
-        CHECK(SendMessageW(GetDlgItem(window, IdVoiceVolume), CB_GETCURSEL, 0, 0) == 4);
+        CHECK(visible(window, IdVoiceChat) && SendMessageW(control(window, IdVoiceChat), CB_GETCURSEL, 0, 0) == 0);
+        CHECK(SendMessageW(control(window, IdVoiceVolume), CB_GETCURSEL, 0, 0) == 4);
         CHECK(enabled(window, IdVoiceChat) == bool(MAG_PLAYER_VOICE_SUPPORTED) && enabled(window, IdVoiceVolume) == bool(MAG_PLAYER_VOICE_SUPPORTED));
         CHECK(!visible(window, IdTcp));
         click(window, IdAdvanced);
@@ -221,7 +226,7 @@ static void in_game(const fs::path& folder) {
         CHECK(!enabled(window, IdApply));
         // Reports: on by default; unchecking is an edit Apply saves as send_reports: false. Send
         // report needs MAG_REPORT_REQUEST (a packaged launch) and a linked account.
-        HWND reports = GetDlgItem(window, IdSendReports);
+        HWND reports = control(window, IdSendReports);
         CHECK(visible(window, IdSendReports) && SendMessageW(reports, BM_GETCHECK, 0, 0) == BST_CHECKED);
         CHECK(visible(window, IdReportNow) && !enabled(window, IdReportNow));
         CHECK(contains(window, IdReportStatus, "Reports are sent only when MAG starts from its app"));
@@ -245,7 +250,7 @@ static void in_game(const fs::path& folder) {
         // The comment: CR LF becomes LF, other characters stay; the counter counts code points.
         CHECK(item(window, IdReportCounter) == "0/1000");
         type(window, IdReportComment, L"Froze on deploy\r\nCaf\u00e9 \"twice\"");
-        SendMessageW(window, WM_COMMAND, MAKEWPARAM(IdReportComment, EN_CHANGE), LPARAM(GetDlgItem(window, IdReportComment)));
+        SendMessageW(window, WM_COMMAND, MAKEWPARAM(IdReportComment, EN_CHANGE), LPARAM(control(window, IdReportComment)));
         CHECK(item(window, IdReportCounter) == "28/1000");
         click(window, IdReportNow);
         const std::string request = read(marker);
@@ -255,7 +260,7 @@ static void in_game(const fs::path& folder) {
         CHECK(item(window, IdReportComment).empty() && item(window, IdReportCounter) == "0/1000");
         // Past the limit the box is cut back to 1000 code points.
         type(window, IdReportComment, std::wstring(1200, L'x').c_str());
-        SendMessageW(window, WM_COMMAND, MAKEWPARAM(IdReportComment, EN_CHANGE), LPARAM(GetDlgItem(window, IdReportComment)));
+        SendMessageW(window, WM_COMMAND, MAKEWPARAM(IdReportComment, EN_CHANGE), LPARAM(control(window, IdReportComment)));
         CHECK(item(window, IdReportCounter) == "1000/1000");
         type(window, IdReportComment, L"");
         const size_t id_at = request.find("\"report_id\":\"");
@@ -279,7 +284,7 @@ static void in_game(const fs::path& folder) {
         RECT game_after;
         GetWindowRect(game, &game_after);
         CHECK(EqualRect(&game_before, &game_after));
-        CHECK(SendMessageW(GetDlgItem(window, IdDisplay), CB_GETCURSEL, 0, 0) == 0);
+        CHECK(SendMessageW(control(window, IdDisplay), CB_GETCURSEL, 0, 0) == 0);
         choose(window, IdDisplay, 1);
         click(window, IdApply);
         click(window, IdKeep);
@@ -289,9 +294,9 @@ static void in_game(const fs::path& folder) {
         click(window, IdControls);
         CHECK(item(window, IdApply) == "Apply controls" && !visible(window, IdServer) && visible(window, IdRows));
         CHECK(binding(window, 0, 0) == "W" && binding(window, 1, 1) == "Unbound");
-        CHECK(shown(GetDlgItem(GetDlgItem(window, IdRows), IdBinding)) && shown(GetDlgItem(GetDlgItem(window, IdRows), IdBinding + 1)));
+        CHECK(shown(GetDlgItem(control(window, IdRows), IdBinding)) && shown(GetDlgItem(control(window, IdRows), IdBinding + 1)));
         {
-            HWND rows = GetDlgItem(window, IdRows);
+            HWND rows = control(window, IdRows);
             int headings = 0;
             for (HWND child = GetWindow(rows, GW_CHILD); child; child = GetWindow(child, GW_HWNDNEXT)) {
                 const std::string name = text(child);
@@ -351,18 +356,18 @@ static void in_game(const fs::path& folder) {
         CHECK(visible(window, IdDebugItem) && visible(window, IdDebugItem + 1) && !visible(window, IdRows) && !visible(window, IdServer));
         CHECK(item(window, IdDebugItem) == "Record controls trace" && item(window, IdDebugItem + 1) == "Open logs folder");
         CHECK(!enabled(window, IdApply) && enabled(window, IdDebugItem + 1));
-        CHECK(SendMessageW(GetDlgItem(window, IdDebugItem), BM_GETCHECK, 0, 0) == BST_UNCHECKED && !fs::exists(folder / "controls-trace"));
-        SendMessageW(GetDlgItem(window, IdDebugItem), BM_SETCHECK, BST_CHECKED, 0);
+        CHECK(SendMessageW(control(window, IdDebugItem), BM_GETCHECK, 0, 0) == BST_UNCHECKED && !fs::exists(folder / "controls-trace"));
+        SendMessageW(control(window, IdDebugItem), BM_SETCHECK, BST_CHECKED, 0);
         click(window, IdDebugItem);
         CHECK(fs::exists(folder / "controls-trace") && fs::file_size(folder / "controls-trace") == 0);
         CHECK(contains(window, IdStatus, "next launch"));
-        SendMessageW(GetDlgItem(window, IdDebugItem), BM_SETCHECK, BST_UNCHECKED, 0);
+        SendMessageW(control(window, IdDebugItem), BM_SETCHECK, BST_UNCHECKED, 0);
         click(window, IdDebugItem);
         CHECK(!fs::exists(folder / "controls-trace"));
         std::ofstream(folder / "controls-trace").close();  // made elsewhere: the page shows it
         click(window, IdGeneral);
         click(window, IdDebugPage);
-        CHECK(SendMessageW(GetDlgItem(window, IdDebugItem), BM_GETCHECK, 0, 0) == BST_CHECKED);
+        CHECK(SendMessageW(control(window, IdDebugItem), BM_GETCHECK, 0, 0) == BST_CHECKED);
         click(window, IdDebugItem + 1);
         {
             std::lock_guard<std::mutex> lock(opened_lock);
@@ -413,9 +418,9 @@ static void setup(const fs::path& folder) {
         settle(window);
         CHECK(visible(window, IdPlay) && enabled(window, IdPlay) && item(window, IdPlay) == "Play MAG");
         CHECK(item(window, IdServer) == "play.magtest.online" && !enabled(window, IdApply));  // the saved settings
-        CHECK(SendMessageW(GetDlgItem(window, IdRendering), CB_GETCURSEL, 0, 0) == 2);  // kept as stored
-        CHECK(SendMessageW(GetDlgItem(window, IdVoiceChat), CB_GETCURSEL, 0, 0) == 1);
-        CHECK(SendMessageW(GetDlgItem(window, IdVoiceVolume), CB_GETCURSEL, 0, 0) == 4);  // 90: the nearest step, 100%
+        CHECK(SendMessageW(control(window, IdRendering), CB_GETCURSEL, 0, 0) == 2);  // kept as stored
+        CHECK(SendMessageW(control(window, IdVoiceChat), CB_GETCURSEL, 0, 0) == 1);
+        CHECK(SendMessageW(control(window, IdVoiceVolume), CB_GETCURSEL, 0, 0) == 4);  // 90: the nearest step, 100%
         click(window, IdPlay);
         CHECK(contains(window, IdError, "Enter a player name to play on a server"));
         type(window, IdName, L"Rook_7");
@@ -458,6 +463,186 @@ static void setup(const fs::path& folder) {
     std::printf("setup: play, name rule, cancel, recovery\n");
 }
 
+// ---- Smaller screens: the window fits the work area and its page scrolls ----
+static std::atomic<long> area[4] = {0, 0, 0, 0};  // the stand-in work area: left, top, right, bottom
+static void set_area(long right, long bottom) { area[2] = right; area[3] = bottom; }
+static RECT rect_in(HWND container, HWND h) {
+    RECT r;
+    GetWindowRect(h, &r);
+    MapWindowPoints(nullptr, container, reinterpret_cast<POINT*>(&r), 2);
+    return r;
+}
+static SCROLLINFO scroll_info(HWND h) {
+    SCROLLINFO info{};
+    info.cbSize = sizeof info;
+    info.fMask = SIF_ALL;
+    GetScrollInfo(h, SB_VERT, &info);
+    return info;
+}
+static bool scroll_bar(HWND h) { return (GetWindowLongPtrW(h, GWL_STYLE) & WS_VSCROLL) != 0; }
+static HWND focused(HWND window) {
+    GUITHREADINFO info{};
+    info.cbSize = sizeof info;
+    GetGUIThreadInfo(GetWindowThreadProcessId(window, nullptr), &info);
+    return info.hwndFocus;
+}
+// The page's child that holds `h` (a binding button is the list's), or null off the page.
+static HWND on_page(HWND page, HWND h) {
+    while (h && GetParent(h) != page) h = GetParent(h);
+    return h;
+}
+static bool in_view(HWND page, HWND child) {
+    RECT client;
+    GetClientRect(page, &client);
+    const RECT r = rect_in(page, child);
+    return r.top >= 0 && r.bottom <= client.bottom;
+}
+// With MAG_TEST_SCREENSHOTS set (CI keeps the folder as an artifact): the window as a .bmp.
+static void snapshot(HWND window, const char* name) {
+    const char* folder = std::getenv("MAG_TEST_SCREENSHOTS");
+    if (!folder || !*folder) return;
+    RECT r;
+    GetWindowRect(window, &r);
+    const int w = r.right - r.left, h = r.bottom - r.top;
+    HDC screen = GetDC(nullptr), dc = CreateCompatibleDC(screen);
+    HBITMAP bitmap = CreateCompatibleBitmap(screen, w, h);
+    HGDIOBJ old = SelectObject(dc, bitmap);
+    const bool printed = PrintWindow(window, dc, 2 /* PW_RENDERFULLCONTENT */) != FALSE;
+    SelectObject(dc, old);
+    BITMAPINFOHEADER header{sizeof header, w, -h, 1, 32, BI_RGB, 0, 0, 0, 0, 0};
+    std::string pixels(size_t(w) * size_t(h) * 4, '\0');
+    const bool read = GetDIBits(dc, bitmap, 0, UINT(h), pixels.data(), reinterpret_cast<BITMAPINFO*>(&header), DIB_RGB_COLORS) == h;
+    DeleteObject(bitmap);
+    DeleteDC(dc);
+    ReleaseDC(nullptr, screen);
+    if (!printed || !read) { std::printf("[driver] no snapshot of %s\n", name); return; }
+    BITMAPFILEHEADER file{0x4D42, DWORD(sizeof(BITMAPFILEHEADER) + sizeof header + pixels.size()), 0, 0,
+                          DWORD(sizeof(BITMAPFILEHEADER) + sizeof header)};
+    fs::create_directories(folder);
+    std::ofstream out(fs::path(folder) / (std::string(name) + ".bmp"), std::ios::binary);
+    out.write(reinterpret_cast<const char*>(&file), sizeof file);
+    out.write(reinterpret_cast<const char*>(&header), sizeof header);
+    out.write(pixels.data(), std::streamsize(pixels.size()));
+    std::printf("[driver] snapshot %s: %dx%d\n", name, w, h);
+}
+// The window inside the work area's `bottom` pixels, its footer inside the client area, and (when
+// the page `scrolls`) a scroll range that covers every control the page shows.
+static void check_fits(HWND window, long bottom, bool scrolls, const char* where) {
+    RECT frame, client;
+    GetWindowRect(window, &frame);
+    GetClientRect(window, &client);
+    HWND page = control(window, IdPage);
+    const SCROLLINFO info = scroll_info(page);
+    std::printf("[driver] %s: window %ldx%ld at %ld, page %u of %d, scroll bar %d\n", where, frame.right - frame.left,
+                frame.bottom - frame.top, frame.top, info.nPage, info.nMax + 1, int(scroll_bar(page)));
+    CHECK(frame.top >= 0 && frame.bottom <= bottom);
+    for (int id : {IdCancel, IdApply, IdPlay, IdStatus}) {
+        const RECT r = rect_in(window, control(window, id));
+        CHECK(r.top >= 0 && r.left >= 0 && r.bottom <= client.bottom && r.right <= client.right);
+        CHECK(r.top >= rect_in(window, page).bottom);  // below the page, never scrolled away
+    }
+    CHECK(scroll_bar(page) == scrolls);
+    if (!scrolls) return;
+    RECT shown_area;
+    GetClientRect(page, &shown_area);
+    CHECK(info.nMax + 1 > int(info.nPage) && int(info.nPage) == shown_area.bottom);
+    int lowest = 0;
+    for (HWND child = GetWindow(page, GW_CHILD); child; child = GetWindow(child, GW_HWNDNEXT))
+        if (shown(child)) lowest = (std::max)(lowest, int(rect_in(page, child).bottom) + info.nPos);
+    CHECK(lowest > int(info.nPage) && lowest <= info.nMax + 1);
+}
+
+// 1280x720, 1920x1080 at 150% and a short screen: the window fits; it is as before where it fits.
+static void small_screens(const fs::path& folder) {
+    fs::create_directories(folder);
+    const fs::path settings = folder / "settings.json";
+    std::ofstream(settings) << "{\"server_address\": \"play.magtest.online\", \"player_name\": \"Rook_7\"}";
+    SettingsForm form;
+    std::string error;
+    CHECK(settings_form_load(settings, form, error));
+    SettingsWindowOptions options;
+    options.setup = true;
+    set_area(1280, 720);
+    settings_window_work_area = [](void*, long out[4]) { for (int i = 0; i < 4; ++i) out[i] = area[i]; };
+    std::thread player([&] {
+        HWND window = wait_window(L"MAGSettingsWindow", L"MAG Settings");
+        CHECK(window != nullptr);
+        if (!window) return;
+        settle(window);
+        HWND page = control(window, IdPage);
+        CHECK(page && IsChild(page, control(window, IdServer)) && GetParent(control(window, IdPlay)) == window);
+        check_fits(window, 720, true, "1280x720");
+        snapshot(window, "settings-1280x720");
+        RECT scrolling;
+        GetClientRect(window, &scrolling);
+        // The Reports group is below the fold; the scroll bar and the wheel reach it, and back.
+        HWND reports = control(window, IdSendReports);
+        CHECK(!in_view(page, reports));
+        SendMessageW(page, WM_VSCROLL, SB_BOTTOM, 0);
+        SCROLLINFO info = scroll_info(page);
+        CHECK(in_view(page, reports) && in_view(page, control(window, IdReportComment)));
+        CHECK(info.nPos == info.nMax + 1 - int(info.nPage));
+        SendMessageW(page, WM_VSCROLL, SB_TOP, 0);
+        CHECK(scroll_info(page).nPos == 0 && in_view(page, control(window, IdServer)));
+        SendMessageW(window, WM_MOUSEWHEEL, MAKEWPARAM(0, WORD(-WHEEL_DELTA)), 0);  // over the footer: the page
+        CHECK(scroll_info(page).nPos > 0);
+        SendMessageW(reports, WM_MOUSEWHEEL, MAKEWPARAM(0, WORD(WHEEL_DELTA)), 0);  // a control passes it up
+        CHECK(scroll_info(page).nPos == 0);
+        // Tab: each control the focus reaches on the page is scrolled into view, down to Reports.
+        bool reached = false, scrolled = false;
+        for (int i = 0; i < 40 && !reached; ++i) {
+            HWND focus = focused(window);
+            if (!focus) { std::printf("[driver] no keyboard focus\n"); break; }
+            PostMessageW(focus, WM_KEYDOWN, VK_TAB, LPARAM(1 | (0x0F << 16)));
+            if (!wait_until([&] { return focused(window) != focus; }, 2000)) { std::printf("[driver] Tab did not move\n"); break; }
+            HWND now = focused(window);
+            if (HWND child = on_page(page, now)) {
+                CHECK(wait_until([&] { return in_view(page, child); }, 2000));
+                scrolled = scrolled || scroll_info(page).nPos > 0;
+            }
+            reached = now == reports;
+        }
+        CHECK(reached && scrolled);
+        // 1920x1080 at 150% (less the taskbar): the monitor's DPI change makes everything larger.
+        set_area(1920, 1040);
+        RECT before;
+        GetWindowRect(window, &before);
+        SendMessageW(window, WM_DPICHANGED, MAKEWPARAM(144, 144), LPARAM(&before));
+        settle(window);
+        check_fits(window, 1040, true, "1920x1080 at 150%");
+        RECT client;
+        GetClientRect(window, &client);
+        CHECK(client.right >= MulDiv(620, 144, 96));
+        SendMessageW(page, WM_VSCROLL, SB_BOTTOM, 0);
+        CHECK(in_view(page, control(window, IdReportComment)));
+        SendMessageW(page, WM_VSCROLL, SB_TOP, 0);
+        snapshot(window, "settings-1920x1080-150");
+        SendMessageW(window, WM_DPICHANGED, MAKEWPARAM(96, 96), LPARAM(&before));
+        settle(window);
+        // Controls on a short screen: the bindings list stays usable inside the scrolling page.
+        set_area(1280, 400);
+        click(window, IdControls);
+        check_fits(window, 400, true, "Controls at 1280x400");
+        snapshot(window, "settings-controls-1280x400");
+        // Room for everything: no scroll bar, and the window as tall as all of it.
+        set_area(1920, 4000);
+        click(window, IdGeneral);
+        check_fits(window, 4000, false, "1920x4000");
+        info = scroll_info(page);
+        RECT page_client, fitted;
+        GetClientRect(page, &page_client);
+        GetClientRect(window, &fitted);
+        CHECK(page_client.bottom == info.nMax + 1 && info.nPos == 0);
+        CHECK(fitted.right == scrolling.right - GetSystemMetrics(SM_CXVSCROLL));  // no scroll bar to make room for
+        CHECK(in_view(page, control(window, IdServer)) && in_view(page, control(window, IdReportComment)));
+        PostMessageW(window, WM_CLOSE, 0, 0);
+    });
+    CHECK(settings_window_run(form, settings, options) == SettingsWindowResult::Cancelled);
+    player.join();
+    settings_window_work_area = nullptr;
+    std::printf("small screens: fits the work area, scrolls, follows Tab, DPI change\n");
+}
+
 int main(int argc, char** argv) {
     if (argc != 2) return 2;
     std::setvbuf(stdout, nullptr, _IONBF, 0);  // a hang still shows how far it got
@@ -475,6 +660,7 @@ int main(int argc, char** argv) {
     mag_controls_settings_register(registration);
     in_game(folder);
     setup(folder / "setup");
+    small_screens(folder / "screens");
     if (failures) { std::printf("%d failure(s)\n", failures.load()); return 1; }
     std::printf("win32 settings window checks passed\n");
     return 0;

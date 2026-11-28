@@ -351,7 +351,9 @@ Host actions are tracked beside the input engine (`player_host_actions.h`, in bo
 engine and the Rust bridge, `mag_controls_host_action`): an action is held while one of its bindings
 is down and the game window has input focus, whatever the game's input context (on foot, a seat, a
 menu). Losing focus (another app, or the settings panel owning input) releases it at once, and a
-control already held when focus returns counts only after it is released once. The keys reach the
+control already held when focus returns counts only after it is released once. Releasing a source
+(`mag_controls_release_source`) or all input (`mag_controls_release_input`) does the same for the
+controls it held, so a release the capture never reports cannot keep a host action held. The keys reach the
 tracker through the desktop capture, so they count while the adapter owns the keyboard: on foot,
 seated and in the in-match menus it attaches to, but not in Controller input mode, where only a
 controller binding works. The voice service reads it through `mag_game_controls_push_to_talk`
@@ -979,6 +981,16 @@ while Command is held and leaves the engine's window fields unfocused when captu
   scrolling is turned back to the wheel's own direction. macOS reads GameController's scroll
   input, SDL its wheel events, Win32 Raw Input's wheel delta (120 to a notch).
 - The left and right GUI keys are never captured.
+- A release that never arrives (a lost report, a modal loop that read the message) does not keep a
+  control held. While ready, every 250 ms the core asks the platform whether each held key and
+  button is still physically down; one found up on two checks in a row is released as if its
+  release had arrived, the backend forgets its auto-repeat state, and the backend logs one line
+  (`[game-controls] released key 14: up on the device but its release was never reported`).
+  Readings count only once the platform has confirmed some held control as down, so a host that
+  cannot read the state releases nothing. Win32 reads `GetAsyncKeyState` (the key's virtual keys
+  from its scan codes, and its Num Lock keypad form), SDL its keyboard state; the macOS backend
+  checks held keys the same way with `CGEventSourceKeyState` (`player_input_macos_keys.h` maps
+  usages to its key codes).
 
 The SDL backend runs on the game window's thread. The SDK's window pump polls SDL events and then
 takes its keyboard-pad sample; compile definitions on `libs/input/pad_sdl_keyboard.c` rename that

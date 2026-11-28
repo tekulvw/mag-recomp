@@ -61,9 +61,24 @@ the setting Off nothing is passed and nothing is registered ([player-settings.md
   rounded up) after release. It closes at once, cutting the tail, when the game window loses input
   focus or the settings panel takes input. The microphone is read every frame whether or not the gate
   is open, so a press starts with current audio. While the gate is closed the port is silent, nothing
-  is encoded and nothing is sent; the signal-state energy and voice activity read silence. The game
-  keeps its own open mic and channel choice (the Tactical Command Menu's voice entry); push to talk
-  only gates what reaches it.
+  is encoded and nothing is sent. Each open and close is one line in the engine log, with the reason
+  and how long it was open (`[voice] push to talk open`, `[voice] push to talk closed: released (open
+  2.3 s)`; never audio). The game keeps its own open mic and channel choice (the Tactical Command
+  Menu's voice entry); push to talk only gates what reaches it.
+- **Hold limit.** Three minutes of push to talk without a release closes the microphone
+  (`[voice] push to talk held for 180 s without a release; ...`) until push to talk is released or
+  the game window loses and regains focus; a stuck key or a lost release cannot keep a player on the
+  air. Nobody holds a talk key that long on purpose. The controls also guard against lost releases
+  directly: a held key found up on the keyboard is released ([native-controls.md](native-controls.md),
+  8.1), and resetting the controls' input forgets held keys ("Host actions").
+- **Signal state.** Energy and voice activity report a frame only when it put a block on an encoded
+  output the game reads: none while the gate is closed, the microphone feeds no output or the output
+  is muted, none once no frame has been produced for 200 ms, and none while blocks are made but the
+  game has not read an encoded output for a second (counted from the start of talking; logged once,
+  `[voice] voice is being encoded but the game has not read it for 1000 ms; nothing is being sent`).
+- **Unread output.** Encoded output the game has not read within two seconds of its newest block is
+  discarded (logged once per start; the trace summary counts `blocks_expired`), so an output the game
+  stopped reading never reports voice waiting to be sent.
 - **No microphone.** A missing device, a refused permission or an unusable format leaves voice
   receive-only: talkers still play, the reason is logged once (`[voice] no microphone (...); voice is
   receive-only`), and the game is not affected. On macOS the first open asks for microphone access
@@ -166,8 +181,10 @@ ways), the microphone level control with generated speech-like signals (quiet, t
 microphones reach the speech level, a microphone already there passes at unity, the gain limit,
 noise alone gets no gain, a sudden full-scale frame is limited), the port volumes reaching the
 encoder, the level heard end to end through Opus and a second service (unity, the talker's volume,
-the voice volume, and a quiet microphone with and without the level control), the push-to-talk gate's tail and focus rules, a missing, refused and pending microphone, the
-service encoding only while the gate is open, and the guest glue in the player mode with a stand-in
+the voice volume, and a quiet microphone with and without the level control), the push-to-talk
+gate's tail, focus rules, hold limit and log lines, a missing, refused and pending microphone, the
+service encoding only while the gate is open, signal state that follows what is actually sent,
+unread output expiring, and the guest glue in the player mode with a stand-in
 microphone and push to talk (no blocks before a press, none after the tail, none without focus, the
 device opened only between start and stop, receive-only without the controls adapter). No device or
 game file is used.

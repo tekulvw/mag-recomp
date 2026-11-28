@@ -37,6 +37,11 @@ enum {
  * which stay with the system. `vkey` may be 0 when unknown. */
 uint32_t mag_win32_raw_key_usage(uint16_t make_code, uint16_t flags, uint16_t vkey);
 
+/* The scan codes that report `usage` (the inverse of mag_win32_raw_key_usage): plain make codes,
+ * and E0-prefixed ones as 0xE000 | code, the form MapVirtualKey's MAPVK_VSC_TO_VK_EX takes.
+ * Returns the count (at most 4; 0 for a usage the table never reports). */
+unsigned mag_win32_usage_scan_codes(uint32_t usage, uint16_t out[4]);
+
 /* Mouse-button edges of one Raw Input mouse report, in report order (each button's press before
  * its release). Indices: 0 left, 1 right, 2 middle, 3 X1, 4 X2. Returns the count (at most 10). */
 typedef struct {

@@ -163,7 +163,7 @@ struct ReceiveStats {
              samples_dropped = 0, underruns = 0;
 };
 struct SendStats {
-    uint64_t frames = 0, blocks = 0, blocks_dropped = 0, read_calls = 0, bytes_read = 0;
+    uint64_t frames = 0, blocks = 0, blocks_dropped = 0, read_calls = 0, bytes_read = 0, blocks_expired = 0;
 };
 
 struct ServiceOptions {
@@ -179,6 +179,16 @@ struct ServiceOptions {
     unsigned queue_ms = 480;       // encoded output kept before the oldest blocks are dropped
     unsigned max_catch_up = 12;    // frames produced at most per pump after a stall
     size_t input_capacity = 4096;  // bytes an encoded input port holds unparsed
+    // Signal state reports activity only for a frame that put a block on an output the game reads:
+    // none once no frame has been produced for `signal_fresh_ms`, and none while blocks are made
+    // but the game has not read an encoded output for `read_stall_ms` (counted from the start of
+    // talking).
+    unsigned signal_fresh_ms = 200;
+    unsigned read_stall_ms = 1000;
+    // Encoded output nobody has read for this long after its newest block is discarded, so an
+    // output the game stopped reading never reports voice pending.
+    unsigned stale_output_ms = 2000;
+    std::function<void(const char*)> log;  // one line per notable send-side change; null: silent
 };
 
 class Service {
@@ -235,6 +245,7 @@ private:
         std::vector<int16_t> pending, ready;
         bool playing = false;
         uint64_t play_start = 0, released = 0, last_write = 0;
+        uint64_t last_block = 0;  // encoded output: when the newest block was queued
     };
     void decode_block(Port& port, const Block& block);
     void advance_playout(uint64_t t);
@@ -242,12 +253,22 @@ private:
     Port* find(uint32_t id);
     void pump();          // produce the frames due since the last call and advance playout
     void summary(uint64_t now, bool force = false);
+    bool transmitting(uint64_t t) const;  // the newest frame is on the air (signal state)
+    void expire_output(uint64_t t);
+    void note(const char* line) const {
+        if (options_.log) options_.log(line);
+    }
     uint64_t now() const { return options_.now_ms ? options_.now_ms() : 0; }
     uint64_t trace_ms() const { return now() - epoch_; }
 
     ServiceOptions options_;
     std::mutex lock_;
     bool initialized_ = false, started_ = false, gate_ = false;
+    // Send side as signal state reports it: the newest frame produced a block (`sent_`), when the
+    // newest frame was produced, when the current run of sent frames began and when the game last
+    // read an encoded output.
+    bool sent_ = false, stall_reported_ = false, expiry_reported_ = false;
+    uint64_t last_frame_at_ = 0, sending_since_ = 0, last_output_read_ = 0;
     uint64_t epoch_ = 0, started_at_ = 0, frames_done_ = 0, next_summary_ = 0;
     float energy_ = 0;
     uint32_t serial_ = 0;

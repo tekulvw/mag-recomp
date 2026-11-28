@@ -238,6 +238,68 @@ static void gate() {
     CHECK(inner->starts == 1 && inner->stops == 1);
 }
 
+// Push to talk logs each open and close with its reason, and a hold past the limit (a stuck key,
+// a lost release) closes the microphone until push to talk is released.
+static void gate_limit_and_log() {
+    std::vector<std::string> lines;
+    const auto log = [&lines](const char* line) { lines.emplace_back(line); };
+    PttInput input{true, false, true};
+    // A 400 ms limit: ten frames.
+    PttGate gate(std::make_unique<Counter>(), [&] { return input; }, 150, 400, log);
+    std::vector<int16_t> samples(FrameSamples);
+    uint64_t index = 0;
+    const auto next = [&] { return gate.frame(index++, samples.data()); };
+    const auto last = [&] { return lines.empty() ? std::string() : lines.back(); };
+    CHECK(!next() && lines.empty());
+    input.held = true;
+    CHECK(next() && last() == "push to talk open");
+    unsigned open = 1;
+    while (next()) ++open;
+    CHECK(open == 10 && gate.limited());  // exactly the limit, then closed with no tail
+    CHECK(lines.size() == 3 && lines[1].find("without a release") != std::string::npos &&
+          lines[2].find("closed: held past the limit (open 0.4 s)") != std::string::npos);
+    for (int i = 0; i < 100; ++i) CHECK(!next());  // still held: stays closed, says nothing more
+    CHECK(lines.size() == 3);
+    input.held = false;
+    CHECK(!next() && !gate.limited());  // the release clears the limit (no tail after it)
+    input.held = true;
+    CHECK(next() && last() == "push to talk open");  // a fresh press talks again
+    input.held = false;
+    unsigned tail = 0;
+    while (next()) ++tail;
+    CHECK(tail == 4 && last().find("closed: released (open 0.2 s)") != std::string::npos);
+    // Focus leaving and returning also starts a new hold, so the limit counts from there.
+    input.held = true;
+    for (int i = 0; i < 8; ++i) CHECK(next());
+    input.focused = false;
+    CHECK(!next() && last().find("closed: the game window lost input focus") != std::string::npos);
+    input.focused = true;
+    for (int i = 0; i < 10; ++i) CHECK(next());
+    CHECK(!next() && gate.limited());
+    // Without the controls adapter it reports why it closed.
+    input = {true, true, true};
+    gate.start();
+    CHECK(next());
+    input.available = false;
+    CHECK(!next() && last().find("closed: push to talk is unavailable") != std::string::npos);
+    // Stopping voice while open closes with that reason.
+    input.available = true;
+    CHECK(next());
+    gate.stop();
+    CHECK(last().find("closed: voice stopped") != std::string::npos);
+    // The default limit is three minutes of 40 ms frames; 0 turns it off.
+    PttInput held{true, true, true};
+    PttGate standard(std::make_unique<Counter>(), [&] { return held; }, 150, PttGate::DefaultMaxHoldMs,
+                     [](const char*) {});
+    uint64_t frames = 0;
+    while (standard.frame(frames, samples.data())) ++frames;
+    CHECK(frames == 180000 / FrameMs);
+    PttGate unlimited(std::make_unique<Counter>(), [&] { return held; }, 150, 0, [](const char*) {});
+    bool always = true;
+    for (uint64_t i = 0; i < 2 * 180000 / FrameMs; ++i) always = always && unlimited.frame(i, samples.data());
+    CHECK(always);
+}
+
 // A fake host device.
 struct Fake {
     CaptureDevice::Open result = CaptureDevice::Open::Opened;
@@ -582,6 +644,7 @@ int main() {
     resampler();
     ring();
     gate();
+    gate_limit_and_log();
     microphone();
     service();
     level_control();

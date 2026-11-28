@@ -2,11 +2,15 @@
 // engine's activation rule (a press while unfocused, or held across focus loss, is blocked until
 // released). Synthetic input only.
 #include "player_desktop_capture_core.h"
+#include "player_input_macos_keys.h"
 #include <cstdio>
 #include <functional>
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <vector>
+#include <set>
+#include <optional>
 using namespace mag;
 
 namespace {
@@ -40,6 +44,20 @@ struct FakePlatform final : DesktopCapturePlatform {
     }
     DesktopPressedState pressed() override { return held; }
     uint64_t now_ns() override { return ++time; }
+    // Physical state as the host reads it (GetAsyncKeyState, CGEventSourceKeyState); off by default.
+    bool reads_physical = false, always_up = false;
+    std::set<uint32_t> physical_keys;
+    std::set<std::pair<uint32_t, uint64_t>> physical_buttons;
+    std::vector<uint32_t> forgotten;
+    std::optional<bool> key_down(uint32_t usage) override {
+        if (!reads_physical) return std::nullopt;
+        return !always_up && physical_keys.contains(usage);
+    }
+    std::optional<bool> button_down(uint32_t index, uint64_t device) override {
+        if (!reads_physical) return std::nullopt;
+        return !always_up && physical_buttons.contains({index, device});
+    }
+    void key_forgotten(uint32_t usage) override { forgotten.push_back(usage); }
 };
 
 struct FakeEngine final : DesktopCaptureSink {
@@ -398,6 +416,105 @@ void wheel_steps() {
     require(f.engine.log.size() == 2, "the wheel counts in menus too (it is a button, not motion)");
 }
 
+// A release the window system never delivers (a lost key-up while the window keeps focus).
+// Without physical readings the key stays held until its next edge; with them, a held key found up
+// on two checks in a row is released, and a host whose readings never confirm a held key (no
+// permission, nothing readable) releases nothing.
+void lost_release() {
+    constexpr PhysicalControl K{InputSource::Keyboard, 14};
+    const auto later = [](Fixture& f) {
+        f.platform.time += DesktopCaptureCore::ReconcileIntervalNs + 1;
+        f.core.refresh();
+    };
+    {
+        Fixture f;
+        f.key(K, true);
+        later(f);
+        later(f);
+        later(f);
+        require(f.engine.active.contains(K), "without physical readings a lost release keeps the key held");
+        // A tap: the press of an already held key is not a new press, its release is delivered.
+        f.key(K, true);
+        f.key(K, false);
+        require(!f.engine.down.contains(K), "the next release clears it");
+    }
+    {
+        Fixture f;
+        f.platform.reads_physical = true;
+        f.platform.physical_keys = {14};
+        f.key(K, true);
+        later(f);
+        require(f.engine.active.contains(K), "a key that is down stays held");
+        f.platform.physical_keys.clear();  // released; the report never arrives
+        later(f);
+        require(f.engine.active.contains(K), "one reading up is not enough");
+        later(f);
+        require(!f.engine.down.contains(K) && f.core.lost_releases() == 1, "two readings up release it");
+        require(f.core.last_lost_release() == K && f.platform.forgotten == std::vector<uint32_t>{14},
+                "the backend forgets the key's repeat state");
+        f.platform.physical_keys = {14};
+        f.key(K, true);
+        require(f.engine.active.contains(K), "the next press acts");
+        // A release and a new press between two checks restart the count.
+        f.platform.physical_keys.clear();
+        later(f);
+        f.key(K, false);
+        f.platform.physical_keys = {14};
+        f.key(K, true);
+        f.platform.physical_keys.clear();
+        later(f);
+        require(f.engine.active.contains(K), "an edge restarts the two readings");
+        later(f);
+        require(!f.engine.down.contains(K) && f.core.lost_releases() == 2, "then two readings release it");
+        // Mouse buttons follow the same rule.
+        f.platform.physical_buttons = {{0, 7}};
+        f.button(Left, true);
+        later(f);
+        f.platform.physical_buttons.clear();
+        later(f);
+        later(f);
+        require(!f.engine.down.contains(Left) && f.core.lost_releases() == 3, "a lost button release is released");
+        // Checks run only at most every interval.
+        f.platform.physical_keys = {14};
+        f.key(K, true);
+        f.platform.physical_keys.clear();
+        f.core.refresh();
+        f.core.refresh();
+        f.core.refresh();
+        require(f.engine.active.contains(K), "not before the interval");
+    }
+    {
+        Fixture f;
+        f.platform.reads_physical = true;
+        f.platform.always_up = true;  // a host that reads nothing (no permission)
+        f.key(K, true);
+        for (int i = 0; i < 10; ++i) later(f);
+        require(f.engine.active.contains(K) && f.core.lost_releases() == 0,
+                "readings that never confirm a held key release nothing");
+    }
+}
+
+// The macOS backend's table for reading physical key state (CGEventSourceKeyState).
+void macos_keys() {
+    require(mag_macos_key_code(14) == 0x28 && mag_macos_key_code(26) == 0x0D && mag_macos_key_code(4) == 0x00,
+            "K, W and A");
+    require(mag_macos_key_code(44) == 0x31 && mag_macos_key_code(41) == 0x35 && mag_macos_key_code(40) == 0x24,
+            "Space, Escape and Return");
+    require(mag_macos_key_code(225) == 0x38 && mag_macos_key_code(224) == 0x3B && mag_macos_key_code(226) == 0x3A,
+            "left Shift, Control and Option");
+    require(mag_macos_key_code(58) == 0x7A && mag_macos_key_code(69) == 0x6F && mag_macos_key_code(82) == 0x7E,
+            "F1, F12 and Up");
+    require(mag_macos_key_code(227) == -1 && mag_macos_key_code(231) == -1 && mag_macos_key_code(0) == -1,
+            "GUI keys and non-keys have no code");
+    // No two usages share a key, except the two names of the key left of Return (49, 50).
+    std::set<int> seen;
+    for (uint32_t usage = 0; usage < 256; ++usage) {
+        const int code = mag_macos_key_code(usage);
+        if (code < 0 || usage == 50) continue;
+        require(code < 0x80 && seen.insert(code).second, "one key per code");
+    }
+}
+
 int main(int argc, char** argv) {
     try {
         if (argc != 2) return 2;
@@ -414,6 +531,8 @@ int main(int argc, char** argv) {
         else if (which == "reacquire") reacquire_discards_warp_motion();
         else if (which == "click") click_recapture();
         else if (which == "wheel") wheel_steps();
+        else if (which == "lost-release") lost_release();
+        else if (which == "macos-keys") macos_keys();
         else return 2;
         return 0;
     } catch (const std::exception& error) {

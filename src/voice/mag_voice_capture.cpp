@@ -323,16 +323,39 @@ void LevelControl::process(int16_t* samples) {
 
 // --- PttGate ------------------------------------------------------------------------------------
 
-PttGate::PttGate(std::unique_ptr<FrameSource> inner, std::function<PttInput()> input, unsigned tail_ms)
-    : inner_(std::move(inner)), input_(std::move(input)), tail_frames_((tail_ms + FrameMs - 1) / FrameMs) {}
+PttGate::PttGate(std::unique_ptr<FrameSource> inner, std::function<PttInput()> input, unsigned tail_ms,
+                 unsigned max_hold_ms, Log log)
+    : inner_(std::move(inner)),
+      input_(std::move(input)),
+      tail_frames_((tail_ms + FrameMs - 1) / FrameMs),
+      max_hold_frames_(max_hold_ms / FrameMs),
+      log_(std::move(log)) {
+    if (!log_) log_ = [](const char* line) { std::fprintf(stderr, "[voice] %s\n", line); };
+}
+
+void PttGate::change(bool open, uint64_t index, const char* reason) {
+    if (open == open_) return;
+    char line[160];
+    if (open) {
+        opened_at_ = index;
+        std::snprintf(line, sizeof line, "push to talk open");
+    } else {
+        const uint64_t frames = index >= opened_at_ ? index - opened_at_ : 0;
+        std::snprintf(line, sizeof line, "push to talk closed: %s (open %.1f s)", reason,
+                      double(frames) * FrameMs / 1000.0);
+    }
+    open_ = open;
+    log_(line);
+}
 
 void PttGate::start() {
-    open_ = held_seen_ = false;
+    open_ = held_seen_ = holding_ = limited_ = false;
     if (inner_) inner_->start();
 }
 
 void PttGate::stop() {
-    open_ = held_seen_ = false;
+    change(false, last_index_, "voice stopped");
+    open_ = held_seen_ = holding_ = limited_ = false;
     if (inner_) inner_->stop();
 }
 
@@ -340,13 +363,33 @@ bool PttGate::frame(uint64_t index, int16_t* samples) {
     // Read the microphone whether or not the gate is open, so a press starts with current audio.
     const bool captured = inner_ && inner_->frame(index, samples);
     const PttInput in = input_ ? input_() : PttInput{};
+    last_index_ = index;
     if (!in.available || !in.focused) {
-        open_ = held_seen_ = false;  // focus loss cuts the tail too
+        // Focus loss cuts the tail too, and a hold after focus returns is a new one.
+        held_seen_ = holding_ = limited_ = false;
+        change(false, index, in.available ? "the game window lost input focus" : "push to talk is unavailable");
     } else if (in.held) {
-        open_ = held_seen_ = true;
-        last_held_ = index;
+        if (!holding_) hold_start_ = index;  // a new hold
+        holding_ = true;
+        if (!limited_ && max_hold_frames_ && index - hold_start_ >= max_hold_frames_) {
+            limited_ = true;
+            char line[160];
+            std::snprintf(line, sizeof line,
+                          "push to talk held for %u s without a release; the microphone stays closed until it is released",
+                          unsigned(max_hold_frames_ * FrameMs / 1000));
+            log_(line);
+        }
+        if (limited_) {
+            held_seen_ = false;  // no tail either
+            change(false, index, "held past the limit");
+        } else {
+            held_seen_ = true;
+            last_held_ = index;
+            change(true, index, nullptr);
+        }
     } else {
-        open_ = held_seen_ && index >= last_held_ && index - last_held_ <= tail_frames_;
+        holding_ = limited_ = false;
+        change(held_seen_ && index >= last_held_ && index - last_held_ <= tail_frames_, index, "released");
     }
     if (open_ && captured) return true;
     std::fill(samples, samples + FrameSamples, int16_t(0));

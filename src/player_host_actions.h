@@ -3,10 +3,13 @@
  * talk, that the host reads and the game never sees. The tracker follows the same physical events
  * and window focus as the input engine, so a host action is held only while the game window has
  * input focus (not while another app or the settings panel owns it), and a control already held
- * when focus returns counts only after it is released once. Both input engines (the portable C++
- * one and the Rust bridge) keep one, under their own lock. */
+ * when focus returns counts only after it is released once. Releasing a source (or all input)
+ * treats its held controls the same way: a release the backend never reports cannot leave a host
+ * action held. Both input engines (the portable C++ one and the Rust bridge) keep one, under their
+ * own lock. */
 #include "player_controls.h"
 #include <algorithm>
+#include <optional>
 #include <set>
 
 namespace mag {
@@ -31,6 +34,18 @@ public:
             return;
         }
         down_.insert(control);
+    }
+    // The engine released `source` (every source without one): what was held stops counting and
+    // needs a release and a new press, as after focus returns.
+    void release(std::optional<InputSource> source = std::nullopt) {
+        for (auto it = down_.begin(); it != down_.end();) {
+            if (source && it->source != *source) {
+                ++it;
+                continue;
+            }
+            blocked_.insert(*it);
+            it = down_.erase(it);
+        }
     }
     HostActionState state(ActionId action) const {
         InputPolicy permission;

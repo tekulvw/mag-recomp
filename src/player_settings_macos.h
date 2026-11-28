@@ -38,4 +38,15 @@
 - (void)cancel:(id)sender;
 - (void)keepDisplay:(id)sender;
 - (void)revertDisplay:(id)sender;
+- (void)fit;  // the window to its content and the screen's visible area; the pages scroll when it is short
 @end
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+// Tests only: size the panel as if the screen's visible area were this one (screen coordinates).
+// NSZeroRect, the default, uses the window's real screen.
+void MAGSettingsSetVisibleFrameForTesting(NSRect frame);
+#ifdef __cplusplus
+}
+#endif

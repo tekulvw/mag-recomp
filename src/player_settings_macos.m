@@ -10,6 +10,38 @@
 - (BOOL)isOpaque {return YES;}
 - (void)drawRect:(NSRect)rect {[NSColor.windowBackgroundColor setFill];NSRectFill(rect);}
 @end
+// The pages' document: flipped, so it starts scrolled to the top and grows downwards.
+@interface MAGSettingsFlippedView : NSView
+@end
+@implementation MAGSettingsFlippedView
+- (BOOL)isFlipped {return YES;}
+@end
+
+// Tab (or full keyboard access) can land on a control scrolled out of the pages' view: bring it
+// in, through any box of its own that scrolls (the report comment, the controls' bindings list).
+@interface MAGSettingsWindow : NSWindow
+@property(nonatomic,weak) NSScrollView *pages;
+@end
+@implementation MAGSettingsWindow
+- (BOOL)makeFirstResponder:(NSResponder *)responder {
+    if(![super makeFirstResponder:responder])return NO;
+    id delegate=[responder isKindOfClass:NSText.class]?((NSText *)responder).delegate:nil;  // a field editor stands for its field
+    NSView *view=[delegate isKindOfClass:NSView.class]?delegate:[responder isKindOfClass:NSView.class]?(NSView *)responder:nil;
+    NSView *document=self.pages.documentView;
+    if(!view||!document||view==document||![view isDescendantOf:document])return YES;
+    NSScrollView *inner=view.enclosingScrollView;
+    if(inner!=self.pages&&inner.documentView==view)view=inner;  // a text area shows its whole box; it keeps its own caret in view
+    for(;view;){
+        NSScrollView *scroll=view.enclosingScrollView;[view scrollRectToVisible:view.bounds];
+        if(!scroll||scroll==self.pages)break;
+        view=scroll;
+    }
+    return YES;
+}
+@end
+
+static NSRect testingVisibleFrame;  // NSZeroRect: the window's real screen
+void MAGSettingsSetVisibleFrameForTesting(NSRect frame) {testingVisibleFrame=frame;}
 
 // The shared definitions (player_settings_text.h) as AppKit takes them.
 static NSArray<NSString *> *titles(const char *const *labels, int count) {
@@ -71,7 +103,10 @@ static NSStackView *row(NSString *title,NSString *hint,NSView *control) {
 
 @implementation MAGSettingsController {
     NSString *_path;
-    NSStackView *_root,*_general,*_ports,*_confirmation,*_debug;
+    NSStackView *_root,*_pages,*_general,*_ports,*_confirmation,*_debug;
+    NSScrollView *_pagesScroll;
+    NSLayoutConstraint *_pagesHeight;
+    id _screenObserver;
     NSMutableArray<NSButton *> *_debugControls;
     NSMutableArray<NSTextField *> *_debugHints;
     NSSegmentedControl *_section;
@@ -109,7 +144,7 @@ static NSStackView *row(NSString *title,NSString *hint,NSView *control) {
 }
 
 - (instancetype)initWithPath:(NSString *)path settings:(NSDictionary *)settings error:(NSError *)error {
-    NSWindow *window=[[NSWindow alloc] initWithContentRect:NSMakeRect(0,0,MAG_SETTINGS_WIDTH,550)
+    MAGSettingsWindow *window=[[MAGSettingsWindow alloc] initWithContentRect:NSMakeRect(0,0,MAG_SETTINGS_WIDTH,550)
         styleMask:NSWindowStyleMaskTitled|NSWindowStyleMaskClosable backing:NSBackingStoreBuffered defer:NO];
     self=[super initWithWindow:window];if(!self)return nil;
     _path=path.copy;_settings=settings.copy;_recovery=error!=nil;_needsSave=error||![NSFileManager.defaultManager fileExistsAtPath:path];
@@ -124,10 +159,24 @@ static NSStackView *row(NSString *title,NSString *hint,NSView *control) {
     // General and Debug; Controls joins between them when an input integration registers its catalog.
     _section=[NSSegmentedControl segmentedControlWithLabels:@[@MAG_SETTINGS_PAGE_GENERAL,@MAG_SETTINGS_PAGE_DEBUG] trackingMode:NSSegmentSwitchTrackingSelectOne target:self action:@selector(sectionChanged:)];
     _section.selectedSegment=0;_section.identifier=@"settings_section";add(_root,_section);
-    _general=stack(NSUserInterfaceLayoutOrientationVertical,9);add(_root,_general);
-    _controlsHost=[NSView new];_controlsHost.hidden=YES;add(_root,_controlsHost);
+    // The pages scroll when the screen is too short for them (-fit); the page picker above and the
+    // error, confirmation and buttons below stay in view.
+    _pages=stack(NSUserInterfaceLayoutOrientationVertical,9);_pages.translatesAutoresizingMaskIntoConstraints=NO;_pages.identifier=@"settings_pages_stack";
+    NSView *document=[MAGSettingsFlippedView new];document.translatesAutoresizingMaskIntoConstraints=NO;[document addSubview:_pages];
+    _pagesScroll=[NSScrollView new];_pagesScroll.identifier=@"settings_pages";_pagesScroll.borderType=NSNoBorder;_pagesScroll.drawsBackground=NO;
+    _pagesScroll.hasVerticalScroller=YES;_pagesScroll.hasHorizontalScroller=NO;_pagesScroll.autohidesScrollers=YES;
+    _pagesScroll.documentView=document;add(_root,_pagesScroll);
+    NSClipView *clip=_pagesScroll.contentView;_pagesHeight=[_pagesScroll.heightAnchor constraintEqualToConstant:0];
+    [NSLayoutConstraint activateConstraints:@[
+        [_pages.leadingAnchor constraintEqualToAnchor:document.leadingAnchor],[_pages.trailingAnchor constraintEqualToAnchor:document.trailingAnchor],
+        [_pages.topAnchor constraintEqualToAnchor:document.topAnchor],[_pages.bottomAnchor constraintEqualToAnchor:document.bottomAnchor],
+        [document.leadingAnchor constraintEqualToAnchor:clip.leadingAnchor],[document.topAnchor constraintEqualToAnchor:clip.topAnchor],
+        [document.widthAnchor constraintEqualToAnchor:clip.widthAnchor],_pagesHeight]];  // height: the pages'
+    window.pages=_pagesScroll;
+    _general=stack(NSUserInterfaceLayoutOrientationVertical,9);add(_pages,_general);
+    _controlsHost=[NSView new];_controlsHost.hidden=YES;add(_pages,_controlsHost);
     // Debug: one row per mag_settings_debug_items entry (player_settings_text.h); switches act at once.
-    _debug=stack(NSUserInterfaceLayoutOrientationVertical,9);_debug.hidden=YES;_debug.identifier=@"debug_page";add(_root,_debug);
+    _debug=stack(NSUserInterfaceLayoutOrientationVertical,9);_debug.hidden=YES;_debug.identifier=@"debug_page";add(_pages,_debug);
     {
         NSTextField *debugHeading=label(@MAG_SETTINGS_HEADING_DEBUG,14,NO);debugHeading.font=[NSFont boldSystemFontOfSize:14];add(_debug,debugHeading);
         NSStackView *rows=stack(NSUserInterfaceLayoutOrientationVertical,5);
@@ -232,8 +281,8 @@ static NSStackView *row(NSString *title,NSString *hint,NSView *control) {
     NSStackView *footer=stack(NSUserInterfaceLayoutOrientationHorizontal,8);
     _status=label(@"",11,YES);[_status setContentHuggingPriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
     [footer addArrangedSubview:_status];
-    _cancelButton=[NSButton buttonWithTitle:@MAG_SETTINGS_CANCEL target:self action:@selector(cancel:)];_cancelButton.keyEquivalent=@"\e";
-    _applyButton=[NSButton buttonWithTitle:@MAG_SETTINGS_APPLY target:self action:@selector(apply:)];
+    _cancelButton=[NSButton buttonWithTitle:@MAG_SETTINGS_CANCEL target:self action:@selector(cancel:)];_cancelButton.keyEquivalent=@"\e";_cancelButton.identifier=@"cancel";
+    _applyButton=[NSButton buttonWithTitle:@MAG_SETTINGS_APPLY target:self action:@selector(apply:)];_applyButton.identifier=@"apply";
     _applyButton.keyEquivalent=@"\r";
     _playButton=[NSButton buttonWithTitle:@MAG_SETTINGS_PLAY target:self action:@selector(play:)];_playButton.keyEquivalent=@"\r";_playButton.hidden=YES;_playButton.enabled=!_recovery;_playButton.identifier=@"play";
     for(NSButton *button in @[_cancelButton,_applyButton,_playButton])[footer addArrangedSubview:button];
@@ -241,7 +290,10 @@ static NSStackView *row(NSString *title,NSString *hint,NSView *control) {
     if(MAG_PLAYER_VOICE_SUPPORTED)_fields=[_fields arrayByAddingObjectsFromArray:@[_voice,_voiceVolume]];
     [self fill:settings];[self changed:nil];
     if(error)[self showError:error.localizedDescription];
-    [self fit];[window center];return self;
+    // The visible area changes with the Dock, the menu bar and display arrangement.
+    __weak MAGSettingsController *weak=self;
+    _screenObserver=[NSNotificationCenter.defaultCenter addObserverForName:NSApplicationDidChangeScreenParametersNotification object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *note){[weak fit];}];
+    [self fit];[window center];[self keepOnScreen];return self;
 }
 
 - (void)setControlsPane:(id<MAGControlsSettingsPane>)pane view:(NSView *)view {
@@ -264,6 +316,7 @@ static NSStackView *row(NSString *title,NSString *hint,NSView *control) {
     _general.hidden=controls||debug;_controlsHost.hidden=!controls;_debug.hidden=!debug;
     if(debug)[self refreshDebug];
     _applyButton.title=controls?@MAG_SETTINGS_APPLY_CONTROLS:@MAG_SETTINGS_APPLY;_errorLabel.hidden=YES;[self changed:nil];[self fit];
+    [_pagesScroll.documentView scrollPoint:NSZeroPoint];  // a page opens at its top
 }
 // Debug: the switches show whether their file exists; Open logs folder needs the supervisor's folder.
 - (void)refreshDebug {
@@ -292,8 +345,52 @@ static NSStackView *row(NSString *title,NSString *hint,NSView *control) {
     }
     [self refreshDebug];[self fit];
 }
-- (void)dealloc {[_timer invalidate];if(_resizeObserver)[NSNotificationCenter.defaultCenter removeObserver:_resizeObserver];}
-- (void)fit { [self.window.contentView layoutSubtreeIfNeeded];[self.window setContentSize:NSMakeSize(MAG_SETTINGS_WIDTH,_root.fittingSize.height+44)]; }
+- (void)dealloc {
+    [_timer invalidate];if(_resizeObserver)[NSNotificationCenter.defaultCenter removeObserver:_resizeObserver];
+    if(_screenObserver)[NSNotificationCenter.defaultCenter removeObserver:_screenObserver];
+}
+- (NSRect)visibleArea {
+    if(!NSIsEmptyRect(testingVisibleFrame))return testingVisibleFrame;
+    NSScreen *screen=self.window.screen?:NSScreen.mainScreen;return screen?screen.visibleFrame:NSZeroRect;
+}
+// As tall as the content, as before the pages could scroll, unless the screen's visible area is
+// shorter: then the pages scroll (at least MAG_SETTINGS_MIN_PAGE_HEIGHT) and
+// MAG_SETTINGS_WORK_AREA_MARGIN stays free above and below the window.
+- (void)fit {
+    NSWindow *window=self.window;NSView *content=window.contentView;
+    // At most twice: a scroller appearing or going changes the pages' width, so their wrapped height.
+    for(int pass=0;pass<2;++pass){
+        [content layoutSubtreeIfNeeded];
+        const CGFloat natural=_pages.fittingSize.height,others=_root.fittingSize.height-_pagesHeight.constant;
+        CGFloat height=natural;const NSRect area=[self visibleArea];
+        if(!NSIsEmptyRect(area)){
+            const CGFloat frame=[window frameRectForContentRect:NSMakeRect(0,0,MAG_SETTINGS_WIDTH,others+natural+44)].size.height;
+            const CGFloat room=area.size.height-2*MAG_SETTINGS_WORK_AREA_MARGIN;
+            if(frame>room)height=MIN(natural,MAX(MAG_SETTINGS_MIN_PAGE_HEIGHT,natural-(frame-room)));
+        }
+        if(height==_pagesHeight.constant)break;
+        _pagesHeight.constant=height;
+    }
+    [content layoutSubtreeIfNeeded];
+    NSRect frame=window.frame,target=[window frameRectForContentRect:NSMakeRect(0,0,MAG_SETTINGS_WIDTH,_root.fittingSize.height+44)];
+    target.origin=NSMakePoint(frame.origin.x,NSMaxY(frame)-target.size.height);  // keeps its top, as setContentSize: did
+    if(!NSEqualRects(target,frame))[window setFrame:target display:YES];
+    [self keepOnScreen];[content layoutSubtreeIfNeeded];
+}
+// Back inside the visible area when resizing or a screen change left it partly outside; the
+// title bar first when even the least height does not fit.
+- (void)keepOnScreen {
+    NSRect area=[self visibleArea],frame=self.window.frame,moved=frame;
+    if(NSIsEmptyRect(area)||NSContainsRect(area,frame))return;
+    if(frame.size.height<=area.size.height-2*MAG_SETTINGS_WORK_AREA_MARGIN)area=NSInsetRect(area,0,MAG_SETTINGS_WORK_AREA_MARGIN);
+    if(NSMaxY(moved)>NSMaxY(area))moved.origin.y=NSMaxY(area)-moved.size.height;
+    if(moved.origin.y<NSMinY(area))moved.origin.y=MIN(NSMinY(area),NSMaxY(area)-moved.size.height);
+    if(NSMaxX(moved)>NSMaxX(area))moved.origin.x=NSMaxX(area)-moved.size.width;
+    if(moved.origin.x<NSMinX(area))moved.origin.x=NSMinX(area);
+    if(!NSEqualPoints(moved.origin,frame.origin))[self.window setFrameOrigin:moved.origin];
+}
+- (void)windowDidChangeScreen:(NSNotification *)note {[self fit];}
+- (void)windowDidChangeBackingProperties:(NSNotification *)note {[self fit];}
 - (void)showError:(NSString *)message { _errorLabel.stringValue=message;_errorLabel.hidden=NO;[self fit]; }
 - (void)fill:(NSDictionary *)settings {
     _server.stringValue=settings[@"server_address"];_name.stringValue=settings[@"player_name"]?:@"";

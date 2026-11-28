@@ -30,6 +30,8 @@ void DesktopCaptureCore::publish_capture(bool focused, bool mouse_captured) {
 }
 
 void DesktopCaptureCore::release_held() {
+    keys_up_.clear();
+    buttons_up_.clear();
     const uint64_t time = platform_.now_ns();
     auto keys = std::move(keys_);
     auto buttons = std::move(buttons_);
@@ -133,6 +135,49 @@ void DesktopCaptureCore::refresh() {
     }
     gate_.publish(ready, relative_, intentional);
     if (installed_) publish_capture(ready, relative_);
+    if (ready_) reconcile();
+}
+
+void DesktopCaptureCore::reconcile() {
+    const uint64_t now = platform_.now_ns();
+    if (now < next_reconcile_) return;
+    next_reconcile_ = now + ReconcileIntervalNs;
+    // Two checks in a row: a key found up at one check and still up at the next is released.
+    std::set<uint32_t> keys_up;
+    std::set<Button> buttons_up;
+    for (uint32_t usage : keys_) {
+        const auto down = platform_.key_down(usage);
+        if (!down) continue;
+        if (*down) physical_trusted_ = true;
+        else keys_up.insert(usage);
+    }
+    for (const auto& button : buttons_) {
+        const auto down = platform_.button_down(button.first, button.second);
+        if (!down) continue;
+        if (*down) physical_trusted_ = true;
+        else buttons_up.insert(button);
+    }
+    if (physical_trusted_) {
+        for (uint32_t usage : std::set<uint32_t>(keys_up)) {
+            if (!keys_up_.contains(usage)) continue;
+            keys_.erase(usage);
+            keys_up.erase(usage);
+            platform_.key_forgotten(usage);
+            ++lost_releases_;
+            last_lost_ = PhysicalControl{InputSource::Keyboard, usage};
+            sink_.push_event({{InputSource::Keyboard, usage}, false, now, 0});
+        }
+        for (const auto& button : std::set<Button>(buttons_up)) {
+            if (!buttons_up_.contains(button)) continue;
+            buttons_.erase(button);
+            buttons_up.erase(button);
+            ++lost_releases_;
+            last_lost_ = PhysicalControl{InputSource::Mouse, button.first};
+            sink_.push_event({{InputSource::Mouse, button.first}, false, now, button.second});
+        }
+    }
+    keys_up_ = std::move(keys_up);
+    buttons_up_ = std::move(buttons_up);
 }
 
 void DesktopCaptureCore::key(uint32_t usage, bool down, uint64_t time_ns, DesktopCaptureGate::Stamp stamp) {
@@ -144,6 +189,7 @@ void DesktopCaptureCore::key(uint32_t usage, bool down, uint64_t time_ns, Deskto
     } else if (!keys_.erase(usage)) {
         return;  // Releases clear only keys this capture reported as held.
     }
+    keys_up_.erase(usage);  // an edge restarts its reconciliation
     sink_.push_event({{InputSource::Keyboard, usage}, down, time_ns, 0});
 }
 
@@ -156,6 +202,7 @@ void DesktopCaptureCore::mouse_button(uint32_t index, uint64_t device, bool down
     } else if (!buttons_.erase(button)) {
         return;
     }
+    buttons_up_.erase(button);
     sink_.push_event({{InputSource::Mouse, index}, down, time_ns, device});
 }
 
