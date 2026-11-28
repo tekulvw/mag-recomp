@@ -261,6 +261,66 @@ bool MicSource::frame(uint64_t, int16_t* samples) {
     return buffer_.pull(samples);
 }
 
+// --- LevelControl -------------------------------------------------------------------------------
+
+LevelControl::LevelControl(std::unique_ptr<FrameSource> inner, LevelOptions options)
+    : inner_(std::move(inner)), options_(options) {}
+
+void LevelControl::start() {
+    // A new voice session may be a new device or a new room: learn the levels again.
+    have_floor_ = have_level_ = false;
+    gain_db_ = 0;
+    applied_ = 1;
+    if (inner_) inner_->start();
+}
+
+void LevelControl::stop() {
+    if (inner_) inner_->stop();
+}
+
+bool LevelControl::frame(uint64_t index, int16_t* samples) {
+    const bool captured = inner_ && inner_->frame(index, samples);
+    if (captured) process(samples);  // a missing frame is silence and teaches nothing
+    return captured;
+}
+
+void LevelControl::process(int16_t* samples) {
+    double sum = 0, peak = 0;
+    for (unsigned i = 0; i < FrameSamples; ++i) {
+        const double x = samples[i] / 32768.0;
+        sum += x * x;
+        peak = std::max(peak, std::fabs(x));
+    }
+    const double level = 10 * std::log10(std::max(sum / FrameSamples, 1e-12));  // RMS in dBFS
+    // The noise floor drops to any quieter frame at once and rises slowly, so speech never lifts it.
+    if (!have_floor_ || level < floor_db_) floor_db_ = level;
+    else floor_db_ = std::min(level, floor_db_ + options_.floor_rise_db);
+    have_floor_ = true;
+    const bool speech = level > options_.speech_min_dbfs && level > floor_db_ + options_.speech_margin_db;
+    if (speech) {
+        // Speech level: quick to rise to louder syllables, slow to fall in softer ones.
+        if (!have_level_) level_db_ = level;
+        else level_db_ += (level > level_db_ ? 0.4 : 0.08) * (level - level_db_);
+        const double wanted = std::clamp(options_.target_dbfs - level_db_, options_.min_gain_db, options_.max_gain_db);
+        if (!have_level_ || wanted < gain_db_) gain_db_ = wanted;  // the first speech sets it outright
+        else gain_db_ = std::min(wanted, gain_db_ + options_.rise_db);
+        have_level_ = true;
+    }
+    double gain = std::pow(10.0, gain_db_ / 20);
+    if (peak * gain > options_.ceiling) gain = options_.ceiling / peak;  // this frame only
+    // A rise ramps across the frame; a fall applies at once, so a sudden loud frame is not let
+    // through at the old gain.
+    const double from = std::min(applied_, gain), knee = options_.ceiling, headroom = 1.0 - knee;
+    for (unsigned i = 0; i < FrameSamples; ++i) {
+        const double g = from + (gain - from) * double(i + 1) / FrameSamples;
+        double y = samples[i] / 32768.0 * g;
+        const double magnitude = std::fabs(y);
+        if (magnitude > knee) y = std::copysign(knee + headroom * std::tanh((magnitude - knee) / headroom), y);
+        samples[i] = static_cast<int16_t>(std::clamp<long>(std::lround(y * 32768.0), -32768, 32767));
+    }
+    applied_ = gain;
+}
+
 // --- PttGate ------------------------------------------------------------------------------------
 
 PttGate::PttGate(std::unique_ptr<FrameSource> inner, std::function<PttInput()> input, unsigned tail_ms,
