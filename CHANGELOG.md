@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.15.1](https://github.com/tekulvw/mag-recomp/compare/v0.15.0...v0.15.1) (2026-11-28)
+
+
+### Bug Fixes
+
+* **installer:** let Windows MAG folders inherit the player's permissions ([#355](https://github.com/tekulvw/mag-recomp/issues/355)) ([5e95902](https://github.com/tekulvw/mag-recomp/commit/5e9590232f0ecc4e2496d14dcb61f306a9b4fd5a))
+* **settings:** keep the settings window inside the screen and scroll its page ([#358](https://github.com/tekulvw/mag-recomp/issues/358)) ([764021e](https://github.com/tekulvw/mag-recomp/commit/764021e321b480cd46615abfd265fae5f86a2193))
+* **voice:** keep push to talk and the talking signal from sticking on ([#360](https://github.com/tekulvw/mag-recomp/issues/360)) ([0cfb623](https://github.com/tekulvw/mag-recomp/commit/0cfb62375d0cafad129c3a448b4fdb7df843ea1f))
+* **voice:** level the microphone so talkers are heard beside the game ([#359](https://github.com/tekulvw/mag-recomp/issues/359)) ([6f665d8](https://github.com/tekulvw/mag-recomp/commit/6f665d80f0d71bab188540d95b52491a93bb6230))
+
+
+### Documentation
+
+* **spec:** design launcher updates that find, verify and apply new releases ([#356](https://github.com/tekulvw/mag-recomp/issues/356)) ([14acac1](https://github.com/tekulvw/mag-recomp/commit/14acac1a1ad8aac4d6cebf8eda190c690f4b94e9))
+
 ## [0.15.0](https://github.com/tekulvw/mag-recomp/compare/v0.14.0...v0.15.0) (2026-11-27)
 
 
