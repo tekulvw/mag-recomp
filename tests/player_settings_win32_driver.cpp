@@ -548,7 +548,7 @@ static void check_fits(HWND window, long bottom, bool scrolls, const char* where
     CHECK(info.nMax + 1 > int(info.nPage) && int(info.nPage) == shown_area.bottom);
     int lowest = 0;
     for (HWND child = GetWindow(page, GW_CHILD); child; child = GetWindow(child, GW_HWNDNEXT))
-        if (shown(child)) lowest = std::max(lowest, int(rect_in(page, child).bottom) + info.nPos);
+        if (shown(child)) lowest = (std::max)(lowest, int(rect_in(page, child).bottom) + info.nPos);
     CHECK(lowest > int(info.nPage) && lowest <= info.nMax + 1);
 }
 
