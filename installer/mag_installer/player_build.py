@@ -28,6 +28,7 @@ from .model import InstallerError, host_key
 from .native_build import FIRMWARE_SOURCE_STEPS
 from .native_recipe import x86_level_override
 from .pipeline import _exclusive_lock, _write_json
+from .platforms import private_directory
 from .safety import Cancellation, contained, file_digest
 
 
@@ -341,7 +342,7 @@ def _migrate(root, output, build, status, token, events):
         status['migration'] = 'staging'
         _write_json(output / 'build.json', status)
         from .native_package import package
-        stage.mkdir(mode=0o700)
+        private_directory(stage)
         package(config, workspace, stage / name, token=token, events=events)
         token.check()
         phase = status['migration'] = 'moving'
@@ -498,7 +499,7 @@ def install(root, source, output, cache, token=None, events=None, retry=False, j
             recovering = True
         else:
             recovering = False
-            build.mkdir(mode=0o700)
+            private_directory(build)
             status = {'schema_version': 2, 'layout': 2, 'state': 'building', 'output': str(output), 'build': str(build),
                       'binding': binding, 'attempt': 1, 'managed_complete': False, 'tools_started': False}
         logs = build / 'logs'; logs.mkdir(exist_ok=True)
@@ -592,7 +593,7 @@ def install(root, source, output, cache, token=None, events=None, retry=False, j
             events({'event': 'stage-start', 'stage': 'package', 'logs': str(native_output / 'logs')})
             # The MAG folder is assembled in the build folder and moved into place when complete.
             stage = build / 'package'
-            stage.mkdir(mode=0o700)
+            private_directory(stage)
             package(config, native_output / 'workspace', stage / name, token=token, events=progress)
             token.check()
             if cache_store:

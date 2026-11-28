@@ -15,6 +15,7 @@ import zipfile
 
 from .model import InstallerError, host_key
 from .pipeline import run_command, _write_json
+from .platforms import private_directory, private_temporary_directory
 from .safety import Cancellation
 from .tools import acquire
 
@@ -346,7 +347,7 @@ def rust_toolchain(root, cache=None, token=None, events=None, host=None):
                 json.loads(receipt.read_text(encoding='utf-8')) != _inventory(combined, token):
             raise InstallerError('Managed Rust toolchain changed; choose fresh storage')
     else:
-        with tempfile.TemporaryDirectory(prefix='.managed-', dir=root / 'artifacts') as scratch:
+        with private_temporary_directory('.managed-', root / 'artifacts') as scratch:
             staged = Path(scratch) / 'payload'
             for key in ('rustc', 'rust-std'):
                 for source in sorted(located[key].rglob('*')):
@@ -546,7 +547,7 @@ def extract_managed(archive, destination, spec, token=None):
             return terminal(item['target'],seen+(name,)) if item['target'] else name
         for name,item in members.items():
             if item['target']: terminal(name)
-        destination.mkdir(parents=True,mode=0o700)
+        private_directory(destination,parents=True)
         try:
             for name,item in members.items():
                 token.check(); path=destination/name
@@ -626,7 +627,7 @@ def materialize(spec, root, cache, token, events):
         if expected != current: raise InstallerError('Managed tool inventory changed; choose fresh storage')
         return final
     blob=acquire(spec,cache,token,events)
-    with tempfile.TemporaryDirectory(prefix='.managed-',dir=root) as scratch:
+    with private_temporary_directory('.managed-',root) as scratch:
         extracted=extract_managed(blob,Path(scratch)/'payload',spec,token)
         _write_json(extracted/'MANAGED-INVENTORY.json',_inventory(extracted,token))
         extracted.rename(final)

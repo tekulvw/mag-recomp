@@ -12,7 +12,7 @@ import time
 
 from .model import InstallerError, host_key
 from .capacity import estimate
-from .platforms import publish_directory, stop_process_tree
+from .platforms import private_directory, publish_directory, stop_process_tree
 from .safety import Cancellation, contained, file_digest, validate_inputs
 from .tools import acquire, extract_archive
 
@@ -356,7 +356,7 @@ def install(profile, source, output, cache, resume=False, synthetic=False, token
                 raise InstallerError('Cannot resume: profile, input identity, host, source or destination changed')
         else:
             if resume: raise InstallerError('No prior local staging exists to resume')
-            stage.mkdir(mode=0o700)
+            private_directory(stage)
             journal = {'fingerprint': fingerprint, 'state': 'starting'}
         _write_json(journal_path, journal)
         logs = contained(stage, 'logs')

@@ -1,13 +1,78 @@
 """Small host adapters. OS branches require certification on each target OS."""
+from contextlib import contextmanager
 import ctypes
 import errno
 import os
 from pathlib import Path
 import platform
+import secrets
+import shutil
 import signal
+import stat
 import subprocess
+import sys
+import tempfile
 
 from .model import InstallerError
+
+
+# Folders the installer makes for the player: the MAG folder, its app and game folders, the build
+# folder and its scratch, staging and the per-user build cache. On macOS and Linux they are made
+# owner-only (mode 0o700). On Windows they inherit the permissions of the folder the player chose,
+# as a folder made there in Explorer would (the player's profile folders already keep other
+# accounts out); that is also what Python did on Windows before the change below. Python's mode=0o700 on Windows (3.12.4 and later, the fix for CVE-2024-4030) instead gives the
+# folder a protected DACL granting only SYSTEM, Administrators and the folder's owner (OWNER
+# RIGHTS). When the installer runs elevated, the owner is the Administrators group, so the
+# player's own account loses access: MAG started without admin rights cannot write its saves or
+# logs, or even read its game files, and the player cannot delete the build folder. A folder
+# moved into place (the MAG folder is renamed out of the build folder) keeps the permissions it
+# was made with, so the folder must be made inheriting from the start.
+OWNER_ONLY = 0o700
+
+
+def private_directory(path, parents=False, exist_ok=False):
+    """mkdir for a folder the installer makes for the player: owner-only on macOS and Linux,
+    inheriting its parent's permissions on Windows (see OWNER_ONLY above). Returns the Path."""
+    path = Path(path)
+    if os.name == 'nt':
+        path.mkdir(parents=parents, exist_ok=exist_ok)
+    else:
+        path.mkdir(mode=OWNER_ONLY, parents=parents, exist_ok=exist_ok)
+    return path
+
+
+def private_scratch(prefix, dir):
+    """tempfile.mkdtemp in `dir`, made with private_directory's permissions. Returns the Path."""
+    if os.name != 'nt':
+        return Path(tempfile.mkdtemp(prefix=prefix, dir=dir))
+    for _ in range(100):
+        path = Path(dir) / (prefix + secrets.token_hex(8))
+        try:
+            return private_directory(path)
+        except FileExistsError:
+            continue
+    raise FileExistsError(errno.EEXIST, 'No usable temporary folder name found', str(dir))
+
+
+def _remove_read_only(function, path, _error):
+    os.chmod(path, stat.S_IWRITE)
+    function(path)
+
+
+@contextmanager
+def private_temporary_directory(prefix, dir):
+    """tempfile.TemporaryDirectory in `dir`, made with private_directory's permissions."""
+    if os.name != 'nt':
+        with tempfile.TemporaryDirectory(prefix=prefix, dir=dir) as path:
+            yield path
+        return
+    path = private_scratch(prefix, dir)
+    try:
+        yield str(path)
+    finally:
+        if path.exists():
+            shutil.rmtree(path, **({'onexc': _remove_read_only} if sys.version_info >= (3, 12)
+                                   else {'onerror': _remove_read_only}))
 
 
 def publish_directory(source, destination):
