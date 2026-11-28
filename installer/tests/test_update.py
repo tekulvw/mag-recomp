@@ -481,28 +481,29 @@ class WindowsPermissionTests(UpdateFixture, unittest.TestCase):
 
     def test_the_new_app_keeps_the_previous_app_folders_permissions(self):
         root, output, cache, app, sid = self.installed_in_profile()
-        before = platforms.dacl_parts(platforms.folder_dacl(app))
+        before = platforms.explicit_dacl(platforms.folder_dacl(app))
         folder = platforms.dacl_parts(platforms.folder_dacl(output))
-        self.assertTrue(any(sid in ace and 'ID' not in ace.split(';')[1] for ace in before[1]))
+        names = {sid} | ({'LA'} if sid.endswith('-500') else set())  # SDDL names the built-in Administrator LA
+        self.assertTrue(any(ace.split(';')[5] in names for ace in before[1]), before)
         with ExitStack() as stack:
             self.setup_host(stack, 'windows-x86_64', '0.16.0')
             player_build.update(root, output, cache)
         self.assertEqual(updating.app_version(app, 'windows-x86_64'), '0.16.0')
-        self.assertEqual(platforms.dacl_parts(platforms.folder_dacl(app)), before)
+        self.assertEqual(platforms.explicit_dacl(platforms.folder_dacl(app)), before)
         self.assertEqual(platforms.dacl_parts(platforms.folder_dacl(output)), folder)
         for path in [app, *app.rglob('*')]:
             self.assertTrue(platforms.grants_full_control(platforms.dacl_parts(platforms.folder_dacl(path))[1], sid), path)
 
     def test_a_permission_mismatch_rolls_the_update_back(self):
         root, output, cache, app, sid = self.installed_in_profile()
-        before = platforms.dacl_parts(platforms.folder_dacl(app))
+        before = platforms.explicit_dacl(platforms.folder_dacl(app))
         with ExitStack() as stack:
             self.setup_host(stack, 'windows-x86_64', '0.16.0')
             stack.enter_context(patch.object(platforms, 'apply_explicit_dacl'))  # the entries are not copied
             with self.assertRaisesRegex(InstallerError, 'permissions differ'):
                 player_build.update(root, output, cache)
         self.assertEqual(updating.app_version(app, 'windows-x86_64'), '0.15.0')
-        self.assertEqual(platforms.dacl_parts(platforms.folder_dacl(app)), before)
+        self.assertEqual(platforms.explicit_dacl(platforms.folder_dacl(app)), before)
 
 
 class EntryPointTests(UpdateFixture, unittest.TestCase):
@@ -548,6 +549,13 @@ class EntryPointTests(UpdateFixture, unittest.TestCase):
 
 
 class HelperTests(unittest.TestCase):
+    def test_explicit_dacl_ignores_inherited_entries_and_auto_inherit_flags(self):
+        self.assertEqual(platforms.explicit_dacl('D:AI(A;OICIID;FA;;;SY)(A;OICI;FA;;;S-1-5-21-1)'),
+                         (False, ['A;OICI;FA;;;S-1-5-21-1']))
+        self.assertEqual(platforms.explicit_dacl('D:(A;OICI;FA;;;S-1-5-21-1)(A;OICIID;FA;;;BA)'),
+                         platforms.explicit_dacl('D:AI(A;OICI;FA;;;S-1-5-21-1)'))
+        self.assertEqual(platforms.explicit_dacl('D:PAI(A;OICI;FA;;;SY)'), (True, ['A;OICI;FA;;;SY']))
+
     def test_the_self_check_reads_receipts_launcher_and_game_identities(self):
         for host, name in HOSTS:
             with self.subTest(host=host), tempfile.TemporaryDirectory() as temp:
