@@ -19,6 +19,12 @@ function(mag_enable_player_settings target sdk)
         "${player_src}/player_settings_runtime.mm" "${player_src}/player_server_overlay.mm" "${player_src}/player_input_desktop_macos.mm"
         "${player_src}/player_archive.cpp"
         "${player_src}/player_portal.cpp" "${player_src}/player_portal_macos.mm")
+    # The panel's Updates row (src/player_update.h): the check, its SHA-256, and the vendored
+    # Monocypher for Ed25519 and BLAKE2b (third-party C, built without warnings).
+    target_sources(${target} PRIVATE "${player_src}/player_update.cpp" "${player_src}/player_sha256.cpp"
+        "${player_src}/third_party/monocypher/monocypher.c" "${player_src}/third_party/monocypher/monocypher-ed25519.c")
+    set_source_files_properties("${player_src}/third_party/monocypher/monocypher.c" "${player_src}/third_party/monocypher/monocypher-ed25519.c"
+        TARGET_DIRECTORY ${target} PROPERTIES COMPILE_OPTIONS "-w")
     set_property(SOURCE "${player_src}/main.cpp" TARGET_DIRECTORY ${target}
         APPEND PROPERTY COMPILE_DEFINITIONS MAG_PLAYER_SETTINGS=1)
     set_source_files_properties("${player_src}/player_settings_store.m" "${player_src}/player_settings_macos.m"

@@ -363,6 +363,18 @@ else()
     # MAG_GAME_CONTROLS (cmake/MagControls.cmake).
     target_sources(${PROJECT_NAME} PRIVATE src/player_settings_session.cpp src/player_settings_form.cpp
         src/player_report_request.cpp src/player_settings_debug.cpp)
+    # Its Updates row: setup checks GitHub's latest release in the background and offers it only
+    # once its signature verifies (src/player_update.h), with the vendored Monocypher's Ed25519.
+    # Inert unless the packaged supervisor hands it an update configuration (release builds only).
+    target_sources(${PROJECT_NAME} PRIVATE src/player_update.cpp
+        src/third_party/monocypher/monocypher.c src/third_party/monocypher/monocypher-ed25519.c)
+    if(MSVC AND NOT CMAKE_C_COMPILER_ID MATCHES "Clang")
+        set_source_files_properties(src/third_party/monocypher/monocypher.c src/third_party/monocypher/monocypher-ed25519.c
+            TARGET_DIRECTORY ${PROJECT_NAME} PROPERTIES COMPILE_OPTIONS "/w")
+    else()
+        set_source_files_properties(src/third_party/monocypher/monocypher.c src/third_party/monocypher/monocypher-ed25519.c
+            TARGET_DIRECTORY ${PROJECT_NAME} PROPERTIES COMPILE_OPTIONS "-w")
+    endif()
     if(WIN32)
         # The window's Account row links through the portal over WinHTTP, as MAG.exe --link does.
         target_sources(${PROJECT_NAME} PRIVATE src/player_settings_win32.cpp src/player_input_win32_map.c

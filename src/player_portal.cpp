@@ -142,6 +142,16 @@ bool split_url(const std::string &url, Url &out) {
     return true;
 }
 
+bool split_request_url(const std::string &url, Url &out) {
+    const size_t mark = url.find('?');
+    if (mark == std::string::npos) return split_url(url, out);
+    const std::string query = url.substr(mark);
+    for (char c : query) if ((unsigned char)c <= 0x20 || (unsigned char)c >= 0x7f || c == '#' || c == '\\') return false;
+    if (query.find('?', 1) != std::string::npos || !split_url(url.substr(0, mark), out)) return false;
+    out.path += query;
+    return true;
+}
+
 bool check_portal_url(std::string &url, std::string &error) {
     size_t a = url.find_first_not_of(" \t\r\n"), b = url.find_last_not_of(" \t\r\n");
     url = a == std::string::npos ? std::string() : url.substr(a, b - a + 1);

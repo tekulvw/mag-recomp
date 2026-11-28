@@ -6,6 +6,7 @@
 #include <windows.h>
 #include <winhttp.h>
 #include <algorithm>
+#include <cstring>
 #include <string>
 
 #ifndef WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_3
@@ -52,8 +53,11 @@ public:
                   const Headers &headers) override {
         Response response;
         Url url;
-        if (!split_url(url_text, url)) { response.error = "the portal address is not a valid URL"; return response; }
-        auto failed = [&] { response.status = 0; response.body.clear(); response.error = describe(GetLastError()); return response; };
+        if (!split_request_url(url_text, url)) { response.error = "the portal address is not a valid URL"; return response; }
+        auto failed = [&] {
+            response.status = 0; response.body.clear(); response.headers.clear(); response.error = describe(GetLastError());
+            return response;
+        };
         Handle session{WinHttpOpen(L"MAG-launcher", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0)};
         if (!session.h)  // before Windows 8.1
             session.h = WinHttpOpen(L"MAG-launcher", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
@@ -72,7 +76,10 @@ public:
         DWORD never = WINHTTP_OPTION_REDIRECT_POLICY_NEVER;
         WinHttpSetOption(request.h, WINHTTP_OPTION_REDIRECT_POLICY, &never, sizeof never);
         const bool content = !body.empty() || (method != "GET" && method != "DELETE");
-        std::string extra = std::string(content ? "Content-Type: application/json\r\n" : "") + "Accept: application/json\r\n";
+        const bool accept = std::any_of(headers.begin(), headers.end(), [](const auto &h) {
+            return h.first.size() == 6 && _strnicmp(h.first.c_str(), "accept", 6) == 0;
+        });
+        std::string extra = std::string(content ? "Content-Type: application/json\r\n" : "") + (accept ? "" : "Accept: application/json\r\n");
         for (const auto &[name, value] : headers) extra += name + ": " + value + "\r\n";
         const std::wstring header_text = wide(extra);
         if (!WinHttpSendRequest(request.h, header_text.c_str(), DWORD(header_text.size()), (LPVOID)body.data(), DWORD(body.size()),
@@ -90,6 +97,32 @@ public:
             for (DWORD i = 0; i < retry_size / sizeof(wchar_t) && retry[i]; ++i) value += retry[i] < 128 ? char(retry[i]) : '?';
             response.retry_after = parse_retry_after(value);
         }
+        // Every header, for ETag, Location and the rate limits (player_update.h).
+        DWORD raw_size = 0;
+        WinHttpQueryHeaders(request.h, WINHTTP_QUERY_RAW_HEADERS_CRLF, WINHTTP_HEADER_NAME_BY_INDEX, WINHTTP_NO_OUTPUT_BUFFER, &raw_size,
+                            WINHTTP_NO_HEADER_INDEX);
+        if (GetLastError() == ERROR_INSUFFICIENT_BUFFER && raw_size && raw_size < 65536) {
+            std::wstring raw(raw_size / sizeof(wchar_t) + 1, L'\0');
+            if (WinHttpQueryHeaders(request.h, WINHTTP_QUERY_RAW_HEADERS_CRLF, WINHTTP_HEADER_NAME_BY_INDEX, raw.data(), &raw_size,
+                                    WINHTTP_NO_HEADER_INDEX)) {
+                raw.resize(raw_size / sizeof(wchar_t));
+                size_t at = raw.find(L"\r\n");  // after the status line
+                while (at != std::wstring::npos && at + 2 < raw.size() && response.headers.size() < 64) {
+                    const size_t next = raw.find(L"\r\n", at + 2);
+                    const std::wstring line = raw.substr(at + 2, next == std::wstring::npos ? std::wstring::npos : next - at - 2);
+                    const size_t colon = line.find(L':');
+                    if (colon != std::wstring::npos && colon) {
+                        std::string name, value;
+                        for (wchar_t c : line.substr(0, colon)) name += c < 128 ? char(c) : '?';
+                        size_t start = colon + 1;
+                        while (start < line.size() && (line[start] == L' ' || line[start] == L'\t')) ++start;
+                        for (wchar_t c : line.substr(start)) value += c < 128 ? char(c) : '?';
+                        response.headers.emplace_back(name, value);
+                    }
+                    at = next;
+                }
+            }
+        }
         for (;;) {
             DWORD available = 0, read = 0;
             if (!WinHttpQueryDataAvailable(request.h, &available)) return failed();
@@ -98,7 +131,7 @@ public:
             response.body.resize(start + available);
             if (!WinHttpReadData(request.h, response.body.data() + start, available, &read)) return failed();
             response.body.resize(start + read);
-            if (response.body.size() > (1u << 20)) { response.body.clear(); response.error = "the reply was too large"; return response; }
+            if (response.body.size() > (1u << 20)) { response.body.clear(); response.headers.clear(); response.error = "the reply was too large"; return response; }
         }
         response.status = int(status);
         return response;

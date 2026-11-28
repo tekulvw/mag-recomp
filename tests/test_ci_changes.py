@@ -73,6 +73,9 @@ class ClassifyTests(unittest.TestCase):
     def test_macos_settings_sources(self):
         self.assertIn('macos_settings', ran(['src/player_settings_macos.m']))
         self.assertIn('macos_settings', ran(['tests/test_player_reports.py']))
+        # The panel's Updates row: the check and its vendored Ed25519.
+        self.assertIn('macos_settings', ran(['src/player_update.cpp']))
+        self.assertIn('macos_settings', ran(['src/third_party/monocypher/monocypher.c']))
         self.assertNotIn('macos_settings', ran(['src/main.cpp']))
 
     def test_each_workflow_file_runs_its_own_jobs(self):

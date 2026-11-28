@@ -23,6 +23,9 @@ struct Response {
     std::string body;
     std::string error;  // why no response arrived (status 0), for the player
     int retry_after = -1;  // a Retry-After header given in seconds; -1 when absent or a date
+    // The reply's headers as received (names in any case; player_update.h reads ETag, Location
+    // and the rate-limit headers). The platform transports fill it; fakes may leave it empty.
+    Headers headers = {};
 };
 // A Retry-After value: whole seconds (at most a day); -1 for anything else.
 int parse_retry_after(const std::string &value);
@@ -30,7 +33,9 @@ class Transport {
 public:
     virtual ~Transport() = default;
     // POST a JSON body (Content-Type: application/json) with these extra headers. Implementations
-    // verify TLS certificates and the host name, and time out rather than hang.
+    // verify TLS certificates and the host name, time out rather than hang, and never follow a
+    // redirect (a 3xx reply is returned as it is). An Accept header given here replaces the
+    // default (application/json).
     virtual Response post(const std::string &url, const std::string &json_body, const Headers &headers) = 0;
     // Any of GET, POST, PUT and DELETE. A request without a body (an empty `json_body` on GET or
     // DELETE) carries no Content-Type. The platform transports answer every method; this default
@@ -53,6 +58,9 @@ inline constexpr const char *official_portal = "https://magtest.online";
 struct Url { std::string scheme, host, path; int port = 0; };
 // An absolute http(s) URL without user information, query or fragment.
 bool split_url(const std::string &url, Url &out);
+// split_url for a request: a query ("?...", printable ASCII) is allowed and kept in `path`, as
+// the signed redirect targets of GitHub's asset downloads carry one.
+bool split_request_url(const std::string &url, Url &out);
 // The portal_url setting: empty, or https://host[:port][/path]. Plain http is accepted only for
 // localhost and 127.0.0.1 (tests). Normalises (lowercase scheme and host, no trailing slash).
 bool check_portal_url(std::string &url, std::string &error);
