@@ -112,6 +112,8 @@ bool parse_reply(const std::string &raw, Response &out) {
             std::string name = lower(header.substr(0, colon)), value = header.substr(colon + 1);
             value.erase(0, value.find_first_not_of(" \t"));
             if (name == "transfer-encoding" && lower(value).find("chunked") != std::string::npos) chunked = true;
+            while (!value.empty() && (value.back() == ' ' || value.back() == '\t')) value.pop_back();
+            if (out.headers.size() < 64) out.headers.emplace_back(header.substr(0, colon), value);
             if (name == "retry-after") out.retry_after = parse_retry_after(value);
             if (name == "content-length") {
                 char *end = nullptr; errno = 0;
@@ -157,7 +159,7 @@ public:
                   const Headers &headers) override {
         Response response;
         Url url;
-        if (!split_url(url_text, url)) { response.error = "the portal address is not a valid URL"; return response; }
+        if (!split_request_url(url_text, url)) { response.error = "the portal address is not a valid URL"; return response; }
         NoSigpipe guard;
         std::string error;
         int fd = connect_to(url, error);
@@ -183,9 +185,10 @@ public:
             }
         }
         const bool content = !body.empty() || (method != "GET" && method != "DELETE");
+        const bool accept = std::any_of(headers.begin(), headers.end(), [](const auto &h) { return lower(h.first) == "accept"; });
         std::string request = method + " " + url.path + " HTTP/1.1\r\nHost: " + url.host +
                               (url.port == (url.scheme == "https" ? 443 : 80) ? std::string() : ":" + std::to_string(url.port)) +
-                              "\r\nUser-Agent: MAG-launcher\r\nAccept: application/json\r\n" +
+                              "\r\nUser-Agent: MAG-launcher\r\n" + (accept ? std::string() : "Accept: application/json\r\n") +
                               (content ? "Content-Type: application/json\r\nContent-Length: " + std::to_string(body.size()) + "\r\n"
                                        : std::string()) +
                               "Connection: close\r\n";
@@ -217,7 +220,7 @@ public:
         else if (raw.size() > reply_limit) response.error = "the reply from " + url.host + " was too large";
         else if (!parse_reply(raw, response)) response.error = raw.empty() ? "no reply from " + url.host + " (timed out or closed)"
                                                                            : "an incomplete reply from " + url.host;
-        if (!response.error.empty()) { response.status = 0; response.body.clear(); response.retry_after = -1; }
+        if (!response.error.empty()) { response.status = 0; response.body.clear(); response.retry_after = -1; response.headers.clear(); }
         return response;
     }
 };

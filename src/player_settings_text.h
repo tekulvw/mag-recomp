@@ -120,6 +120,31 @@
 #define MAG_SETTINGS_REPORT_COMMENT_LIMIT 1000
 #define MAG_SETTINGS_REPORT_COMMENT_COUNTER "%d/%d"  /* characters used, the limit */
 
+/* General: Updates (src/player_update.h; docs/player-settings.md, "Updates"). The checkbox is the
+ * check_updates setting (on unless the file says false). Setup checks GitHub's latest release at
+ * most every 6 hours, in the background, and offers one only after its signature verifies; the
+ * banner sits at the top of General. In game the row only reports what setup found. */
+#define MAG_SETTINGS_HEADING_UPDATES "Updates"
+#define MAG_SETTINGS_CHECK_UPDATES "Check for updates when MAG starts"
+#define MAG_SETTINGS_CHECK_UPDATES_HINT \
+    "Asks GitHub for the latest MAG release at most every 6 hours. Nothing about you or your computer is sent."
+#define MAG_SETTINGS_CHECK_UPDATES_ON "On"  /* the checkbox's own label */
+#define MAG_SETTINGS_CHECK_NOW "Check now"
+#define MAG_UPDATE_UP_TO_DATE "MAG %s is up to date (checked %s)."         /* version, when */
+#define MAG_UPDATE_AVAILABLE_ROW "MAG %s is available (you have %s)."        /* new, current */
+#define MAG_UPDATE_IN_GAME "MAG %s is available. It will be offered next time you start MAG."
+#define MAG_UPDATE_FAILED "Couldn't check for updates."
+#define MAG_UPDATE_CHECKING "Checking for updates…"
+#define MAG_UPDATE_NOT_CHECKED "Not checked yet."
+#define MAG_UPDATE_OFF "Checking is off."
+#define MAG_UPDATE_RATE_LIMITED "GitHub asked MAG to wait; it checks again later."
+#define MAG_UPDATE_UNAVAILABLE "Updates are not available in this build."
+#define MAG_UPDATE_BANNER_TITLE "MAG %s is available"                       /* new */
+#define MAG_UPDATE_BANNER_DETAIL "You have %s."                             /* current */
+#define MAG_UPDATE_NOW "Update now (about %s minutes)"                      /* minutes */
+#define MAG_UPDATE_WHATS_NEW "What's new"
+#define MAG_UPDATE_LATER "Later"
+
 /* Choices, in menu order, with the values the settings file stores. */
 #define MAG_SETTINGS_DISPLAY_MODES 2
 static const char *const mag_settings_display_mode_labels[MAG_SETTINGS_DISPLAY_MODES] = {"Windowed", "Borderless fullscreen"};

@@ -53,6 +53,21 @@ The runtime is built from the [ps3recomp](https://github.com/sp00nznet/ps3recomp
 [tekulvw/ps3recomp](https://github.com/tekulvw/ps3recomp) fork, which is fetched separately and keeps
 its own licence. Its licence text is reproduced in [LICENSE.ps3recomp](LICENSE.ps3recomp).
 
+The launcher's update check verifies release signatures with [Monocypher](https://monocypher.org)
+4.0.3 (BLAKE2b and Ed25519, verification only), vendored unchanged in
+[src/third_party/monocypher](src/third_party/monocypher) under its dual CC0-1.0 / BSD-2-Clause
+licence ([LICENCE.md](src/third_party/monocypher/LICENCE.md)). The files come from
+`monocypher-4.0.3.tar.gz` (SHA-512 `40904ada5c7ee4f7741733e38b69a30a4b0561cbffba5ffe7c2dce16136d5402`
+`51ec0d9056ff606510d3b5b708fb8a40db7e0870d4a0b2dc17ba2bfb880f8965`), with these SHA-256 hashes:
+
+| File | SHA-256 |
+| --- | --- |
+| `monocypher.c` | `57eb914fc88136119bd41655cccb8c250048bf54d470540625186f8ab16f64be` |
+| `monocypher.h` | `c494da712122da7ff679fdcf318a5317e84972b6c950fe9d896212947797facd` |
+| `monocypher-ed25519.c` (from `src/optional/`) | `60fce3578fb00b00da96490653d993c4cb427b1e1be38183285c66e04d22cc18` |
+| `monocypher-ed25519.h` (from `src/optional/`) | `abc4fad381879f5c29176ebe014b9189956b3dfe0a3e36459b6990bc57212380` |
+| `LICENCE.md` | `5f8360e4c06ddcc584bdb4b210c6af824c4bb301e6a9a521869b6d90795ca4b3` |
+
 ## No warranty
 
 This software is provided "as is", without warranty of any kind. Running recompiled software may

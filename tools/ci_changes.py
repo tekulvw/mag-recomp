@@ -48,6 +48,8 @@ FILTERS = {
     'macos_settings': (
         'src/player_settings*', 'src/player_controls*', 'src/player_portal*', 'src/player_report*',
         'src/player_input_desktop_macos*', 'src/player_input_macos*',
+        'src/player_update*', 'src/third_party/monocypher/*',
+        'tests/player_update*', 'tests/test_player_update*', 'tests/fake_release_server*',
         'tests/player_settings*', 'tests/test_player_settings*',
         'tests/player_controls*', 'tests/test_player_controls*',
         'tests/player_reports*', 'tests/test_player_reports*',
