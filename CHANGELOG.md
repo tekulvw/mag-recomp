@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.16.0](https://github.com/tekulvw/mag-recomp/compare/v0.15.1...v0.16.0) (2026-11-28)
+
+
+### Features
+
+* **installer:** let MAG hold a session lock and verify an updated install ([#363](https://github.com/tekulvw/mag-recomp/issues/363)) ([d9533d2](https://github.com/tekulvw/mag-recomp/commit/d9533d221b2bca4e9b8712e639bd0982d32893cb))
+* **installer:** update an existing MAG folder in place ([#361](https://github.com/tekulvw/mag-recomp/issues/361)) ([36e8a73](https://github.com/tekulvw/mag-recomp/commit/36e8a732464cbc47ea2a0083d3261ab4762dbb9c))
+
+
+### Bug Fixes
+
+* **voice:** end the talk indicators when push to talk closes and talkers stop ([#364](https://github.com/tekulvw/mag-recomp/issues/364)) ([be2eb76](https://github.com/tekulvw/mag-recomp/commit/be2eb7669e0a57a3c8426b6031d83062a656ffec))
+
 ## [0.15.1](https://github.com/tekulvw/mag-recomp/compare/v0.15.0...v0.15.1) (2026-11-28)
 
 
