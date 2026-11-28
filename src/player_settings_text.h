@@ -15,7 +15,9 @@
  *   Debug:    Diagnostics { one row per mag_settings_debug_items entry }, note
  *   Controls: [Keyboard & Mouse | Controller], Input mode + Bindings, aim assist, mouse row,
  *             Action / Primary / Secondary rows, hint, Reset, note
- *   error line, display confirmation (15 s), separator, footer: status, Cancel, Apply, Play MAG */
+ *   error line, display confirmation (15 s), separator, footer: status, Cancel, Apply, Play MAG
+ * The segments and everything from the error line down stay in place; when the window would be
+ * taller than its screen's work area, the page between them scrolls. */
 
 #define MAG_SETTINGS_TITLE "MAG Settings"
 #define MAG_SETTINGS_PREVIEW_TITLE "MAG Display Preview"
@@ -24,6 +26,8 @@
 #define MAG_SETTINGS_MARGIN 24
 #define MAG_SETTINGS_CONTROL_WIDTH 205   /* each row's control */
 #define MAG_SETTINGS_ROW_HEIGHT 42
+#define MAG_SETTINGS_WORK_AREA_MARGIN 12 /* kept free above and below the window in the work area */
+#define MAG_SETTINGS_MIN_PAGE_HEIGHT 160 /* the scrolling page's least height */
 
 /* Pages. */
 #define MAG_SETTINGS_PAGE_GENERAL "General"

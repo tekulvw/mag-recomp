@@ -41,6 +41,7 @@ import time
 import uuid
 
 from .model import InstallerError
+from .platforms import private_directory
 from .safety import Cancellation
 
 DIRECTORY = 'build-cache'
@@ -234,7 +235,7 @@ class BuildCache:
         for path in (self.root.parent, self.root):
             if path.is_symlink():
                 raise InstallerError(f'The build cache folder must not be a symlink: {path}')
-        self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        private_directory(self.root, parents=True, exist_ok=True)
         for name in (*KINDS, 'blobs', 'objects', 'sessions'):
             (self.root / name).mkdir(exist_ok=True)
         readme = self.root / 'README.txt'

@@ -3,12 +3,14 @@
 // rows, wording and behaviour (player_settings_text.h), drawn with an SDL renderer and the SDK's
 // public-domain 8x8 font. It owns no window and no event loop, so tests drive it with synthetic
 // events and a software renderer. Coordinates are the panel's logical points (the macOS panel's
-// width); the window scales them by a whole number.
+// width); the window scales them by a whole number. A screen shorter than the layout gets a view
+// height: the page then scrolls between the segments and the footer, which stay in the window.
 #include "player_settings_account.h"
 #include "player_settings_form.h"
 #include "player_settings_window.h"
 #include "player_report_request.h"
 #include <SDL2/SDL.h>
+#include <algorithm>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
@@ -43,7 +45,11 @@ public:
     // Time passing without events: capture and display timeouts, account progress.
     State tick(uint64_t now_ms);
     void draw(SDL_Renderer* renderer, SDL_Texture* font) const;
-    int height() const;  // the current layout's height, in points
+    // The window's height, in points: the layout's, or less when the view height cuts the page.
+    int height() const;
+    int natural_height() const;  // the whole layout's, as though the page did not scroll
+    // The most the window may be, in points (0: no limit); a taller layout scrolls its page.
+    void set_view_height(int points) { view_height_ = std::max(0, points); }
     // The font texture (white glyphs on transparent) the panel draws with.
     static SDL_Texture* make_font(SDL_Renderer* renderer);
 
@@ -83,6 +89,14 @@ public:
     bool choosing() const { return !open_choice_.empty(); }
     int scroll() const { return scroll_; }
     int scroll_limit() const;
+    // The page between the segments and the footer: where it shows in the window, how far it is
+    // scrolled and can scroll (0 when it fits), and its scrollbar's thumb (empty when it fits).
+    SDL_Rect page_rect() const;
+    int page_scroll() const;
+    int page_scroll_limit() const;
+    void set_page_scroll(int points) { page_scroll_ = std::max(0, points); }
+    SDL_Rect page_thumb() const;
+    bool visible(const std::string& name) const;  // shown, and wholly inside the page (and the list)
 
 private:
     enum class Kind { Segment, Text, Choice, Button, Link, Slot, Clear, Slider, Check, Note };
@@ -96,16 +110,21 @@ private:
         bool selected = false;  // a segment's state, the default button
         int row = -1;
         unsigned slot = 0;
+        bool paged = false;  // part of the page, which scrolls and is clipped to its viewport
     };
     // tone: 0 text, 1 secondary, 2 error; `listed` labels belong to the scrolling bindings list.
-    struct Label { int x, y; std::string text; int tone; bool bold; int columns; bool listed = false; };
+    struct Label { int x, y; std::string text; int tone; bool bold; int columns; bool listed = false; bool paged = false; };
     struct Layout {
         std::vector<Item> items;
         std::vector<Label> labels;
         std::vector<SDL_Rect> groups;
         std::vector<SDL_Rect> lines;  // separators
         SDL_Rect list{0, 0, 0, 0};   // the bindings list (scrolls)
-        int height = 0;
+        int height = 0, natural = 0;  // the window's; the whole layout's
+        // The page's viewport, its scroll and limit (0: it fits), and how many `lines` belong to it.
+        SDL_Rect page{0, 0, 0, 0};
+        int page_scroll = 0, page_limit = 0;
+        size_t paged_lines = 0;
     };
     struct Capture {
         bool on = false;
@@ -161,6 +180,9 @@ private:
     bool saved_anything_ = false;  // in game: Apply saved something, so closing reports Saved
     bool controls_page_ = false, debug_page_ = false, controller_ = false, advanced_ = false, dirty_ = false;
     int scope_ = 0, scroll_ = 0;
+    int view_height_ = 0, page_scroll_ = 0;
+    int drag_ = -1;                       // dragging the page's thumb: where it was grabbed, from its top
+    int pointer_x_ = -1, pointer_y_ = -1;  // the last mouse position: the wheel scrolls what it is over
     std::string focus_;
     std::string error_, status_, hint_, open_choice_;
     int choice_cursor_ = 0;

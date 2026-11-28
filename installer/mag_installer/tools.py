@@ -21,6 +21,7 @@ import urllib.request
 import zipfile
 
 from .model import InstallerError, relative_path
+from .platforms import private_scratch
 from .safety import contained, file_digest
 
 # The operating system's CA bundle, by the paths its vendors use: macOS (and
@@ -294,7 +295,7 @@ def extract_archive(blob, destination, tool, token):
     if destination.exists() or destination.is_symlink():
         raise InstallerError('Tool extraction destination already exists')
     destination.parent.mkdir(parents=True, exist_ok=True)
-    scratch = Path(tempfile.mkdtemp(prefix='.extract-', dir=destination.parent))
+    scratch = private_scratch('.extract-', destination.parent)
     expanded = 0
     entries = 0
     names = {}

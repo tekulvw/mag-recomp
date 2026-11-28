@@ -13,6 +13,7 @@ import shutil
 import subprocess
 
 from .model import InstallerError
+from .platforms import private_directory
 from .safety import Cancellation, contained, file_digest
 from .native_package import playback_environment
 
@@ -550,7 +551,7 @@ def package(config, workspace, destination, token=None, events=None, environment
     if environment is None:
         from .managed_tools import msvc_environment
         environment = msvc_environment(config['msvc']['vcvars'])
-    destination.mkdir(mode=0o700)
+    private_directory(destination)
     try:
         game = stage_game(workspace, folder, token, events)
         bin_dir = destination / 'bin'; bin_dir.mkdir()

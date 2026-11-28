@@ -509,6 +509,129 @@ static void trace_has_no_payload() {
     service.end();
 }
 
+// A microphone that is always open: push to talk held, or stuck.
+class OpenSource final : public FrameSource {
+public:
+    bool frame(uint64_t, int16_t* samples) override {
+        for (unsigned i = 0; i < FrameSamples; ++i) samples[i] = 4000;
+        return true;
+    }
+};
+
+// Signal state reports activity only for frames that put a block on an output the game reads, and
+// an output the game stopped reading is discarded instead of reporting voice pending forever.
+static void signal_state_follows_transmission() {
+    Clock clock;
+    std::vector<std::string> lines;
+    ServiceOptions options;
+    options.now_ms = [&clock] { return clock.ms; };
+    options.source = std::make_unique<OpenSource>();
+    options.encoder = std::make_unique<PatternEncoder>();
+    options.log = [&lines](const char* line) { lines.emplace_back(line); };
+    Service service(std::move(options));
+    service.init();
+    PortParams mic_params;
+    mic_params.type = uint32_t(PortType::InMic);
+    uint32_t mic = 0, out = 0;
+    service.create_port(mic_params, mic);
+    service.create_port(voice_port(PortType::OutVoice), out);
+    float energy = 0;
+    uint32_t vad = 0;
+    bool is_float = false;
+    const auto vad_now = [&] {
+        vad = 7;
+        CHECK(service.signal_state(mic, AttrVad, energy, vad, is_float) == status::Ok);
+        return vad;
+    };
+    const auto energy_now = [&] {
+        energy = -1;
+        CHECK(service.signal_state(mic, AttrEnergyLevel, energy, vad, is_float) == status::Ok);
+        return energy;
+    };
+    service.start();
+    // The gate is open but the microphone feeds no output: nothing is sent, so no activity.
+    clock.ms += 200;
+    CHECK(vad_now() == 0 && energy_now() == 0);
+    service.connect(mic, out);
+    clock.ms += 200;
+    CHECK(vad_now() == 1 && energy_now() > 0.1f);
+    // A muted output sends nothing: no activity.
+    service.set_mute(out, true);
+    clock.ms += 80;
+    CHECK(vad_now() == 0 && energy_now() == 0);
+    service.set_mute(out, false);
+    clock.ms += 80;
+    CHECK(vad_now() == 1);
+    // The game keeps reading: activity stays on as long as blocks go out.
+    uint8_t buffer[1024];
+    size_t copied = 0;
+    for (int i = 0; i < 10; ++i) {
+        clock.ms += 400;
+        CHECK(service.read(out, buffer, sizeof buffer, copied) == status::Ok && copied > 0);
+        CHECK(vad_now() == 1);
+    }
+    CHECK(lines.empty());
+    // The game stops reading the output: after a second nothing is on the air, said once.
+    clock.ms += 600;
+    CHECK(vad_now() == 1);
+    clock.ms += 600;
+    CHECK(vad_now() == 0 && energy_now() == 0);
+    clock.ms += 600;
+    CHECK(vad_now() == 0);
+    CHECK(lines.size() == 1 && lines[0].find("has not read it") != std::string::npos);
+    // Reading again brings it back.
+    CHECK(service.read(out, buffer, sizeof buffer, copied) == status::Ok && copied > 0);
+    clock.ms += 40;
+    CHECK(vad_now() == 1);
+    CHECK(lines.size() == 2 && lines[1].find("reads the voice output again") != std::string::npos);
+    service.stop();
+    CHECK(vad_now() == 0);
+    service.end();
+}
+
+// Encoded output the game stops reading after the gate closes: discarded once its newest block is
+// older than stale_output_ms, so the port no longer reports voice waiting to be sent.
+static void unread_output_expires() {
+    Clock clock;
+    std::vector<std::string> lines;
+    ServiceOptions options;
+    options.now_ms = [&clock] { return clock.ms; };
+    options.source = std::make_unique<TestToneSource>();  // one second on, one off
+    options.encoder = std::make_unique<PatternEncoder>();
+    options.log = [&lines](const char* line) { lines.emplace_back(line); };
+    options.stale_output_ms = 500;  // shorter than the source's silent second
+    Service service(std::move(options));
+    service.init();
+    PortParams mic_params;
+    mic_params.type = uint32_t(PortType::InMic);
+    uint32_t mic = 0, out = 0;
+    service.create_port(mic_params, mic);
+    service.create_port(voice_port(PortType::OutVoice), out);
+    service.connect(mic, out);
+    service.start();
+    PortInfo info;
+    const auto step = [&](unsigned ms) {
+        for (unsigned i = 0; i < ms / 40; ++i) {
+            clock.ms += 40;
+            service.port_info(out, info);
+        }
+    };
+    step(1000);  // frames 0..24, open: the queue keeps its newest 480 ms
+    CHECK(info.bytes == 12 * 37);
+    step(480);   // closed since frame 25; the newest block is 480 ms old
+    CHECK(info.bytes == 12 * 37);
+    step(40);    // past 500 ms
+    CHECK(info.bytes == 0);
+    CHECK(service.send_stats().blocks_expired == 12);
+    // One line for the discard (each open second is shorter than the read stall, so no stall line).
+    CHECK(lines.size() == 1 && lines[0].find("did not read") != std::string::npos);
+    step(1000);  // the next open second, still unread, and its discard: no new line
+    step(1000);
+    CHECK(info.bytes == 0 && service.send_stats().blocks_expired == 24);
+    CHECK(lines.size() == 1);  // once per start
+    service.end();
+}
+
 int main() {
     block_sizes();
     parser_every_split();
@@ -522,6 +645,8 @@ int main() {
     playout_to_pcm_port();
     playout_to_secondary();
     trace_has_no_payload();
+    signal_state_follows_transmission();
+    unread_output_expires();
     if (failures) {
         std::printf("%d failures\n", failures);
         return 1;

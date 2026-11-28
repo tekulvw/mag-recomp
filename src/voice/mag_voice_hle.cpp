@@ -319,6 +319,7 @@ void voice_start(const char*) {
     }
     ServiceOptions options;
     options.now_ms = monotonic_ms;
+    options.log = [](const char* line) { std::fprintf(stderr, "[voice] %s\n", line); };
     const char* label = coded ? "lab tone" : pattern ? "lab pattern" : "push to talk";
     if (ptt) {
         if (const char* missing = push_to_talk_missing()) {

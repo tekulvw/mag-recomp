@@ -102,6 +102,9 @@ class Win32TranslationTests(unittest.TestCase):
     def test_scan_codes_translate_to_hid_usages(self):
         self.run_case('keys')
 
+    def test_usages_map_back_to_their_scan_codes(self):
+        self.run_case('scan-codes')
+
     def test_auto_repeat_is_not_a_new_press(self):
         self.run_case('repeats')
 
