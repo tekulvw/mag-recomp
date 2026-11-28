@@ -30,6 +30,10 @@ enum class PortType : uint32_t { InMic = 0, InPcm = 1, InVoice = 2, OutPcm = 3, 
 enum class PortState : uint32_t { Idle = 0, Ready = 1, Buffering = 2, Running = 3 };
 // Signal-state attributes of the public interface.
 constexpr uint32_t AttrEnergyLevel = 1000, AttrVad = 1001;
+// The signal-state attribute the game reads from its microphone port while that port is running: a
+// speech level on a 0 to 10 scale that it compares with its microphone sensitivity (docs/voice-chat.md,
+// "Talk state"). The service reports the top of the scale while it transmits and 0 otherwise.
+constexpr uint32_t AttrSpeechLevel = 11, SpeechLevelTop = 10;
 
 struct PortParams {
     uint32_t type = 0;
@@ -188,6 +192,10 @@ struct ServiceOptions {
     // Encoded output nobody has read for this long after its newest block is discarded, so an
     // output the game stopped reading never reports voice pending.
     unsigned stale_output_ms = 2000;
+    // An encoded input counts as a talking talker (its port reports running) while it holds or
+    // plays voice and for this long after its newest block arrived, so network jitter between
+    // packets does not end the talker; after that it reports ready and the game lets the talker go.
+    unsigned talker_linger_ms = 500;
     std::function<void(const char*)> log;  // one line per notable send-side change; null: silent
 };
 
@@ -215,7 +223,8 @@ public:
     uint32_t read(uint32_t id, uint8_t* out, size_t capacity, size_t& copied);
     // Accepts up to the port's free space; `accepted` receives the count.
     uint32_t write(uint32_t id, const uint8_t* data, size_t bytes, size_t& accepted);
-    // Writes the attribute's value: energy as a level in [0, 1], voice activity as 0 or 1.
+    // Writes the attribute's value: energy as a level in [0, 1], voice activity as 0 or 1, the speech
+    // level (attribute 11) as 0 or SpeechLevelTop.
     uint32_t signal_state(uint32_t id, uint32_t attr, float& energy, uint32_t& vad, bool& is_float);
     // The headset output (OUT_SECONDARY), which the game connects received talkers to and never
     // reads: `count` mono 16-bit samples at SampleRate of the audio now due on every input connected
@@ -246,6 +255,8 @@ private:
         bool playing = false;
         uint64_t play_start = 0, released = 0, last_write = 0;
         uint64_t last_block = 0;  // encoded output: when the newest block was queued
+        bool have_voice = false;  // encoded input: a block arrived since creation or the last reset
+        uint64_t last_voice = 0;  // encoded input: when the newest block arrived
     };
     void decode_block(Port& port, const Block& block);
     void advance_playout(uint64_t t);
@@ -254,6 +265,7 @@ private:
     void pump();          // produce the frames due since the last call and advance playout
     void summary(uint64_t now, bool force = false);
     bool transmitting(uint64_t t) const;  // the newest frame is on the air (signal state)
+    uint32_t port_state(const Port& port, uint64_t t) const;
     void expire_output(uint64_t t);
     void note(const char* line) const {
         if (options_.log) options_.log(line);

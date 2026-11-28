@@ -76,6 +76,9 @@ the setting Off nothing is passed and nothing is registered ([player-settings.md
   is muted, none once no frame has been produced for 200 ms, and none while blocks are made but the
   game has not read an encoded output for a second (counted from the start of talking; logged once,
   `[voice] voice is being encoded but the game has not read it for 1000 ms; nothing is being sent`).
+- **Talk state.** The game's talk indicators follow the port graph (see "Talk state" below): the
+  microphone port runs only while voice goes out, so the player's own indicator goes off shortly
+  after push to talk closes.
 - **Unread output.** Encoded output the game has not read within two seconds of its newest block is
   discarded (logged once per start; the trace summary counts `blocks_expired`), so an output the game
   stopped reading never reports voice waiting to be sent.
@@ -94,6 +97,39 @@ the setting Off nothing is passed and nothing is registered ([player-settings.md
 - Codec, blocks and playback are those of the lab tone mode below: Opus at the port's rate in 37-byte
   blocks, talkers decoded and played on the host playback stream at `MAG_VOICE_VOLUME` (see "Playback").
 - Noise suppression is not in this stage yet.
+
+## Talk state
+
+The game keeps its own idea of who is talking, and reads it from the voice library's port graph
+rather than from voice events. The first live test (client 0.15.1) showed both sides stuck on: a
+player's own indicator stayed lit after push to talk closed, and another player's marker stayed lit
+after their packets stopped, because the service reported every port as running for as long as voice
+was started. What the game expects, as observed in retail v1.0:
+
+- **Its own microphone.** Every frame the game reads the microphone port's state. While the port is
+  running it reads signal-state attribute 11, a speech level on a 0 to 10 scale, and keeps the
+  microphone active (for a short hold of its own) when the level reaches its sensitivity threshold.
+  Once the port is not running and the hold has passed, the microphone goes inactive and the talk
+  indicator goes off. The game sends what it reads from the encoded output only while the microphone
+  is active. When the level is at or above the threshold it may also set the microphone port's volume
+  from its settings.
+- **Other players.** Every frame the game reads each talker's encoded input port. When the port is
+  ready (no voice to play) the game ends that talker: it disconnects the port and frees the slot, and
+  the marker goes off. The next packet from that player starts a new talker, with a port reset.
+
+So the service reports:
+
+- the microphone port as **running** while it transmits (the same rule as the energy and
+  voice-activity attributes: a frame that put a block on an output the game reads), and **ready**
+  otherwise; attribute 11 as **10** (the top of the scale) while it transmits and 0 otherwise. Push
+  to talk has already decided who talks, so the game's own sensitivity never cuts a player off;
+- a talker's encoded input as **running** while it holds or plays voice and for 500 ms after its
+  newest block arrived, so the gaps between packets do not end a talker, and **ready** otherwise
+  (and after a reset, until the new talker's first block);
+- every other port as running while voice is started, and every port as idle before it starts.
+
+The trace's `port_info` lines carry the `state` (0 idle, 1 ready, 2 buffering, 3 running) and its
+`signal_state` lines the `value` answered.
 
 ## Microphone level
 
@@ -184,7 +220,9 @@ encoder, the level heard end to end through Opus and a second service (unity, th
 the voice volume, and a quiet microphone with and without the level control), the push-to-talk
 gate's tail, focus rules, hold limit and log lines, a missing, refused and pending microphone, the
 service encoding only while the gate is open, signal state that follows what is actually sent,
-unread output expiring, and the guest glue in the player mode with a stand-in
+unread output expiring, the talk state (a model of the game's microphone rules turns its indicator
+on for each talk spurt and off within the tail and its hold after release; a talker's port runs
+through packet gaps of up to 320 ms and is ready within the linger after its packets stop), and the guest glue in the player mode with a stand-in
 microphone and push to talk (no blocks before a press, none after the tail, none without focus, the
 device opened only between start and stop, receive-only without the controls adapter). No device or
 game file is used.
